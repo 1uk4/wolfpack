@@ -270,3 +270,112 @@ describe("Supervisor (stale socket in a directory workerd cannot write)", { time
     }
   });
 });
+
+/** A fake systemctl: `show` answers the next queued InvocationID (the last one repeats); every call is recorded. Never runs the real thing. */
+function fakeSystemctl(invocations: string[]) {
+  const calls: string[][] = [];
+  let shown = 0;
+  return {
+    calls,
+    run: async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "show") return `${invocations[Math.min(shown++, invocations.length - 1)]}\n`;
+      return "";
+    },
+  };
+}
+
+describe("Supervisor.restartWolf", { timeout: 20_000 }, () => {
+  let orphan: ChildProcess | undefined;
+  afterEach(() => {
+    orphan?.kill("SIGKILL");
+    orphan = undefined;
+  });
+
+  it("restarts a unit-wrapped wolf through its systemd unit and reports the new InvocationID", async () => {
+    const m = makeWolves("alpha");
+    root = m.root;
+    const sc = fakeSystemctl(["inv-1", "inv-2"]);
+    sup = new Supervisor({ wolves: m.wolves, command: FAKE_COMMAND, wolfdUnits: true, systemctl: sc.run, log: () => {} });
+    sup.start();
+    await sup.whenSettled();
+    expect(await sup.restartWolf("alpha")).toEqual({ invocation: "inv-2" });
+    expect(sc.calls).toContainEqual(["restart", "wolfd@alpha.service"]);
+    await sup.whenSettled();
+    expect(sup.status()[0].state).toBe("online");
+  });
+
+  it("fails with 'the wolf did not restart' when the unit's InvocationID is unchanged", async () => {
+    const m = makeWolves("alpha");
+    root = m.root;
+    sup = new Supervisor({ wolves: m.wolves, command: FAKE_COMMAND, wolfdUnits: true, systemctl: fakeSystemctl(["same"]).run, log: () => {} });
+    sup.start();
+    await sup.whenSettled();
+    await expect(sup.restartWolf("alpha")).rejects.toThrow("the wolf did not restart");
+    await sup.whenSettled(); // the wrapper is back, supervision continues
+    expect(sup.status()[0].state).toBe("online");
+  });
+
+  it("reports an unconfirmed restart, not a failure, when the second InvocationID read fails after a successful restart", async () => {
+    const m = makeWolves("alpha");
+    root = m.root;
+    const calls: string[][] = [];
+    let shows = 0;
+    const run = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "show" && ++shows === 2) throw new Error("systemctl show failed");
+      return args[0] === "show" ? "inv-1\n" : "";
+    };
+    sup = new Supervisor({ wolves: m.wolves, command: FAKE_COMMAND, wolfdUnits: true, systemctl: run, log: () => {} });
+    sup.start();
+    await sup.whenSettled();
+    expect(await sup.restartWolf("alpha")).toEqual({ unconfirmed: true });
+    expect(calls).toContainEqual(["restart", "wolfd@alpha.service"]);
+    await sup.whenSettled();
+    expect(sup.status()[0].state).toBe("online");
+  });
+
+  it("a failing first InvocationID read throws before any restart is issued", async () => {
+    const m = makeWolves("alpha");
+    root = m.root;
+    const calls: string[][] = [];
+    const run = async (args: string[]) => {
+      calls.push(args);
+      throw new Error("systemctl show failed");
+    };
+    sup = new Supervisor({ wolves: m.wolves, command: FAKE_COMMAND, wolfdUnits: true, systemctl: run, log: () => {} });
+    sup.start();
+    await sup.whenSettled();
+    await expect(sup.restartWolf("alpha")).rejects.toThrow("systemctl show failed");
+    expect(calls.some((c) => c[0] === "restart")).toBe(false);
+  });
+
+  it("restarts an adopted wolfd through its unit instead of refusing", async () => {
+    const m = makeWolves("alpha");
+    root = m.root;
+    const sock = m.wolves[0].serve.socket;
+    orphan = spawn(process.execPath, [FAKE_WOLF, "--config", m.wolves[0].file, "--socket", sock], { stdio: "ignore" });
+    await until(() => existsSync(sock), 5000, "orphan socket");
+    const sc = fakeSystemctl(["inv-1", "inv-2"]);
+    sup = new Supervisor({ wolves: m.wolves, command: FAKE_COMMAND, transport: "socket", wolfdUnits: true, systemctl: sc.run, log: () => {} });
+    sup.start();
+    await sup.whenSettled();
+    expect(sup.status()[0].adopted).toBe(true);
+    expect(await sup.restartWolf("alpha")).toEqual({ invocation: "inv-2" });
+    expect(sc.calls).toContainEqual(["restart", "wolfd@alpha.service"]);
+  });
+
+  it("a plain child is stopped and respawned as before: new pid, systemctl never called", async () => {
+    const m = makeWolves("alpha");
+    root = m.root;
+    const sc = fakeSystemctl(["x"]);
+    sup = new Supervisor({ wolves: m.wolves, command: FAKE_COMMAND, systemctl: sc.run, log: () => {} });
+    sup.start();
+    await sup.whenSettled();
+    const pid = sup.status()[0].pid;
+    await sup.restartWolf("alpha");
+    await until(() => sup!.status()[0].state === "online", 8000, "back online");
+    expect(sup.status()[0].pid).not.toBe(pid);
+    expect(sc.calls).toEqual([]);
+  });
+});

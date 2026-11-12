@@ -2,9 +2,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LinkCmd } from "@wolfpack/protocol";
-import { createCommandRunner } from "./commands.js";
+import { createCommandRunner, readWolfStatus, restartWolves, type WolfControl } from "./commands.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -118,7 +118,69 @@ describe("logs.fetch", () => {
     expect(await r.handle(logs("workerd", 5))).toMatchObject({ ok: false, code: "internal" });
   });
 
-  it("advertises only logs.fetch until further handlers are injected", () => {
+  it("advertises only logs.fetch until handlers are injected, and each kind only with its handler", () => {
     expect(createCommandRunner().supported()).toEqual(["logs.fetch"]);
+    expect(createCommandRunner({ wolves: fakeWolves() }).supported()).toEqual(["logs.fetch", "wolves.restart"]);
+  });
+});
+/** A fake supervisor: three wolves, hal is mid-reply, bob is stopped, cy fails to restart. */
+function fakeWolves(): WolfControl & { restarted: string[] } {
+  const restarted: string[] = [];
+  const st: Record<string, { wasActive: boolean; midReply: boolean }> = { hal: { wasActive: true, midReply: true }, bob: { wasActive: false, midReply: false }, cy: { wasActive: true, midReply: false } };
+  return {
+    restarted,
+    names: () => Object.keys(st),
+    status: async (n) => st[n]!,
+    restart: async (n) => {
+      if (n === "cy") throw new Error("adopted wolfd has no process handle");
+      restarted.push(n);
+    },
+  };
+}
+
+describe("wolves.restart", () => {
+  it("reads each wolf's status before restarting and names the wolves, reporting midReply", async () => {
+    const w = fakeWolves();
+    const res = await restartWolves(w, ["hal", "bob"]);
+    expect(res).toEqual({ ok: true, data: { restarted: [{ wolf: "hal", wasActive: true, midReply: true }, { wolf: "bob", wasActive: false, midReply: false }] } });
+    expect(w.restarted).toEqual(["hal", "bob"]);
+  });
+
+  it("with no wolf named restarts all of them; the status read alone restarts nothing", async () => {
+    const w = fakeWolves();
+    expect(await readWolfStatus(w)).toEqual([{ wolf: "hal", wasActive: true, midReply: true }, { wolf: "bob", wasActive: false, midReply: false }, { wolf: "cy", wasActive: true, midReply: false }]);
+    expect(w.restarted).toEqual([]);
+    const res = await restartWolves(w);
+    expect(w.restarted).toEqual(["hal", "bob"]);
+    expect(res).toMatchObject({ ok: false, code: "restart_failed" });
+  });
+
+  it("an unconfirmed restart is reported as ok with the message 'restarted, but could not confirm'", async () => {
+    const w: WolfControl = { names: () => ["hal"], status: async () => ({ wasActive: true, midReply: false }), restart: async () => ({ unconfirmed: true }) };
+    const res = await createCommandRunner({ wolves: w }).handle({ t: "cmd", id: "c-8", kind: "wolves.restart", args: {} });
+    expect(res).toEqual({ t: "cmd.result", id: "c-8", ok: true, message: "restarted, but could not confirm", data: { restarted: [{ wolf: "hal", wasActive: true, midReply: false }] } });
+  });
+
+  it("an unknown wolf name restarts nothing and says not_found", async () => {
+    const w = fakeWolves();
+    expect(await restartWolves(w, ["nope"])).toMatchObject({ ok: false, code: "not_found" });
+    expect(w.restarted).toEqual([]);
+  });
+
+  it("starts every restart before any finishes, so many wolves fit the hub's timeout", async () => {
+    const started: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const w: WolfControl = { names: () => ["a", "b", "c"], status: async () => ({ wasActive: true, midReply: false }), restart: async (n) => (started.push(n), gate) };
+    const done = restartWolves(w);
+    await vi.waitFor(() => expect(started).toEqual(["a", "b", "c"]));
+    release();
+    expect(await done).toMatchObject({ ok: true, data: { restarted: [{ wolf: "a" }, { wolf: "b" }, { wolf: "c" }] } });
+  });
+
+  it("the runner dispatches wolves.restart to the injected control", async () => {
+    const r = createCommandRunner({ wolves: fakeWolves() });
+    const res = await r.handle({ t: "cmd", id: "c-9", kind: "wolves.restart", args: { wolf: "bob" } });
+    expect(res).toEqual({ t: "cmd.result", id: "c-9", ok: true, data: { restarted: [{ wolf: "bob", wasActive: false, midReply: false }] } });
   });
 });

@@ -5,7 +5,7 @@
  */
 import { execFile } from "node:child_process";
 import { open } from "node:fs/promises";
-import { COMMAND_LOGS_MAX_BYTES, type CommandKind, type CommandResultCode, type LinkCmd, type LinkCmdResult, type LogsData } from "@wolfpack/protocol";
+import { COMMAND_LOGS_MAX_BYTES, type CommandKind, type CommandResultCode, type LinkCmd, type LinkCmdResult, type LogsData, type RestartData, type RestartedWolf } from "@wolfpack/protocol";
 
 /** Where a service's log lines come from: a systemd unit (Linux) or a log file (a supervised wolf's wolfd log, on any platform). */
 export interface LogSource {
@@ -16,7 +16,47 @@ export interface LogSource {
 /** The services `logs.fetch` may read on a machine without any configuration. A fixed allowlist: the name is never used as a path or a unit by itself. */
 export const DEFAULT_LOG_UNITS: Readonly<Record<string, string>> = { workerd: "workerd.service", hubd: "hubd.service", console: "console.service" };
 
+/** What wolves.restart needs from the supervisor. Exported so the Keys editor can restart wolves after a key change. */
+export interface WolfControl {
+  names(): string[];
+  /** wasActive: the wolfd is up. midReply: a turn is running in it (restarting would cut a reply off). */
+  status(name: string): Promise<{ wasActive: boolean; midReply: boolean }>;
+  /** Stop and respawn one wolf's wolfd. Rejects when it cannot. */
+  restart(name: string): Promise<void | { unconfirmed?: boolean }>;
+}
+
+/** The status read: every named wolf (default all), without restarting anything. */
+export async function readWolfStatus(w: Pick<WolfControl, "names" | "status">, names?: string[]): Promise<RestartedWolf[]> {
+  return Promise.all((names ?? w.names()).map(async (wolf) => ({ wolf, ...(await w.status(wolf).catch(() => ({ wasActive: false, midReply: false }))) })));
+}
+
+/**
+ * Read each wolf's status, then restart the named wolves (all when none named) right away. Failures are reported per wolf; the rest still restart.
+ * The status snapshot is taken once, before the parallel restarts begin, so `midReply` and `wasActive` describe the state at the start, not at the moment each wolf was cut off.
+ */
+export async function restartWolves(w: WolfControl, names?: string[]): Promise<{ ok: true; data: RestartData; message?: string } | { ok: false; code: "restart_failed" | "not_found"; message: string; data: RestartData }> {
+  const known = new Set(w.names());
+  const unknown = (names ?? []).filter((n) => !known.has(n));
+  if (unknown.length) return { ok: false, code: "not_found", message: `no such wolf on this machine: ${unknown.map((n) => JSON.stringify(n.slice(0, 40))).join(", ")}`, data: { restarted: [] } };
+  const before = await readWolfStatus(w, names);
+  const restarted: RestartedWolf[] = [];
+  const failed: string[] = [];
+  let unconfirmed = false;
+  // In parallel: restarting many wolves one by one would pass the hub's 15 s timeout.
+  const outcomes = await Promise.allSettled(before.map((s) => w.restart(s.wolf)));
+  outcomes.forEach((o, i) => {
+    if (o.status === "fulfilled") {
+      restarted.push(before[i]!);
+      if (o.value && o.value.unconfirmed) unconfirmed = true;
+    }
+    else failed.push(`${before[i]!.wolf}: ${String((o.reason as Error)?.message ?? o.reason).split("\n")[0]}`);
+  });
+  return failed.length ? { ok: false, code: "restart_failed", message: `could not restart ${failed.join("; ")}`.slice(0, 1000), data: { restarted } } : { ok: true, data: { restarted }, ...(unconfirmed ? { message: "restarted, but could not confirm" } : {}) };
+}
+
 export interface CommandRunnerOptions {
+  /** The wolves this workerd supervises. Absent (link-only: it supervises none) = wolves.restart is not advertised. */
+  wolves?: WolfControl;
   platform?: NodeJS.Platform;
   /** Extra log sources by service name (the supervised wolves' log files). A name equal to a default unit is ignored with a warning. The Mac app keeps no workerd log file of its own, so workerd has no source there. */
   logSources?: () => Record<string, LogSource>;
@@ -138,10 +178,14 @@ export function createCommandRunner(o: CommandRunnerOptions = {}): CommandRunner
   }
 
   return {
-    supported: () => ["logs.fetch"],
+    supported: () => ["logs.fetch", ...(o.wolves ? (["wolves.restart"] as const) : [])],
     async handle(cmd) {
       try {
         if (cmd.kind === "logs.fetch") return await logsFetch(cmd.id, cmd.args as { service: string; lines: number });
+        if (cmd.kind === "wolves.restart" && o.wolves) {
+          const r = await restartWolves(o.wolves, (cmd.args as { wolf?: string }).wolf ? [(cmd.args as { wolf: string }).wolf] : undefined);
+          return r.ok ? { ...ok(cmd.id, r.data), ...(r.message ? { message: r.message } : {}) } : { ...fail(cmd.id, r.code, r.message), data: r.data };
+        }
         return fail(cmd.id, "internal", "command not supported on this machine");
       } catch (e) {
         log(`command ${cmd.kind} ${cmd.id} failed: ${(e as Error).message}`);

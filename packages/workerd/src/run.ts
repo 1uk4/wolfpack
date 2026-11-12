@@ -232,6 +232,16 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       log,
       // Each supervised wolf's wolfd log is readable by the wolf's name (never by path: the hub only names a service).
       logSources: () => Object.fromEntries(supervisor.status().map((c) => [c.name, { file: c.logFile }])),
+      // Link-only supervises no wolves (they run from their own units), so there is nothing to restart: wolves.restart is not advertised.
+      ...(linkOnly
+        ? {}
+        : {
+            wolves: {
+              names: () => supervisor.configs().map((c) => c.identity.name),
+              status: async (n) => ({ wasActive: supervisor.status().some((s) => s.name === n && s.state === "online"), midReply: await supervisor.wolfBusy(n) }),
+              restart: async (n) => ((await supervisor.restartWolf(n)).unconfirmed ? { unconfirmed: true } : undefined),
+            },
+          }),
     });
     link = new HubLink({
       ...hubCfg,

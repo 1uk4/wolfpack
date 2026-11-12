@@ -26,7 +26,7 @@ describe("claude-stateless factory", () => {
       const env = { WOLF_DEN: den, PATH: "/bin", ENABLE_TOOL_SEARCH: "true" };
       const h = claudeStatelessFactory({ cwd: "/cwd", env, seams: { "claude-stateless": { createProvider: create, models: [] } } });
       const state = join(root, "claude-stateless", "den");
-      expect(create).toHaveBeenCalledWith(expect.objectContaining({ id: "claude-stateless", sessionDir: join(state, "sessions"), debug: true, debugLogPath: join(state, "debug.log"), env: { ...env, ENABLE_TOOL_SEARCH: "false" } }));
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ id: "claude-stateless", sessionDir: join(state, "sessions"), debug: true, debugLogPath: join(state, "debug.log"), continuePrompt: "If more work remains, call the next tool. Otherwise write your closing message to the owner: what you did and what is pending. Never reply with 'No response requested' or an empty acknowledgement.", env: { ...env, ENABLE_TOOL_SEARCH: "false" } }));
       expect(existsSync(join(state, "sessions"))).toBe(true);
       expect(existsSync(den)).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }

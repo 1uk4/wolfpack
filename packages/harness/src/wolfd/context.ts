@@ -59,7 +59,8 @@ export const ENDING_TURN_GUIDANCE = `When the owner has to make a decision, supp
 - ask ends your turn. Make no further tool calls after it. The owner fills in the pages at their own pace and submits once; their answers open your next turn.
 - Ask only when you cannot proceed without the owner. Ordinary conversation stays plain chat: thinking out loud, status updates, small clarifications, and anything you can decide yourself and say so.
 - Don't ask what you can find out by looking, and don't repeat a question the owner already answered.
-- A finished result with nothing to decide is a normal message, not an ask.`;
+- A finished result with nothing to decide is a normal message, not an ask.
+- After fire-and-forget tool results (a subagent launched or resumed, a note saved), still send the owner a short closing message: what started and what to expect.`;
 
 export interface FoundFile {
   path: string;

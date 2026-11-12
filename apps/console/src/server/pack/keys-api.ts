@@ -5,6 +5,8 @@
  *   POST /api/pack/machines/<hostId>/key/ack   accept a machine's changed key
  * The console never sees a key: the browser seals it to the machine's public key.
  */
+import { WORKERD_TTL_MS } from "@wolfpack/protocol";
+
 const NO_STORE = { "Cache-Control": "no-store" };
 
 export interface KeysApiDeps {
@@ -21,6 +23,9 @@ interface InvEntry {
 	kind: string;
 	id: string;
 	ageS?: number;
+	parent?: string;
+	busy?: boolean;
+	transport?: "api" | "subscription";
 	keys?: { slot: string; present: boolean; masked?: string; source?: "pack" | "env"; shadowsEnv?: boolean }[];
 }
 
@@ -49,14 +54,22 @@ export function createKeysApi(d: KeysApiDeps) {
 				const [inv, keys] = await Promise.all([hub("GET", "/v1/inventory"), hub("GET", "/v1/machines/keys")]);
 				if (!inv || !keys) return noHub();
 				if (!inv.ok) return fail(502, "The hub could not list machines.", "failed");
-				const entries = ((await inv.json()) as { entries: InvEntry[] }).entries.filter((e) => e.kind === "workerd");
+				const all = ((await inv.json()) as { entries: InvEntry[] }).entries;
+				const entries = all.filter((e) => e.kind === "workerd");
 				const pub = keys.ok ? ((await keys.json()) as { keys: Record<string, { pubkey: string; fingerprint: string; changed: boolean }> }).keys : {};
 				const machines = entries.map((e) => {
 					const k = pub[e.id];
 					return {
 						hostId: e.id,
 						machine: e.machine,
-						online: true,
+						// Online = the workerd reported within its TTL (the hub keeps stale entries listed with their age).
+						online: (e.ageS ?? 0) * 1000 <= WORKERD_TTL_MS,
+						// Wolves of this machine that are mid-reply, as the workerd reported them.
+						midReply: all.filter((w) => w.kind === "wolfd" && w.parent === e.id && w.busy).map((w) => w.id),
+						// Each wolf with its transport. A wolf that reports none is treated as subscription: a metered key is never assumed.
+						wolves: all.filter((w) => w.kind === "wolfd" && w.parent === e.id).map((w) => ({ name: w.id, transport: w.transport === "api" ? "api" : "subscription" })),
+						// A console entry on the same machine means dictation is needed here.
+						servesConsole: all.some((c) => c.kind === "console" && c.machine === e.machine),
 						canSetKeys: !!k && !!e.keys,
 						...(k ? { pubkey: k.pubkey, fingerprint: k.fingerprint, keyChanged: k.changed } : {}),
 						slots: e.keys ?? [],

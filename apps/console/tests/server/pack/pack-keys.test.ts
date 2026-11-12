@@ -33,7 +33,37 @@ describe("Pack keys API", () => {
 		const res = await api.machines(req("GET"));
 		assert.equal(res.status, 200);
 		const body = (await res.json()) as { machines: Record<string, unknown>[] };
-		assert.deepEqual(body.machines, [{ hostId: "sfo-01-wolves", machine: "sfo-01", online: true, canSetKeys: true, pubkey: "PK", fingerprint: "fp1", keyChanged: true, slots: [{ slot: "anthropic", present: true, masked: "••••abcd", source: "pack", shadowsEnv: true }] }]);
+		assert.deepEqual(body.machines, [{ hostId: "sfo-01-wolves", machine: "sfo-01", online: true, canSetKeys: true, midReply: [], wolves: [], servesConsole: false, pubkey: "PK", fingerprint: "fp1", keyChanged: true, slots: [{ slot: "anthropic", present: true, masked: "••••abcd", source: "pack", shadowsEnv: true }] }]);
+	});
+
+	it("takes midReply from busy wolfds, servesConsole from a console entry on the same machine, and online from the report age", async () => {
+		const { api } = setup({
+			"/v1/inventory": {
+				status: 200,
+				body: {
+					hubMachine: "sfo-01",
+					entries: [
+						{ machine: "sfo-01", kind: "workerd", id: "sfo-01-wolves", ageS: 1, keys: [] },
+						{ machine: "sfo-01", kind: "wolfd", id: "hal", parent: "sfo-01-wolves", ageS: 1, busy: true, transport: "subscription" },
+						{ machine: "sfo-01", kind: "wolfd", id: "idle", parent: "sfo-01-wolves", ageS: 1, transport: "api" },
+						{ machine: "sfo-01", kind: "wolfd", id: "old", parent: "sfo-01-wolves", ageS: 1 },
+						{ machine: "sfo-01", kind: "console", id: "c1", ageS: 2 },
+						{ machine: "gone", kind: "workerd", id: "gone-wolves", ageS: 500, keys: [] },
+					],
+				},
+			},
+			"/v1/machines/keys": { status: 200, body: { keys: {} } },
+		});
+		const body = (await (await api.machines(req("GET"))).json()) as { machines: { hostId: string; midReply?: string[]; servesConsole?: boolean; online: boolean }[] };
+		const sfo = body.machines.find((m) => m.hostId === "sfo-01-wolves")!;
+		assert.deepEqual(sfo.midReply, ["hal"]);
+		// A wolf that reports no transport is treated as subscription: the metered key is never assumed for it.
+		assert.deepEqual((sfo as { wolves?: unknown }).wolves, [{ name: "hal", transport: "subscription" }, { name: "idle", transport: "api" }, { name: "old", transport: "subscription" }]);
+		assert.equal(sfo.servesConsole, true);
+		assert.equal(sfo.online, true);
+		const gone = body.machines.find((m) => m.hostId === "gone-wolves")!;
+		assert.equal(gone.servesConsole, false);
+		assert.equal(gone.online, false);
 	});
 
 	it("forwards the fingerprint being accepted to the hub's ack, and passes its 409 through", async () => {

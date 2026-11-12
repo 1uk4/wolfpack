@@ -22,6 +22,10 @@ export const InventoryEntrySchema = z.object({
   lagMs: z.number().nonnegative().optional(),
   /** Measured round trip of a /healthz probe, ms (only where someone probes: workerd -> wolfd). */
   responseMs: z.number().nonnegative().optional(),
+  /** A wolfd entry only: a turn is running in this wolf right now (restarting it would cut the reply off). Absent = idle or unknown. */
+  busy: z.boolean().optional(),
+  /** A wolfd entry only: how this wolf reaches its model. Only "api" wolves receive the Pack's Anthropic key. Absent = not reported. */
+  transport: z.enum(["api", "subscription"]).optional(),
   /** Key presence per slot (workerd entries only, work-wolfpack-6EmU8pu). Never the value: only a mask. */
   keys: z
     .array(

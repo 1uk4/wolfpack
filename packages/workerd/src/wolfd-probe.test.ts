@@ -21,7 +21,7 @@ function stub(listen: number | string): Promise<Server> {
 }
 const child = (name: string, url: string | null) => ({ name, state: "online" as const, pid: 1, url, adopted: false, restarts: 0, failures: 0, nextRestartInMs: null, logFile: "" });
 
-function reporter(children: ReturnType<typeof child>[], over: { enabled?: boolean; keys?: () => InventoryEntry["keys"] } = {}) {
+function reporter(children: ReturnType<typeof child>[], over: { enabled?: boolean; keys?: () => InventoryEntry["keys"]; busy?: (name: string) => Promise<boolean>; transport?: (name: string) => "api" | "subscription" } = {}) {
   const sent: InventoryEntry[][] = [];
   const r = createInventoryReporter({
     hostId: "sfo-01-wolves",
@@ -32,6 +32,8 @@ function reporter(children: ReturnType<typeof child>[], over: { enabled?: boolea
     send: (entries) => (sent.push(entries), true),
     enabled: () => over.enabled ?? true,
     ...(over.keys ? { keys: over.keys } : {}),
+    ...(over.busy ? { busy: over.busy } : {}),
+    ...(over.transport ? { transport: over.transport } : {}),
     probeTimeoutMs: 300,
     intervalMs: 3_600_000,
   });
@@ -69,6 +71,25 @@ describe("workerd inventory reporter", () => {
     expect(e[0]!.keys).toEqual(keys);
     expect(e[1]!.keys).toBeUndefined();
     expect(InventoryEntrySchema.safeParse(e[0]).success).toBe(true);
+  });
+
+  it("marks each wolfd that is mid-reply as busy, so the Pack can warn before a restart", async () => {
+    const { r, sent } = reporter([child("talking", null), child("idle", null)], { busy: async (n) => n === "talking" });
+    await r.report();
+    const e = sent.at(-1)!;
+    expect(e.find((x) => x.id === "talking")!.busy).toBe(true);
+    expect(e.find((x) => x.id === "idle")!.busy).toBeUndefined();
+    expect(InventoryEntrySchema.safeParse(e.find((x) => x.id === "talking")).success).toBe(true);
+  });
+
+  it("reports each wolfd's transport so the Pack knows which wolves take the Anthropic key", async () => {
+    const { r, sent } = reporter([child("bridge", null), child("metered", null)], { transport: (n) => (n === "metered" ? "api" : "subscription") });
+    await r.report();
+    const e = sent.at(-1)!;
+    expect(e.find((x) => x.id === "bridge")!.transport).toBe("subscription");
+    expect(e.find((x) => x.id === "metered")!.transport).toBe("api");
+    expect(e[0]!.transport).toBeUndefined();
+    expect(InventoryEntrySchema.safeParse(e.find((x) => x.id === "metered")).success).toBe(true);
   });
 
   it("gives up on a wolfd that drips its response past the overall deadline, ignores an oversized body, and a non-http url", async () => {

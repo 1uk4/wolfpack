@@ -22,6 +22,7 @@ import { KbSync, type KbSyncOptions } from "./kb-sync.js";
 import { Supervisor, type SupervisorOptions } from "./supervisor.js";
 import { ensureDirectToken } from "./direct-token.js";
 import { loadOrCreateMachineKey } from "./machine-key.js";
+import { apiWolfNames, wolfTransport } from "./wolf-transport.js";
 
 export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   /** Directory holding `<wolf>/wolf.yaml`. Default: ~/wolves/local. */
@@ -243,6 +244,11 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       children: () => supervisor.status(),
       send: (entries) => link!.sendFrame({ t: "report", entries }),
       enabled: () => inventoryOn,
+      busy: (n) => supervisor.wolfBusy(n),
+      transport: (n) => {
+        const c = supervisor.configs().find((x) => x.identity.name === n);
+        return c ? wolfTransport(c, opts.env ?? process.env) : "subscription";
+      },
       // Key presence (masks only, never values) so the Pack's Keys grid can show it.
       ...(opts.keyFile ? { keys: () => readKeyPresence(opts.keyFile!, opts.env ?? process.env) } : {}),
     });
@@ -277,7 +283,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
             checker: new KeyChecker({ fetch: globalThis.fetch as unknown as FetchLike }),
             mode: opts.keyFileMode,
             // Only the Anthropic key feeds the wolves; Deepgram feeds the console, which reads the file itself.
-            restartWolvesUsing: async (slot) => (slot === "anthropic" && !linkOnly ? ((await restartWolves(wolfControl)).data.restarted) : []),
+            // Only API-key wolves ever received the key, so only they restart; a subscription wolf is never touched.
+            restartWolvesUsing: async (slot) => (slot === "anthropic" && !linkOnly ? ((await restartWolves(wolfControl, apiWolfNames(supervisor.configs(), opts.env ?? process.env))).data.restarted) : []),
           })
         : undefined);
     const commands = createCommandRunner({

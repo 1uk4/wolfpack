@@ -33,6 +33,7 @@ export * from "./kb/memory-api.ts";
 export * from "./kb/kb-activity-api.ts";
 export * from "./thread/needs-you-api.ts";
 export * from "./pack/devices-api.ts";
+export * from "./pack/machines-api.ts";
 export * from "./settings/prompts-api.ts";
 export * from "./settings/settings-overview-api.ts";
 export * from "./settings/wolf-settings-api.ts";

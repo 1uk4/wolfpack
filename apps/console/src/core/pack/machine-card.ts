@@ -18,6 +18,7 @@ export const NO_RESTART_HINT = "This machine can't restart it from here";
 export type RestartKind = "wolves.restart" | "workerd.restart";
 export const NO_LOG_NOTE = "This machine has no log for that service";
 export const CHANNEL_READONLY_NOTE = "Change it from that machine's console";
+export const UPDATE_READONLY_NOTE = "Update it from that machine's console";
 
 export interface MachineServiceView {
 	kind: "console" | "hubd" | "wolfd" | "workerd";

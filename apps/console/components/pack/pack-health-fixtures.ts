@@ -176,6 +176,55 @@ export function fixtureLogs(service: string, now: number): { lines: string[]; tr
 	};
 }
 
+/**
+ * `?healthUpdate=<state>` and `?healthAuto=<on|off|unset>` (work-wolfpack-leOBfgn): a fake of /api/health/update and /api/health/subscription for the
+ * console's own machine card, so every update state can be seen without calling a real updater. Use with `?healthFixture=ok&pack=machines`.
+ *   available  two components behind; Update starts a fake run that shows Updating for 8 s, then Updated
+ *   running    an update already running (Updating…, never finishes)
+ *   done       like available, but the run succeeds after 1.5 s
+ *   failed     like available, but the run fails after 1.5 s (exit 4: another update run holds the lock)
+ *   uptodate   nothing behind; Check now says Already up to date; Update (if sent) answers 409
+ * `healthAuto`: on = mode auto, off = mode button, unset = no subscription file ("not set (host default)"). PUT only updates the fake.
+ */
+export const HEALTH_UPDATE_STATES = ["available", "running", "done", "failed", "uptodate"] as const;
+export function fixtureUpdateApi(search: string): typeof fetch | null {
+	if (process.env.NODE_ENV === "production") return null;
+	const p = new URLSearchParams(search);
+	const state = p.get("healthUpdate");
+	const auto = p.get("healthAuto");
+	if (!state && !auto) return null;
+	const mode = state && (HEALTH_UPDATE_STATES as readonly string[]).includes(state) ? state : "uptodate";
+	const behind = [{ component: "hubd", from: "0.1.14", to: "0.1.15" }, { component: "console", from: "0.1.18", to: "0.1.19" }];
+	let units = mode === "uptodate" ? [] : behind;
+	let last: { result: string; exitStatus: number | null; at: string | null } | null = mode === "running" ? { result: "running", exitStatus: null, at: null } : null;
+	let sub = { exists: auto !== "unset", channel: "stable", mode: auto === "unset" ? "unknown" : auto === "on" ? "auto" : "button" };
+	const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "Content-Type": "application/json" } });
+	return (async (input, init) => {
+		const url = String(input);
+		const method = init?.method ?? "GET";
+		if (url.startsWith("/api/health/subscription")) {
+			if (method === "PUT") sub = { exists: true, ...JSON.parse(String(init?.body)) };
+			return json(method === "PUT" ? {} : sub);
+		}
+		if (method === "POST") {
+			if (units.length === 0) return json({ code: "no_update" }, 409);
+			if (last?.result === "running") return json({ code: "running" }, 409);
+			last = { result: "running", exitStatus: null, at: null };
+			const ms = mode === "available" ? 8_000 : 1_500;
+			setTimeout(() => {
+				const at = new Date().toISOString();
+				if (mode === "failed") last = { result: "exit-code", exitStatus: 4, at };
+				else {
+					last = { result: "success", exitStatus: 0, at };
+					units = [];
+				}
+			}, ms);
+			return new Response(null, { status: 202 });
+		}
+		return json({ units, last });
+	}) as typeof fetch;
+}
+
 export interface FixtureSwitches {
 	fixture: HealthFixture | null;
 	restartStatus: number | null;

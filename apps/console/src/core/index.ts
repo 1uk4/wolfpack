@@ -100,7 +100,7 @@ export * from "./pack/pack-sections.ts";
 export type { Tone, HealthLink, HealthSnapshotView } from "./pack/pack-health-view.ts";
 export { ageText, BACK_MS, packSummary } from "./pack/pack-health-view.ts";
 export { groupByHost } from "./pack/pack-hosts.ts";
-export type { HostInfo } from "./pack/pack-hosts.ts";
+export type { HostInfo, HostCard } from "./pack/pack-hosts.ts";
 export { createHealthConnection } from "./pack/pack-health-connection.ts";
 export type { HealthConnectionDeps } from "./pack/pack-health-connection.ts";
 // machine-card.ts: the Machines section's card rules. Pure.
@@ -113,4 +113,5 @@ export * from "./pack/keys-seal.ts";
 export * from "./pack/wolves-model.ts";
 export * from "./pack/wolf-prompt-scopes.ts";
 export { buildGraphs, type FlowRow, type PromptGraph } from "./settings/prompt-flows.ts";
-export { updateWarnings } from "./pack/pack-health-view.ts";
+export { updateWarnings, updateFinished, updateOffered, updateOutcome, updateQuestion } from "./pack/pack-health-view.ts";
+export type { HealthActionsView, UpdateUnitView } from "./pack/pack-health-view.ts";

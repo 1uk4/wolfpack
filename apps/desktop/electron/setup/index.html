@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up Wolfpack</title>
+<link rel="stylesheet" href="setup.css">
+</head>
+<body>
+<div class="drag"></div>
+<main>
+  <ol class="dots" aria-hidden="true"><li></li><li></li><li></li></ol>
+
+  <form id="step-key" class="step" data-step="0" novalidate>
+    <h1>Sign in</h1>
+    <p class="hint">Wolfpack uses your own Anthropic API key. It stays on this Mac.</p>
+    <label for="key">API key</label>
+    <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…">
+    <p id="key-saved" class="hint" hidden>Key saved. <button id="replace-key" type="button" class="secondary">Replace</button></p>
+    <p class="links"><a id="get-key" href="https://console.anthropic.com/settings/keys">Get a key</a></p>
+    <p class="error" role="alert"></p>
+    <div class="actions"><button id="skip-key" type="button" class="secondary">Skip, add a key later in Settings</button><button type="submit" class="primary">Continue</button></div>
+  </form>
+
+  <form id="step-name" class="step" data-step="1" hidden novalidate>
+    <h1>Name your wolf</h1>
+    <p class="hint">You can change this later.</p>
+    <label for="name">Name</label>
+    <input id="name" type="text" autocomplete="off" maxlength="40">
+    <p class="error" role="alert"></p>
+    <div class="actions"><button type="button" class="back">Back</button><button type="submit" class="primary">Continue</button></div>
+  </form>
+
+  <form id="step-knowledge" class="step" data-step="2" hidden novalidate>
+    <h1>Knowledge</h1>
+    <p class="hint">Your wolf remembers what it learns in these areas.</p>
+    <ul id="domains" class="domains">
+      <li><label class="check"><input type="checkbox" id="d-personal" checked disabled> <span>personal</span></label></li>
+    </ul>
+    <button id="add-domain" type="button" class="secondary">Add a domain</button>
+    <p class="error" role="alert"></p>
+    <div class="actions"><button type="button" class="back">Back</button><button type="submit" class="primary" id="finish">Open chat</button></div>
+  </form>
+
+  <section id="working" class="step" data-step="3" hidden>
+    <h1>Starting your wolf…</h1>
+    <p class="hint">This takes a few seconds.</p>
+    <p class="error" role="alert"></p>
+    <div class="actions"><button type="button" id="working-back" class="back" hidden>Back</button><span></span></div>
+  </section>
+</main>
+<script src="setup.js"></script>
+</body>
+</html>

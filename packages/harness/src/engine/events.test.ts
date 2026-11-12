@@ -1,5 +1,5 @@
 /** Synthetic edge cases the recordings don't cover. Shapes follow the captured engine events. */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEventMapper, type EngineEvent, type EngineSnapshot } from "./events.js";
 
 const ev = (e: unknown) => e as EngineEvent;
@@ -106,6 +106,24 @@ describe("turn-end reason", () => {
     const out = map(start(), asstStart([]), asstEnd([], { stopReason: "error", errorMessage: "overloaded" }), end(), sub(1, "done"));
     expect(out.map((e) => e.type)).toEqual(["turn-start", "error", "turn-end"]);
     expect(out[1]).toMatchObject({ message: "overloaded" });
+  });
+  describe("a turn with no anthropic key (work-wolfpack-71LeXut)", () => {
+    const noKeyError = (errorMessage: string) => map(start(), asstStart([]), asstEnd([], { stopReason: "error", errorMessage }), end(), sub(1, "done"))[1];
+    const app = "No API key yet. Add one in Settings → Data and support, then send again.";
+    const plain = "No Anthropic API key is set for this wolf. Add one in Settings, then send again.";
+    afterEach(() => vi.unstubAllEnvs());
+
+    it("in the desktop app (WOLFPACK_SINGLE_MAC=1) points to Data and support, for both pi-ai phrasings and a wrapped message", () => {
+      vi.stubEnv("WOLFPACK_SINGLE_MAC", "1");
+      expect(noKeyError("Provider is not configured: anthropic")).toMatchObject({ type: "error", message: app });
+      expect(noKeyError("No API key for provider: anthropic")).toMatchObject({ message: app });
+      expect(noKeyError("Error: 401 - No API key for provider: anthropic. Use /login")).toMatchObject({ message: app });
+    });
+
+    it("without the flag says to add one in Settings, with no app-only path", () => {
+      vi.stubEnv("WOLFPACK_SINGLE_MAC", "");
+      expect(noKeyError("Provider is not configured: anthropic")).toMatchObject({ message: plain });
+    });
   });
 });
 

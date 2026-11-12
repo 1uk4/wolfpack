@@ -25,7 +25,8 @@
  * precedent, components/thread/session.ts).
  */
 import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
-import { clearHubToken, PAIR_PATH } from "@/src/core/ui/hub-auth";
+import { clearHubToken } from "@/src/core/ui/hub-auth";
+import { leaveOnUnauthorized } from "@/components/shell/single-mac";
 import { SERVER_EVENT_TYPES, type ServerEventType, type ServerEvents } from "@/src/core";
 
 /** The minimal source surface the provider consumes — EventSource behind
@@ -124,7 +125,7 @@ export function wireSource(source: NotifySource, hub: ReturnType<typeof createNo
 /** The device token was revoked: forget it and go to /pair (the same exit the fetch wrapper takes on a hub 401). */
 function signOut(): void {
 	clearHubToken(window.localStorage);
-	if (!window.location.pathname.startsWith(PAIR_PATH)) window.location.assign(PAIR_PATH);
+	leaveOnUnauthorized();
 }
 
 const EventsContext = createContext<ReturnType<typeof createNotifyHub> | null>(null);

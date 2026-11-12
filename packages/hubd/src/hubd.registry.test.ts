@@ -74,6 +74,50 @@ describe("hub registry", () => {
     expect(names).toEqual(["alpha"]);
   });
 
+  it("seeded domains get their KB folder (existing INDEX.md untouched), so the KB sync route stops 404ing; a missing folder is healed at the next start", async () => {
+    const f = fixtures();
+    const dir = mkdir();
+    const dom = (n: string) => join(hubRoots(dir).kbBase, "domains", n);
+    mkdirSync(dom("wolfpack"), { recursive: true });
+    writeFileSync(join(dom("wolfpack"), "INDEX.md"), "custom curated text\n");
+    const first = await start(dir, { domainsYaml: f.domains, wolfYamls: f.wolfs });
+    expect(existsSync(join(dom("personal"), "entries"))).toBe(true);
+    expect(readFileSync(join(dom("personal"), "INDEX.md"), "utf8")).toBe("# personal\n\nNo entries yet.\n");
+    expect(readFileSync(join(dom("wolfpack"), "INDEX.md"), "utf8")).toBe("custom curated text\n");
+    expect((await first.call("GET", "/v1/kb/domains/personal/manifest")).status).toBe(200);
+    await first.hub.close();
+    servers.pop();
+    rmSync(dom("personal"), { recursive: true, force: true });
+    const again = await start(dir);
+    expect(existsSync(join(dom("personal"), "entries"))).toBe(true);
+    expect((await again.call("GET", "/v1/kb/domains/personal/manifest")).status).toBe(200);
+  });
+
+  it("an existing domain folder is left exactly as it was at start: no stub INDEX.md, no new files", () => {
+    const f = fixtures();
+    const dir = mkdir();
+    const root = join(hubRoots(dir).kbBase, "domains", "personal");
+    mkdirSync(join(root, "entries"), { recursive: true });
+    writeFileSync(join(root, "entries", "x.md"), "curated entry\n");
+    createRegistry({ dataDir: dir, releaseClaims: async () => [], log: () => {}, seed: { domainsYaml: f.domains, wolfYamls: f.wolfs } });
+    expect(existsSync(join(root, "INDEX.md"))).toBe(false);
+    expect(readFileSync(join(root, "entries", "x.md"), "utf8")).toBe("curated entry\n");
+  });
+
+  it("a KB folder that cannot be created is logged with the domain name and startup still succeeds", () => {
+    const f = fixtures();
+    const dir = mkdir();
+    const domains = join(hubRoots(dir).kbBase, "domains");
+    mkdirSync(hubRoots(dir).kbBase, { recursive: true });
+    writeFileSync(domains, "a file where the domains folder should be");
+    const logs: string[] = [];
+    createRegistry({ dataDir: dir, releaseClaims: async () => [], log: (m) => logs.push(m), seed: { domainsYaml: f.domains, wolfYamls: f.wolfs } });
+    expect(logs.filter((l) => l.startsWith("hubd: could not create the KB folder for domain "))).toEqual([
+      expect.stringMatching(/^hubd: could not create the KB folder for domain "personal": .+/),
+      expect.stringMatching(/^hubd: could not create the KB folder for domain "wolfpack": .+/),
+    ]);
+  });
+
   it("without seed sources no registry file exists until the first write", async () => {
     const dir = mkdir();
     const { call } = await start(dir);

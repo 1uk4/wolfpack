@@ -22,7 +22,7 @@ The unit starts only when `/var/lib/workerd/hub.json` exists. `setup.sh` fails t
 
 ## A. Build the bundle (Mac)
 ```
-npm ci && npx tsc --build
+ONNXRUNTIME_NODE_INSTALL=skip npm ci && npx tsc --build
 node deploy/workerd/build-bundle.mjs /tmp/workerd-bundle     # prints the sha256 of workerd.mjs
 node /tmp/workerd-bundle/workerd.mjs --help | head -2         # expect "usage:"
 ```

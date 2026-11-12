@@ -1,0 +1,121 @@
+# Desktop app (work-wolfpack-07v3AmE): build the arm64 Mac app with the runtime inside (hubd, workerd, wolfd, memory, onnx natives, embedding model).
+#   build   : pull requests that touch apps/desktop, and manual runs. UNSIGNED, read-only token, no secrets. Uploads the dmg + zip + latest-mac.yml as a CI artifact.
+#   release : manual runs only, in the protected environment `desktop-release` (the owner creates it and holds the secrets there).
+#             Signs, notarises, staples and uploads a DRAFT GitHub release; the owner publishes it. Tag pushes do not trigger this.
+# Secrets (environment desktop-release): CSC_LINK (base64 .p12 of the Developer ID Application certificate), CSC_KEY_PASSWORD,
+#   APPLE_API_KEY (the App Store Connect .p8 contents), APPLE_API_KEY_ID, APPLE_API_ISSUER (ticket work-wolfpack-2bWFgG5).
+# Both jobs run apps/desktop/scripts/dist.mjs, which ends with scripts/check-app.mjs on the built app.
+name: desktop
+on:
+  pull_request:
+    paths: ['apps/desktop/**', '.github/workflows/desktop.yml', 'scripts/fetch-embed-model.mjs']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    # Apple silicon. macos-26, not macos-15: on macos-15 (Xcode 26.3 on macOS 15.8) actool's
+    # AssetCatalogAgent crashed compiling build/icon.icon from 2026-11-12, same image and commit that passed earlier.
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: select Xcode 26 (actool >= 26 compiles build/icon.icon)
+        run: |
+          xc=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$xc"
+          xcodebuild -version
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4   # the 547 MB model, pinned and SHA-256 checked by scripts/fetch-embed-model.mjs
+        with:
+          path: ${{ runner.temp }}/embed-model
+          key: embed-model-${{ hashFiles('scripts/fetch-embed-model.mjs') }}
+      - name: fetch the embedding model (pinned, checksummed)
+        run: node scripts/fetch-embed-model.mjs "$RUNNER_TEMP/embed-model"
+      - name: unsigned build + app check (pnpm dist)
+        env:
+          WOLFPACK_EMBED_MODEL_SRC: ${{ runner.temp }}/embed-model
+        run: pnpm --filter @wolfpack/desktop dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wolfpack-desktop-arm64
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/*.blockmap
+            apps/desktop/dist/latest-mac.yml
+          retention-days: 14
+
+  release:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/stable'
+    runs-on: macos-26   # same as build: actool needs Xcode 26 on macOS 26 to compile build/icon.icon
+    timeout-minutes: 90
+    environment: desktop-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: select Xcode 26 (actool >= 26 compiles build/icon.icon)
+        run: |
+          xc=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$xc"
+          xcodebuild -version
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/embed-model
+          key: embed-model-${{ hashFiles('scripts/fetch-embed-model.mjs') }}
+      - name: fetch the embedding model (pinned, checksummed)
+        run: node scripts/fetch-embed-model.mjs "$RUNNER_TEMP/embed-model"
+      - name: signed + notarised build + app check (dist.mjs --ci)
+        env:
+          WOLFPACK_EMBED_MODEL_SRC: ${{ runner.temp }}/embed-model
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          umask 077
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
+          unset APPLE_API_KEY_CONTENT
+          APPLE_API_KEY="$RUNNER_TEMP/AuthKey.p8" node apps/desktop/scripts/dist.mjs --ci
+      - name: delete the API key file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"
+      - name: upload the DRAFT release (no signing secrets in this step)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: apps/desktop
+        run: |
+          pnpm exec electron-builder publish --policy always \
+            --files dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wolfpack-desktop-arm64-signed
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/*.blockmap
+            apps/desktop/dist/latest-mac.yml
+          retention-days: 14

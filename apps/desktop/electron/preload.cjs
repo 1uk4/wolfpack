@@ -33,8 +33,10 @@
  */
 const { contextBridge, ipcRenderer } = require("electron");
 
+// main.cjs passes --wolfpack-single-mac when the app runs its own runtime (work-wolfpack-TdmbaV4): the console hides multi-machine UI.
 const api = {
 	platform: process.platform,
+	singleMac: process.argv.includes("--wolfpack-single-mac"),
 	expandWindow: () => ipcRenderer.send("wolfpack:expand-window"),
 	onZoom: (cb) => {
 		const listener = (_event, factor) => cb(factor);
@@ -55,5 +57,29 @@ const api = {
 		return () => ipcRenderer.removeListener("wolfpack:navigate", listener);
 	},
 };
+
+// Settings > Data and support (work-wolfpack-B97I0Gv): only when the app runs its own runtime. The key goes in, never comes back: the page learns { ok } or an error.
+if (api.singleMac && !process.argv.includes("--wolfpack-setup")) {
+	const call = (name, arg) => ipcRenderer.invoke(`wolfpack:app:${name}`, arg);
+	api.app = {
+		folders: () => call("folders"),
+		showFolder: (name) => call("show-folder", name), // "state" | "wolves"
+		loginItem: { get: () => call("login-item"), set: (on) => call("set-login-item", on === true) },
+		changeKey: (key) => call("change-key", key),
+		copyDiagnostics: () => call("copy-diagnostics"),
+		reset: () => call("reset"),
+	};
+}
+
+// The setup wizard window only (main.cjs passes --wolfpack-setup); the console never sees it.
+if (process.argv.includes("--wolfpack-setup")) {
+	api.setup = {
+		info: () => ipcRenderer.invoke("wolfpack:setup:info"),
+		suggestedName: () => ipcRenderer.invoke("wolfpack:setup:name"),
+		checkKey: (key) => ipcRenderer.invoke("wolfpack:setup:check-key", key),
+		openExternal: (url) => ipcRenderer.invoke("wolfpack:setup:open-external", url),
+		finish: (answers) => ipcRenderer.invoke("wolfpack:setup:finish", answers),
+	};
+}
 
 contextBridge.exposeInMainWorld("wolfpack", api);

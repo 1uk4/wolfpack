@@ -17,6 +17,7 @@
  */
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
+import { packStateDir } from "@wolfpack/protocol/runtime-home";
 import { dirname, join, resolve } from "node:path";
 import { discoverAgents, formatRosterLines, orchestratorRules } from "@wolfpack/agents";
 import type { PromptSection } from "@wolfpack/engine";
@@ -145,7 +146,7 @@ export function loadSkills(den: string): SkillSummary[] {
 
 /** Ops reference path for investigator briefs: $WOLFPACK_OPS_REF, then ~/.wolfpack/ops.md (named even when absent). */
 function opsRef(): string {
-  const fallback = join(homedir(), ".wolfpack", "ops.md");
+  const fallback = join(packStateDir(), "ops.md");
   const env = process.env.WOLFPACK_OPS_REF;
   return env && existsSync(env) ? env : fallback;
 }

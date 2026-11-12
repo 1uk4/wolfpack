@@ -8,6 +8,7 @@ WORKDIR /src
 COPY package.json package-lock.json tsconfig.json ./
 COPY packages ./packages
 COPY apps ./apps
+ENV ONNXRUNTIME_NODE_INSTALL=skip
 RUN npm ci --no-audit --no-fund && npx tsc --build
 # Production-only install of the wolfd closure (no devDependencies, no apps/*): same lockfile, workspace-scoped.
 RUN mkdir /stage && cp package.json package-lock.json /stage/ \
@@ -19,6 +20,8 @@ RUN for a in apps/*; do mkdir -p /stage/$a && cp $a/package.json /stage/$a/; don
  && find /stage/packages -type f \( -name '*.test.js' -o -name '*.test.d.ts' -o -name '*.test.js.map' \) -delete  # compiled tests carry fake-token fixtures and are not runtime
 # glibc targets only: the musl SDK native package is another ~270 MB.
 RUN rm -rf /stage/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
+# The in-process ONNX embedder (optional dep of @wolfpack/kb) is for the desktop app only; servers embed through Ollama.
+RUN rm -rf /stage/node_modules/onnxruntime-node /stage/node_modules/onnxruntime-common /stage/node_modules/@huggingface/tokenizers
 # claude CLI for operators / the billing probe. Default (small): tools/bin/claude -> the SDK's own native binary (same code the wolf
 # runs; its version is the SDK's claudeCodeVersion), plus tools/install-claude-cli.sh to install the pinned CLI on demand.
 # WITH_CLI=1 also bakes the pinned @anthropic-ai/claude-code in (+~310 MB).

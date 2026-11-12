@@ -449,6 +449,23 @@ export default function createMemoryExtension(
   // ─── Observer ──────────────────────────────────────────────────────────────
   const observing = new Map<number, Promise<void>>();
   let warnedNoReads = false;
+  let warnedNoKey = false;
+  /**
+   * The Anthropic SDK's own error when it has neither apiKey nor authToken (it also reads process.env itself, so we never
+   * guess from env: only the SDK knows). Matched by its message; nothing else in the engine throws this text.
+   * The desktop app can run with no key yet: one log line, the watermark stays put (it only advances after a successful
+   * observation), so a key added later catches up on the backlog.
+   */
+  function swallowNoKey(err: unknown): boolean {
+    if (!(err instanceof Error) || !/Could not resolve authentication method/.test(err.message)) return false;
+    if (!warnedNoKey) {
+      warnedNoKey = true;
+      console.warn(process.env.WOLFPACK_SINGLE_MAC === "1"
+        ? "[memory] No Anthropic API key: not observing until one is added (Settings → Data and support)"
+        : "[memory] No Anthropic API key: not observing until one is added.");
+    }
+    return true;
+  }
   let consolidating: Promise<void> | null = null;
   const mem = memoryEmitter(wolfDen, wolfName, defaultDomain);
   // Subagent memory: responses seen since a subagent conversation last observed, and the cached task → feature lookup.
@@ -622,7 +639,7 @@ export default function createMemoryExtension(
     timer = setInterval(() => {
       void (async () => {
         try {
-          if (consolidating) return;
+          if (consolidating || warnedNoKey) return; // no key: a tick would only log its start line and fail again
           const stats = await getPoolStats(wolfDen);
           if (stats.count === 0 || poolSig(stats) === lastSavedPool) return; // empty, or nothing new since the last save
           if (!actions.promoteEnabled) {
@@ -634,7 +651,7 @@ export default function createMemoryExtension(
           const job = actions.promote();
           if (job.status === "started") await job.done;
         } catch (err) {
-          console.error("[memory] timer error:", err instanceof Error ? err.message : err);
+          if (!swallowNoKey(err)) console.error("[memory] timer error:", err instanceof Error ? err.message : err);
         }
       })();
     }, timerMs);
@@ -710,7 +727,7 @@ export default function createMemoryExtension(
         const consResult = await consolidateToSessions({ ...(opts.drain ? {} : { poolTarget }), minObservations: 1 });
         console.log(`[memory] Auto-consolidated into session topics: ${consResult.topicsCreated} created, ${consResult.topicsMerged} updated`);
       } catch (consErr) {
-        console.error("[memory] Auto-consolidation failed:", consErr instanceof Error ? consErr.message : consErr);
+        if (!swallowNoKey(consErr)) console.error("[memory] Auto-consolidation failed:", consErr instanceof Error ? consErr.message : consErr);
       } finally {
         consolidating = null;
       }
@@ -1273,6 +1290,7 @@ export default function createMemoryExtension(
         }
         const prev = observing.get(ctx.conversationId) ?? Promise.resolve();
         const run = prev.then(() => observeConversation(message, ctx, { planning, final: !message.content.some((b) => b.type === "toolCall") })).catch((err) => {
+          if (swallowNoKey(err)) return;
           console.error("[memory] observation error:", err instanceof Error ? err.message : err);
         });
         observing.set(ctx.conversationId, run);

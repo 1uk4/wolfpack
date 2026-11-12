@@ -11,6 +11,8 @@ export interface WolfConfig {
   specialty?: string;
   domains?: string[];
   extensions?: string[];
+  /** Provider plug-ins to load from the plugins folder (folder names). */
+  plugins?: string[];
   telegram?: {
     tokenEnv?: string;  // env var name for bot token (default: TELEGRAM_BOT_TOKEN)
     ownerId: number;    // allowed user id
@@ -58,6 +60,10 @@ export async function loadWolfConfig(): Promise<WolfConfig> {
 
   if (!config.name) {
     throw new Error("wolf.yaml must specify 'name'");
+  }
+  const rawPlugins: unknown = config.plugins;
+  if (rawPlugins !== undefined && (!Array.isArray(rawPlugins) || rawPlugins.some((p) => typeof p !== "string"))) {
+    throw new Error(`invalid wolf.yaml: plugins must be a list of plug-in folder names (strings), got ${JSON.stringify(rawPlugins)}`);
   }
   const rawDefault: unknown = config.memory?.defaultDomain;
   if (rawDefault !== undefined && (typeof rawDefault !== "string" || !rawDefault)) {

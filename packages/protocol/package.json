@@ -12,7 +12,8 @@
     "./objects": "./dist/objects.js",
     "./stub": "./dist/stub/index.js",
     "./contract": "./dist/contract/index.js",
-    "./health-lag": "./dist/health-lag.js"
+    "./health-lag": "./dist/health-lag.js",
+    "./runtime-home": "./dist/runtime-home.js"
   },
   "scripts": {
     "build": "tsc --build",

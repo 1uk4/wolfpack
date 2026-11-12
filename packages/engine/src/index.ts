@@ -46,7 +46,7 @@ export type { KnowledgeAdapter, ExtractOptions, UsageRecord } from "./adapter.js
 export { AnthropicAdapter } from "./adapters/anthropic.js";
 export { loadQuery, warmClaudeAgentSdk } from "./adapters/claude-agent-sdk.js";
 export { LlmInfraError, OutputTruncatedError } from "./adapters/errors.js";
-export { createAdapter } from "./adapters/index.js";
+export { createAdapter, registerAdapter, type AdapterFactory } from "./adapters/index.js";
 
 // Usage tracking
 export { UsageTracker, type UsageSummary } from "./usage.js";

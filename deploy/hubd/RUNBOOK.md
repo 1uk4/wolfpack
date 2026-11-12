@@ -38,7 +38,7 @@ journalctl -u hubd -n 20 --no-pager                                             
 
 ## 0. Build (Mac)
 ```
-npm ci && npx tsc --build
+ONNXRUNTIME_NODE_INSTALL=skip npm ci && npx tsc --build
 node deploy/hubd/build-bundle.mjs /tmp/hubd-bundle     # prints the sha256 of hubd.mjs
 node /tmp/hubd-bundle/hubd.mjs | head -2               # expect "usage:"
 ```

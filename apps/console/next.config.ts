@@ -24,7 +24,7 @@ const nextConfig: NextConfig = {
 	// stripped the external pi packages from the trace and broke the packaged server.
 	// scripts/build-server.mjs also refuses to package a bundle that holds auth.json.
 	outputFileTracingExcludes: {
-		"*": ["data/**/*", "auth.json", ".env*"],
+		"*": ["data/**/*", ".env*"],
 	},
 
 	// The tracer misses JSON loaded with `import ... with { type: "json" }`, so

@@ -18,7 +18,6 @@ import { KeyboardShortcuts } from "@/components/shell/keyboard-shortcuts";
 import { shouldOpenInReader, useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { WorkNavEntry } from "@/components/work/work-nav-link";
 import { CommandPalette } from "@/components/shell/command-palette";
-import { SettingsDialogProvider } from "@/components/settings/settings-dialog.tsx";
 import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -982,7 +981,7 @@ export function SessionsSidebar() {
 export function AppShell({ children }: { children: React.ReactNode }) {
 	const multiMachine = useMultiMachine();
 	return (
-		<SettingsDialogProvider>
+		<>
 			<SessionsSidebar />
 			<main className="min-w-0 flex-1">{children}</main>
 			{/* The floating chat bar: one per window, on every route (draws nothing without its provider). */}
@@ -996,6 +995,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 			    matters for the events it dispatches, never for DOM priority. */}
 			<KeyboardShortcuts />
 			<CommandPalette />
-		</SettingsDialogProvider>
+		</>
 	);
 }

@@ -26,7 +26,6 @@ Object.assign(globalThis, {
 	getComputedStyle: () => ({ animationName: "none" }),
 });
 
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
@@ -160,11 +159,11 @@ describe("live revision in place", () => {
 		await act(async () => {
 			root!.render(
 				<AppRouterContext.Provider value={{ push() {} } as never}>
-					<SettingsDialogProvider>
+					<>
 						<MemoryEventsProvider connect={inertSource}>
 							<ThreadChat wolf="w" slug="s" threadId="t1" title="T" initialMessages={threadMessagesToNative(history) as never} />
 						</MemoryEventsProvider>
-					</SettingsDialogProvider>
+					</>
 				</AppRouterContext.Provider>,
 			);
 		});

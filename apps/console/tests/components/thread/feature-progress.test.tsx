@@ -33,7 +33,6 @@ type WorkRecordResponse = import("../../../src/core/index.ts").WorkRecordRespons
 const { FeatureProgressPanel, useFeatureProgress } = await import("../../../components/thread/feature-progress.tsx");
 const { resetOpenPanels, setOpenPanel } = await import("../../../components/thread/pin-store.ts");
 const { FIXTURE_THREAD } = await import("@wolfpack/client");
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
@@ -383,13 +382,13 @@ async function mountChat(over: { initialBound?: string } = {}) {
 	await act(async () => {
 		root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
-				<SettingsDialogProvider>
+				<>
 					<ServerEventsProvider connect={frames}>
 						<MemoryEventsProvider connect={() => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} })}>
 							<ThreadChat wolf="1uk4" slug="home" threadId={FIXTURE_THREAD.id} title="T" initialMessages={threadMessagesToNative([CHECKLIST])} {...over} />
 						</MemoryEventsProvider>
 					</ServerEventsProvider>
-				</SettingsDialogProvider>
+				</>
 			</AppRouterContext.Provider>,
 		);
 	});

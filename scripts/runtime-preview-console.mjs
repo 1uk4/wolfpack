@@ -80,7 +80,7 @@ function loadAgent({ home, env: hostEnv = {}, args, workingDir, port, stackPort,
 	const access = hub
 		? { WOLFPACK_HUB_URL: hub.url, HUBD_PUBLIC_URL: hub.publicUrl, WOLFPACK_CONSOLE_PUBLIC_ORIGIN: `http://127.0.0.1:${port}` }
 		: { WOLFPACK_API_URL: `http://127.0.0.1:${stackPort}` };
-	const env = { PORT: port, HOSTNAME: "127.0.0.1", ...access, HOME: home, WOLFPACK_AUTH_FILE: path.join(home, ".wolfpack", "preview", "auth.json"), PATH: process.env.PATH ?? "/usr/bin:/bin" };
+	const env = { PORT: port, HOSTNAME: "127.0.0.1", ...access, HOME: home, WOLFPACK_KEY_FILE: path.join(home, ".wolfpack", "preview", "keys.env"), PATH: process.env.PATH ?? "/usr/bin:/bin" };
 	const file = plistPath(home);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(

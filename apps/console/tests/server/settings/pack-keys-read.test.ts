@@ -1,6 +1,6 @@
 /**
- * The console reads the machine's Pack key file first (work-wolfpack-6EmU8pu): the Pack value beats the process env and auth.json,
- * auth.json stays the fallback, and auth.json is never written. Throwaway values and temp dirs only.
+ * The console reads the machine's Pack key file first (work-wolfpack-6EmU8pu): the Pack value beats the process env. The console's old
+ * auth.json is no longer read and never written (work-wolfpack-u6GH2kk). Throwaway values and temp dirs only.
  */
 
 import assert from "node:assert/strict";
@@ -21,7 +21,7 @@ process.env.WOLFPACK_AUTH_FILE = AUTH;
 process.env.WOLFPACK_KEY_FILE = PACK;
 process.env.DEEPGRAM_API_KEY = "dg-from-env";
 
-const { keyValue, initAuthEnv } = await import("../../../src/server/settings/keys.ts");
+const { keyValue } = await import("../../../src/server/settings/keys.ts");
 
 after(() => {
 	delete process.env.DEEPGRAM_API_KEY;
@@ -30,9 +30,11 @@ after(() => {
 });
 
 describe("console reads the Pack key file first", () => {
-	it("Pack beats the env and auth.json; auth.json still answers for keys the Pack lacks", () => {
+	it("Pack beats the env, and the old auth.json is not read at all", () => {
 		assert.equal(keyValue("DEEPGRAM_API_KEY"), "dg-from-pack");
-		assert.equal(keyValue("TAVILY_API_KEY"), "tv-from-auth");
+		assert.equal(keyValue("TAVILY_API_KEY"), undefined);
+		assert.equal(process.env.TAVILY_API_KEY, undefined);
+		assert.equal(fs.readFileSync(AUTH, "utf8"), AUTH_TEXT);
 	});
 
 	it("reads the file fresh, so a key.set shows without a restart", () => {
@@ -40,21 +42,17 @@ describe("console reads the Pack key file first", () => {
 		assert.equal(keyValue("DEEPGRAM_API_KEY"), "dg-second");
 	});
 
-	it("never copies the Pack's Anthropic key into process.env (child processes would inherit it), and never touches auth.json", () => {
+	it("never copies the Pack's Anthropic key into process.env (child processes would inherit it)", () => {
 		fs.writeFileSync(PACK, "ANTHROPIC_API_KEY=an-from-pack\n");
-		initAuthEnv();
-		assert.equal(process.env.ANTHROPIC_API_KEY, undefined);
 		assert.equal(keyValue("ANTHROPIC_API_KEY"), "an-from-pack");
-		assert.equal(fs.readFileSync(AUTH, "utf8"), AUTH_TEXT);
+		assert.equal(process.env.ANTHROPIC_API_KEY, undefined);
 	});
 
 	it("a removed key is gone at once", () => {
 		fs.writeFileSync(PACK, "ANTHROPIC_API_KEY=an-set\n");
 		assert.equal(keyValue("ANTHROPIC_API_KEY"), "an-set");
 		fs.writeFileSync(PACK, "");
-		initAuthEnv();
 		assert.equal(keyValue("ANTHROPIC_API_KEY"), undefined);
-		assert.equal(process.env.ANTHROPIC_API_KEY, undefined);
 	});
 
 	it("has no default key file: without WOLFPACK_KEY_FILE there is no Pack key", () => {
@@ -70,7 +68,7 @@ describe("console reads the Pack key file first", () => {
 	it("parses CRLF lines and returns only the known slots", () => {
 		fs.writeFileSync(PACK, "DEEPGRAM_API_KEY=dg-crlf\r\nTAVILY_API_KEY=tv-pack\r\n");
 		assert.equal(keyValue("DEEPGRAM_API_KEY"), "dg-crlf");
-		assert.equal(keyValue("TAVILY_API_KEY"), "tv-from-auth");
+		assert.equal(keyValue("TAVILY_API_KEY"), undefined);
 	});
 
 	it("ignores a value with characters the store would reject", () => {

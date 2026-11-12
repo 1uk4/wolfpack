@@ -34,12 +34,11 @@ describe("Pack > Wolves > All settings", () => {
 		assert.match(html, /data-testid="env-ANTHROPIC_API_KEY"/);
 	});
 
-	it("shows the section in a wolf this console can reach and none in one it cannot", () => {
+	it("shows no All settings section in a wolf this console cannot reach (the reachable case is in render-pack-settings-coverage)", () => {
 		const machine = { hostId: "sfo", machine: "sfo-01", online: true, canSetKeys: true, slots: [], wolves: [{ name: "dewey", transport: "api" as const }] };
 		const wolf = machine.wolves[0]!;
 		const detail = (reach: { relay: boolean; machine: string }) =>
 			renderToStaticMarkup(<WolfDetail machine={machine} wolf={wolf} catalog={[]} reach={reach} call={noCall} onBack={() => {}} />);
-		assert.match(detail({ relay: false, machine: "sfo-01" }), /data-testid="wolf-all-settings"/);
 		const away = detail({ relay: false, machine: "Mac" });
 		assert.ok(!away.includes('data-testid="wolf-all-settings"'));
 		assert.match(away, /data-testid="wolf-readonly"/);

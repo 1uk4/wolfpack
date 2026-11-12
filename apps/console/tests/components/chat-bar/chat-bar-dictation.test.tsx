@@ -92,7 +92,6 @@ Object.defineProperty(globalThis, "navigator", {
 const { usePathname } = await import("next/navigation");
 const { AppRouterContext: navCtx } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { FakeNav, navLog } = await import("../../helpers/fake-nav.tsx");
 const { useThreadDictation } = await import("../../../components/composer/use-thread-dictation.ts");
 const { useComposerDraft, appendToDraft, draftKey, writeDraft, useRereadDraftWhenShown } = await import("../../../lib/composer-draft.ts");
@@ -157,7 +156,7 @@ async function mount(start: string, stored: object | null, extra?: React.ReactNo
 	await act(async () => {
 		root!.render(
 			<FakeNav start={start}>
-				<SettingsDialogProvider>
+				<>
 					<ServerEventsProvider connect={fakeSource}>
 						<AttachedThreadProvider>
 							<ChatBar />
@@ -165,7 +164,7 @@ async function mount(start: string, stored: object | null, extra?: React.ReactNo
 							{extra}
 						</AttachedThreadProvider>
 					</ServerEventsProvider>
-				</SettingsDialogProvider>
+				</>
 			</FakeNav>,
 		);
 	});
@@ -512,7 +511,7 @@ describe("useDictation lifecycle", () => {
 		const host = document.createElement("div");
 		document.body.appendChild(host);
 		const probe = createRoot(host);
-		await act(async () => probe.render(<SettingsDialogProvider><Probe /></SettingsDialogProvider>));
+		await act(async () => probe.render(<><Probe /></>));
 		await fire(host.querySelector('[data-testid="dictation-toggle"]')!, "click", { detail: 1 });
 		await wait();
 		const ws = await say("never lands");
@@ -996,7 +995,7 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 		try {
 			const tree = (withBar: boolean) => (
 				<FakeNav start="/wolf/w/thread/a">
-					<SettingsDialogProvider>
+					<>
 						<ServerEventsProvider connect={fakeSource}>
 							<AttachedThreadProvider>
 								{withBar ? <ChatBar /> : null}
@@ -1004,7 +1003,7 @@ describe("dictation for a thread follows the owner, and stopping decides where t
 								<OnPageA />
 							</AttachedThreadProvider>
 						</ServerEventsProvider>
-					</SettingsDialogProvider>
+					</>
 				</FakeNav>
 			);
 			await act(async () => root!.render(tree(false)));

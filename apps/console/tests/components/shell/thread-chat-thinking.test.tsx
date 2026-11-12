@@ -21,7 +21,6 @@ Object.assign(globalThis, {
 });
 
 const { KeyboardShortcuts } = await import("../../../components/shell/keyboard-shortcuts.tsx");
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
@@ -51,12 +50,12 @@ async function mount() {
 	await act(async () => {
 		root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
-			<SettingsDialogProvider>
+			<>
 			<MemoryEventsProvider connect={inertSource}>
 				<ThreadChat wolf="w" slug="s" threadId="t1" title="T" initialMessages={[assistant("a1", "first", "x"), assistant("a2", "second", "y")]} />
 				<KeyboardShortcuts />
 			</MemoryEventsProvider>
-			</SettingsDialogProvider>
+			</>
 			</AppRouterContext.Provider>,
 		);
 	});

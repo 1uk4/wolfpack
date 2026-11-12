@@ -24,7 +24,6 @@ Object.assign(globalThis, {
 	getComputedStyle: () => ({ animationName: "none" }),
 });
 
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AskCard } = await import("../../../components/ask/ask-card.tsx");
 const { useDictation, joinDictation, useFieldMic, InlineMic } = await import("../../../components/composer/dictation.tsx");
 
@@ -132,9 +131,9 @@ async function mount(children: React.ReactNode) {
 	root = createRoot(host);
 	await act(async () => {
 		root!.render(
-			<SettingsDialogProvider>
+			<>
 				<Page>{children}</Page>
-			</SettingsDialogProvider>,
+			</>,
 		);
 	});
 }
@@ -372,9 +371,9 @@ describe("module singletons", () => {
 		root = createRoot(host);
 		await act(async () => {
 			root!.render(
-				<SettingsDialogProvider>
+				<>
 					<OverrideTextarea value="" onChange={() => {}} onAppend={() => {}} micKey="k" />
-				</SettingsDialogProvider>,
+				</>,
 			);
 		});
 		assert.equal(mics().length, 0);
@@ -402,9 +401,9 @@ describe("module singletons", () => {
 		root = createRoot(host);
 		await act(async () => {
 			root!.render(
-				<SettingsDialogProvider>
+				<>
 					<Swap />
-				</SettingsDialogProvider>,
+				</>,
 			);
 		});
 		assert.equal(mics().length, 1);

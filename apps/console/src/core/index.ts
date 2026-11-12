@@ -49,9 +49,7 @@ export * from "./settings/settings.ts";
 export * from "./settings/settings-resolution.ts";
 export * from "./thread/session-find.ts";
 export * from "./thread/session-navigation.ts";
-// auth-keys.ts (auth-keys wave, 2026-09-19): the curated key catalog +
-// shape rules + masking — pure, browser-safe (the auth page binds to the
-// /api/keys routes built on it).
+// auth-keys.ts: the model-provider key table (provider id → env var) — pure, browser-safe.
 export * from "./settings/auth-keys.ts";
 // keyboard.ts: the shortcut registry + binding normalization (pure, browser-safe).
 export * from "./ui/keyboard.ts";

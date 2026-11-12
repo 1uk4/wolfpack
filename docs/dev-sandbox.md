@@ -172,7 +172,7 @@ wolfpack preview off             # stop the console
   `<worktree>/apps/console` on `127.0.0.1:3230` (`PREVIEW_CONSOLE_PORT`) against the local wolfd
   (`WOLFPACK_API_URL=http://127.0.0.1:7141`) under the launchd agent `com.wolfpack.preview-console` (log
   `~/.wolfpack/preview/console.log`), waits up to 90 s for `/api/wolves` to list a wolf (the first request compiles), and runs
-  `open http://127.0.0.1:3230`. The console reads its keys from `~/.wolfpack/preview/auth.json` (`WOLFPACK_AUTH_FILE`), so they
+  `open http://127.0.0.1:3230`. The console reads its Pack keys from `~/.wolfpack/preview/keys.env` (`WOLFPACK_KEY_FILE`; absent until a key is set), so they
   survive a switch. If port 3230 is held by something else (a hand-started `next dev`) it refuses.
 - **All wolves, like stable.** If this Mac is paired with a hub (`~/.wolfpack/workerd/hub.json`, the file workerd links with; only its
   `hubUrl` is read, never the token), the preview console runs in hub relay mode: `WOLFPACK_HUB_URL` and `HUBD_PUBLIC_URL` are the

@@ -13,7 +13,7 @@ Turns on the Pack's Keys page for sfo-01: keys sent from the Pack are stored in 
 - **Subscription wolves never receive the Pack's Anthropic key.** Only wolves whose transport is `api` get `ANTHROPIC_API_KEY` from the key file, and a save restarts only those wolves. A wolf's transport is its own `"transport"` in the `models.json` beside its `wolf.yaml`; `WOLF_TRANSPORT` is only a fallback for a wolf with none (the wolf's own value always wins). If the transport cannot be determined, the wolf is treated as subscription (a metered key is never sent on a guess). workerd reports each wolf's transport in its inventory, and the Keys grid shows a muted "Claude subscription" in the Chat row for a machine whose wolves are all subscription. The Deepgram key is not affected (the console reads it itself).
 - **On sfo-01 the Pack Anthropic key feeds only the hub's curator and memory** (hubd), not the wolves. A later feature (work-wolfpack-dcyQcRG) makes the bridge easy to set up.
 - workerd merges the key file over the environment of every API-key wolfd it spawns. On sfo-01 workerd-wolves does not spawn wolfd itself: its "wolfd command" is `wolfd-unit.sh`, which asks systemd for `wolfd@<name>`. That env is not forwarded to the unit. So on sfo-01 a key saved in the Pack **does not reach the wolves**, and it must not: `wolfd@.service` has an `ExecStartPre` that refuses to start when `ANTHROPIC_API_KEY` is set ("a wolfd wolf never runs on a metered key", exit 78). **Do not add the key file as an `EnvironmentFile=` of `wolfd@`.** (The owner's plan listed that drop-in; it would stop every wolf. Skipped on purpose. Changing that guard is an `infra/` change and needs its own decision.)
-- The console reads the key file first for the Deepgram dictation token and for the Anthropic key it uses itself (path from `WOLFPACK_KEY_FILE` only; with it unset the console has no Pack key file). It does not copy Pack keys into its own environment, so none reaches a child process. It ignores a world-writable key file (logged, never the value) and never writes `auth.json`.
+- The console reads the key file first for the Deepgram dictation token and for the Anthropic key it uses itself (path from `WOLFPACK_KEY_FILE` only; with it unset the console has no Pack key file). It does not copy Pack keys into its own environment, so none reaches a child process. It ignores a world-writable key file (logged, never the value). It neither reads nor writes `auth.json` any more (see step 0).
 - hubd and the curator/sweep read keys only from their process environment (the crawl service takes `ANTHROPIC_API_KEY` from env). An `EnvironmentFile=` drop-in on `hubd.service` covers them. No code reads the file there. **So after you change the Anthropic key, restart `hubd`** (`systemctl restart hubd.service`): its curator and memory read the environment only when the unit starts, and the Keys page shows "Saved. No wolf on this machine uses it; the hub's memory picks it up after the hub restarts."
 - A pre-existing `ANTHROPIC_API_KEY` in workerd's own environment is still inherited by every wolf it spawns, so do not set one there.
 
@@ -34,6 +34,25 @@ getent passwd | grep -E '^(wolf-|workerd|console|hubd)' | cut -d: -f1
 
 ## Where the key file lives, and why not `/var/lib/workerd-wolves/keys.env`
 `/var/lib/workerd-wolves` is the unit's `StateDirectory` with mode 0700, and systemd re-applies that mode on every start, so the console and hubd could never reach a file inside it. This runbook uses its own directory: **`/var/lib/wolfpack-keys/keys.env`**, directory `workerd-wolves:workerd-keys` mode `2750` (setgid so new files keep the group), file mode `0640`. (If the owner prefers the other path, it needs a different mechanism; **check on the box**.)
+
+## 0. Before the new console starts: does the console have keys in `auth.json`?
+The console no longer reads `auth.json`. Any key that lives only there (likely the Deepgram key the phone's dictation uses) stops working the moment the new console starts, unless it is moved into the Pack key file first. Do this before deploy; the file itself is never edited or deleted.
+```
+# where the console's auth.json is (a path, not a secret); empty = the console's default location, check on the box
+grep -E '^WOLFPACK_AUTH_FILE=' /etc/wolfpack/console.env
+# every key name it holds: names only, never values. The file is mode 0600, so run this as the console's user or root.
+# auth.json is a flat JSON {VAR: value} map
+f=<the path from above>
+sudo -u <console user> node -e 'console.log(Object.keys(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))).join("\n"))' "$f"
+# (or, as that user or root: jq -r 'keys[]' "$f")
+```
+For `ANTHROPIC_API_KEY` or `DEEPGRAM_API_KEY`, move the key before the new console starts, by either:
+- re-entering it in Pack → Keys once the page works (dictation on the phone is off until then), or
+- migrating it with workerd's one-time copy: add `WORKERD_MIGRATE_KEYS=1` and `WORKERD_MIGRATE_AUTH_JSON=<path>` as in step 4, restart `workerd-wolves`, then remove those lines. The file must be readable by `workerd-wolves`; if it is not, use the first way.
+
+For any other name (OpenRouter, OpenAI and so on) the Pack cannot hold it. Set it in the console's service environment (`/etc/wolfpack/console.env`) before the new console starts: `keyValue` still falls back to the environment.
+
+If the list has none of these names (or the file is absent), nothing to do.
 
 ## 1. Preconditions
 ```
@@ -164,4 +183,4 @@ The key file and group can stay (unused) or be removed later: `rm /var/lib/wolfp
 - That `SupplementaryGroups=` in a drop-in adds to (not replaces) `console.service`'s `systemd-journal`; confirm with `systemctl show console -p SupplementaryGroups`.
 - That `ReadWritePaths=` in the drop-in is enough under `ProtectSystem=strict` for the atomic temp-file + rename in `/var/lib/wolfpack-keys` (look for EACCES/EROFS in `journalctl -u workerd-wolves`).
 - The real unit/user names on the box (listing commands above), and that no extra wolves or consoles exist beyond `infra/`.
-- Whether sfo-01's console uses `auth.json` at all (`WOLFPACK_AUTH_FILE` in `/etc/wolfpack/console.env`; do not print the file).
+- Whether sfo-01's console holds keys in `auth.json`: see step 0.

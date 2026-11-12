@@ -251,9 +251,9 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		expect(h.helper).toEqual(["running 0"]);
 		expect(readState()).toMatchObject({ mode: "worktree", worktree: wtA, previewRef: "feat/a", console: { mode: "dev", dir: wtA }, phase: "switching" });
 		expect(h.lc.some((a) => a[0] === "bootstrap" && a[2].endsWith("com.wolfpack.preview-console.plist"))).toBe(true);
-		// keys survive a switch: the console reads one auth file under ~/.wolfpack/preview, not the served worktree's
+		// keys survive a switch: the console reads one key file under ~/.wolfpack/preview, not the served worktree's
 		expect(fs.readFileSync(path.join(home, "Library", "LaunchAgents", "com.wolfpack.preview-console.plist"), "utf8")).toContain(
-			`<key>WOLFPACK_AUTH_FILE</key><string>${path.join(home, ".wolfpack", "preview", "auth.json")}</string>`,
+			`<key>WOLFPACK_KEY_FILE</key><string>${path.join(home, ".wolfpack", "preview", "keys.env")}</string>`,
 		);
 		expect(g(rt, "rev-parse", "--abbrev-ref", "HEAD")).toBe("stable"); // the runtime checkout is not touched
 	});

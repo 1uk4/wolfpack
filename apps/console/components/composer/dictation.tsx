@@ -111,8 +111,8 @@ export function openDeepgramKeyInPack(): void {
 }
 
 /** The client-authored KEYLESS line (zero-keys wave, owner 2026-09-25):
- * the token route's raw 503 message is dev-speak ("add it to auth.json
- * (desktop) or .env.local (dev)") — the surface says the short truth
+ * the token route's raw 503 message is a server message ("add a Deepgram key in
+ * Pack → Keys") — the surface says the short truth
  * instead. Exported for pins; the errored idle button's click recognizes
  * it and opens Pack → Keys. */
 export const DICTATION_KEYLESS = "Dictation needs a Deepgram key";

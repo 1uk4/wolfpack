@@ -121,7 +121,6 @@ export function ThisDeviceBody() {
 
 	const writeAppearance = async (next: AppearanceSettings) => {
 		setError(null);
-		// TODO(work-wolfpack-u6GH2kk): duplicated from the Settings dialog's Appearance PUT; share one writer.
 		let res: Response;
 		try {
 			res = await fetch("/api/settings/appearance", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) });

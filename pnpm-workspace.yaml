@@ -11,6 +11,8 @@ publicHoistPattern:
 # scripts/pnpm-config.test.ts keeps the two in step.
 overrides:
   katex: 0.18.2
+  # osx-sign pins isbinaryfile ^4.0.8 (4.0.10 throws RangeError on the 547 MB embed-model/model.onnx); 5.0.7 guards it.
+  "@electron/osx-sign>isbinaryfile": 5.0.7
 # pnpm 12 fails the install on any unlisted install script, so every package that has one is decided here.
 # true: pi-claude-bridge-stateless is a git dependency whose prepare script builds it; esbuild's postinstall
 #   checks (and may swap in) its native binary, as under npm.

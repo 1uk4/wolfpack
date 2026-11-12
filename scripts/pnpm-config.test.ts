@@ -10,7 +10,14 @@ const workspace = parse(readFileSync(new URL("pnpm-workspace.yaml", root), "utf8
 
 describe("npm and pnpm config agree", () => {
   it("pnpm-workspace.yaml overrides equal package.json overrides", () => {
-    expect(workspace.overrides).toEqual(pkg.overrides);
+    // npm scopes an override by nesting ("a": { "b": v }); pnpm writes the same thing as "a>b": v.
+    const flat = (o: Record<string, unknown>, prefix = ""): Record<string, unknown> =>
+      Object.fromEntries(
+        Object.entries(o).flatMap(([k, v]) =>
+          v && typeof v === "object" ? Object.entries(flat(v as Record<string, unknown>, `${prefix}${k}>`)) : [[`${prefix}${k}`, v]],
+        ),
+      );
+    expect(workspace.overrides).toEqual(flat(pkg.overrides));
   });
 
   it("pnpm-workspace.yaml lists the same workspace globs as package.json", () => {

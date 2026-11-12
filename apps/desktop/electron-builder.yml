@@ -143,6 +143,12 @@ mac:
   # Adds minutes per build (Apple's scan queue). Verification battery:
   # codesign --verify --deep / spctl --assess / stapler validate.
   notarize: true
+  # The 547 MB embed-model/model.onnx is data, not code: skip a per-file codesign --force on it (the bundle
+  # signature seals it anyway). Paired with the @electron/osx-sign>isbinaryfile 5.0.7 override in
+  # pnpm-workspace.yaml / package.json: osx-sign 1.3.3 pins isbinaryfile 4.0.10, which throws RangeError on
+  # this file, and signIgnore only applies after that walk.
+  signIgnore:
+    - "embed-model/.*\\.onnx$"
 dmg:
   title: "${productName} ${version}"
   iconSize: 80

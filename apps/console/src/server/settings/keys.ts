@@ -39,6 +39,7 @@
  * today's behavior, byte-for-byte.
  */
 
+import fs from "node:fs";
 import {
 	AUTH_KEYS,
 	AUTH_PROVIDER_KEYS,
@@ -52,6 +53,45 @@ import {
 	validateKeyShape,
 } from "../../core/settings/auth-keys.ts";
 import { authStore } from "../../store/auth.ts";
+
+/** The key slots the Pack stores, as the env names they live under in the machine's key file. */
+const PACK_KEY_NAMES: readonly string[] = ["ANTHROPIC_API_KEY", "DEEPGRAM_API_KEY"];
+
+/** The machine's Pack key file: WOLFPACK_KEY_FILE only (same as workerd, no default path). Unset = no Pack key file. */
+function packKeyFile(): string | undefined {
+	return process.env.WOLFPACK_KEY_FILE?.trim() || undefined;
+}
+
+/** The key store's character check (workerd key-store.ts): printable ASCII, none of the shell-special ones. */
+function validKeyChars(v: string): boolean {
+	return /^[\x21-\x7e]+$/.test(v) && !/["'\\$#]/.test(v);
+}
+
+/**
+ * The Pack's keys, read fresh from disk on every call (a key.set shows without a restart, a key.remove at once). Mirrors workerd's
+ * readKeyFileEnv: CRLF lines, known slot names only, invalid values ignored. A world-writable file is refused (logged, never the value).
+ * Absent/unreadable = {}. Read-only. The result is never copied into process.env.
+ */
+function packKeys(): Record<string, string> {
+	const out: Record<string, string> = {};
+	const file = packKeyFile();
+	if (!file) return out;
+	try {
+		if (fs.statSync(file).mode & 0o002) {
+			console.warn(`[keys] ignoring the Pack key file ${file}: it is world-writable`);
+			return out;
+		}
+		for (const line of fs.readFileSync(file, "utf-8").split(/\r?\n/)) {
+			const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+			const name = m?.[1];
+			const value = m?.[2];
+			if (name && value && PACK_KEY_NAMES.includes(name) && validKeyChars(value)) out[name] = value;
+		}
+	} catch {
+		/* no key file: the old places answer */
+	}
+	return out;
+}
 
 // The once-per-process boot record — globalThis anchor (HMR re-imports the
 // module; the snapshot must not re-run and misread fill-gapped vars as real
@@ -123,6 +163,8 @@ export function initAuthEnv(): void {
 			if (process.env[name] !== undefined) record.realEnv.add(name);
 		}
 	}
+	// The Pack's keys are NOT put into process.env: children would inherit them (a subscription process must never get the Anthropic
+	// key). Consumers read them through keyValue() at the point of use.
 	for (const [name, value] of Object.entries(fileVars)) {
 		if (!isManagedName(name)) continue;
 		if (process.env[name] === undefined) {
@@ -186,6 +228,9 @@ export function keyStatuses(): AuthKeyStatus[] {
  *  STT route was the one cold-boot hole: a first-ever request to it would
  *  otherwise read env before any fill-gap ran). */
 export function keyValue(id: string): string | undefined {
+	// The Pack's key file wins over everything; env and auth.json stay the fallback.
+	const packed = packKeys()[id];
+	if (packed) return packed;
 	// The fresh-user switch: ONLY the file store counts (belt-and-
 	// suspenders — the boot deletion already emptied the env; this guards
 	// any env key reintroduced after boot).

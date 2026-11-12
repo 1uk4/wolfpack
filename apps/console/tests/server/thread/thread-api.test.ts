@@ -5,7 +5,7 @@
  */
 
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import { MockConsoleClient, FIXTURE_THREAD } from "@wolfpack/client";
 import { createThreadApi, resumeCursor } from "../../../src/server/thread/thread-api.ts";
 import { createConsoleClient, getConsoleClient, setConsoleClient } from "../../../src/server/thread/console-client.ts";
@@ -89,6 +89,37 @@ describe("thread API: SSE stream", () => {
 		assert.equal(JSON.parse(rest.at(-1)!.data).type, "turn-end");
 		const ids = rest.map((f) => f.id!);
 		assert.deepEqual(ids, ids.map((_, i) => last + 1 + i), "contiguous, no gaps or repeats");
+	});
+
+	it("sends a ': ka' comment every 15s while the wolf is silent, so the browser connection stays warm", async (t) => {
+		t.after(() => mock.timers.reset());
+		mock.timers.enable({ apis: ["setInterval"] });
+		const client = {
+			listThreads: async () => [FIXTURE_THREAD],
+			// Never yields: an idle turn.
+			watch: () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}), return: async () => ({ done: true, value: undefined }) }) }),
+		};
+		const api = createThreadApi(() => client as never);
+		const res = await stream(api);
+		const reader = res.body!.getReader();
+		mock.timers.tick(15_000);
+		const { value } = await reader.read();
+		assert.equal(new TextDecoder().decode(value), ": ka\n\n");
+		await reader.cancel();
+	});
+
+	it("aborting the request closes the watch and stops the keepalive, even if the body is never cancelled", async (t) => {
+		t.after(() => mock.timers.reset());
+		mock.timers.enable({ apis: ["setInterval"] });
+		let closed = false;
+		const client = {
+			listThreads: async () => [FIXTURE_THREAD],
+			watch: () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}), return: async () => ((closed = true), { done: true, value: undefined }) }) }),
+		};
+		const abort = new AbortController();
+		await createThreadApi(() => client as never).stream(ref, new Request("http://t/stream", { signal: abort.signal }));
+		abort.abort();
+		assert.equal(closed, true);
 	});
 
 	it("an idle thread with nothing to replay ends immediately", async () => {

@@ -9,20 +9,15 @@
  */
 import { useEffect, useState } from "react";
 import { ArrowUpCircleIcon } from "lucide-react";
+import { updateWarnings } from "@/src/core";
 
-type Row = { component: string; running: string | null; latest: string | null; outdated: boolean | null; notesUrl: string | null; updateStep: string; updateStatus?: { state: string; code?: string; lastCheck?: string; stale?: boolean } };
+type Row = { component: string; running: string | null; latest: string | null; outdated: boolean | null; notesUrl: string | null; updateStep: string; updateStatus?: { state: string; code?: string; host?: string; lastCheck?: string; stale?: boolean; manual?: boolean } };
 
 const HOUR = 60 * 60_000;
 
-/** "40m", "3h", "2d" since an ISO time. */
-function age(iso: string): string {
-	const min = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 60_000));
-	return min < 60 ? `${min}m` : min < 48 * 60 ? `${Math.floor(min / 60)}h` : `${Math.floor(min / 1440)}d`;
-}
-
 export function UpdateNotice() {
 	const [rows, setRows] = useState<Row[]>([]);
-	const [staleSince, setStaleSince] = useState<string | null>(null);
+	const [warnings, setWarnings] = useState<string[]>([]);
 	const [open, setOpen] = useState(false);
 	useEffect(() => {
 		let alive = true;
@@ -33,7 +28,7 @@ export function UpdateNotice() {
 					if (!alive) return;
 					const all = b?.components ?? [];
 					setRows(all.filter((c) => c.outdated === true || c.updateStatus?.state === "failed"));
-					setStaleSince(all.find((c) => c.updateStatus?.stale && c.updateStatus.lastCheck)?.updateStatus?.lastCheck ?? null);
+					setWarnings(updateWarnings(all, Date.now()));
 				})
 				.catch(() => {});
 		load();
@@ -43,7 +38,7 @@ export function UpdateNotice() {
 			clearInterval(t);
 		};
 	}, []);
-	if (!rows.length && !staleSince) return null;
+	if (!rows.length && !warnings.length) return null;
 	return (
 		<div data-testid="update-notice">
 			{rows.length > 0 && (
@@ -57,11 +52,11 @@ export function UpdateNotice() {
 					Update available
 				</button>
 			)}
-			{staleSince && (
-				<div data-testid="update-stale" className="px-2 pb-1.5 text-xs text-muted-foreground">
-					Auto-update hasn't run since {age(staleSince)} ago — see deploy/auto-update/RUNBOOK.md
+			{warnings.map((w) => (
+				<div key={w} data-testid="update-stale" className="px-2 pb-1.5 text-xs text-muted-foreground">
+					{w}
 				</div>
-			)}
+			))}
 			{open && rows.length > 0 && (
 				<ul className="flex flex-col gap-1.5 px-2 pb-1.5 text-xs normal-case text-muted-foreground">
 					{rows.map((r) => (

@@ -118,7 +118,7 @@ export interface ManifestFetcherOptions {
  * A manifest reader: fetches at most once per `ttlMs` (a failure is retried after `retryMs`, keeping the last good manifest), concurrent
  * calls share one request, and a request is abandoned after `timeoutMs`. Never throws.
  */
-export function createManifestFetcher(opts: ManifestFetcherOptions = {}): () => Promise<ManifestResult> {
+export function createManifestFetcher(opts: ManifestFetcherOptions = {}): (o?: { force?: boolean }) => Promise<ManifestResult> {
   const url = opts.url ?? DEFAULT_MANIFEST_URL;
   const timeoutMs = opts.timeoutMs ?? MANIFEST_TIMEOUT_MS;
   const ttl = opts.ttlMs ?? MANIFEST_TTL_MS;
@@ -148,8 +148,8 @@ export function createManifestFetcher(opts: ManifestFetcherOptions = {}): () => 
     }
   };
 
-  return () => {
-    if (last && now() - last.at < (last.ok ? ttl : retry)) return Promise.resolve(last.result);
+  return (o) => {
+    if (!o?.force && last && now() - last.at < (last.ok ? ttl : retry)) return Promise.resolve(last.result);
     pending ??= load()
       .then((result) => {
         last = { result, at: now(), ok: !result.error };

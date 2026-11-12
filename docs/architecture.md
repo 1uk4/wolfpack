@@ -17,7 +17,7 @@ Current state only. Anything not yet built is under **Planned** and says so. Rat
 
 Next.js App Router app, served in the browser and wrapped by `apps/desktop` (Electron spawns the console's standalone server on 127.0.0.1). It runs entirely on `MockConsoleClient`: one wolf, one home thread, one scripted streaming turn including a tool call. No daemon, hub or real wolf is involved.
 
-Routes: `/` (home placeholder), `/wolf/[name]` and `/wolf/[name]/thread/[threadId]` (chat). `/work/*` is reserved. The thread URL segment is a slug derived by `threadSlug` in `src/core/thread/thread-adapter.ts`, not the client's raw thread id.
+Routes: `/` (home placeholder), `/wolf/[name]/thread/[threadId]` (chat; `/wolf/[name]` only redirects to that wolf's Home thread, creating it through the idempotent `createThread({kind:"home"})` when missing). `/work/*` is reserved. The thread URL segment is a slug derived by `threadSlug` in `src/core/thread/thread-adapter.ts`, not the client's raw thread id.
 
 The inherited shell (sidebar, composer, settings, keyboard system, tool-card registry, event bus, jobs) is present. The graph canvas and plan DAG components are kept but inert (unrouted).
 

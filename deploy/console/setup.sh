@@ -6,19 +6,21 @@
 #   setup.sh [--dry-run] uninstall [--purge]
 # --dry-run prints every state-changing action ("DRY-RUN: ...") and changes nothing; read-only probes still run.
 set -euo pipefail
+# SETUP_ROOT: path prefix for the install tree and unit, so tests can drive `install` in a temp dir (also skips the root check). Unset on hosts.
+R="${SETUP_ROOT:-}"
 
 DRY=0 CMD="" BUNDLE="" PORT=3200 PURGE=0
 USER_=console
 GROUP_=console
-OPT=/opt/wolfpack-console
+OPT="$R"/opt/wolfpack-console
 DATA_DIR=/var/lib/console
 ENV_DIR=/etc/wolfpack
 ENV_FILE=$ENV_DIR/console.env
-UNIT=/etc/systemd/system/console.service
+UNIT="$R"/etc/systemd/system/console.service
 POLKIT_RULE=/etc/polkit-1/rules.d/50-console-restart.rules
-ROLLBACK_UNIT=/etc/systemd/system/wolfpack-rollback@.service
+ROLLBACK_UNIT="$R"/etc/systemd/system/wolfpack-rollback@.service
 # The console bundle's OWN copy of infra/release/deploy-release.sh: never the shared /usr/local/lib/wolfpack/deploy-release.sh other tools install.
-ROLLBACK_SCRIPT=/usr/local/lib/wolfpack/console-rollback-release.sh
+ROLLBACK_SCRIPT="$R"/usr/local/lib/wolfpack/console-rollback-release.sh
 KEEP_RELEASES=5
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -41,7 +43,7 @@ while (($#)); do
 done
 [[ -n $CMD ]] || die "usage: setup.sh [--dry-run] setup|install|rollback|uninstall [options]"
 valid_port "$PORT" || die "bad --port $PORT (1024-65535, never 3141 or 3150)"
-((DRY)) || [[ $EUID -eq 0 ]] || die "run as root (or use --dry-run)"
+((DRY)) || [[ -n $R || $EUID -eq 0 ]] || die "run as root (or use --dry-run)"
 
 user_exists() { id "$USER_" >/dev/null 2>&1; }
 # Is the TCP port bound by something other than our own console? Prints the offending line.
@@ -131,6 +133,13 @@ install_rollback() {
   fi
 }
 
+# Refresh the unit from the bundle on every install (work-wolfpack-jScCkFy), so a unit change reaches hosts that already have one. The caller daemon-reloads.
+install_unit() {
+  [[ -f $BUNDLE/console.service ]] || { echo "NOTICE: bundle has no console.service; unit left as is"; return 0; }
+  local node; node="$(command -v node || true)"; [[ -n $node ]] || node=/usr/bin/node
+  sed "s|@NODE@|$node|" "$BUNDLE/console.service" >"$UNIT.tmp" && chmod 644 "$UNIT.tmp" && mv "$UNIT.tmp" "$UNIT"
+}
+
 cmd_install() {
   [[ -n $BUNDLE ]] || die "install needs --bundle <dir>"
   [[ -f $BUNDLE/app/server.js ]] || die "$BUNDLE/app/server.js not found"
@@ -155,7 +164,9 @@ cmd_install() {
   if [[ -L $OPT/current ]]; then ln -sfn "$(readlink -f "$OPT/current")" "$OPT/previous.new" && mv -T "$OPT/previous.new" "$OPT/previous"; fi
   ln -sfn "$rel" "$OPT/current.new" && mv -T "$OPT/current.new" "$OPT/current" # rename(2): atomic
   install -m 0755 "$HERE/setup.sh" "$OPT/setup.sh" 2>/dev/null || true # the deploy script rolls back with the INSTALLED copy
-  install_rollback && systemctl daemon-reload
+  install_unit
+  install_rollback
+  systemctl daemon-reload
   if systemctl is-active --quiet console; then systemctl restart console; echo "restarted console"; fi
   local cur prev old
   cur="$(readlink -f "$OPT/current")"; prev="$(readlink -f "$OPT/previous" 2>/dev/null || true)"

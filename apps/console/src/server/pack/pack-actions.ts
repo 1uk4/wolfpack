@@ -236,7 +236,7 @@ export interface Updater {
 	/** The manual unit's last run (systemctl show, argv, 3 s timeout); null: never ran or unreadable. */
 	last(unit?: string): Promise<RollbackLast | null>;
 	/** The components behind the latest stable release now. */
-	available(): Promise<UpdateUnit[]>;
+	available(refresh?: boolean): Promise<UpdateUnit[]>;
 }
 
 /**
@@ -246,13 +246,13 @@ export interface Updater {
  * (`--now`), so it bypasses every failedTarget hold (a rollback hold or a failed install); a hold is cleared only by a successful
  * install of that unit. Never automatic: only POST /api/health/update calls it.
  */
-export function createUpdater(o: { available: () => Promise<UpdateUnit[]>; run?: CommandRunner; show?: CommandRunner; now?: () => number; log?: (m: string) => void }): Updater {
+export function createUpdater(o: { available: (refresh?: boolean) => Promise<UpdateUnit[]>; run?: CommandRunner; show?: CommandRunner; now?: () => number; log?: (m: string) => void }): Updater {
 	const run = o.run ?? execRunner;
 	const show = o.show ?? showRunner;
 	const now = o.now ?? Date.now;
 	const log = o.log ?? ((m: string) => console.log(m));
 	let starting = false;
-	const available = () => o.available().catch(() => [] as UpdateUnit[]);
+	const available = (refresh?: boolean) => o.available(refresh).catch(() => [] as UpdateUnit[]);
 	const last = async (unit: string = UPDATE_UNIT): Promise<RollbackLast | null> => {
 		const r = await show("systemctl", ["show", unit, "-p", SHOW_PROPS, "--timestamp=unix"]);
 		return r.code === 0 ? parseShow(r.stdout ?? "") : null;

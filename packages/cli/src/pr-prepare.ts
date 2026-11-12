@@ -185,6 +185,8 @@ interface CheckRun {
 function ciProblem(gh: PrDeps["gh"], slug: string | undefined, sha: string): string | undefined {
   // Without a GitHub remote gh fills in {owner}/{repo} from its own repo detection.
   const r = gh(["api", `repos/${slug ?? "{owner}/{repo}"}/commits/${sha}/check-runs?per_page=100`, "--paginate", "--jq", ".check_runs[] | [.name, .status, .conclusion, .html_url] | @json"]);
+  // GitHub answers 422 "No commit found for SHA" for a commit it has not received: that is pending, never a failure.
+  if (r.code !== 0 && /No commit found for SHA|HTTP 422/.test(r.err + r.out)) return `${sha} is not on GitHub yet, so CI has not started: wait for CI to start and finish, then run prepare again.`;
   if (r.code !== 0) return `could not read the check runs of ${sha}: ${detail(r)}`;
   const runs: CheckRun[] = [];
   for (const line of r.out.split("\n")) {
@@ -289,6 +291,13 @@ export async function prPrepare(opts: PrPrepareOptions, deps: PrDeps): Promise<v
         return `${sha} ${rest.join("\t")}`;
       });
     if (!commits.length) throw new PrRefusal("nothing to release: no commits on this branch beyond origin/stable");
+
+    // The merge commit exists only locally and GitHub has no check runs for an unpushed sha (HTTP 422), so push it first.
+    // CI then has just started: the check below reports it pending and asks for a re-run.
+    if (merged && !opts.dryRun) {
+      must(git(["push", "origin", `refs/heads/${branch}:refs/heads/${branch}`]), "git push");
+      pushed = true;
+    }
 
     // Red or unfinished CI on this commit never gets a release PR. A dry run only reports it.
     const ciSlug = prRef?.slug ?? GITHUB_SLUG.exec(git(["remote", "get-url", "origin"]).out.trim())?.[1];

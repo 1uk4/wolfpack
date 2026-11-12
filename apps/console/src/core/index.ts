@@ -97,3 +97,4 @@ export * from "./graph/branch-graph.ts";
 export { graphKey, newestRequest } from "./graph/graph-fetch.ts";
 export * from "./work/work-id-link.ts";
 export * from "./settings/wolf-settings-form.ts";
+export { updateWarnings } from "./pack/pack-health-view.ts";

@@ -51,6 +51,8 @@ interface Over {
   /** Make the comment writes (`gh api -X POST|PATCH|DELETE`) fail. */
   commentFail?: boolean;
   /** Check runs GitHub reports for the head commit. Default: `ci` completed with success. */
+  /** GitHub answers 422 "No commit found for SHA" for check runs until the branch has been pushed. */
+  checks422UntilPushed?: boolean;
   checks?: { name: string; status: string; conclusion: string | null; url?: string }[];
 }
 
@@ -94,6 +96,7 @@ function fakes(over: Over = {}) {
         if (args[1] === "user") return ok(`${over.me ?? "wolfbot"}\n`);
         if (path.includes("/check-runs")) {
           calls.push("check-runs");
+          if (over.checks422UntilPushed && !calls.some((c) => c.startsWith("git push"))) return { code: 1, out: "", err: "gh: No commit found for SHA: headsha99 (HTTP 422)" };
           const runs = over.checks ?? [{ name: "ci", status: "completed", conclusion: "success" }];
           return ok(runs.map((c) => JSON.stringify([c.name, c.status, c.conclusion, c.url ?? `https://github.com/1uk4/wolfpack/actions/runs/1/job/${c.name}`])).join("\n"));
         }
@@ -235,6 +238,15 @@ describe("wolfpack pr prepare: syncing stable", () => {
     expect(cmds(f).some((c) => c.includes("rebase"))).toBe(false);
   });
 
+  it("pushes the merge commit before reading CI on it, since GitHub has no check runs for an unpushed sha", async () => {
+    const f = fakes({ ancestor: 1, checks422UntilPushed: true });
+    await run({}, f);
+    const c = f.calls; // chronological, unlike cmds()
+    const push = c.findIndex((x) => x.startsWith("git push"));
+    expect(push).toBeGreaterThan(c.indexOf("git merge --no-edit origin/stable"));
+    expect(push).toBeLessThan(c.indexOf("check-runs"));
+  });
+
   it("aborts the merge on a real conflict and stops without pushing, showing git's message", async () => {
     const f = fakes({ ancestor: 1, merge: 1 });
     const err = await failure(run({}, f));
@@ -274,13 +286,13 @@ describe("wolfpack pr prepare: syncing stable", () => {
     expect(cmds(f)).toContain("git push origin refs/heads/wolf/1uk4:refs/heads/wolf/1uk4");
   });
 
-  it("leaves the sync merge local and unpushed when a later step refuses, and says so", async () => {
+  it("says the merge commit was pushed, and to run prepare again, when a later step refuses", async () => {
     const f = fakes({ ancestor: 1, verifyOk: false });
     const err = await failure(run({}, f));
     expect(err).toBeInstanceOf(PrRefusal);
     expect(err!.message).toMatch(/tests failed/);
-    expect(err!.message).toMatch(/origin\/stable was merged into wolf\/1uk4 locally; nothing was pushed/);
-    expect(writes(f)).toEqual([]);
+    expect(err!.message).toMatch(/wolf\/1uk4 was pushed/);
+    expect(writes(f).filter((c) => c.startsWith("gh pr"))).toEqual([]);
   });
 
   it("turns an unexpected crash in the build step into a clean refusal, not a stack trace", async () => {
@@ -288,9 +300,9 @@ describe("wolfpack pr prepare: syncing stable", () => {
     const err = await failure(run({}, f));
     expect(err).toBeInstanceOf(PrRefusal);
     expect(err!.message).toContain("spawn npx ENOENT");
-    expect(err!.message).toMatch(/nothing was pushed/);
+    expect(err!.message).toMatch(/was pushed/);
     expect(f.out.some((l) => l.includes("Error: spawn npx ENOENT") && l.includes("\n    at "))).toBe(true);
-    expect(writes(f)).toEqual([]);
+    expect(writes(f).filter((c) => c.startsWith("gh pr"))).toEqual([]);
   });
 });
 

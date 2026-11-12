@@ -75,6 +75,8 @@ export interface UploadOptions {
 }
 
 export interface WatchOptions {
+  /** Abort and reconnect when the stream carries no bytes (frames or keepalives) for this long. Default 60s. */
+  idleMs?: number;
   /** Replay events with id > from, then continue live. Omit to replay the current/last turn from its start. */
   from?: number;
   /**

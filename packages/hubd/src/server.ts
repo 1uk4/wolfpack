@@ -71,9 +71,10 @@ import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
 import { createLinkContributions, type LinkContributions } from "./link-contributions.js";
 import { createLink, type Link, type LinkTimers } from "./link.js";
-import { CommandRequestSchema, INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES, InventoryReportBodySchema, LINK_PATH, wolfForRoute } from "@wolfpack/protocol";
+import { CommandRequestSchema, INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES, InventoryReportBodySchema, LINK_PATH, MachineKeyAckBodySchema, wolfForRoute } from "@wolfpack/protocol";
 import { createInventory, type Inventory } from "./inventory.js";
 import { createCommandHub, type CommandHub } from "./commands.js";
+import { createMachineKeys, type MachineKeys } from "./machine-keys.js";
 import { createRelay, type Relay } from "./relay.js";
 import { DOMAIN_RE, listWorkItems, readWorkRecordFor } from "./work-reads.js";
 import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
@@ -321,6 +322,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let linkRef: Link | undefined; // set once the link exists; revisions recorded before that have no one to notify
   let curator: Curator | undefined;
   const inventory: Inventory = createInventory(opts.now);
+  const machineKeys: MachineKeys = createMachineKeys(opts.dataDir);
   let health: HubHealth | undefined; // started inside the start try below, stopped there if startup fails
   let rebuild: RebuildService | undefined; // set with the curator below
   let kbActivity: KbActivity | undefined; // set with the curator below (its on/off state is part of the answer)
@@ -519,7 +521,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       seenMax: opts.linkSeenMax,
       faults: opts.linkFaults,
     });
-    link = createLink({ authenticate, registry, timers: opts.linkTimers, onReport: (h, m, entries) => inventory.setHost(h, m, entries.slice(0, INVENTORY_MAX_ENTRIES)), onHostGone: (h) => inventory.clearHost(h), onRelayFrame: (h, e, f) => relay.onFrame(h, e, f), onDown: (h, e) => { relay.onDown(h, e); commandHub.onDown(h, e); }, onCommandResult: (h, e, f) => commandHub.onResult(h, e, f), contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
+    link = createLink({ authenticate, registry, timers: opts.linkTimers, onHello: (h, hello) => { if (hello.pubkey) void machineKeys.observe(h, hello.pubkey).catch((e) => console.error(`hubd: recording machine key for ${h} failed: ${(e as Error).message}`)); }, onReport: (h, m, entries) => inventory.setHost(h, m, entries.slice(0, INVENTORY_MAX_ENTRIES)), onHostGone: (h) => inventory.clearHost(h), onRelayFrame: (h, e, f) => relay.onFrame(h, e, f), onDown: (h, e) => { relay.onDown(h, e); commandHub.onDown(h, e); }, onCommandResult: (h, e, f) => commandHub.onResult(h, e, f), contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
     linkRef = link;
     link.onPresence((h, p) => p === "online" && linkContrib.onHostOnline(h));
     packSummary = createPackSummary({
@@ -895,6 +897,20 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "hubInventory": {
           deviceCaller(identity);
           return send(res, 200, { entries: inventory.list(health!.self()), hubMachine: health!.self().machine });
+        }
+        case "hubMachineKeys": {
+          deviceCaller(identity);
+          return send(res, 200, { keys: machineKeys.all() });
+        }
+        case "hubMachineKeyAck": {
+          const caller = deviceCaller(identity);
+          const body = parseBody(MachineKeyAckBodySchema, await readJson(req, { maxBytes: 1024, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          const acked = machineKeys.ack(params.id!, body.fingerprint);
+          if (acked === "unknown") throw new HubError("not_found", "no key recorded for this machine");
+          if (acked === "mismatch") throw new HubError("conflict", "that is not this machine's current key fingerprint; reload and check it again");
+          // Audit trail: host, fingerprint and token id only, never key material.
+          console.error(`hubd: machine key accepted host=${params.id} fingerprint=${body.fingerprint} token=${caller.tokenId}`);
+          return send(res, 200, { ok: true });
         }
         case "hubMachineCommand": {
           // Console/browser tokens only; the token was verified against tokens.json on this request (a revoked device is 401 above). Body (sealed key bytes) is never logged or stored.

@@ -61,6 +61,8 @@ export interface LinkOptions {
   };
   /** A `report` frame arrived from a registered host (its machine = the hello's, undefined for an older worker). Setting this makes the welcome advertise `inventory`. */
   onReport?: (hostId: string, machine: string | undefined, entries: LinkReport["entries"]) => void;
+  /** A hello was accepted from `hostId` (used to record its pubkey). */
+  onHello?: (hostId: string, hello: LinkHello) => void;
   /** A host's current link closed (not a replaced one). */
   onHostGone?: (hostId: string) => void;
   /** A relay frame (res/chunk/end/rerr) arrived from a registered host's live link. */
@@ -262,6 +264,11 @@ export function createLink(opts: LinkOptions): Link {
     }
     byHost.set(c.hostId, c);
     c.hello = h;
+    try {
+      opts.onHello?.(c.hostId, h);
+    } catch (e) {
+      log(`hubd: link ${c.hostId}: onHello failed: ${(e as Error).message}`);
+    }
     const machine = normaliseMachine(h.machine);
     if (machine) machines.set(c.hostId, machine);
     else machines.delete(c.hostId); // an older worker reconnecting clears the stale value

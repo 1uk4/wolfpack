@@ -36,6 +36,9 @@ export const CONSOLE_REPORT_EVERY_MS = 15_000;
 export const WORKERD_TTL_MS = 90_000;
 export const CONSOLE_TTL_MS = 45_000;
 
+/** Body of the machine key ack (work-wolfpack-6EmU8pu): the fingerprint being accepted, so a key that changed again is not accepted blind. */
+export const MachineKeyAckBodySchema = z.object({ fingerprint: z.string().min(1).max(128) });
+
 export const InventoryReportBodySchema = z.object({ entry: InventoryEntrySchema });
 export interface InventoryResponse {
   entries: InventoryListed[];

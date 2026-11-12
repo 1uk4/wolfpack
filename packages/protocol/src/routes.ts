@@ -52,7 +52,7 @@ import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffReques
 import * as R from "./registry.js";
 import { HubSettingsSchema } from "./hub-settings.js";
 import { CommandRequestSchema, CommandResponseSchema } from "./command.js";
-import { InventoryEntrySchema, InventoryReportBodySchema } from "./inventory.js";
+import { InventoryEntrySchema, InventoryReportBodySchema, MachineKeyAckBodySchema } from "./inventory.js";
 import { PutWolfSettingsBodySchema, RestartResponseSchema, RevealBodySchema, RevealResponseSchema, WolfSettingsViewSchema } from "./wolf-settings.js";
 import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from "./prompts.js";
 import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
@@ -567,6 +567,10 @@ export const ROUTES = {
   hubInventoryReport: { scope: "hub", method: "POST", path: "/v1/inventory/report", body: InventoryReportBodySchema, response: { kind: "json", schema: z.object({ ok: z.literal(true) }) }, status: [200], error: err },
   /** Command channel (work-wolfpack-8jLJ4on): run one command on a connected machine and wait for its result. Console/browser tokens only. 200 = the machine answered (ok true/false), 409 = not sent (not_sent_offline / not_sent_unsupported), 504 = timeout (outcome unknown; never retry automatically). Nothing is stored; the body (key bytes) is never logged. */
   hubMachineCommand: { scope: "hub", method: "POST", path: "/v1/machines/:id/commands", body: CommandRequestSchema, response: { kind: "json", schema: CommandResponseSchema }, status: [200, 409, 504], error: err },
+  /** Machine public keys (work-wolfpack-6EmU8pu): per host the hello pubkey, its fingerprint and the key-change flag. Console/browser tokens only. */
+  hubMachineKeys: { scope: "hub", method: "GET", path: "/v1/machines/keys", response: { kind: "json", schema: z.object({ keys: z.record(z.string(), z.object({ pubkey: z.string(), fingerprint: z.string(), changed: z.boolean() })) }) }, status: [200], error: err },
+  /** Accept a machine's changed key (clears the key-change flag). The body names the fingerprint being accepted: 409 when it is not the current one, 404 when the host never sent a key. */
+  hubMachineKeyAck: { scope: "hub", method: "POST", path: "/v1/machines/:id/key/ack", body: MachineKeyAckBodySchema, response: { kind: "json", schema: z.object({ ok: z.literal(true) }) }, status: [200, 404, 409], error: err },
   hubSettings: { scope: "hub", method: "GET", path: "/v1/settings", response: { kind: "json", schema: HubSettingsSchema }, status: [200], error: err },
   /**
    * The KB graph built from the hub's own read-only KB copy, limited to the domains the caller may read (console/browser tokens: all; a worker

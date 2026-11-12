@@ -5,7 +5,7 @@
  */
 import { execFile } from "node:child_process";
 import { open } from "node:fs/promises";
-import { COMMAND_LOGS_MAX_BYTES, type CommandKind, type CommandResultCode, type LinkCmd, type LinkCmdResult, type LogsData, type RestartData, type RestartedWolf } from "@wolfpack/protocol";
+import { COMMAND_LOGS_MAX_BYTES, WORKERD_RESTART_EXIT_CODE, type CommandKind, type CommandResultCode, type LinkCmd, type LinkCmdResult, type LogsData, type RestartData, type RestartedWolf } from "@wolfpack/protocol";
 
 /** Where a service's log lines come from: a systemd unit (Linux) or a log file (a supervised wolf's wolfd log, on any platform). */
 export interface LogSource {
@@ -54,7 +54,20 @@ export async function restartWolves(w: WolfControl, names?: string[]): Promise<{
   return failed.length ? { ok: false, code: "restart_failed", message: `could not restart ${failed.join("; ")}`.slice(0, 1000), data: { restarted } } : { ok: true, data: { restarted }, ...(unconfirmed ? { message: "restarted, but could not confirm" } : {}) };
 }
 
+/**
+ * True when something will start this workerd again after it exits 75: a systemd service (systemd sets INVOCATION_ID for every unit and
+ * also JOURNAL_STREAM or NOTIFY_SOCKET for most; failing those, being a direct child of pid 1). A bare INVOCATION_ID exported into a shell
+ * is not enough. sfo-01's unit has Restart=on-failure. The Mac app does NOT respawn workerd (apps/desktop/electron/supervisor.cjs), and its
+ * supervisor marks every child it spawns with WOLFPACK_EXIT_WITH_PARENT=1, so that wins. A bare terminal run has no supervisor either.
+ */
+export function canRestartSelf(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, ppid: number = process.ppid): boolean {
+  if (env.WOLFPACK_EXIT_WITH_PARENT === "1") return false;
+  return platform === "linux" && !!env.INVOCATION_ID && (!!env.JOURNAL_STREAM || !!env.NOTIFY_SOCKET || ppid === 1);
+}
+
 export interface CommandRunnerOptions {
+  /** Present only when workerd can be respawned (see canRestartSelf): enables workerd.restart. `stop` is workerd's normal shutdown; `exit` ends the process after it (or after `fallbackMs`, default 10 s, if stop hangs). */
+  restartSelf?: { stop: () => Promise<void>; exit: (code: number) => void; fallbackMs?: number };
   /** The wolves this workerd supervises. Absent (link-only: it supervises none) = wolves.restart is not advertised. */
   wolves?: WolfControl;
   platform?: NodeJS.Platform;
@@ -69,6 +82,8 @@ export interface CommandRunner {
   /** The kinds this machine can run right now (advertised in hello). */
   supported(): CommandKind[];
   handle(cmd: LinkCmd): Promise<LinkCmdResult>;
+  /** Called once `result` has been written to the link. workerd.restart exits here, so the hub always sees the ack first. */
+  afterSend(cmd: LinkCmd, result: LinkCmdResult): void;
 }
 
 /** After a journal buffer overflow, the second try asks for this many lines (or fewer). */
@@ -135,6 +150,7 @@ export function createCommandRunner(o: CommandRunnerOptions = {}): CommandRunner
   const platform = o.platform ?? process.platform;
   const log = o.log ?? (() => {});
   const warnedShadow = new Set<string>();
+  let restartingSelf = false;
 
   async function logsFetch(id: string, args: { service: string; lines: number }): Promise<LinkCmdResult> {
     const extra = o.logSources?.() ?? {};
@@ -178,7 +194,24 @@ export function createCommandRunner(o: CommandRunnerOptions = {}): CommandRunner
   }
 
   return {
-    supported: () => ["logs.fetch", ...(o.wolves ? (["wolves.restart"] as const) : [])],
+    supported: () => ["logs.fetch", ...(o.wolves ? (["wolves.restart"] as const) : []), ...(o.restartSelf ? (["workerd.restart"] as const) : [])],
+    afterSend(cmd, result) {
+      if (cmd.kind === "workerd.restart" && result.ok && o.restartSelf) {
+        const { stop, exit, fallbackMs = 10_000 } = o.restartSelf;
+        if (restartingSelf) return; // a second workerd.restart while one is under way: one stop, one exit
+        restartingSelf = true;
+        log("workerd.restart: ack sent; stopping, then exiting for the supervisor to restart");
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          exit(WORKERD_RESTART_EXIT_CODE);
+        };
+        const timer = setTimeout(finish, fallbackMs); // stop hung: leave anyway
+        stop().catch(() => {}).then(finish);
+      }
+    },
     async handle(cmd) {
       try {
         if (cmd.kind === "logs.fetch") return await logsFetch(cmd.id, cmd.args as { service: string; lines: number });
@@ -186,6 +219,7 @@ export function createCommandRunner(o: CommandRunnerOptions = {}): CommandRunner
           const r = await restartWolves(o.wolves, (cmd.args as { wolf?: string }).wolf ? [(cmd.args as { wolf: string }).wolf] : undefined);
           return r.ok ? { ...ok(cmd.id, r.data), ...(r.message ? { message: r.message } : {}) } : { ...fail(cmd.id, r.code, r.message), data: r.data };
         }
+        if (cmd.kind === "workerd.restart" && o.restartSelf) return ok(cmd.id);
         return fail(cmd.id, "internal", "command not supported on this machine");
       } catch (e) {
         log(`command ${cmd.kind} ${cmd.id} failed: ${(e as Error).message}`);

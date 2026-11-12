@@ -5,7 +5,7 @@ import { WorkerdServer, VERSION as WORKERD_VERSION } from "./proxy.js";
 import { createInventoryReporter, type InventoryReporter } from "./wolfd-probe.js";
 import { machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
 import { HubLink, type LinkStatus } from "./link.js";
-import { createCommandRunner } from "./commands.js";
+import { canRestartSelf, createCommandRunner } from "./commands.js";
 import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } from "./hub-config.js";
 import { feedContributions, feedDisabledReason } from "./feed.js";
 import { Outbox, writeReceiptFile } from "./outbox.js";
@@ -232,6 +232,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       log,
       // Each supervised wolf's wolfd log is readable by the wolf's name (never by path: the hub only names a service).
       logSources: () => Object.fromEntries(supervisor.status().map((c) => [c.name, { file: c.logFile }])),
+      ...(canRestartSelf() ? { restartSelf: { stop: () => shutdown(), exit: (code: number) => process.exit(code) } } : {}),
       // Link-only supervises no wolves (they run from their own units), so there is nothing to restart: wolves.restart is not advertised.
       ...(linkOnly
         ? {}
@@ -247,6 +248,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       ...hubCfg,
       commands: () => commands.supported(),
       onCommand: (c) => commands.handle(c),
+      onCommandSent: (c, r) => commands.afterSend(c, r),
       kbRevisions: () => kbSync!.revisions(),
       onWelcome: (w) => {
         kbSync!.applyWelcome(w.grantedDomains);
@@ -312,6 +314,20 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   serverUrl = url;
   if (!linkOnly) supervisor.start(); // link-only: never spawn
   link?.start();
+  /** The normal stop sequence; also what workerd.restart runs before it exits 75. */
+  let stopping: Promise<void> | undefined;
+  /** Memoized: close(), a SIGTERM and workerd.restart may all ask for it; the sequence runs once and every caller awaits the same run. */
+  const shutdown = (): Promise<void> => (stopping ??= doShutdown());
+  async function doShutdown(): Promise<void> {
+    wake?.stop();
+    inventory?.stop();
+    kbSync?.stop();
+    if (feed) clearInterval(feed);
+    await link?.stop();
+    await server.close();
+    await supervisor.stop();
+    for (const w of workServers) await w.close().catch(() => {});
+  }
   return {
     url,
     supervisor,
@@ -319,15 +335,6 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     kbSync,
     server,
     errors,
-    async close() {
-      wake?.stop();
-      inventory?.stop();
-      kbSync?.stop();
-      if (feed) clearInterval(feed);
-      await link?.stop();
-      await server.close();
-      await supervisor.stop();
-      for (const w of workServers) await w.close().catch(() => {});
-    },
+    close: shutdown,
   };
 }

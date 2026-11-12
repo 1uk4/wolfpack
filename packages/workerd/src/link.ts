@@ -46,6 +46,8 @@ export interface HubLinkOptions {
   commands?: () => CommandKind[];
   /** A `cmd` frame arrived from the hub. The returned result is sent back as `cmd.result`; a throw is answered `internal`. */
   onCommand?: (cmd: LinkCmd) => Promise<LinkCmdResult>;
+  /** The cmd.result was written to the socket (or could not be). workerd.restart exits from here. */
+  onCommandSent?: (cmd: LinkCmd, result: LinkCmdResult) => void;
   /** Called with the welcome's rejected wolf names (unknown to the hub, or owned by another host). */
   onRejected?: (names: string[]) => void;
   /** Relay: called for `req` / `cancel` / `pause` / `resume` frames from the hub. */
@@ -443,7 +445,9 @@ export class HubLink {
       if (h && this.st === "online") {
         void h(f)
           .catch((): LinkCmdResult => ({ t: "cmd.result", id: f.id, ok: false, code: "internal", message: "the command failed" }))
-          .then((r) => this.send(r));
+          .then((r) => {
+            if (!this.sendFrame(r, (err) => !err && this.o.onCommandSent?.(f, r))) return; // link dropped: the hub resolves it not_sent_offline
+          });
       }
     } else if (f.t === "error") {
       // Never overwrite a sticky reason; a rejected wolf.add is informational.

@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LinkCmd } from "@wolfpack/protocol";
-import { createCommandRunner, readWolfStatus, restartWolves, type WolfControl } from "./commands.js";
+import type { LinkCmd, LinkCmdResult } from "@wolfpack/protocol";
+import { canRestartSelf, createCommandRunner, readWolfStatus, restartWolves, type WolfControl } from "./commands.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -121,6 +121,7 @@ describe("logs.fetch", () => {
   it("advertises only logs.fetch until handlers are injected, and each kind only with its handler", () => {
     expect(createCommandRunner().supported()).toEqual(["logs.fetch"]);
     expect(createCommandRunner({ wolves: fakeWolves() }).supported()).toEqual(["logs.fetch", "wolves.restart"]);
+    expect(createCommandRunner({ restartSelf: { stop: async () => {}, exit: () => {} } }).supported()).toEqual(["logs.fetch", "workerd.restart"]);
   });
 });
 /** A fake supervisor: three wolves, hal is mid-reply, bob is stopped, cy fails to restart. */
@@ -182,5 +183,63 @@ describe("wolves.restart", () => {
     const r = createCommandRunner({ wolves: fakeWolves() });
     const res = await r.handle({ t: "cmd", id: "c-9", kind: "wolves.restart", args: { wolf: "bob" } });
     expect(res).toEqual({ t: "cmd.result", id: "c-9", ok: true, data: { restarted: [{ wolf: "bob", wasActive: false, midReply: false }] } });
+  });
+});
+
+describe("workerd.restart", () => {
+  const cmd: LinkCmd = { t: "cmd", id: "c-5", kind: "workerd.restart", args: {} };
+  it("acks first, then stops workerd cleanly, and exits 75 only after the stop finished", async () => {
+    const order: string[] = [];
+    const r = createCommandRunner({ restartSelf: { stop: async () => void order.push("stop"), exit: (code) => order.push(`exit ${code}`) } });
+    const res = await r.handle(cmd);
+    order.push("ack " + (res.ok ? "ok" : "fail"));
+    r.afterSend(cmd, res);
+    await vi.waitFor(() => expect(order).toContain("exit 75"));
+    expect(order).toEqual(["ack ok", "stop", "exit 75"]);
+  });
+
+  it("exits 75 anyway when the stop hangs past the fallback time", async () => {
+    vi.useFakeTimers();
+    try {
+      const exits: number[] = [];
+      const r = createCommandRunner({ restartSelf: { stop: () => new Promise<void>(() => {}), exit: (c) => exits.push(c), fallbackMs: 10_000 } });
+      r.afterSend(cmd, { t: "cmd.result", id: "c-5", ok: true });
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(exits).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(exits).toEqual([75]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("two workerd.restart commands stop and exit once", async () => {
+    const events: string[] = [];
+    const r = createCommandRunner({ restartSelf: { stop: async () => void events.push("stop"), exit: (c) => events.push(`exit ${c}`) } });
+    const ack: LinkCmdResult = { t: "cmd.result", id: "c-5", ok: true };
+    r.afterSend(cmd, ack);
+    r.afterSend({ ...cmd, id: "c-6" }, { ...ack, id: "c-6" });
+    await vi.waitFor(() => expect(events).toContain("exit 75"));
+    await new Promise((res) => setTimeout(res, 20));
+    expect(events).toEqual(["stop", "exit 75"]);
+  });
+
+  it("does not exit after a different command or a failed ack", async () => {
+    const exits: number[] = [];
+    const r = createCommandRunner({ restartSelf: { stop: async () => {}, exit: (c) => exits.push(c) } });
+    r.afterSend({ ...cmd, kind: "logs.fetch", args: { service: "workerd", lines: 1 } }, { t: "cmd.result", id: "c-5", ok: true });
+    r.afterSend(cmd, { t: "cmd.result", id: "c-5", ok: false, code: "internal" });
+    expect(exits).toEqual([]);
+  });
+
+  it("is judged restartable only under a real systemd service: the Mac app, a bare terminal run, a stray INVOCATION_ID and non-Linux are not", () => {
+    expect(canRestartSelf({ INVOCATION_ID: "abc", JOURNAL_STREAM: "8:1" }, "linux", 4242)).toBe(true);
+    expect(canRestartSelf({ INVOCATION_ID: "abc", NOTIFY_SOCKET: "/run/systemd/notify" }, "linux", 4242)).toBe(true);
+    expect(canRestartSelf({ INVOCATION_ID: "abc" }, "linux", 1)).toBe(true);
+    expect(canRestartSelf({ INVOCATION_ID: "abc" }, "linux", 4242)).toBe(false); // an exported id in a shell, not a service
+    expect(canRestartSelf({ JOURNAL_STREAM: "8:1" }, "linux", 1)).toBe(false);
+    expect(canRestartSelf({}, "linux", 4242)).toBe(false);
+    expect(canRestartSelf({ INVOCATION_ID: "abc", JOURNAL_STREAM: "8:1", WOLFPACK_EXIT_WITH_PARENT: "1" }, "linux", 1)).toBe(false);
+    expect(canRestartSelf({ WOLFPACK_EXIT_WITH_PARENT: "1", WOLFPACK_SINGLE_MAC: "1", ELECTRON_RUN_AS_NODE: "1" }, "darwin", 1)).toBe(false);
   });
 });

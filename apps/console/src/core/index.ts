@@ -101,3 +101,5 @@ export * from "./settings/wolf-settings-form.ts";
 export * from "./pack/pack-sections.ts";
 export type { Tone } from "./pack/pack-health-view.ts";
 export * from "./pack/pack-devices.ts";
+// machine-commands.ts: the browser client for the hub command channel (Machines and Keys sections).
+export * from "./pack/machine-commands.ts";

@@ -46,7 +46,7 @@
  */
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { hubdPort, workerdConfigDir, workerdPort } from "@wolfpack/protocol/runtime-home";
 import { machineName, normaliseMachine } from "@wolfpack/protocol/health-lag";
 import { join } from "node:path";
 import type { InventoryView, RemoteService } from "./inventory.ts";
@@ -81,6 +81,16 @@ export function readDirectToken(file: string): string | undefined {
 	}
 }
 
+/** A bad WOLFPACK_*_PORT must not 500 the health page: warn and use the default. */
+function safePort(name: string, get: () => number, fallback: number): number {
+	try {
+		return get();
+	} catch {
+		console.warn(`console: ${name} is not a port number; using ${fallback}`);
+		return fallback;
+	}
+}
+
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
 
 /**
@@ -103,7 +113,7 @@ export function directTarget(env: Record<string, string | undefined> = process.e
 		console.warn("console: WOLFPACK_WORKERD_DIRECT_URL must be http on loopback (127.0.0.1, ::1, localhost); the direct path is off");
 		return undefined;
 	}
-	const tokenFile = env.WOLFPACK_WORKERD_DIRECT_TOKEN_FILE?.trim() || join(env.WORKERD_CONFIG_DIR?.trim() || join(homedir(), ".wolfpack", "workerd"), "direct-token");
+	const tokenFile = env.WOLFPACK_WORKERD_DIRECT_TOKEN_FILE?.trim() || join(workerdConfigDir(env), "direct-token");
 	return { url: url.origin, tokenFile };
 }
 export type LinkStatus = "ok" | "degraded" | "recovering" | "down" | "frozen" | "restarting" | "unknown";
@@ -271,7 +281,7 @@ export function hubTarget(env: Record<string, string | undefined> = process.env)
 			console.warn("console: WOLFPACK_HUB_URL is not a URL; checking hubd at http://127.0.0.1:3150");
 		}
 	}
-	let healthz = `${base?.origin ?? "http://127.0.0.1:3150"}/healthz`;
+	let healthz = `${base?.origin ?? `http://127.0.0.1:${safePort("WOLFPACK_HUBD_PORT", () => hubdPort(env, 3150), 3150)}`}/healthz`;
 	const override = env.WOLFPACK_HEALTH_HUB_URL?.trim();
 	if (override) {
 		try {
@@ -292,7 +302,7 @@ export function hubTarget(env: Record<string, string | undefined> = process.env)
  *   WOLFPACK_HEALTH_WOLVES    `<name>=<url>,...` wolfd /healthz URLs to probe directly (optional; normally the wolves come from workerd)
  */
 export function healthTargets(env: Record<string, string | undefined> = process.env): HealthTargets {
-	const workerds = pairs(env.WOLFPACK_HEALTH_WORKERDS?.trim() || "workerd=http://127.0.0.1:7141", (id) => WORKERD_UNIT_RE.test(id), "WOLFPACK_HEALTH_WORKERDS");
+	const workerds = pairs(env.WOLFPACK_HEALTH_WORKERDS?.trim() || `workerd=http://127.0.0.1:${safePort("WOLFPACK_WORKERD_PORT", () => workerdPort(env), 7141)}`, (id) => WORKERD_UNIT_RE.test(id), "WOLFPACK_HEALTH_WORKERDS");
 	const wolves = pairs(env.WOLFPACK_HEALTH_WOLVES, (id) => WOLF_RE.test(id), "WOLFPACK_HEALTH_WOLVES").map(({ id, url }) => ({ name: id, url }));
 	const direct = directTarget(env);
 	return { hub: hubTarget(env).healthz, workerds, wolves, ...(direct ? { direct } : {}) };

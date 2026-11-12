@@ -14,7 +14,6 @@
  * configured with its tier's model at boot/resume (reconcile) and on a tier change (ThreadConversations.setTier).
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
@@ -32,6 +31,7 @@ import {
   type WolfEngine,
 } from "../engine/index.js";
 import type { ThreadTier } from "@wolfpack/protocol";
+import { runDir } from "@wolfpack/protocol/runtime-home";
 import { resolveAutosquash, resolveWorkspacesRoot } from "@wolfpack/workspaces";
 import { parse as parseYaml } from "yaml";
 import { adaptToDurable } from "../adapters/durable.js";
@@ -203,6 +203,7 @@ async function startConfigured(
   // The spawn tools (subagent, subagent_message, subagents_list, subagent_stop): offered to home and feature threads only;
   // a child's conversation is configured with an explicit tool list that leaves them out.
   const subagentBridge = new SubagentBridge();
+  const slotRunDir = opts.home ? join(opts.home, ".wolfpack", "run") : runDir(env);
   const subagentExtensions = createSubagentExtension(subagentBridge, { wolfDen: config.den, wolfName: config.identity.name, onCardTool: cardGuard.register });
   // ls/grep/find/guarded_bash are always installed so subagent profiles can list them; the home and feature threads
   // only get them when wolf.yaml `tools:` names "readonly" (the terminal pi does not enable them by default either).
@@ -307,7 +308,7 @@ async function startConfigured(
         // Per-host cap and slot directory: shared by every wolfd on the host (env WOLFPACK_SUBAGENT_HOST_MAX / _SLOTS).
         ...(Number(env.WOLFPACK_SUBAGENT_HOST_MAX) >= 1 ? { hostMax: Number(env.WOLFPACK_SUBAGENT_HOST_MAX) } : {}),
         ...(Number(env.WOLFPACK_SUBAGENT_SLOT_POLL_MS) > 0 ? { slotPollMs: Number(env.WOLFPACK_SUBAGENT_SLOT_POLL_MS) } : {}),
-        slotDir: env.WOLFPACK_SUBAGENT_SLOTS || join(opts.home ?? homedir(), ".wolfpack", "run", "subagent-slots"),
+        slotDir: env.WOLFPACK_SUBAGENT_SLOTS || join(slotRunDir, "subagent-slots"),
         getConversation: (id) => engine.conversations.get(id),
         releaseOwner: (taskId) => engine.conversations.releaseOwner(taskId),
         releaseModel: async (conversationId) => {

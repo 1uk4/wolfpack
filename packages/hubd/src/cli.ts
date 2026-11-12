@@ -10,6 +10,7 @@ import { formatAliasBackfillReport, kbBackfillAliases } from "./kb-backfill-alia
 import { formatRehomeReport, kbRehome } from "./kb-rehome.js";
 import { exportHub, importHub } from "./export.js";
 import { normalizeConsoleUrl } from "./pair-page.js";
+import { hubdPort } from "@wolfpack/protocol/runtime-home";
 import { createHubServer } from "./server.js";
 import { parseRebuildArgs, runRebuildCli, type RebuildCliArgs } from "./rebuild-cli.js";
 import { DEFAULT_CURATOR_POLL_MS, type CuratorOptions } from "./curator.js";
@@ -112,7 +113,7 @@ env: HUBD_CURATOR=1 (run the KB sweep in the hub; default off) / HUBD_CURATOR_PO
 
 export function parseArgs(argv: string[]): CliArgs {
   const [command, ...rest0] = argv;
-  if (command === "rebuild") return { command, port: 3142, host: "127.0.0.1", allowNetwork: false, seedWolves: [], rebuild: parseRebuildArgs(rest0) };
+  if (command === "rebuild") return { command, port: hubdPort(process.env, 3142), host: "127.0.0.1", allowNetwork: false, seedWolves: [], rebuild: parseRebuildArgs(rest0) };
   if (command !== "serve" && command !== "dev" && command !== "export" && command !== "import" && command !== "pair" && command !== "tokens" && command !== "work-orphans" && command !== "work-import" && command !== "kb-backfill" && command !== "kb-rehome") throw new Error(USAGE);
   let rest = rest0;
   let sub: CliArgs["sub"];
@@ -127,7 +128,7 @@ export function parseArgs(argv: string[]): CliArgs {
       rest = rest.slice(1);
     }
   }
-  const out: CliArgs = { command, port: 3142, host: "127.0.0.1", allowNetwork: false, seedWolves: [], ...(sub ? { sub } : {}), ...(tokenId ? { tokenId } : {}) };
+  const out: CliArgs = { command, port: hubdPort(), host: "127.0.0.1", allowNetwork: false, seedWolves: [], ...(sub ? { sub } : {}), ...(tokenId ? { tokenId } : {}) };
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
     const val0 = () => {

@@ -508,6 +508,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.131.0
         version: 0.131.0(zod@3.25.76)
+      '@wolfpack/protocol':
+        specifier: '*'
+        version: link:../protocol
       yaml:
         specifier: ^2.6.0
         version: 2.9.1

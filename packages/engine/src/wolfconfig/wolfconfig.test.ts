@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { discoverWolves, loadWolfConfig, WolfConfigError } from "./load.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultSocketPath, defaultWolvesRoot, discoverWolves, loadWolfConfig, WolfConfigError } from "./load.js";
 import { applyWolfTierOverrides, resolveWolfModel, TierResolutionError } from "./tiers.js";
 import { STARTER_PACK_MODELS, detectWolfLocation, regenerateWolfModelsFile, resolveModelTable, type ModelTable } from "../models.js";
 
@@ -357,5 +357,29 @@ describe("wolf.yaml models:", () => {
     expect(after).toEqual(current);
     // With that step present (the current shape) it is `unchanged`.
     expect(regen().status).toBe("unchanged");
+  });
+});
+
+describe("default paths follow the runtime home", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("an explicit home gives the dev-stack paths, whatever the ambient env says", () => {
+    vi.stubEnv("WOLFPACK_HOME", "/ambient/state");
+    vi.stubEnv("WOLFPACK_WOLVES_DIR", "/ambient/wolves");
+    expect(defaultSocketPath("ada", "/fake")).toBe("/fake/.wolfpack/run/ada.sock");
+    expect(defaultWolvesRoot("/fake")).toBe("/fake/wolves/local");
+  });
+  it("without a home, an unset env gives the paths under HOME", () => {
+    vi.stubEnv("HOME", "/fake");
+    vi.stubEnv("WOLFPACK_HOME", "");
+    vi.stubEnv("WOLFPACK_WOLVES_DIR", "");
+    vi.stubEnv("WOLFPACK_WOLVES_ROOT", "");
+    expect(defaultSocketPath("ada")).toBe("/fake/.wolfpack/run/ada.sock");
+    expect(defaultWolvesRoot()).toBe("/fake/wolves/local");
+  });
+  it("without a home, the env vars move them", () => {
+    vi.stubEnv("WOLFPACK_HOME", "/app/state");
+    vi.stubEnv("WOLFPACK_WOLVES_DIR", "/app/wolves");
+    expect(defaultSocketPath("ada")).toBe("/app/state/run/ada.sock");
+    expect(defaultWolvesRoot()).toBe("/app/wolves");
   });
 });

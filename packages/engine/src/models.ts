@@ -27,6 +27,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { packStateDir } from "@wolfpack/protocol/runtime-home";
 import { parse as parseYaml } from "yaml";
 
 export const TIERS = ["main", "smart", "fast"] as const;
@@ -376,8 +377,8 @@ function canonicalJson(value: unknown): string {
 export const MODELS_FILE_ENV = "WOLFPACK_MODELS_FILE";
 
 /** The pack config file: ~/.wolfpack/config.yaml. */
-export function packConfigPath(home: string = os.homedir()): string {
-  return path.join(home, ".wolfpack", "config.yaml");
+export function packConfigPath(home?: string): string {
+  return home ? path.join(home, ".wolfpack", "config.yaml") : path.join(packStateDir(), "config.yaml");
 }
 
 /** Read the `models:` block of a pack config file (undefined if absent or unreadable). */

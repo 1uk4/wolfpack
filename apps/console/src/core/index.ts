@@ -100,3 +100,4 @@ export * from "./settings/wolf-settings-form.ts";
 // pack-sections.ts: the Pack panel sections, badges and entry summary. Pure.
 export * from "./pack/pack-sections.ts";
 export type { Tone } from "./pack/pack-health-view.ts";
+export * from "./pack/pack-devices.ts";

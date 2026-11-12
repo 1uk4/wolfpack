@@ -15,6 +15,7 @@ import { AppearanceSection } from "../../../components/settings/appearance-secti
 import { KeysSection } from "../../../components/settings/keys-section.tsx";
 import { KeyboardSection } from "../../../components/settings/keyboard-section.tsx";
 import { SettingsDialogBody, SettingsDialogProvider } from "../../../components/settings/settings-dialog.tsx";
+import { SingleMacContext } from "../../../components/shell/single-mac.tsx";
 import { KEYBOARD_ACTIONS } from "../../../src/core/index.ts";
 
 /** The full opening tag of the element carrying a testid — attribute
@@ -32,6 +33,18 @@ describe("SettingsDialog hidden tabs", () => {
 			const html = renderToStaticMarkup(<SettingsDialogBody onClose={() => {}} initialSection={section as never} />);
 			assert.ok(tagOf(html, "settings-nav-keys").includes('aria-current="true"'), section);
 		}
+	});
+});
+
+describe("SettingsDialog in the single-Mac app", () => {
+	it("has no Keys or Devices tab and lands on the first visible tab (the setup wizard owns the API key)", () => {
+		const html = renderToStaticMarkup(
+			<SingleMacContext.Provider value={true}>
+				<SettingsDialogBody onClose={() => {}} />
+			</SingleMacContext.Provider>,
+		);
+		for (const id of ["keys", "devices"]) assert.ok(!html.includes(`data-testid="settings-nav-${id}"`), id);
+		assert.ok(tagOf(html, "settings-nav-wolf").includes('aria-current="true"'));
 	});
 });
 

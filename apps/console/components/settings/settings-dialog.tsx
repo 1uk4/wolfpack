@@ -70,10 +70,10 @@ type SectionId = (typeof SECTIONS)[number]["id"];
 /** Hidden tabs (Appearance, Keyboard) keep their components and saved settings; dropping `hidden: true` brings a tab back. */
 const VISIBLE_SECTIONS = SECTIONS.filter((s) => !("hidden" in s && s.hidden));
 /** Tabs that only make sense for a multi-machine pack; the single-Mac app drops them (work-wolfpack-TdmbaV4). */
-const SINGLE_MAC_HIDDEN_TABS: readonly string[] = ["devices"];
+const SINGLE_MAC_HIDDEN_TABS: readonly string[] = ["devices", "keys"]; // Keys: the desktop setup wizard owns the API key (work-wolfpack-UpMwxPl)
 const visibleSections = (singleMac: boolean) => VISIBLE_SECTIONS.filter((s) => !(singleMac && SINGLE_MAC_HIDDEN_TABS.includes(s.id)));
-/** A deep link to a hidden or unknown tab lands on Keys. */
-const landing = (id: string, singleMac = false): SectionId => (visibleSections(singleMac).some((s) => s.id === id) ? (id as SectionId) : "keys");
+/** A deep link to a hidden or unknown tab lands on Keys (the first visible tab in the single-Mac app). */
+const landing = (id: string, singleMac = false): SectionId => (visibleSections(singleMac).some((s) => s.id === id) ? (id as SectionId) : singleMac ? (visibleSections(true)[0]?.id ?? "wolf") : "keys");
 
 /** `open(section?, row?)` — the optional ROW deep-links into the Keys
  *  section with that row unfolded (zero-keys wave: the dictation error's

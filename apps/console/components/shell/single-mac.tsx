@@ -23,7 +23,7 @@ export function readSingleMac(): boolean {
 }
 
 /** null until the client has read the bridge; then the answer. */
-const SingleMacContext = createContext<boolean | null>(null);
+export const SingleMacContext = createContext<boolean | null>(null);
 
 export function SingleMacProvider({ children }: { children: ReactNode }) {
 	const [value, setValue] = useState<boolean | null>(null);

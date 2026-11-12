@@ -15,8 +15,8 @@ export interface Result {
 	note?: string;
 }
 export interface AppBridge {
-	folders(): Promise<{ state: string; wolves: string }>;
-	showFolder(name: "state" | "wolves"): Promise<Result>;
+	folders(): Promise<{ state: string; wolves: string; logs?: string }>;
+	showFolder(name: "state" | "wolves" | "logs"): Promise<Result>;
 	loginItem: {
 		get(): Promise<{ openAtLogin: boolean; needsApproval: boolean }>;
 		set(on: boolean): Promise<{ openAtLogin: boolean; needsApproval: boolean; error?: string }>;
@@ -24,6 +24,8 @@ export interface AppBridge {
 	changeKey(key: string): Promise<Result>;
 	copyDiagnostics(): Promise<Result>;
 	reset(): Promise<Result>;
+	/** This device > Reset app: stops the wolves, moves Chromium cache folders to the Trash and relaunches (older apps lack it). */
+	resetAppUi?(): Promise<Result>;
 }
 
 /** Tests provide a bridge (or null) here; undefined means "read window". */
@@ -33,7 +35,7 @@ export const AppBridgeContext = createContext<AppBridge | null | undefined>(unde
 function devStub(): AppBridge {
 	let login = false;
 	return {
-		folders: async () => ({ state: "~/Library/Application Support/Wolfpack", wolves: "~/Wolves" }),
+		folders: async () => ({ state: "~/Library/Application Support/Wolfpack", wolves: "~/Wolves", logs: "~/Library/Application Support/Wolfpack/logs" }),
 		showFolder: async () => ({ ok: true }),
 		loginItem: {
 			get: async () => ({ openAtLogin: login, needsApproval: false }),
@@ -42,6 +44,7 @@ function devStub(): AppBridge {
 		changeKey: async (key) => (key.trim() === "bad" ? { ok: false, error: "That key didn't work" } : { ok: true }),
 		copyDiagnostics: async () => ({ ok: true }),
 		reset: async () => ({ ok: false, error: "Reset does nothing in the browser preview." }),
+		resetAppUi: async () => ({ ok: false, error: "Reset does nothing in the browser preview." }),
 	};
 }
 

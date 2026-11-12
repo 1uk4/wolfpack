@@ -58,6 +58,19 @@ const api = {
 	},
 };
 
+// Settings > Data and support (work-wolfpack-B97I0Gv): only when the app runs its own runtime. The key goes in, never comes back: the page learns { ok } or an error.
+if (api.singleMac && !process.argv.includes("--wolfpack-setup")) {
+	const call = (name, arg) => ipcRenderer.invoke(`wolfpack:app:${name}`, arg);
+	api.app = {
+		folders: () => call("folders"),
+		showFolder: (name) => call("show-folder", name), // "state" | "wolves"
+		loginItem: { get: () => call("login-item"), set: (on) => call("set-login-item", on === true) },
+		changeKey: (key) => call("change-key", key),
+		copyDiagnostics: () => call("copy-diagnostics"),
+		reset: () => call("reset"),
+	};
+}
+
 // The setup wizard window only (main.cjs passes --wolfpack-setup); the console never sees it.
 if (process.argv.includes("--wolfpack-setup")) {
 	api.setup = {

@@ -256,4 +256,4 @@ async function runSetup(answers, opts) {
 	return sup;
 }
 
-module.exports = { needsSetup, readSetup, readWolfId, storedKey, checkKey, runSetup, wolfIdFor, domainNameProblem, ANTHROPIC_BASE, MAX_DESCRIPTION, MAX_DOMAINS };
+module.exports = { writeAtomic, needsSetup, readSetup, readWolfId, storedKey, checkKey, runSetup, wolfIdFor, domainNameProblem, ANTHROPIC_BASE, MAX_DESCRIPTION, MAX_DOMAINS };

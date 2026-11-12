@@ -24,7 +24,7 @@
  *     would shadow every settings-page key change until restart.
  */
 
-const { app, BrowserWindow, Menu, Notification, Tray, nativeImage, ipcMain, session, shell, dialog } = require("electron");
+const { app, BrowserWindow, Menu, Notification, Tray, nativeImage, ipcMain, session, shell, dialog, clipboard } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -37,6 +37,7 @@ const { shouldCurate, parseBatteryPercent } = require("./curator-gate.cjs");
 const { needsSetup, readSetup, readWolfId, storedKey, checkKey, runSetup, wolfIdFor } = require("./setup.cjs");
 const { consoleEnv } = require("./console-env.cjs");
 const { windowAllClosedAction, createTray } = require("./tray.cjs");
+const { createAppSettings } = require("./app-settings.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/shell/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -869,7 +870,34 @@ async function main() {
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) createWindow(url, landingUrl);
 	});
+	// Console Settings > Data and support (work-wolfpack-B97I0Gv): logic in app-settings.cjs; only the console window's own top frame on the app's own console origin may call.
 	if (appRuntime && supervisor) {
+		const stateDir = process.env.WOLFPACK_APP_HOME || app.getPath("userData");
+		const settings = createAppSettings({
+			stateDir, wolvesDir: process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves"),
+			getSup: () => supervisor, modelBaseUrl: process.env.WOLFPACK_ANTHROPIC_BASE_URL || undefined, version: app.getVersion(),
+			sysVersion: `${process.getSystemVersion()}`, log, shell, clipboard, app,
+			// The native second step for Reset and Change key: Cancel is the default, so Enter never confirms.
+			confirm: async ({ message, detail, button }) => {
+				const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows().find((w) => w !== wizardWindow);
+				const r = await dialog.showMessageBox(parent ?? undefined, { type: "warning", message, detail, buttons: ["Cancel", button], defaultId: 0, cancelId: 0 });
+				return r.response === 1;
+			},
+		});
+		const origin = new URL(url).origin;
+		const fromConsole = (e) => {
+			const win = BrowserWindow.fromWebContents(e.sender);
+			if (!win || win === wizardWindow || e.senderFrame !== e.sender.mainFrame) return false;
+			try { return new URL(e.senderFrame.url).origin === origin; } catch { return false; }
+		};
+		const on = (name, fn) => ipcMain.handle(`wolfpack:app:${name}`, (e, arg) => (fromConsole(e) ? fn(arg) : { ok: false, error: "Not allowed" }));
+		on("folders", () => settings.folders());
+		on("show-folder", (n) => settings.showFolder(String(n)));
+		on("login-item", () => settings.loginItem());
+		on("set-login-item", (v) => { const r = settings.setLoginItem(v === true); tray?.refresh(); return r; });
+		on("change-key", (k) => settings.changeKey(String(k ?? "")));
+		on("copy-diagnostics", () => settings.copyDiagnostics());
+		on("reset", () => settings.reset());
 		const sup = supervisor;
 		tray = createTray({
 			app, Tray, Menu, nativeImage, log,

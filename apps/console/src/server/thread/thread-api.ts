@@ -114,6 +114,9 @@ export function sseFrame(ev: ThreadEvent | SnapshotEvent): Uint8Array {
 }
 
 const DONE = encoder.encode("data: [DONE]\n\n");
+/** Idle comment frame: the route re-frames client.watch output, which swallows wolfd's keepalives, so it keeps the browser connection warm itself. */
+const KEEPALIVE = encoder.encode(": ka\n\n");
+export const STREAM_KEEPALIVE_MS = 15_000;
 
 export function createThreadApi(source: ClientSource) {
 	return {
@@ -501,6 +504,7 @@ export function createThreadApi(source: ClientSource) {
 			// A snapshot (stale cursor, or a mid-turn correction after a diverged final) is forwarded as a
 			// `snapshot` frame the instant the client reports it; the adapter swaps its in-flight state for it.
 			let out: ReadableStreamDefaultController<Uint8Array> | undefined;
+			let ka: ReturnType<typeof setInterval> | undefined;
 			try {
 				const client = source();
 				const id = await resolve(client, ref);
@@ -520,21 +524,42 @@ export function createThreadApi(source: ClientSource) {
 			const body = new ReadableStream<Uint8Array>({
 				start(controller) {
 					out = controller;
+					ka = setInterval(() => {
+						try {
+							controller.enqueue(KEEPALIVE);
+						} catch {
+							clearInterval(ka);
+						}
+					}, STREAM_KEEPALIVE_MS);
+					// A keepalive must never hold the process open (fallback); the real stop is the request abort below.
+					(ka as { unref?: () => void }).unref?.();
+					// Client gone without a body cancel (aborted request): stop the keepalive and close the watch.
+					req.signal?.addEventListener(
+						"abort",
+						() => {
+							clearInterval(ka);
+							void iterator.return?.();
+						},
+						{ once: true },
+					);
 				},
 				async pull(controller) {
 					try {
 						const next = await iterator.next();
 						if (next.done) {
+							clearInterval(ka);
 							controller.enqueue(DONE);
 							controller.close();
 							return;
 						}
 						controller.enqueue(sseFrame(next.value));
 					} catch (err) {
+						clearInterval(ka);
 						controller.error(err);
 					}
 				},
 				async cancel() {
+					clearInterval(ka);
 					await iterator.return?.();
 				},
 			});

@@ -24,9 +24,7 @@ import {
 	watchPackHealth,
 	type PackHealthState,
 } from "@/components/pack/pack-health-store";
-import { kbRelativeTime } from "@/src/core/kb/kb-activity-model";
-import { packSectionFromSearch } from "@/src/core";
-import { BACK_MS, packSummary, type HealthSnapshotView } from "@/src/core/pack/pack-health-view";
+import { kbRelativeTime, packSectionFromSearch, BACK_MS, packSummary, type HealthSnapshotView } from "@/src/core";
 
 const TICK_MS = 2_000;
 

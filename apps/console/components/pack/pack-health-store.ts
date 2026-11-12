@@ -8,9 +8,7 @@
  *   dev: ?healthFixture=<name> / ?healthRestart= / ?healthLogs= / ?healthRollback=<status> load components/pack/pack-health-fixtures.ts with a dynamic import, only
  *        outside production, so the fixtures stay out of the production bundle.
  */
-import { createHealthConnection, type HealthConnectionDeps } from "@/src/core/pack/pack-health-connection";
-import type { PackSectionId } from "@/src/core";
-import type { HealthSnapshotView } from "@/src/core/pack/pack-health-view";
+import { createHealthConnection, type HealthConnectionDeps, type PackSectionId, type HealthSnapshotView } from "@/src/core";
 
 export interface PackHealthState {
 	snapshot: HealthSnapshotView | null;

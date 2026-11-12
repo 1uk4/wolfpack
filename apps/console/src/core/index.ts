@@ -99,9 +99,12 @@ export * from "./work/work-id-link.ts";
 export * from "./settings/wolf-settings-form.ts";
 // pack-sections.ts: the Pack panel sections, badges and entry summary. Pure.
 export * from "./pack/pack-sections.ts";
-export type { Tone } from "./pack/pack-health-view.ts";
-export { ageText } from "./pack/pack-health-view.ts";
+export type { Tone, HealthLink, HealthSnapshotView } from "./pack/pack-health-view.ts";
+export { ageText, BACK_MS, packSummary } from "./pack/pack-health-view.ts";
 export { groupByHost } from "./pack/pack-hosts.ts";
+export type { HostInfo } from "./pack/pack-hosts.ts";
+export { createHealthConnection } from "./pack/pack-health-connection.ts";
+export type { HealthConnectionDeps } from "./pack/pack-health-connection.ts";
 // machine-card.ts: the Machines section's card rules. Pure.
 export * from "./pack/machine-card.ts";
 export * from "./pack/pack-devices.ts";

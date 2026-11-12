@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { describe, it } from "node:test";
@@ -27,8 +27,7 @@ function windowOptions(platform: string) {
 		session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
 	};
 	const context = {
-		require: (id: string) =>
-			id === "electron" ? electron : id === "./notify.cjs" ? require("../../desktop/electron/notify.cjs") : id === "./remote.cjs" ? require("../../desktop/electron/remote.cjs") : id === "./userdata-migrate.cjs" ? require("../../desktop/electron/userdata-migrate.cjs") : require(id),
+		require: (id: string) => (id === "electron" ? electron : id.startsWith(".") ? require(join(dirname(mainFile), id)) : require(id)),
 		process: { platform, argv: [], env: {}, on() {} },
 		__dirname: dirname(mainFile),
 	};
@@ -64,7 +63,7 @@ describe("desktop window chrome", () => {
 	it("preload exposes OS identity without exposing Node/Electron to the renderer", () => {
 		const exposed = new Map<string, Record<string, unknown>>();
 		const context = {
-			process: { platform: "win32" },
+			process: { platform: "win32", argv: [] },
 			require: () => ({
 				contextBridge: {
 					exposeInMainWorld(name: string, api: Record<string, unknown>) {
@@ -79,7 +78,7 @@ describe("desktop window chrome", () => {
 		const bridge = exposed.get("wolfpack") as Record<string, unknown>;
 		assert.equal(bridge.platform, "win32");
 		assert.deepEqual(Object.keys(bridge).sort(), [
-			"expandWindow", "getZoom", "installUpdate", "notify", "onNavigate", "onUpdateStatus", "onZoom", "platform",
+			"expandWindow", "getZoom", "installUpdate", "notify", "onNavigate", "onUpdateStatus", "onZoom", "platform", "singleMac",
 		]);
 	});
 });

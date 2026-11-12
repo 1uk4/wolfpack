@@ -42,6 +42,14 @@ describe("machineCommand (work-wolfpack-4qae7Hg)", () => {
     expect(bodies).toEqual([{ kind: "key.set", args: {}, sealed: "SEALED-X" }, { kind: "wolves.restart", args: {} }]);
   });
 
+  it("sends a client-chosen command id to the hub (the seal binds it) and leaves it out when absent", async () => {
+    const bodies: unknown[] = [];
+    const c = make(async (_url, init) => (bodies.push(JSON.parse(String(init?.body))), new Response(JSON.stringify({ id: "c-mine-1", ok: true }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    await c.machineCommand("sfo-01", { kind: "key.set", args: { slot: "anthropic" }, sealed: "S", id: "c-mine-1" });
+    await c.machineCommand("sfo-01", { kind: "wolves.restart" });
+    expect(bodies).toEqual([{ kind: "key.set", args: { slot: "anthropic" }, sealed: "S", id: "c-mine-1" }, { kind: "wolves.restart", args: {} }]);
+  });
+
   it("still throws the hub's error envelope for a refused request", async () => {
     const c = make(answer(400, { code: "invalid_request", message: "bad body", retryable: false }));
     await expect(c.machineCommand("sfo-01", { kind: "workerd.restart", args: {} })).rejects.toMatchObject({ code: "invalid_request" });

@@ -504,9 +504,9 @@ export class HttpConsoleClient implements ConsoleClient {
    * Hub only: run one command on a machine (POST /v1/machines/:id/commands). The hub answers 409 (not_sent_*) and 504 (timeout) with a
    * CommandResponse body: those come back as a result, not an error. Any other refusal (400, 401, ...) still throws.
    */
-  async machineCommand(hostId: string, cmd: { kind: CommandKind; args?: unknown; sealed?: string }): Promise<CommandResponse> {
+  async machineCommand(hostId: string, cmd: { kind: CommandKind; args?: unknown; sealed?: string; id?: string }): Promise<CommandResponse> {
     if (!this.hub) throw new ProtocolError("invalid_request", "machineCommand needs a hub client", false);
-    return (await this.json("hubMachineCommand", { id: hostId }, ROUTES.hubMachineCommand.response.schema, { kind: cmd.kind, args: cmd.args ?? {}, ...(cmd.sealed !== undefined ? { sealed: cmd.sealed } : {}) }, undefined, "", {}, [409, 504], MACHINE_COMMAND_TIMEOUT_MS)) as CommandResponse;
+    return (await this.json("hubMachineCommand", { id: hostId }, ROUTES.hubMachineCommand.response.schema, { kind: cmd.kind, args: cmd.args ?? {}, ...(cmd.sealed !== undefined ? { sealed: cmd.sealed } : {}), ...(cmd.id !== undefined ? { id: cmd.id } : {}) }, undefined, "", {}, [409, 504], MACHINE_COMMAND_TIMEOUT_MS)) as CommandResponse;
   }
 
   /** Hub only: revoke a device (may be this one); `cascade` also revokes the devices it added. 409 `conflict` when it would remove the last console token. */

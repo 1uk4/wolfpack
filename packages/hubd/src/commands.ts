@@ -9,7 +9,7 @@ import { COMMAND_TIMEOUT_MS, type CommandKind, type CommandResponse, type Comman
 
 export interface CommandHub {
   /** Run `kind` on `hostId`. `status` is the HTTP status the route answers with. */
-  run(hostId: string, req: { kind: CommandKind; args: LinkCmd["args"]; sealed?: string }): Promise<{ status: number; body: CommandResponse }>;
+  run(hostId: string, req: { kind: CommandKind; args: LinkCmd["args"]; sealed?: string; id?: string }): Promise<{ status: number; body: CommandResponse }>;
   /** A cmd.result frame arrived from `hostId`'s link `epoch`. */
   onResult(hostId: string, epoch: number, f: LinkCmdResult): void;
   /** The link `epoch` of `hostId` closed. */
@@ -79,7 +79,11 @@ export function createCommandHub(o: CommandHubOptions): CommandHub {
 
   return {
     run(hostId, req) {
-      const id = `c-${randomUUID()}`;
+      // The browser may choose the id: a sealed key is bound to it (AAD). One already in flight is refused.
+      const id = req.id ?? `c-${randomUUID()}`;
+      // Refused WITHOUT a record: a record under this id would read as the in-flight command's outcome. Replay protection proper lives on
+      // the machine (it remembers the ids it has seen); this check only keeps one id from being pending twice.
+      if (pending.has(id)) return Promise.resolve({ status: statusFor("replay"), body: { id, ok: false, code: "replay", message: "this command id is already in use" } as CommandResponse });
       if (o.presence(hostId) !== "online" || o.epoch(hostId) === undefined) return Promise.resolve(fail(id, hostId, req.kind, "not_sent_offline", "the machine is not connected; nothing was sent"));
       if (!o.advertised(hostId).includes(req.kind)) return Promise.resolve(fail(id, hostId, req.kind, "not_sent_unsupported", "the machine does not support this command (update its workerd); nothing was sent"));
       const epoch = o.epoch(hostId)!;

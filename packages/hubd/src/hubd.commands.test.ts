@@ -68,6 +68,22 @@ describe("hubd command channel", () => {
     expect((await post("box", c.token, LOGS)).status).toBe(401);
   });
 
+  it("uses a client-chosen command id (the seal binds it) and refuses one already in flight", async () => {
+    const c = mint("console");
+    const m = await machine("box", { commands: ["logs.fetch"] });
+    const first = post("box", c.token, { ...LOGS, id: "c-mine-1" });
+    await eventually(() => m.cmds().length === 1, "cmd frame");
+    expect(m.cmds()[0]!.id).toBe("c-mine-1");
+    const log = vi.spyOn(console, "log");
+    const dup = await post("box", c.token, { ...LOGS, id: "c-mine-1" });
+    expect(await dup.json()).toMatchObject({ ok: false, code: "replay" });
+    // The refusal must not write a record under the in-flight command's id (it would read as that command's outcome).
+    expect(log.mock.calls.map((a) => String(a[0])).filter((l) => l.includes("id=c-mine-1"))).toEqual([]);
+    log.mockRestore();
+    m.ws.send(JSON.stringify({ t: "cmd.result", id: "c-mine-1", ok: true, data: { lines: [], truncated: false } }));
+    expect(await (await first).json()).toMatchObject({ id: "c-mine-1", ok: true });
+  });
+
   it("answers not_sent_offline at once when the machine has no link", async () => {
     const c = mint("console");
     const r = await post("ghost", c.token, LOGS);

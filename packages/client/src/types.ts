@@ -223,7 +223,7 @@ export interface ConsoleClient {
   revokeDevice?(id: string, opts?: { cascade?: boolean }): Promise<{ revoked: string; self: boolean; cascaded: string[] }>;
   mintPairingCode?(label?: string): Promise<MintPairingCodeResponse>;
   /** Hub only: run one command on a machine through the command channel. 409/504 come back as a result with `ok: false`. */
-  machineCommand?(hostId: string, cmd: { kind: CommandKind; args?: unknown; sealed?: string }): Promise<CommandResponse>;
+  machineCommand?(hostId: string, cmd: { kind: CommandKind; args?: unknown; sealed?: string; id?: string }): Promise<CommandResponse>;
   /** The Record of a work item, via the wolf's Work API client. Rejects NotFoundError for an unknown item. */
   getWorkRecord?(wolf: string, workId: string): Promise<WorkRecordResponse>;
   /**

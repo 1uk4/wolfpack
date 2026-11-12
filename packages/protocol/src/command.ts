@@ -49,7 +49,7 @@ const CmdBase = z.object({
 const argsMatchKind = (f: { kind: CommandKind; args: unknown }) => CommandArgsSchemas[f.kind].safeParse(f.args).success;
 export const LinkCmdSchema = CmdBase.extend({ t: z.literal("cmd"), id: CommandIdSchema }).refine(argsMatchKind, { message: "args do not match kind" });
 /** Console -> hub body of POST /v1/machines/:hostId/commands. The hub assigns the command id. */
-export const CommandRequestSchema = CmdBase.refine(argsMatchKind, { message: "args do not match kind" });
+export const CommandRequestSchema = CmdBase.extend({ id: CommandIdSchema.optional() }).refine(argsMatchKind, { message: "args do not match kind" });
 
 export const CommandResultCodeSchema = z.enum([
   "not_sent_offline",

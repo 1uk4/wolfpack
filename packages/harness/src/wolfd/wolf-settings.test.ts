@@ -57,6 +57,19 @@ describe("wolfd /settings", () => {
     expect(v.restartNeeded).toBe(false);
   });
 
+  it("the view always names the wolf (config.name) even when wolf.yaml has no name, and carries each tier's provider", async () => {
+    const wolfHome = mkdtempSync(join(tmpdir(), "wolfd-settings-"));
+    dirs.push(wolfHome);
+    const configFile = join(wolfHome, "wolf.yaml");
+    writeFileSync(configFile, "domains: [personal]\n");
+    const s = new WolfServer({ name: "w", wolfHome, configFile, env: {}, conversation: new ScriptedEngine({ delayMs: 1, id: "901" }), tierProviders: { main: "openai", smart: "claude-stateless" } });
+    servers.push(s);
+    await s.attach();
+    const v = await (await send(`${await s.listen()}/v1/wolves/w/settings`, "GET")).json();
+    expect(v.config.name).toBe("w");
+    expect(v.tierProviders).toEqual({ main: "openai", smart: "claude-stateless" });
+  });
+
   it("reveals exactly one listed value and refuses names it does not list", async () => {
     const { url } = await boot();
     const ok = await send(`${url}/reveal`, "POST", { source: "env", name: "WORK_TOKEN" });
@@ -92,6 +105,16 @@ describe("wolfd /settings", () => {
     expect((await send(url, "PUT", { set: { "subagents.maxRunning": 4 } }, { "If-Match": "stale" })).status).toBe(409);
     expect(readFileSync(configFile, "utf8")).toBe(YAML);
     expect(existsSync(configFile + ".tmp")).toBe(false);
+  });
+
+  it("lists memory.model as editable and saves it to wolf.yaml", async () => {
+    const { url, configFile } = await boot();
+    const v = await (await send(url, "GET")).json();
+    expect(v.editable).toContain("memory.model");
+    const res = await send(url, "PUT", { set: { "memory.model": "claude-haiku-5-5" } }, { "If-Match": v.etag });
+    expect(res.status).toBe(200);
+    expect((await res.json()).config.memory.model).toBe("claude-haiku-5-5");
+    expect(readFileSync(configFile, "utf8")).toContain("model: claude-haiku-5-5");
   });
 
   it("saves the wolf color only as a palette key, reports it on the wolf summary, and null clears it", async () => {

@@ -113,34 +113,41 @@ export function Toggle({
 			data-testid={`toggle-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
 			onClick={() => onChange(!checked)}
 			className={cn(
-				"relative inline-block h-4.5 w-8 shrink-0 appearance-none rounded-full border border-border p-0 transition-colors",
-				// Owner (2026-09-20): on is a gray track with a WHITE disc (a full-white
-				// track was too loud); off stays the muted track.
-				checked ? "bg-muted-foreground" : "bg-muted",
+				// On a phone the button is a 44px-tall, 48px-wide tap area and the 32x18 track sits centred in it; on desktop the button is the track's own box.
+				"inline-flex h-4.5 w-8 shrink-0 appearance-none items-center justify-center rounded-full bg-transparent p-0 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 max-md:h-11 max-md:w-12",
 				disabled && "cursor-not-allowed",
 			)}
 		>
-			{discIcon ? (
-				// The icon IS the disc: same size, same slide, same state colors —
-				// only the knob's face changes (the invert affordance).
-				<span
-					className={cn(
-						"absolute left-0 top-0.5 flex size-3 items-center justify-center rounded-full transition-transform",
-						checked ? "translate-x-4 text-foreground" : "translate-x-0.5 text-muted-foreground",
-					)}
-				>
-					{discIcon}
-				</span>
-			) : (
-				<span
-					className={cn(
-						"absolute left-0 top-0.5 size-3 rounded-full transition-transform",
-						// 2px inset from each inner edge, both states (owner round: the on
-						// disc used to touch the pill's right edge).
-						checked ? "translate-x-4 bg-foreground" : "translate-x-0.5 bg-muted-foreground",
-					)}
-				/>
-			)}
+			<span
+				className={cn(
+					"relative h-4.5 w-8 shrink-0 rounded-full border border-border transition-colors",
+					// Owner (2026-09-20): on is a gray track with a WHITE disc (a full-white
+					// track was too loud); off stays the muted track.
+					checked ? "bg-muted-foreground" : "bg-muted",
+				)}
+			>
+				{discIcon ? (
+					// The icon IS the disc: same size, same slide, same state colors —
+					// only the knob's face changes (the invert affordance).
+					<span
+						className={cn(
+							"absolute left-0 top-0.5 flex size-3 items-center justify-center rounded-full transition-transform",
+							checked ? "translate-x-4 text-foreground" : "translate-x-0.5 text-muted-foreground",
+						)}
+					>
+						{discIcon}
+					</span>
+				) : (
+					<span
+						className={cn(
+							"absolute left-0 top-0.5 size-3 rounded-full transition-transform",
+							// 2px inset from each inner edge, both states (owner round: the on
+							// disc used to touch the pill's right edge).
+							checked ? "translate-x-4 bg-foreground" : "translate-x-0.5 bg-muted-foreground",
+						)}
+					/>
+				)}
+			</span>
 		</button>
 	);
 }
@@ -169,7 +176,7 @@ export function ThinSelect({
 			disabled={disabled}
 			onChange={(e) => onChange(e.target.value)}
 			className={cn(
-				"h-7 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground outline-none",
+				"h-7 max-md:h-11 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground outline-none",
 				disabled && "cursor-not-allowed",
 			)}
 		>
@@ -228,7 +235,7 @@ export function CommitInput({
 					e.currentTarget.blur();
 				}
 			}}
-			className="h-7 w-40 rounded-sm border border-border bg-background px-2 font-ui text-xs text-foreground outline-none placeholder:text-muted-foreground/60"
+			className="h-7 w-40 max-md:h-11 rounded-sm border border-border bg-background px-2 font-ui text-xs text-foreground outline-none placeholder:text-muted-foreground/60"
 		/>
 	);
 }

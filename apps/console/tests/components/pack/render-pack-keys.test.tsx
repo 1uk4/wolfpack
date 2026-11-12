@@ -2,7 +2,7 @@
  * Seam: the Keys section (components/pack/pack-keys.tsx) rendered to static markup (first paint; effects don't run in SSR).
  * Covers: the grid (groups, env shadowing, missing dictation key), the no-X25519 message, and the result wording.
  */
-import React from "react";
+import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
@@ -82,5 +82,58 @@ describe("Pack > Keys", () => {
 		assert.equal(outcomeText({ id: "c", ok: true, data: { restarted: [] } }, "anthropic").text, "Saved. No wolf on this machine uses it; the hub's memory picks it up after the hub restarts.");
 		assert.equal(outcomeText({ id: "c", ok: true, data: { restarted: [] } }, "deepgram").text, "Saved.");
 		assert.equal(outcomeText({ id: "c", ok: false, code: "timeout" }).tone, "unknown");
+	});
+});
+
+describe("Pack > Keys > phone list", () => {
+	const html = renderToStaticMarkup(<KeysView machines={machines} support={{ ok: true }} send={send} reload={() => {}} />);
+	const stateOf = (testid: string) => new RegExp(`data-testid="${testid}"[^>]*>([^<]*)<`).exec(html)?.[1];
+
+	it("lists a machine row under each key in every group it is in, with the same state text as the grid cell and the cell's note", () => {
+		for (const g of ["chat", "memory"]) {
+			assert.equal(stateOf(`keys-state-${g}-anthropic-mac`), "••••4f2a · Pack");
+			assert.equal(stateOf(`keys-cell-${g}-anthropic-mac`), "••••4f2a · Pack");
+			assert.equal(stateOf(`keys-state-${g}-anthropic-sfo`), "••••9c1e · Pack (overrides environment)");
+			assert.equal(stateOf(`keys-cell-${g}-anthropic-sfo`), "••••9c1e · Pack (overrides environment)");
+		}
+		assert.match(html, /data-testid="keys-note-chat-anthropic-sfo"[^>]*>The Pack(?:'|&#x27;)s key is used; this machine(?:'|&#x27;)s environment also sets one\./);
+		assert.ok(!html.includes('data-testid="keys-note-chat-anthropic-mac"')); // no note, no line
+	});
+
+	it("a machine that cannot take keys is a plain row, not a button", () => {
+		// sfo's key changed, so it is never a sealing target
+		assert.match(html, /<button[^>]*data-testid="keys-row-chat-anthropic-mac"/);
+		assert.match(html, /<div[^>]*data-testid="keys-row-chat-anthropic-sfo"/);
+	});
+
+	it("a plain row says why it cannot be tapped, in the editor's words", () => {
+		assert.match(html, /data-testid="keys-why-chat-anthropic-sfo"[^>]*>its key changed</);
+		assert.ok(!html.includes('data-testid="keys-why-chat-anthropic-mac"'));
+		const old: KeyMachine[] = [{ hostId: "old", machine: "old-box", online: true, canSetKeys: false, slots: [] }];
+		const oldHtml = renderToStaticMarkup(<KeysView machines={old} support={{ ok: true }} send={send} reload={() => {}} />);
+		assert.match(oldHtml, /data-testid="keys-why-chat-anthropic-old"[^>]*>can(?:'|&#x27;)t take keys \(update its workerd\)</);
+	});
+
+	it("tapping a machine's row opens the editor with only that machine picked", async () => {
+		const { createRoot } = await import("react-dom/client");
+		const { parseHTML } = await import("linkedom");
+		const dom = parseHTML("<html><body></body></html>");
+		Object.assign(globalThis, { window: dom.window, document: dom.document, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+		const two: KeyMachine[] = [
+			{ hostId: "a", machine: "Alpha", online: true, canSetKeys: true, pubkey: "PA", slots: [] },
+			{ hostId: "b", machine: "Beta", online: true, canSetKeys: true, pubkey: "PB", slots: [] },
+		];
+		const host = dom.document.createElement("div");
+		dom.document.body.appendChild(host);
+		const root = createRoot(host);
+		await act(async () => root.render(<KeysView machines={two} support={{ ok: true }} send={send} reload={() => {}} />));
+		const tap = (id: string) => act(async () => void dom.document.querySelector(`[data-testid="${id}"]`)!.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true })));
+		const checked = () => ["a", "b"].map((h) => (dom.document.querySelector(`[data-testid="keys-target-${h}"] input`) as HTMLInputElement).checked);
+		await tap("keys-row-chat-anthropic-b");
+		assert.deepEqual(checked(), [false, true]);
+		assert.match(dom.document.querySelector('[data-testid="keys-editor"]')!.textContent ?? "", /Send sealed to 1 machine\b/);
+		await tap("keys-name-chat-anthropic"); // the card's name: the default selection, every machine
+		assert.deepEqual(checked(), [true, true]);
+		await act(async () => root.unmount());
 	});
 });

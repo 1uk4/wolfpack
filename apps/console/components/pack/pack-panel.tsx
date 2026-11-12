@@ -7,7 +7,7 @@
  * bodies in pack-section-bodies.tsx. Under md the menu is a strip across the top and the body fills the screen.
  *   url: ?pack=<section> opens the Pack on that section at page load (PackHealthHost reads it); an unknown name opens Machines.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SettingsIcon } from "lucide-react";
 import { OverlayHeader, OverlayShell } from "@/components/shell/overlay-shell";
 import { usePackHealth } from "@/components/pack/pack-health";
@@ -95,13 +95,18 @@ export function PackPanel() {
 				data-testid={`pack-menu-${id}`}
 				aria-current={section === id ? "page" : undefined}
 				onClick={() => setSection(id)}
-				className={cn("flex items-center gap-2 rounded-sm px-3 py-1.5 text-left text-xs max-md:shrink-0 max-md:py-2", small && "text-muted-foreground", section === id ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent")}
+				className={cn("flex items-center gap-2 rounded-sm px-3 py-1.5 text-left text-xs max-md:min-h-11 max-md:shrink-0 max-md:whitespace-nowrap max-md:py-2", small && "text-muted-foreground", section === id ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent")}
 			>
 				{label}
 				{b && <Badge badge={b} id={id} />}
 			</button>
 		);
 	};
+	// Keep the open tab visible in the phone's scrolling strip, on mount (?pack=<section>) and when it changes.
+	const tabs = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		tabs.current?.querySelector<HTMLElement>(`[data-testid="pack-menu-${section}"]`)?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
+	}, [section]);
 	const Body = PACK_SECTION_BODIES[section];
 	const main = PACK_SECTIONS.filter((s) => s.id !== "this-device");
 	const thisDevice = PACK_SECTIONS.find((s) => s.id === "this-device")!;
@@ -123,7 +128,7 @@ export function PackPanel() {
 			)}
 		>
 			<div className="mx-auto flex w-full max-w-5xl min-h-0 flex-1 gap-4 text-xs max-md:flex-col max-md:gap-2">
-				<div className="flex w-44 shrink-0 flex-col gap-0.5 max-md:w-full max-md:flex-row max-md:overflow-x-auto">
+				<div ref={tabs} className="flex w-44 shrink-0 flex-col gap-0.5 max-md:w-full max-md:flex-row max-md:items-stretch max-md:overflow-x-auto max-md:border-b max-md:pb-1 max-md:[scrollbar-width:none]" data-testid="pack-tabs">
 					<nav aria-label="Pack sections" className="flex flex-col gap-0.5 max-md:flex-row">
 						{main.map((s) => item(s.id, s.label))}
 						{item(thisDevice.id, thisDevice.label, true)}
@@ -136,13 +141,13 @@ export function PackPanel() {
 								closePackHealth();
 								openSettingsAfterPack(settings.open);
 							}}
-							className="rounded-sm px-3 py-1.5 text-left text-[11px] text-muted-foreground/70 underline-offset-2 hover:underline max-md:shrink-0 max-md:py-2"
+							className="rounded-sm px-3 py-1.5 text-left text-[11px] text-muted-foreground/70 underline-offset-2 hover:underline max-md:flex max-md:min-h-11 max-md:shrink-0 max-md:items-center max-md:whitespace-nowrap max-md:py-2"
 						>
 							Old settings
 						</button>
 					</div>
 				</div>
-				<div className="min-w-0 flex-1 overflow-y-auto pb-6">
+				<div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto pb-6">
 					<Body />
 				</div>
 			</div>

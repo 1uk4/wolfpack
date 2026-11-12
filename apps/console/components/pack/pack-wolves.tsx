@@ -39,8 +39,8 @@ import {
 type Fetcher = typeof fetch;
 /** Looked up per call: the hub-auth wrapper replaces window.fetch and adds the device token. */
 const liveFetch: Fetcher = (u, i) => fetch(u, i);
-const BTN = "rounded-sm border px-2.5 py-1 text-xs transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50 max-md:px-3 max-md:py-2";
-const SELECT = "rounded-sm border bg-background px-2 py-1 text-xs max-md:py-2 max-md:text-base";
+const BTN = "rounded-sm border px-2.5 py-1 text-xs transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50 max-md:min-h-11 max-md:px-3 max-md:py-2";
+const SELECT = "rounded-sm border bg-background px-2 py-1 text-xs max-md:py-2 max-md:min-h-11 max-md:text-base";
 
 interface SettingsView {
 	etag: string;
@@ -146,7 +146,7 @@ function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; catalog: Pi
 
 	return (
 		<div data-testid={`wolf-detail-${wolf.name}`} className="flex min-w-0 flex-col gap-4">
-			<div className="flex items-center gap-2">
+			<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
 				<button type="button" className={cn(BTN, "inline-flex items-center gap-1")} onClick={props.onBack} data-testid="wolf-back"><ArrowLeftIcon className="size-3.5" aria-hidden />Wolves</button>
 				<h3 className="text-sm font-medium text-foreground">{wolf.name}</h3>
 				<span className="text-muted-foreground">on {machine.machine}</span>
@@ -208,7 +208,7 @@ export function WolvesView(props: { machines: KeyMachine[]; catalog: PickerModel
 					<ul className="flex flex-col gap-1">
 						{g.wolves.map((x) => (
 							<li key={x.name}>
-								<button type="button" data-testid={`wolf-row-${x.name}`} className="flex w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-left hover:bg-accent max-md:py-3" onClick={() => setSel({ hostId: g.hostId, name: x.name })}>
+								<button type="button" data-testid={`wolf-row-${x.name}`} className="flex w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-left hover:bg-accent max-md:min-h-11 max-md:py-3" onClick={() => setSel({ hostId: g.hostId, name: x.name })}>
 									<span className="font-medium text-foreground">{x.name}</span>
 									<span className="text-muted-foreground">{transportLabel(x.transport)}</span>
 								</button>

@@ -24,8 +24,8 @@ import {
 type Send = typeof sendMachineCommand;
 type Load = () => Promise<{ machines: KeyMachine[] } | { error: string }>;
 
-const BTN = "rounded-sm border px-2.5 py-1 text-xs transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50 max-md:px-3 max-md:py-2";
-const INPUT = "w-full rounded-sm border bg-background px-2 py-1 font-mono text-xs max-md:py-2 max-md:text-base";
+const BTN = "rounded-sm border px-2.5 py-1 text-xs transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50 max-md:min-h-11 max-md:px-3 max-md:py-2";
+const INPUT = "w-full rounded-sm border bg-background px-2 py-1 font-mono text-xs max-md:py-2 max-md:min-h-11 max-md:text-base";
 
 const liveLoad: Load = async () => {
 	try {
@@ -36,6 +36,11 @@ const liveLoad: Load = async () => {
 		return { error: "This console's server is not answering." };
 	}
 };
+
+/** Why a machine cannot be a sealing target: the editor and the phone list's plain rows say the same words. */
+const NO_KEYS_TEXT = "can't take keys (update its workerd)";
+const CHANGED_TEXT = "its key changed";
+const whyNotTarget = (m: KeyMachine | undefined): string | null => (!m || !m.canSetKeys || !m.pubkey ? NO_KEYS_TEXT : m.keyChanged ? CHANGED_TEXT : null);
 
 export type MachineOutcome = { state: "idle" | "sending" } | { state: "done"; result: CommandResult };
 
@@ -56,6 +61,8 @@ export function outcomeText(r: CommandResult, slot?: string): { tone: "ok" | "ba
 
 export function KeyEditor(props: {
 	slot: string;
+	/** Start with just this machine picked (when it can take keys); absent = every machine that can. */
+	only?: string;
 	providerName: string;
 	machines: KeyMachine[];
 	support: { ok: true } | { ok: false; message: string };
@@ -67,7 +74,7 @@ export function KeyEditor(props: {
 	// A machine whose key changed is never sealed to until the owner accepts the new key.
 	const targets = machines.filter((m) => m.canSetKeys && m.pubkey && !m.keyChanged);
 	const [value, setValue] = useState("");
-	const [picked, setPicked] = useState<string[]>(() => targets.map((m) => m.hostId));
+	const [picked, setPicked] = useState<string[]>(() => (props.only && targets.some((m) => m.hostId === props.only) ? [props.only] : targets.map((m) => m.hostId)));
 	const [out, setOut] = useState<Record<string, MachineOutcome>>({});
 	const shape = value ? checkKeyShape(slot, value) : null;
 	const busy = Object.values(out).some((o) => o.state === "sending");
@@ -122,12 +129,12 @@ export function KeyEditor(props: {
 					const has = m.slots.find((s) => s.slot === slot)?.source === "pack";
 					return (
 						<li key={m.hostId} data-testid={`keys-target-${m.hostId}`} className="flex flex-wrap items-center gap-2">
-							<label className="flex items-center gap-1.5">
+							<label className="flex items-center gap-1.5 max-md:min-h-11">
 								<input type="checkbox" disabled={!can || !!m.keyChanged} checked={picked.includes(m.hostId)} onChange={(e) => setPicked((p) => (e.target.checked ? [...p, m.hostId] : p.filter((x) => x !== m.hostId)))} />
 								{m.machine}
 							</label>
-							{!can ? <span className="text-muted-foreground">can&apos;t take keys (update its workerd)</span> : null}
-							{m.keyChanged ? <span className="text-amber-600">its key changed</span> : null}
+							{!can ? <span className="text-muted-foreground">{NO_KEYS_TEXT}</span> : null}
+							{m.keyChanged ? <span className="text-amber-600">{CHANGED_TEXT}</span> : null}
 							{o?.state === "sending" ? <span className="text-muted-foreground">Sending…</span> : null}
 							{text ? <span data-testid={`keys-result-${m.hostId}`} className={text.tone === "ok" ? "text-emerald-600" : text.tone === "unknown" ? "text-amber-600" : "text-destructive"}>{text.text}</span> : null}
 							{o?.state === "done" && o.result.code === "timeout" ? <button type="button" className={BTN} disabled={!value} onClick={() => void sendTo(m, "set")}>Retry</button> : null}
@@ -153,11 +160,13 @@ export function KeyEditor(props: {
 	);
 }
 
+const machineName = (ms: readonly KeyMachine[], hostId: string): string => ms.find((m) => m.hostId === hostId)?.machine ?? hostId;
+
 const cellText = (c: ReturnType<typeof buildGrid>[number]["rows"][number]["cells"][number]): string =>
 	c.state === "unknown" ? "—" : c.state === "subscription" ? "Claude subscription" : c.state === "none" ? (c.missing ? "Needs a key" : "—") : `${c.masked ?? "set"} · ${c.state === "env" ? "environment" : "Pack"}${c.state === "shadowed" ? " (overrides environment)" : ""}`;
 
 export function KeysView(props: { machines: KeyMachine[]; support: { ok: true } | { ok: false; message: string }; send: Send; reload: () => void; ack?: (hostId: string, fingerprint: string) => void }) {
-	const [editing, setEditing] = useState<{ slot: string; name: string } | null>(null);
+	const [editing, setEditing] = useState<{ slot: string; name: string; hostId?: string } | null>(null);
 	const [picker, setPicker] = useState(false);
 	const grid = buildGrid(props.machines);
 	const options = pickerOptions(grid);
@@ -169,7 +178,46 @@ export function KeysView(props: { machines: KeyMachine[]; support: { ok: true } 
 					{props.ack ? <button type="button" className={BTN} onClick={() => props.ack!(m.hostId, m.fingerprint ?? "")}>It&apos;s expected</button> : null}
 				</p>
 			))}
-			<table className="w-full border-collapse">
+			<div data-testid="keys-list" className="flex flex-col gap-4 md:hidden">
+				{grid.map((g) => (
+					<section key={g.capability} data-testid={`keys-list-group-${g.capability}`} className="flex flex-col gap-2">
+						<h3 className="text-[11px] uppercase tracking-wide text-muted-foreground">{g.label}</h3>
+						{g.rows.map((r) => (
+							<div key={r.slot} data-testid={`keys-card-${g.capability}-${r.slot}`} className="overflow-hidden rounded-md border">
+								<button type="button" data-testid={`keys-name-${g.capability}-${r.slot}`} onClick={() => setEditing({ slot: r.slot, name: r.name })} className="flex min-h-11 w-full items-center border-b bg-muted/30 px-3 py-2 text-left text-sm font-medium text-foreground hover:bg-accent">{r.name}</button>
+								<ul className="divide-y">
+									{r.cells.map((c) => {
+										const m = props.machines.find((x) => x.hostId === c.hostId);
+										const why = whyNotTarget(m);
+										const canTake = why === null;
+										const rowClass = "flex min-h-11 w-full items-center justify-between gap-3 px-3 py-2 text-left";
+										const body = (
+											<>
+												<span className="min-w-0 truncate font-medium">{machineName(props.machines, c.hostId)}</span>
+												<span className="flex min-w-0 flex-col items-end text-right">
+													<span data-testid={`keys-state-${g.capability}-${r.slot}-${c.hostId}`} className={cn("min-w-0 break-words", c.missing && "text-destructive", (c.state === "unknown" || c.state === "subscription") && "text-muted-foreground")}>{cellText(c)}</span>
+													{why ? <span data-testid={`keys-why-${g.capability}-${r.slot}-${c.hostId}`} className="min-w-0 break-words text-[11px] text-muted-foreground">{why}</span> : null}
+													{c.note ? <span data-testid={`keys-note-${g.capability}-${r.slot}-${c.hostId}`} className="min-w-0 break-words text-[11px] text-muted-foreground">{c.note}</span> : null}
+												</span>
+											</>
+										);
+										return (
+											<li key={c.hostId}>
+												{canTake ? (
+													<button type="button" data-testid={`keys-row-${g.capability}-${r.slot}-${c.hostId}`} onClick={() => setEditing({ slot: r.slot, name: r.name, hostId: c.hostId })} className={cn(rowClass, "hover:bg-accent")}>{body}</button>
+												) : (
+													<div data-testid={`keys-row-${g.capability}-${r.slot}-${c.hostId}`} className={rowClass}>{body}</div>
+												)}
+											</li>
+										);
+									})}
+								</ul>
+							</div>
+						))}
+					</section>
+				))}
+			</div>
+			<table className="hidden w-full border-collapse md:table">
 				<thead>
 					<tr><th className="p-1 text-left font-normal text-muted-foreground" />{props.machines.map((m) => <th key={m.hostId} className="p-1 text-left font-medium">{m.machine}</th>)}</tr>
 				</thead>
@@ -193,13 +241,13 @@ export function KeysView(props: { machines: KeyMachine[]; support: { ok: true } 
 						{options.map((o) => (
 							<div key={o.capability}>
 								<p className="text-[11px] uppercase tracking-wide text-muted-foreground">{o.label}</p>
-								{o.providers.map((p) => <button key={p.slot} type="button" className="block py-1 hover:underline" onClick={() => (setEditing({ slot: p.slot, name: p.name }), setPicker(false))}>{p.name}</button>)}
+								{o.providers.map((p) => <button key={p.slot} type="button" className="block py-1 hover:underline max-md:min-h-11 max-md:w-full max-md:text-left" onClick={() => (setEditing({ slot: p.slot, name: p.name }), setPicker(false))}>{p.name}</button>)}
 							</div>
 						))}
 					</div>
 				) : null}
 			</div>
-			{editing ? <KeyEditor key={editing.slot} slot={editing.slot} providerName={editing.name} machines={props.machines} support={props.support} send={props.send} onClose={() => setEditing(null)} onDone={props.reload} /> : null}
+			{editing ? <KeyEditor key={`${editing.slot}/${editing.hostId ?? ""}`} only={editing.hostId} slot={editing.slot} providerName={editing.name} machines={props.machines} support={props.support} send={props.send} onClose={() => setEditing(null)} onDone={props.reload} /> : null}
 		</div>
 	);
 }

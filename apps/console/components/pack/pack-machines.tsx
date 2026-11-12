@@ -23,7 +23,7 @@ import {
 } from "@/src/core";
 
 const TONE: Record<string, string> = { red: "bg-red-500", amber: "bg-amber-500", grey: "bg-muted-foreground/50", green: "bg-emerald-500" };
-const BTN = "rounded-sm border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50 max-md:px-3 max-md:py-2";
+const BTN = "rounded-sm border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50 max-md:min-h-11 max-md:px-3 max-md:py-2";
 
 export type Send = (hostId: string, cmd: { kind: string; args?: unknown }) => Promise<CommandResult>;
 export type LogState = { lines: string[]; error: string | null } | "loading";
@@ -68,7 +68,7 @@ export function MachineCard(p: {
 			<div data-testid="machine-channel" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
 				<span>Update channel</span>
 				{view.channel.editable ? (
-					<select data-testid="machine-channel-select" value={view.channel.value ?? "stable"} onChange={(e) => p.onChannel?.(e.target.value as "stable" | "main")} className="rounded-sm border bg-background px-2 py-1">
+					<select data-testid="machine-channel-select" value={view.channel.value ?? "stable"} onChange={(e) => p.onChannel?.(e.target.value as "stable" | "main")} className="rounded-sm border bg-background px-2 py-1 max-md:min-h-11">
 						<option value="stable">stable</option>
 						<option value="main">main (testing)</option>
 					</select>

@@ -6,6 +6,8 @@
  * The console never sees a key: the browser seals it to the machine's public key.
  */
 import { WORKERD_TTL_MS } from "@wolfpack/protocol";
+import { machineName } from "@wolfpack/protocol/health-lag";
+import { isRelayMode } from "../thread/relay-mode.ts";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -75,7 +77,8 @@ export function createKeysApi(d: KeysApiDeps) {
 						slots: e.keys ?? [],
 					};
 				});
-				return Response.json({ machines }, { headers: NO_STORE });
+				// Which wolves THIS console can address: in relay mode the hub routes any wolf by name; otherwise only the wolves on this machine.
+				return Response.json({ machines, console: { relay: isRelayMode(env, true), machine: machineName(env) } }, { headers: NO_STORE });
 			} catch {
 				return down();
 			}

@@ -66,6 +66,19 @@ describe("Pack keys API", () => {
 		assert.equal(gone.online, false);
 	});
 
+	it("says whether this console relays through the hub and which machine it runs on, so the Wolves section knows which wolves it can reach", async () => {
+		const routes = { "/v1/inventory": { status: 200, body: { entries: [] } }, "/v1/machines/keys": { status: 200, body: { keys: {} } } };
+		const mk = (env: Record<string, string>) => {
+			const witness = createSessionWitness({ file: undefined });
+			const gateApi = createHealthApi({ checkToken: async () => "accepted", witness } as unknown as Parameters<typeof createHealthApi>[0]);
+			const hubFetch = (async (url: string) => Response.json(routes[new URL(url).pathname as keyof typeof routes].body)) as unknown as typeof fetch;
+			return createKeysApi({ gate: (r) => gateApi.gate(r, "key change"), env: { WOLFPACK_HUB_URL: "http://hub.test:3150", WOLFPACK_HUB_TOKEN: "op", WOLFPACK_MACHINE: "Mac.local", ...env }, fetch: hubFetch });
+		};
+		const reach = async (env: Record<string, string>) => ((await (await mk(env).machines(req("GET"))).json()) as { console: unknown }).console;
+		assert.deepEqual(await reach({}), { relay: true, machine: "mac" });
+		assert.deepEqual(await reach({ WOLFPACK_API_URL: "http://127.0.0.1:7141" }), { relay: false, machine: "mac" });
+	});
+
 	it("forwards the fingerprint being accepted to the hub's ack, and passes its 409 through", async () => {
 		const { api, calls } = setup({ "/v1/machines/box/key/ack": { status: 409, body: { code: "conflict" } } });
 		const res = await api.ack(req("POST", { fingerprint: "ff00" }), "box");

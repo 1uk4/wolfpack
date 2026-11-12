@@ -14,6 +14,7 @@ import { MachinesSection } from "@/components/pack/pack-machines";
 import { DevicesBody } from "@/components/pack/pack-devices";
 import { DomainsTab } from "@/components/pack/pack-domains";
 import { ThisDeviceBody } from "@/components/pack/pack-this-device";
+import { KeysBody } from "@/components/pack/pack-keys";
 import type { PackSectionId } from "@/src/core";
 
 function Placeholder({ id, title, task }: { id: PackSectionId; title: string; task: string }) {
@@ -30,6 +31,6 @@ export const PACK_SECTION_BODIES: Record<PackSectionId, ComponentType> = {
 	devices: DevicesBody,
 	wolves: () => <Placeholder id="wolves" title="Wolves" task="work-wolfpack-eE5FKDy" />,
 	domains: DomainsTab,
-	keys: () => <Placeholder id="keys" title="Keys" task="work-wolfpack-6EmU8pu" />,
+	keys: KeysBody,
 	"this-device": ThisDeviceBody,
 };

@@ -20,13 +20,17 @@ export interface KeyMachine {
 	canSetKeys: boolean;
 	/** True when the machine serves a console (needs dictation). */
 	servesConsole?: boolean;
+	/** Wolves on this machine that are mid-reply right now (restarting would cut them off). Not reported by workerd yet; fixtures only. */
+	midReply?: string[];
+	/** The machine's wolves with the transport each reports (inventory). Absent or empty = unknown, treated as needing the key. */
+	wolves?: { name: string; transport: "api" | "subscription" }[];
 	pubkey?: string;
 	fingerprint?: string;
 	keyChanged?: boolean;
 	slots: SlotPresence[];
 }
 /** "unknown": the machine can't take keys or is offline, so nothing is known (or asked) about its keys. */
-export type CellState = "none" | "pack" | "env" | "shadowed" | "unknown";
+export type CellState = "none" | "pack" | "env" | "shadowed" | "unknown" | "subscription";
 export interface Cell {
 	hostId: string;
 	state: CellState;
@@ -50,8 +54,15 @@ export interface GridGroup {
 
 export const CAPABILITY_LABEL: Record<Capability, string> = { chat: "Chat", dictation: "Dictation", memory: "Memory" };
 
-export function cellOf(m: KeyMachine, slot: string, needed: boolean): Cell {
+/** Names of the machine's wolves that run on an API key: the only ones the Anthropic key reaches or restarts. */
+export const apiWolves = (m: KeyMachine): string[] => (m.wolves ?? []).filter((w) => w.transport === "api").map((w) => w.name);
+
+/** Every wolf on the machine is on the Claude subscription: its Chat row needs no Anthropic key. */
+const allSubscription = (m: KeyMachine): boolean => !!m.wolves && m.wolves.length > 0 && m.wolves.every((w) => w.transport === "subscription");
+
+export function cellOf(m: KeyMachine, slot: string, needed: boolean, capability?: Capability): Cell {
 	if (!m.canSetKeys || !m.online) return { hostId: m.hostId, state: "unknown", missing: false };
+	if (capability === "chat" && slot === "anthropic" && allSubscription(m)) return { hostId: m.hostId, state: "subscription", missing: false };
 	const s = m.slots.find((x) => x.slot === slot);
 	if (!s || !s.present) return { hostId: m.hostId, state: "none", missing: needed };
 	if (s.source === "pack" && s.shadowsEnv) return { hostId: m.hostId, state: "shadowed", masked: s.masked, note: "The Pack's key is used; this machine's environment also sets one.", missing: false };
@@ -70,7 +81,7 @@ export function buildGrid(machines: readonly KeyMachine[]): GridGroup[] {
 			.flatMap((p) => p.slots.map((s) => ({ p, slot: s.id })))
 			// In use = some machine has a key, or one that needs this capability has none (so the gap is visible).
 			.filter(({ slot }) => hasAny(slot) || (cap !== "dictation" && machines.length > 0) || machines.some((m) => neededOn(cap, m)))
-			.map(({ p, slot }) => ({ providerId: p.id, name: p.name, slot, cells: machines.map((m) => cellOf(m, slot, neededOn(cap, m))) })),
+			.map(({ p, slot }) => ({ providerId: p.id, name: p.name, slot, cells: machines.map((m) => cellOf(m, slot, neededOn(cap, m), cap)) })),
 	})).filter((g) => g.rows.length > 0);
 }
 

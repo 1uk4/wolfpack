@@ -24,7 +24,7 @@
  *     would shadow every settings-page key change until restart.
  */
 
-const { app, BrowserWindow, Menu, Notification, ipcMain, session, shell, dialog } = require("electron");
+const { app, BrowserWindow, Menu, Notification, Tray, nativeImage, ipcMain, session, shell, dialog } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -34,6 +34,7 @@ const { createNeedsYouNotifier } = require("./notify.cjs");
 const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs");
 const { createSupervisor } = require("./supervisor.cjs");
 const { consoleEnv } = require("./console-env.cjs");
+const { windowAllClosedAction, createTray } = require("./tray.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/shell/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -83,6 +84,9 @@ if (!app.requestSingleInstanceLock()) {
 
 let serverProcess = null;
 let supervisor = null; // hubd + workerd + wolfd, this Mac only (supervisor.cjs)
+let appRuntime = false; // true once the app runs its own services (menu-bar app); remote/dev modes stay false
+let tray = null;
+let systemShutdown = false; // set by powerMonitor "shutdown": before-quit must not hold the quit
 
 /** Start the app's own runtime. State: WOLFPACK_APP_HOME (default userData); wolves: WOLFPACK_APP_WOLVES (default ~/Wolves). First-run API key: WOLFPACK_APP_API_KEY (the wizard replaces this). */
 async function startRuntime() {
@@ -317,6 +321,8 @@ function createWindow(url) {
 		return { action: "deny" };
 	});
 
+	// Menu-bar app: a visible window brings the Dock icon back (it is hidden while no window is open).
+	if (appRuntime && process.platform === "darwin") void app.dock?.show();
 	void win.loadURL(url);
 	if (remoteTarget) {
 		// Remote unreachable (Tailscale off…): swap the blank window for a local
@@ -554,14 +560,21 @@ function installMenu() {
 
 async function main() {
 	app.on("window-all-closed", () => {
-		// macOS convention: the app stays resident, reactivated from the Dock.
-		if (process.platform !== "darwin") app.quit();
+		// App runtime: closing the window never quits; the wolves keep running and the menu-bar item stays. The Dock icon goes.
+		const action = windowAllClosedAction({ appRuntime, platform: process.platform });
+		if (action === "hide") {
+			if (process.platform === "darwin") app.dock?.hide();
+		} else if (action === "quit") app.quit();
+		// "stay": macOS convention outside app runtime, reactivated from the Dock.
 	});
 
 	// The child must not outlive us — cover every quit path.
 	app.on("before-quit", (e) => {
 		killServer();
+		try { tray?.destroy(); } catch { /* already gone */ }
+		tray = null;
 		if (!supervisor) return;
+		if (systemShutdown) return; // logout/shutdown: never hold it; the children were already sent SIGTERM and exit with the parent
 		// Quit stops every child: hold the quit until SIGTERM/SIGKILL are done.
 		// `supervisor` is nulled first, so the app.quit() below re-enters this handler, finds no supervisor and lets the quit through (the second-quit case).
 		e.preventDefault();
@@ -574,6 +587,12 @@ async function main() {
 	process.on("SIGTERM", () => app.quit()); // quit cleanly: before-quit stops the children
 
 	await app.whenReady();
+
+	// Logout/restart/shutdown must never wait on us: SIGTERM the children synchronously and do not preventDefault (Electron: only needed to delay the shutdown). The bundles' parent-pid watcher is the backstop. powerMonitor is unusable before ready, so it is read here.
+	require("electron").powerMonitor.on("shutdown", () => {
+		systemShutdown = true;
+		try { supervisor?.killAllSync(); } catch { /* best effort */ }
+	});
 
 	// Dev mode: point at a running `next dev` server (WOLFPACK_DEV_URL) — no
 	// spawn, no packaging, full HMR. The rest of this shell still applies
@@ -605,9 +624,15 @@ async function main() {
 			return;
 		}
 		// The console talks to the app's own workerd only (loopback); no hub URL/token yet (ticket: hub token for work reads).
+		// A quit during startup nulls `supervisor` (before-quit): stop here instead of touching it.
+		if (!supervisor) return;
 		await startServer(new URL(url).port, { WOLFPACK_API_URL: supervisor.urls.workerd, WOLFPACK_WORKERD_DIRECT_URL: supervisor.urls.workerd }, { appRuntime: true });
-		await waitUntilUp(url);
+		await waitUntilUp(url).catch((err) => {
+			if (supervisor) throw err;
+		});
+		if (!supervisor) return;
 		log(`server up: ${url}`);
+		appRuntime = true;
 	} else {
 		log(`dev mode: ${devUrl}`);
 	}
@@ -642,8 +667,31 @@ async function main() {
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) createWindow(url);
 	});
-	createWindow(url);
-	log(`window open: ${url}`);
+	if (appRuntime && supervisor) {
+		const sup = supervisor;
+		tray = createTray({
+			app, Tray, Menu, nativeImage, log,
+			getStatus: () => (supervisor ? supervisor.status() : { running: false }),
+			openWindow: () => {
+				const w = BrowserWindow.getAllWindows()[0];
+				if (!w) return createWindow(url);
+				if (w.isMinimized()) w.restore();
+				w.show();
+				w.focus();
+			},
+			quit: () => app.quit(),
+		});
+		sup.onChange(() => tray?.refresh());
+	}
+	// Started at login: services run, no window (open it from the menu bar). macOS reports a login start through wasOpenedAtLogin; if it does not, the window simply opens (accepted limit).
+	const startHidden = appRuntime && app.getLoginItemSettings().wasOpenedAtLogin;
+	if (startHidden) {
+		if (process.platform === "darwin") app.dock?.hide();
+		log("started at login: no window");
+	} else {
+		createWindow(url);
+		log(`window open: ${url}`);
+	}
 	// First update check AFTER the window exists (the downloaded-banner
 	// push needs a listener); dev builds no-op (no autoUpdater).
 	if (autoUpdater) {

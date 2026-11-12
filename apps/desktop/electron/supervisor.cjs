@@ -123,6 +123,15 @@ function createSupervisor(opts) {
 	const stoppedError = () => Object.assign(new Error("supervisor stopped"), { stopped: true });
 	let secret = "";
 	const redact = (s) => (secret ? s.split(secret).join("[redacted]") : s);
+	const listeners = new Set();
+	let wolfUp = false; // cached: the default wolf is online (set after bring-up, refreshed by a slow poll)
+	let lastRunning = false;
+	const changed = () => {
+		const r = sup.status().running;
+		if (r === lastRunning) return;
+		lastRunning = r;
+		for (const cb of listeners) try { cb(r); } catch { /* a listener must not break the supervisor */ }
+	};
 	const sup = { urls: {}, ports: {}, wolfDir: path.join(wolvesDir, wolfName), pids: () => [...children.values()].map((c) => c.pid) };
 
 	function setup() {
@@ -177,6 +186,8 @@ function createSupervisor(opts) {
 			rec.exited = true;
 			log(`${name} exited (code=${code} signal=${sig})`);
 			children.delete(name);
+			if (name === "workerd") wolfUp = false;
+			changed();
 		});
 		return rec;
 	}
@@ -231,6 +242,27 @@ function createSupervisor(opts) {
 		const wd = launch("workerd", "workerd.mjs", ["--wolves", wolvesDir, "--port", String(workerdPort), "--host", "127.0.0.1", "--wolfd", shim.command], env, shim.dir);
 		await until(healthy(sup.urls.workerd), "workerd", wd);
 		await until(async () => ((await (await fetch(`${sup.urls.workerd}/v1/wolves`)).json()).wolves ?? []).some((w) => w.status === "online"), "the default wolf did not come online", wd);
+		wolfUp = true;
+		changed();
+		startPoll();
+	}
+
+	// Slow, unref'd check that the wolf is still online (workerd restarts a dead wolfd by itself); the menu reads the cached value.
+	let poll = null;
+	function startPoll() {
+		if (poll) return;
+		poll = setInterval(async () => {
+			let up;
+			try {
+				up = ((await (await fetch(`${sup.urls.workerd}/v1/wolves`, { signal: AbortSignal.timeout(5000) })).json()).wolves ?? []).some((w) => w.status === "online");
+			} catch {
+				up = false;
+			}
+			if (stopping) return;
+			wolfUp = up;
+			changed();
+		}, 30_000);
+		poll.unref?.();
 	}
 
 	sup.start = async () => {
@@ -254,7 +286,23 @@ function createSupervisor(opts) {
 	/** SIGTERM every child (workerd first: it stops its wolfd), wait up to graceMs, SIGKILL what is left, including wolfd grandchildren. */
 	sup.stop = async (graceMs = 8000) => {
 		stopping = true;
+		wolfUp = false;
+		if (poll) clearInterval(poll);
+		poll = null;
+		changed();
 		await killAll(graceMs);
+	};
+
+	/** Synchronous best-effort SIGTERM of every child and wolfd (logout/shutdown: no time to wait). Does not wait or SIGKILL. */
+	sup.killAllSync = () => {
+		stopping = true;
+		for (const pid of sup.allPids()) try { process.kill(pid, "SIGTERM"); } catch { /* gone */ }
+	};
+
+	/** cb(running) fires when the running state flips (wolf up, child exit, stop). Returns an unsubscribe. */
+	sup.onChange = (cb) => {
+		listeners.add(cb);
+		return () => listeners.delete(cb);
 	};
 
 	async function killAll(graceMs = 8000) {
@@ -278,6 +326,8 @@ function createSupervisor(opts) {
 			return [];
 		}
 	}
+	/** True while hubd, workerd and the wolf are all up. Cheap: reads cached state only. */
+	sup.status = () => ({ running: !stopping && wolfUp && children.has("hubd") && children.has("workerd") });
 	sup.allPids = () => [...children.values()].map((c) => c.pid).concat(wolfdPids());
 	return sup;
 }

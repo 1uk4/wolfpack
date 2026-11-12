@@ -54,6 +54,8 @@ files:
   # were only unpacked because their packages were packed.
   - "!**/*"
   - electron/**/*
+  # Tests stay out of the asar. Must come right after the positive above: the last matching pattern wins.
+  - "!electron/**/*.test.*"
   - package.json
   # Auto-update (Wave C, 2026-10-10): electron-updater + its runtime tree
   # re-included explicitly. The negation above excludes node_modules, and

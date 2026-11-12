@@ -1,7 +1,7 @@
 /** Seam: sendMachineCommand (src/core/pack/machine-commands.ts), the browser client for POST /api/machines/:id/commands. fetch is the boundary. */
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { sendMachineCommand } from "../../../src/core/pack/machine-commands.ts";
+import { COMMAND_CLIENT_TIMEOUT_MS, sendMachineCommand } from "../../../src/core/pack/machine-commands.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -28,6 +28,38 @@ describe("sendMachineCommand", () => {
 		await sendMachineCommand("m", { kind: "key.set", args: {}, sealed: "SEALED-X" });
 		await sendMachineCommand("m", { kind: "wolves.restart" });
 		assert.deepEqual(calls.map((c) => JSON.parse(String(c.init.body))), [{ kind: "key.set", args: {}, sealed: "SEALED-X" }, { kind: "wolves.restart", args: {} }]);
+	});
+
+	it("sends a client-chosen id in the body (the seal binds it) and leaves it out when absent", async () => {
+		const calls = reply(200, { id: "c-mine", ok: true });
+		await sendMachineCommand("m", { kind: "key.set", args: { slot: "anthropic" }, sealed: "S", id: "c-mine" });
+		await sendMachineCommand("m", { kind: "wolves.restart" });
+		assert.deepEqual(calls.map((c) => JSON.parse(String(c.init.body))), [{ kind: "key.set", args: { slot: "anthropic" }, sealed: "S", id: "c-mine" }, { kind: "wolves.restart", args: {} }]);
+	});
+
+	it("waits COMMAND_CLIENT_TIMEOUT_MS (30 s) and turns the client's own timeout into an ok:false 'timeout' result, without throwing", async () => {
+		assert.equal(COMMAND_CLIENT_TIMEOUT_MS, 30_000);
+		let seen: AbortSignal | undefined;
+		globalThis.fetch = ((_u: string, init: RequestInit) => {
+			seen = init.signal as AbortSignal;
+			return Promise.reject(new DOMException("timed out", "TimeoutError"));
+		}) as typeof fetch;
+		const r = await sendMachineCommand("m", { kind: "key.set" });
+		assert.equal(r.ok, false);
+		assert.equal(r.code, "timeout");
+		assert.ok(seen instanceof AbortSignal);
+	});
+
+	it("combines the caller's signal with the timer: aborting the caller's signal aborts the request", async () => {
+		const ctl = new AbortController();
+		let seen: AbortSignal | undefined;
+		globalThis.fetch = ((_u: string, init: RequestInit) => {
+			seen = init.signal as AbortSignal;
+			return new Promise((_r, rej) => seen!.addEventListener("abort", () => rej(new DOMException("aborted", "AbortError"))));
+		}) as typeof fetch;
+		const p = sendMachineCommand("m", { kind: "logs.fetch" }, { signal: ctl.signal });
+		ctl.abort();
+		await assert.rejects(p, { name: "AbortError" });
 	});
 
 	it("rethrows an abort instead of turning it into a result", async () => {

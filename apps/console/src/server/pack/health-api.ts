@@ -113,7 +113,7 @@ export function createHealthApi(d: HealthApiDeps) {
 	};
 
 	/** The shared gate of every action: the bearer header, checked as in RESTART AUTH. Returns who asked, or the error response. */
-	const gateOf = async (req: Request, what: "restart" | "log read" | "rollback" | "update" | "domain change" | "subscription"): Promise<string | Response> => {
+	const gateOf = async (req: Request, what: "restart" | "log read" | "rollback" | "update" | "domain change" | "subscription" | "key change"): Promise<string | Response> => {
 		const token = bearerOf(req.headers.get("authorization"));
 		const auth: AuthOutcome = token ? await authorise(token) : { ok: false };
 		if (!auth.ok && auth.busy !== undefined) {

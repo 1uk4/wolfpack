@@ -107,3 +107,5 @@ export * from "./pack/machine-card.ts";
 export * from "./pack/pack-devices.ts";
 // machine-commands.ts: the browser client for the hub command channel (Machines and Keys sections).
 export * from "./pack/machine-commands.ts";
+export * from "./pack/keys-model.ts";
+export * from "./pack/keys-seal.ts";

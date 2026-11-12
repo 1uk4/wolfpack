@@ -19,6 +19,16 @@ describe("machines API", () => {
 		assert.deepEqual(seen, [["sfo-01", { kind: "wolves.restart", args: {} }]]);
 	});
 
+	it("passes a client-chosen command id through to the hub (the seal binds it) and answers 400 for an id the hub would refuse", async () => {
+		const seen: unknown[] = [];
+		let calls = 0;
+		const api = createMachinesApi(source(async (_h, c) => (calls++, seen.push(c), { id: "c-abc-1", ok: true })));
+		assert.equal((await api.command(post({ kind: "key.set", args: { slot: "anthropic" }, sealed: "v1.X", id: "c-abc-1" }), "sfo-01")).status, 200);
+		assert.deepEqual(seen, [{ kind: "key.set", args: { slot: "anthropic" }, sealed: "v1.X", id: "c-abc-1" }]);
+		for (const bad of ["abc", "c-", "c-a b", `c-${"a".repeat(65)}`, 5]) assert.equal((await api.command(post({ kind: "wolves.restart", args: {}, id: bad }), "sfo-01")).status, 400);
+		assert.equal(calls, 1);
+	});
+
 	it("defaults args to {} when the body has none", async () => {
 		const seen: unknown[] = [];
 		const api = createMachinesApi(source(async (_h, c) => (seen.push(c), { id: "c-1", ok: true })));

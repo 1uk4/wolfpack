@@ -105,6 +105,8 @@ export function storedProviderIds(storagePath: string): string[] {
  */
 export function buildWolfModels(table: Pick<ModelTable, "transport" | "tiers">, opts: BuildWolfModelsOptions): WolfModels {
   const ids = providersInUse(table);
-  if (ids.every((id) => id === "anthropic") && !(opts.storedProviders ?? []).some((id) => id !== "anthropic")) return { dispose: () => {}, forget: () => {} };
+  // WOLFPACK_ANTHROPIC_BASE_URL needs our own registry (the anthropic factory applies it); the engine's default one would call api.anthropic.com.
+  const baseUrlOverride = !!(opts.env ?? process.env).WOLFPACK_ANTHROPIC_BASE_URL?.trim();
+  if (!baseUrlOverride && ids.every((id) => id === "anthropic") && !(opts.storedProviders ?? []).some((id) => id !== "anthropic")) return { dispose: () => {}, forget: () => {} };
   return buildModelRegistry(ids, opts);
 }

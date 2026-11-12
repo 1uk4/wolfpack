@@ -103,6 +103,9 @@ const cardAnswersOf = (ready: readonly ReadyAnswer[]) => ({
   cards: ready.map(({ callId: id, answers: a, skipped, note }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}), ...(note && (note.text || note.attachments?.length) ? { note } : {}) })),
 });
 
+/** Idle keepalive on the thread stream: a comment frame so proxies and idle guards keep the connection open. */
+export const THREAD_STREAM_KEEPALIVE_MS = 15_000;
+
 export class ThreadRuntime {
   readonly cards: CardTracker;
   private seq = 0;
@@ -1093,7 +1096,13 @@ export class ThreadRuntime {
       Connection: "keep-alive",
     });
     const frame = (ev: ThreadEvent) => res.write(`id: ${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
+    let ka: ReturnType<typeof setInterval> | undefined;
+    const stopKa = () => {
+      if (ka) clearInterval(ka);
+      ka = undefined;
+    };
     const done = () => {
+      stopKa();
       res.write(`data: ${SSE_DONE}\n\n`);
       res.end();
     };
@@ -1129,7 +1138,14 @@ export class ThreadRuntime {
       }
     };
     this.subs.add(sub);
-    res.on("close", () => this.subs.delete(sub));
+    ka = setInterval(() => {
+      if (res.destroyed || res.writableEnded) stopKa();
+      else res.write(": ka\n\n");
+    }, THREAD_STREAM_KEEPALIVE_MS);
+    res.on("close", () => {
+      stopKa();
+      this.subs.delete(sub);
+    });
   }
 }
 

@@ -42,8 +42,11 @@ export function OverlayShell({
 	onClose,
 	header,
 	bleed = false,
+	restoreFocus,
 	children,
 }: {
+	/** Asked when the overlay unmounts: false skips putting focus back on the opener (default true). */
+	restoreFocus?: () => boolean;
 	/** aria-label, when there is no visible title element to point at. */
 	label?: string;
 	/** id of the visible title element (aria-labelledby). */
@@ -59,6 +62,8 @@ export function OverlayShell({
 }) {
 	const dialogRef = useRef<HTMLDivElement>(null);
 	const closeRef = useRef<HTMLButtonElement>(null);
+	const restoreFocusRef = useRef(restoreFocus);
+	restoreFocusRef.current = restoreFocus;
 	useEffect(() => {
 		const opener = document.activeElement as HTMLElement | null;
 		const prevOverflow = document.body.style.overflow;
@@ -66,7 +71,7 @@ export function OverlayShell({
 		closeRef.current?.focus();
 		return () => {
 			document.body.style.overflow = prevOverflow;
-			if (opener?.isConnected) opener.focus?.();
+			if (opener?.isConnected && restoreFocusRef.current?.() !== false) opener.focus?.();
 		};
 	}, []);
 	useEffect(() => {

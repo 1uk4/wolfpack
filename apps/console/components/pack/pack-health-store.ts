@@ -9,6 +9,7 @@
  *        outside production, so the fixtures stay out of the production bundle.
  */
 import { createHealthConnection, type HealthConnectionDeps } from "@/src/core/pack/pack-health-connection";
+import type { PackSectionId } from "@/src/core";
 import type { HealthSnapshotView } from "@/src/core/pack/pack-health-view";
 
 export interface PackHealthState {
@@ -108,14 +109,23 @@ export const getServerPackHealth = (): PackHealthState => INITIAL;
 /** While the modal is open it is a counted subscriber, so it keeps the stream alive after every bar unmounts. */
 let modalHold: (() => void) | null = null;
 
+let pendingSection: PackSectionId | null = null;
+/** The section the current open asked for; the panel reads it when it mounts (a pure read: strict mode may mount twice). Cleared on close. */
+export function requestedPackSection(): PackSectionId {
+	return pendingSection ?? "machines";
+}
+
 /** Open the modal; `from` is the bar button that gets focus back on close. */
-export function openPackHealth(from: HTMLElement | null): void {
+export function openPackHealth(from: HTMLElement | null, section?: PackSectionId): void {
 	opener = from;
+	pendingSection = section ?? null;
 	if (modalHold === null) modalHold = subscribePackHealth(() => {});
 	set({ modalOpen: true });
 }
 /** Close the modal and drop its hold on the stream (also called when the host unmounts with the modal open). */
-export function closePackHealth(): void {
+export function closePackHealth(o?: { restoreFocus?: boolean }): void {
+	pendingSection = null;
+	skipFocus = o?.restoreFocus === false; // another dialog is taking over (Old settings): focus must not jump to the opener
 	set({ modalOpen: false });
 	const release = modalHold;
 	modalHold = null;
@@ -123,9 +133,15 @@ export function closePackHealth(): void {
 }
 
 /** After the modal closed: focus the bar that opened it, or else any bar still on screen (the phone list may have hidden it). */
+let skipFocus = false;
 export function focusPackHealthOpener(): void {
+	if (skipFocus) {
+		skipFocus = false;
+		opener = null;
+		return;
+	}
 	const shown = (el: HTMLElement | null): el is HTMLElement => !!el?.isConnected && el.getClientRects().length > 0;
-	const target = shown(opener) ? opener : Array.from(document.querySelectorAll<HTMLElement>('[data-testid="pack-health-bar"]')).find(shown);
+	const target = shown(opener) ? opener : Array.from(document.querySelectorAll<HTMLElement>('[data-testid="settings-entry"]')).find(shown);
 	opener = null;
 	target?.focus();
 }

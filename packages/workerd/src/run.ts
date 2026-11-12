@@ -5,7 +5,7 @@ import { WorkerdServer, VERSION as WORKERD_VERSION } from "./proxy.js";
 import { createInventoryReporter, type InventoryReporter } from "./wolfd-probe.js";
 import { machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
 import { HubLink, type LinkStatus } from "./link.js";
-import { canRestartSelf, createCommandRunner } from "./commands.js";
+import { canRestartSelf, createCommandRunner, type KeyHandler } from "./commands.js";
 import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } from "./hub-config.js";
 import { feedContributions, feedDisabledReason } from "./feed.js";
 import { Outbox, writeReceiptFile } from "./outbox.js";
@@ -22,6 +22,8 @@ import { ensureDirectToken } from "./direct-token.js";
 export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   /** Directory holding `<wolf>/wolf.yaml`. Default: ~/wolves/local. */
   wolvesDir?: string;
+  /** Key storage for key.set / key.remove (the Keys task injects it). Absent = those commands are not advertised. */
+  keys?: KeyHandler;
   port?: number;
   host?: string;
   only?: string[];
@@ -232,6 +234,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       log,
       // Each supervised wolf's wolfd log is readable by the wolf's name (never by path: the hub only names a service).
       logSources: () => Object.fromEntries(supervisor.status().map((c) => [c.name, { file: c.logFile }])),
+      ...(opts.keys ? { keys: opts.keys, hostId: hubCfg.hostId } : {}),
       ...(canRestartSelf() ? { restartSelf: { stop: () => shutdown(), exit: (code: number) => process.exit(code) } } : {}),
       // Link-only supervises no wolves (they run from their own units), so there is nothing to restart: wolves.restart is not advertised.
       ...(linkOnly

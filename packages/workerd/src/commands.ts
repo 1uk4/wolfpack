@@ -5,7 +5,17 @@
  */
 import { execFile } from "node:child_process";
 import { open } from "node:fs/promises";
-import { COMMAND_LOGS_MAX_BYTES, WORKERD_RESTART_EXIT_CODE, type CommandKind, type CommandResultCode, type LinkCmd, type LinkCmdResult, type LogsData, type RestartData, type RestartedWolf } from "@wolfpack/protocol";
+import {
+  COMMAND_LOGS_MAX_BYTES,
+  WORKERD_RESTART_EXIT_CODE,
+  type CommandKind,
+  type CommandResultCode,
+  type LinkCmd,
+  type LinkCmdResult,
+  type LogsData,
+  type RestartData,
+  type RestartedWolf,
+} from "@wolfpack/protocol";
 
 /** Where a service's log lines come from: a systemd unit (Linux) or a log file (a supervised wolf's wolfd log, on any platform). */
 export interface LogSource {
@@ -65,7 +75,27 @@ export function canRestartSelf(env: NodeJS.ProcessEnv = process.env, platform: N
   return platform === "linux" && !!env.INVOCATION_ID && (!!env.JOURNAL_STREAM || !!env.NOTIFY_SOCKET || ppid === 1);
 }
 
+/** Refusal codes a KeyHandler may return; they pass through to the hub unchanged. */
+export type KeyFailCode = "rejected_key" | "bad_seal" | "replay" | "store_failed";
+export type KeyResult = { ok: true } | { ok: false; code: KeyFailCode; message?: string };
+
+/**
+ * Stores and removes keys on this machine. The command channel only forwards to it and never sees, keeps or logs a key: `sealed` is
+ * opaque to the channel. No implementation exists yet (the Keys task owns storage and sealing); until one is passed to
+ * createCommandRunner, key.set / key.remove are not advertised and the hub answers not_sent_unsupported.
+ *
+ * Where a key is stored must be an explicit input to the handler (a path or store it is constructed with), never derived from a home
+ * directory. On sfo-01 workerd-wolves cannot write a wolf's /home/wolf-<name>/.env: ProtectHome=yes, a different user, mode 600.
+ */
+export interface KeyHandler {
+  set(a: { slot: string; sealed: string; hostId: string; cmdId: string }): Promise<KeyResult>;
+  remove(a: { slot: string }): Promise<KeyResult>;
+}
+
 export interface CommandRunnerOptions {
+  /** Enables key.set / key.remove. Needs `hostId` (bound into the seal by the Keys task). */
+  keys?: KeyHandler;
+  hostId?: string;
   /** Present only when workerd can be respawned (see canRestartSelf): enables workerd.restart. `stop` is workerd's normal shutdown; `exit` ends the process after it (or after `fallbackMs`, default 10 s, if stop hangs). */
   restartSelf?: { stop: () => Promise<void>; exit: (code: number) => void; fallbackMs?: number };
   /** The wolves this workerd supervises. Absent (link-only: it supervises none) = wolves.restart is not advertised. */
@@ -194,7 +224,7 @@ export function createCommandRunner(o: CommandRunnerOptions = {}): CommandRunner
   }
 
   return {
-    supported: () => ["logs.fetch", ...(o.wolves ? (["wolves.restart"] as const) : []), ...(o.restartSelf ? (["workerd.restart"] as const) : [])],
+    supported: () => ["logs.fetch", ...(o.wolves ? (["wolves.restart"] as const) : []), ...(o.restartSelf ? (["workerd.restart"] as const) : []), ...(o.keys && o.hostId ? (["key.set", "key.remove"] as const) : [])],
     afterSend(cmd, result) {
       if (cmd.kind === "workerd.restart" && result.ok && o.restartSelf) {
         const { stop, exit, fallbackMs = 10_000 } = o.restartSelf;
@@ -218,6 +248,18 @@ export function createCommandRunner(o: CommandRunnerOptions = {}): CommandRunner
         if (cmd.kind === "wolves.restart" && o.wolves) {
           const r = await restartWolves(o.wolves, (cmd.args as { wolf?: string }).wolf ? [(cmd.args as { wolf: string }).wolf] : undefined);
           return r.ok ? { ...ok(cmd.id, r.data), ...(r.message ? { message: r.message } : {}) } : { ...fail(cmd.id, r.code, r.message), data: r.data };
+        }
+        if ((cmd.kind === "key.set" || cmd.kind === "key.remove") && o.keys && o.hostId) {
+          const slot = (cmd.args as { slot: string }).slot;
+          let r: KeyResult;
+          try {
+            if (cmd.kind === "key.remove") r = await o.keys.remove({ slot });
+            else if (!cmd.sealed) return fail(cmd.id, "bad_seal", "key.set carried no sealed key");
+            else r = await o.keys.set({ slot, sealed: cmd.sealed, hostId: o.hostId, cmdId: cmd.id });
+          } catch {
+            return fail(cmd.id, "store_failed", "the key store failed"); // never echo the error: it may quote key material
+          }
+          return r.ok ? ok(cmd.id) : fail(cmd.id, r.code, r.message ?? r.code);
         }
         if (cmd.kind === "workerd.restart" && o.restartSelf) return ok(cmd.id);
         return fail(cmd.id, "internal", "command not supported on this machine");

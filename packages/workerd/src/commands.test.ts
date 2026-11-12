@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LinkCmd, LinkCmdResult } from "@wolfpack/protocol";
-import { canRestartSelf, createCommandRunner, readWolfStatus, restartWolves, type WolfControl } from "./commands.js";
+import { canRestartSelf, type KeyHandler, createCommandRunner, readWolfStatus, restartWolves, type WolfControl } from "./commands.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -122,8 +122,10 @@ describe("logs.fetch", () => {
     expect(createCommandRunner().supported()).toEqual(["logs.fetch"]);
     expect(createCommandRunner({ wolves: fakeWolves() }).supported()).toEqual(["logs.fetch", "wolves.restart"]);
     expect(createCommandRunner({ restartSelf: { stop: async () => {}, exit: () => {} } }).supported()).toEqual(["logs.fetch", "workerd.restart"]);
+    expect(createCommandRunner({ keys: { set: async () => ({ ok: true }), remove: async () => ({ ok: true }) }, hostId: "box" }).supported()).toEqual(["logs.fetch", "key.set", "key.remove"]);
   });
 });
+
 /** A fake supervisor: three wolves, hal is mid-reply, bob is stopped, cy fails to restart. */
 function fakeWolves(): WolfControl & { restarted: string[] } {
   const restarted: string[] = [];
@@ -241,5 +243,41 @@ describe("workerd.restart", () => {
     expect(canRestartSelf({}, "linux", 4242)).toBe(false);
     expect(canRestartSelf({ INVOCATION_ID: "abc", JOURNAL_STREAM: "8:1", WOLFPACK_EXIT_WITH_PARENT: "1" }, "linux", 1)).toBe(false);
     expect(canRestartSelf({ WOLFPACK_EXIT_WITH_PARENT: "1", WOLFPACK_SINGLE_MAC: "1", ELECTRON_RUN_AS_NODE: "1" }, "darwin", 1)).toBe(false);
+  });
+});
+
+describe("key.set / key.remove", () => {
+  function fakeKeys(result: { ok: true } | { ok: false; code: "rejected_key" | "bad_seal" | "replay" | "store_failed"; message?: string } = { ok: true }) {
+    const calls: unknown[] = [];
+    const h: KeyHandler = { set: async (a) => (calls.push(["set", a]), result), remove: async (a) => (calls.push(["remove", a]), result) };
+    return { h, calls };
+  }
+  it("are not run until a KeyHandler is injected", async () => {
+    const r = createCommandRunner();
+    expect(await r.handle({ t: "cmd", id: "c-7", kind: "key.set", args: { slot: "anthropic" }, sealed: "S" })).toMatchObject({ ok: false, code: "internal" });
+  });
+
+  it("forward slot, sealed bytes, hostId and the command id to the handler and return ok", async () => {
+    const { h, calls } = fakeKeys();
+    const r = createCommandRunner({ keys: h, hostId: "box" });
+    expect(await r.handle({ t: "cmd", id: "c-7", kind: "key.set", args: { slot: "anthropic" }, sealed: "SEALED" })).toEqual({ t: "cmd.result", id: "c-7", ok: true });
+    expect(await r.handle({ t: "cmd", id: "c-8", kind: "key.remove", args: { slot: "anthropic" } })).toEqual({ t: "cmd.result", id: "c-8", ok: true });
+    expect(calls).toEqual([["set", { slot: "anthropic", sealed: "SEALED", hostId: "box", cmdId: "c-7" }], ["remove", { slot: "anthropic" }]]);
+  });
+
+  it("pass the handler's refusal code through, and a key.set with no sealed bytes is bad_seal without calling it", async () => {
+    const { h, calls } = fakeKeys({ ok: false, code: "replay", message: "seen before" });
+    const r = createCommandRunner({ keys: h, hostId: "box" });
+    expect(await r.handle({ t: "cmd", id: "c-9", kind: "key.set", args: { slot: "a" }, sealed: "S" })).toEqual({ t: "cmd.result", id: "c-9", ok: false, code: "replay", message: "seen before" });
+    calls.length = 0;
+    expect(await r.handle({ t: "cmd", id: "c-10", kind: "key.set", args: { slot: "a" } })).toMatchObject({ ok: false, code: "bad_seal" });
+    expect(calls).toEqual([]);
+  });
+
+  it("a throwing handler answers store_failed without echoing the error text", async () => {
+    const r = createCommandRunner({ keys: { set: async () => { throw new Error("disk said SEALEDSECRET"); }, remove: async () => ({ ok: true }) }, hostId: "box" });
+    const res = await r.handle({ t: "cmd", id: "c-11", kind: "key.set", args: { slot: "a" }, sealed: "S" });
+    expect(res).toMatchObject({ ok: false, code: "store_failed" });
+    expect(JSON.stringify(res)).not.toContain("SEALEDSECRET");
   });
 });

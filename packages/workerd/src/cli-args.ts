@@ -1,5 +1,6 @@
 /** Argument parsing and validation for the `workerd` serve command (pure: no process.exit, testable). */
 import { parseArgs } from "node:util";
+import { workerdPort } from "@wolfpack/protocol/runtime-home";
 import { envLinkOnly, isLoopbackHost, type RunWorkerdOptions } from "./run.js";
 
 export type CliParse = { help: true } | { error: string } | { opts: RunWorkerdOptions };
@@ -35,7 +36,12 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
   if (linkOnly && values["wolfd-transport"] !== undefined) return { error: "--wolfd-transport is not allowed with --link-only (link-only spawns nothing)" };
   const host = values.host ?? (linkOnly ? env.WORKERD_HOST || undefined : undefined);
   if (linkOnly && host && !isLoopbackHost(host)) return { error: `link-only only listens on loopback (127.0.0.1, ::1, localhost), not ${host}` };
-  const port = values.port === undefined ? (linkOnly ? Number(env.WORKERD_PORT) : 7141) : Number(values.port);
+  let port: number;
+  try {
+    port = values.port === undefined ? (linkOnly ? Number(env.WORKERD_PORT) : workerdPort(env)) : Number(values.port);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
   if (!Number.isInteger(port) || port < 0 || port > 65535) return { error: `invalid --port ${values.port ?? env.WORKERD_PORT}` };
   return {
     opts: {

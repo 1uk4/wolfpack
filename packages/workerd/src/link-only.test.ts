@@ -71,6 +71,13 @@ describe("workerd CLI args", () => {
   it("default (no link-only) stays unchanged", () => {
     expect(parseServeArgs([], {})).toMatchObject({ opts: { linkOnly: undefined, port: 7141 } });
   });
+  it("WOLFPACK_WORKERD_PORT sets the port; WORKERD_PORT alone does not (non-link-only)", () => {
+    expect(parseServeArgs([], { WOLFPACK_WORKERD_PORT: "7291" })).toMatchObject({ opts: { port: 7291 } });
+    expect(parseServeArgs([], { WORKERD_PORT: "7999" })).toMatchObject({ opts: { port: 7141 } });
+  });
+  it("a bad WOLFPACK_WORKERD_PORT is an error naming the variable, not a throw", () => {
+    expect(parseServeArgs([], { WOLFPACK_WORKERD_PORT: "abc" })).toEqual({ error: expect.stringContaining("WOLFPACK_WORKERD_PORT") });
+  });
   it("link-only needs an explicit port (no 7141 fallback)", () => {
     expect(parseServeArgs(["--link-only"], {})).toHaveProperty("error");
     expect(parseServeArgs(["--link-only", "--port", "7142"], {})).toMatchObject({ opts: { port: 7142 } });

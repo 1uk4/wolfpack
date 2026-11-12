@@ -1,4 +1,5 @@
 import { discoverWolves } from "@wolfpack/engine";
+import { kbOpsDir, wolvesDir as defaultWolvesDir, workerdPort } from "@wolfpack/protocol/runtime-home";
 import { startSharedWorkServer, type SharedWorkServer, type StartWorkServer } from "@wolfpack/harness/sandbox";
 import { WorkerdServer, VERSION as WORKERD_VERSION } from "./proxy.js";
 import { createInventoryReporter, type InventoryReporter } from "./wolfd-probe.js";
@@ -34,7 +35,7 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   /** Test seams for the link. */
   linkOptions?: { baseMs?: number; capMs?: number; rand?: () => number; retryBaseMs?: number; foreignRetries?: number; sendWindow?: number };
   wake?: Partial<WakeOptions>;
-  /** Librarian-ops root where receipts are written (`<kbOps>/receipts/<wolf>/`). Default env KB_OPS, else `<wolvesDir>/../librarian`. */
+  /** Librarian-ops root where receipts are written (`<kbOps>/receipts/<wolf>/`). Default env KB_OPS, else `<wolvesDir>/../librarian` for an explicit wolvesDir, else the resolver's kbOpsDir. */
   kbOps?: string;
   /** Contribution outbox directory. Default `<configDir>/outbox`. */
   outboxDir?: string;
@@ -129,9 +130,14 @@ export interface RunningWorkerd {
   close(): Promise<void>;
 }
 
+/** Where receipts and contributions live: opts.kbOps > env KB_OPS > env WOLFPACK_KB_OPS > `<explicit wolvesDir>/../librarian` > the resolver default (`<wolves root>/librarian`). */
+export function resolveKbOps(opts: Pick<RunWorkerdOptions, "kbOps" | "wolvesDir">, env: Record<string, string | undefined> = process.env): string {
+  return opts.kbOps ?? (env.KB_OPS?.trim() || env.WOLFPACK_KB_OPS?.trim() || (opts.wolvesDir ? join(dirname(opts.wolvesDir), "librarian") : kbOpsDir(env)));
+}
+
 export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningWorkerd> {
   const log = opts.log ?? ((l: string) => process.stderr.write(`${new Date().toISOString()} ${l}\n`));
-  const root = opts.wolvesDir ?? `${process.env.HOME}/wolves/local`;
+  const root = opts.wolvesDir ?? defaultWolvesDir();
   const linkOnly = opts.linkOnly ?? envLinkOnly();
   const announce = linkOnly ? [...new Set(opts.announce ?? envAnnounce())] : [];
   if (linkOnly) {
@@ -183,7 +189,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   if (hubCfg) {
     const warning = insecureHubWarning(hubCfg.hubUrl);
     if (warning) log(`[workerd] ${warning}`);
-    const kbOps = opts.kbOps ?? process.env.KB_OPS ?? join(dirname(root), "librarian");
+    const kbOps = resolveKbOps(opts);
     const outboxPath = opts.outboxDir ?? join(opts.configDir ?? workerdConfigDir(), "outbox");
     const outbox = new Outbox(outboxPath);
     // The subscribed set is ONLY what the hub registry grants this host (welcome.grantedDomains / grants frames); wolf.yaml domains are
@@ -284,7 +290,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     ...(directToken ? { directToken } : {}),
     health: () => ({ ok: true, wolves: supervisor.status(), ...(kbSync ? { kb: kbSync.status() } : {}), ...(link ? { hub: link.status() satisfies LinkStatus } : {}), ...(link && hubCfg ? { hubHostId: hubCfg.hostId } : {}) }), // hubHostId: matches this workerd to its entry in hubd's /healthz hosts
   });
-  const url = await server.listen(opts.port ?? 7141, opts.host ?? (linkOnly ? (process.env.WORKERD_HOST || "127.0.0.1") : undefined));
+  const url = await server.listen(opts.port ?? workerdPort(), opts.host ?? (linkOnly ? (process.env.WORKERD_HOST || "127.0.0.1") : undefined));
   serverUrl = url;
   if (!linkOnly) supervisor.start(); // link-only: never spawn
   link?.start();

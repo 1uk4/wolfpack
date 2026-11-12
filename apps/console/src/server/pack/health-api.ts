@@ -213,15 +213,17 @@ export function createHealthApi(d: HealthApiDeps) {
 		},
 
 		/** GET /api/health/update: what an update would change, and how the manual unit's last run ended. */
-		async updateState(): Promise<Response> {
+		async updateState(req?: Request): Promise<Response> {
+			// ?refresh=1 (the panel's Check now): skip the 2 s cache and re-read the manifest.
+			const refresh = req ? new URL(req.url).searchParams.get("refresh") === "1" : false;
 			// Unauthenticated, so anonymous polling must not multiply the manifest read and the systemctl spawn: one computation is
 			// shared while in flight and its result kept for UPDATE_STATE_TTL_MS.
 			const t = now();
-			if (!updateCache || (!updateCache.pending && t - updateCache.at >= UPDATE_STATE_TTL_MS)) {
+			if (refresh || !updateCache || (!updateCache.pending && t - updateCache.at >= UPDATE_STATE_TTL_MS)) {
 				const entry: { at: number; pending: boolean; body: Promise<{ units: UpdateUnit[]; last: { result: string; exitStatus: number | null; at: string | null } | null }> } = {
 					at: t,
 					pending: true,
-					body: Promise.all([d.updater.available(), d.updater.last()]).then(([units, last]) => ({
+					body: Promise.all([d.updater.available(refresh), d.updater.last()]).then(([units, last]) => ({
 						units: units.map((u) => ({ component: u.component, from: u.from, to: u.to })),
 						last: last ? { result: last.result, exitStatus: last.exitStatus, at: last.at } : null,
 					})),
@@ -245,7 +247,7 @@ const releaseReader = (): ReleaseReader => ((globalThis as Holder)[RELEASES] ??=
 /** The components /api/updates says are behind the latest stable release (same reader as the sidebar notice). */
 const availableUpdates = (env: Record<string, string | undefined>) => {
 	const handler = createUpdatesHandler({ env });
-	return async (): Promise<UpdateUnit[]> => (await handler()).components.flatMap((c) => (c.outdated === true && c.latest ? [{ component: c.component, from: c.running, to: c.latest }] : []));
+	return async (refresh?: boolean): Promise<UpdateUnit[]> => (await handler({ refresh })).components.flatMap((c) => (c.outdated === true && c.latest ? [{ component: c.component, from: c.running, to: c.latest }] : []));
 };
 const SYSTEMD = process.platform === "linux";
 

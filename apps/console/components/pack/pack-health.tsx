@@ -318,8 +318,9 @@ type UpdateState = { units: UpdateUnitView[]; last: { result: string; exitStatus
  * send. hubd and the console restart mid-update, so a failed poll is not an error: it shows "reconnecting" and polling goes on, and the
  * state clears on the first finished report, or after 10 min with none (never a stuck spinner).
  */
-function UpdatePanel({ actions, canAct }: { actions: HealthActionsView | undefined; canAct: boolean }) {
-	const update = useAction("/api/health/update", "update", updateOutcome, null);
+function UpdatePanel({ actions, canAct, machine }: { actions: HealthActionsView | undefined; canAct: boolean; machine: string }) {
+	const outcome = useCallback((st: number, ra: string | null, body?: unknown) => updateOutcome(st, ra, body, machine), [machine]);
+	const update = useAction("/api/health/update", "update", outcome, null);
 	const { ui, setUi } = update;
 	const [state, setState] = useState<UpdateState | null>(null);
 	const [offline, setOffline] = useState(false);
@@ -396,24 +397,37 @@ function useUpdateState() {
 	const [units, setUnits] = useState<UpdateUnitView[]>([]);
 	const [sub, setSub] = useState<Sub>({ channel: "stable", mode: "button" });
 	const [saveErr, setSaveErr] = useState<string | null>(null);
+	const [checking, setChecking] = useState(false);
+	const [checkedAt, setCheckedAt] = useState<number | null>(null);
+	const stopped = useRef(false);
+	/** One read of the update units and the subscription. `refresh` (Check now) makes the server re-read the release manifest instead of using its 10-minute cache. */
+	const poll = useCallback(async (refresh = false) => {
+		try {
+			const q = refresh ? "?refresh=1" : "";
+			const [u, s] = await Promise.all([fetch(`/api/health/update${q}`, { cache: "no-store" }), fetch("/api/health/subscription", { cache: "no-store" })]);
+			if (u.ok && !stopped.current) setUnits(((await u.json()) as { units?: UpdateUnitView[] }).units ?? []);
+			if (s.ok && !stopped.current) setSub((await s.json()) as Sub);
+		} catch {
+			/* keep the last view */
+		}
+	}, []);
 	useEffect(() => {
-		let stop = false;
-		const poll = async () => {
-			try {
-				const [u, s] = await Promise.all([fetch("/api/health/update", { cache: "no-store" }), fetch("/api/health/subscription", { cache: "no-store" })]);
-				if (u.ok && !stop) setUnits(((await u.json()) as { units?: UpdateUnitView[] }).units ?? []);
-				if (s.ok && !stop) setSub((await s.json()) as Sub);
-			} catch {
-				/* keep the last view */
-			}
-		};
+		stopped.current = false;
 		void poll();
 		const t = setInterval(() => void poll(), 15_000);
 		return () => {
-			stop = true;
+			stopped.current = true;
 			clearInterval(t);
 		};
-	}, []);
+	}, [poll]);
+	const check = useCallback(async () => {
+		setChecking(true);
+		await poll(true);
+		if (!stopped.current) {
+			setChecking(false);
+			setCheckedAt(Date.now());
+		}
+	}, [poll]);
 	const save = async (next: Sub) => {
 		const prev = sub;
 		setSub(next);
@@ -426,16 +440,20 @@ function useUpdateState() {
 			setSaveErr(`Could not save (${(e as Error).message === "401" ? "sign in first" : "failed"})`);
 		}
 	};
-	return { units, sub, save, saveErr };
+	return { units, sub, save, saveErr, check, checking, checkedAt };
 }
 
 /** The top of the console's machine card: the update banner, the pack-wide auto switch and the channel picker (under Advanced). wolfd is never auto-updated. */
-function UpdateHeader({ up, actions, canAct }: { up: ReturnType<typeof useUpdateState>; actions: HealthActionsView | undefined; canAct: boolean }) {
+function UpdateHeader({ up, actions, canAct, machine }: { up: ReturnType<typeof useUpdateState>; actions: HealthActionsView | undefined; canAct: boolean; machine: string }) {
 	const { sub, save, saveErr } = up;
 	return (
 		<section data-testid="pack-service-cards">
-			<UpdatePanel actions={actions} canAct={canAct} />
+			<UpdatePanel actions={actions} canAct={canAct} machine={machine} />
 			<div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+				<button type="button" data-testid="pack-check-now" disabled={up.checking} onClick={() => void up.check()} className={QUIET_BTN}>
+					{up.checking ? "Checking…" : "Check now"}
+				</button>
+				{up.checkedAt !== null && !up.checking && <span data-testid="pack-checked" className="text-muted-foreground/70">Checked just now</span>}
 				<label className="flex items-center gap-2 max-md:py-1">
 					<input type="checkbox" data-testid="pack-auto-switch" checked={sub.mode === "auto"} disabled={!canAct} onChange={(e) => void save({ ...sub, mode: e.target.checked ? "auto" : "button" })} />
 					<span>Update automatically</span>
@@ -479,8 +497,9 @@ function ActionControl(p: { verb: string; sentText: string; testId: string; ui: 
 }
 
 /** Update and Roll back for one service, inline in its row (the console's own machine only). `label` names the service in the confirm text. */
-function ServiceControls({ card, label, canAct, fakes }: { card: ServiceCard; label: string; canAct: boolean; fakes: Fakes }) {
-	const update = useAction("/api/health/update", card.component, updateOutcome, null, "component");
+function ServiceControls({ card, label, machine, canAct, fakes }: { card: ServiceCard; label: string; machine: string; canAct: boolean; fakes: Fakes }) {
+	const outcome = useCallback((st: number, ra: string | null, body?: unknown) => updateOutcome(st, ra, body, machine), [machine]);
+	const update = useAction("/api/health/update", card.component, outcome, null, "component");
 	const rollback = useAction("/api/health/rollback", card.component, rollbackOutcome, fakes.fakeRollback);
 	if (!card.canUpdate && !card.rollbackTo && update.ui.phase === "idle" && rollback.ui.phase === "idle") return null;
 	return (
@@ -549,8 +568,8 @@ function HostBody({ card, canAct, actions, fakes, up }: { card: HostCard; now: n
 		if (!mine && !wolfd) return undefined;
 		return (
 			<span className="flex flex-wrap items-center justify-end gap-1.5">
-				{mine && <ServiceControls card={mine} label={r.name} canAct={canAct} fakes={fakes} />}
-				{wolfd && <ServiceControls card={wolfd} label="Wolfd" canAct={canAct} fakes={fakes} />}
+				{mine && <ServiceControls card={mine} label={r.name} machine={card.label} canAct={canAct} fakes={fakes} />}
+				{wolfd && <ServiceControls card={wolfd} label="Wolfd" machine={card.label} canAct={canAct} fakes={fakes} />}
 			</span>
 		);
 	};
@@ -559,7 +578,7 @@ function HostBody({ card, canAct, actions, fakes, up }: { card: HostCard; now: n
 		<section data-testid="pack-host" data-host={card.id} aria-labelledby={titleId} className="pb-4">
 			<h3 id={titleId} className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-muted-foreground">{card.label}</h3>
 			<div className="flex min-w-0 flex-col gap-1.5">
-				{up && <UpdateHeader up={up} actions={actions} canAct={canAct} />}
+				{up && <UpdateHeader up={up} actions={actions} canAct={canAct} machine={card.label} />}
 				{rows.map((r) => (
 					<div key={r.key} className="flex min-w-0 flex-col gap-1.5">
 						<ServiceLine row={r} controls={ctl(r)} />

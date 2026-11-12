@@ -63,6 +63,7 @@ export const CommandResultCodeSchema = z.enum([
   "bad_seal",
   "replay",
   "store_failed",
+  "check_unreachable",
 ]);
 export type CommandResultCode = z.infer<typeof CommandResultCodeSchema>;
 

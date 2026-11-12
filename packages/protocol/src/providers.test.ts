@@ -39,6 +39,10 @@ describe("provider list", () => {
     expect(checkKeyShape("deepgram", "short")).toEqual({ ok: false, reason: "Deepgram keys are 32 to 64 letters and digits" });
     expect(checkKeyShape("deepgram", "-".repeat(40))).toEqual({ ok: false, reason: "Deepgram keys are 32 to 64 letters and digits" });
   });
+  it("accepts only letters, digits, hyphen and underscore in an Anthropic key (nothing a service env file would interpret)", () => {
+    for (const bad of ['"', "'", "\\", "$", "#", ";", "="]) expect(checkKeyShape("anthropic", ANTH.slice(0, 20) + bad + ANTH.slice(20))).toEqual({ ok: false, reason: "Anthropic keys start with sk-ant-" });
+    expect(checkKeyShape("anthropic", "sk-ant-api03-ab_cd-" + "x".repeat(30))).toEqual({ ok: true });
+  });
   it("trims first, and says so when a key has inner spaces, control characters or non-ASCII", () => {
     const why = "key contains spaces or non-ASCII characters";
     expect(checkKeyShape("anthropic", `  ${ANTH}\n`)).toEqual({ ok: true });

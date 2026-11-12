@@ -52,7 +52,7 @@ export const PROVIDERS = [
     capabilities: ["chat", "memory"],
     slots: [{ id: "anthropic", label: "Anthropic" }],
     keyUrl: "https://console.anthropic.com/settings/keys",
-    shape: { prefix: "sk-ant-", minLength: 30, maxLength: 300, hint: "Anthropic keys start with sk-ant-" },
+    shape: { prefix: "sk-ant-", pattern: "^sk-ant-[A-Za-z0-9_-]+$", minLength: 30, maxLength: 300, hint: "Anthropic keys start with sk-ant-" },
   },
   {
     id: "deepgram",

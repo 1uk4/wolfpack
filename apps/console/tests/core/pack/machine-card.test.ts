@@ -29,6 +29,23 @@ describe("machineCard", () => {
 	});
 });
 
+describe("machineCard inventory states", () => {
+	const wolfRow = (id: string, version?: string) => ({ machine: "sfo-01", kind: "wolfd" as const, id, parent: "workerd", ...(version ? { version } : {}), ageS: 3, latest: null });
+	const bare = (inventoryState?: HostCard["inventoryState"], inventory = [wolfRow("a"), wolfRow("b", "0.1.21")]) =>
+		card({ inventory, ...(inventoryState ? { inventoryState } : {}), workerds: [{ link: link("workerd", "workerd", { version: null }), wolves: [] }] });
+	it("shows the first reported version of a kind, not just the first row's", () => {
+		const v = machineCard(bare("ok"), null);
+		assert.equal(v.services.find((s) => s.kind === "wolfd")!.version, "0.1.21");
+	});
+	it("says why a version is missing when the inventory could not be read, and keeps 'version unknown' for rows that were read", () => {
+		const none = bare("ok", []);
+		assert.equal(machineCard(none, null).services[0]!.versionNote, undefined);
+		assert.equal(machineCard(bare("unavailable", []), null).services[0]!.versionNote, "reports unavailable");
+		assert.equal(machineCard(bare("signed-out", []), null).services[0]!.versionNote, "sign in on this device first");
+		assert.deepEqual(machineCard(bare("unavailable", []), null).channel, { value: null, editable: false, note: "Change it from that machine's console", missing: "reports unavailable" });
+	});
+});
+
 describe("machineCard log fetching", () => {
 	const down = (over: Partial<HostCard> = {}) => card({ hub: link("hubd", "hubd", { status: "down", error: "refused" }), workerds: [{ link: link("workerd", "workerd", { status: "down", error: "refused" }), wolves: [] }], ...over });
 	it("never asks a machine for logs unless it advertised logs.fetch", () => {

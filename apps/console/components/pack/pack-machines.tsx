@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import {
 	ageText,
 	groupByHost,
+	type InventoryRowView,
 	logLines,
 	machineCard,
 	restartSummary,
@@ -87,7 +88,7 @@ export function MachineCard(p: {
 						<option value="main">main (testing)</option>
 					</select>
 				) : (
-					<span data-testid="machine-channel-value" className="rounded-sm border px-1.5 text-foreground">{view.channel.value ?? "unknown"}</span>
+					<span data-testid="machine-channel-value" className="rounded-sm border px-1.5 text-foreground">{view.channel.value ?? view.channel.missing ?? "unknown"}</span>
 				)}
 				{view.channel.note && <span className="text-muted-foreground/70">{view.channel.note}</span>}
 				{p.onCheck && <button type="button" data-testid="machine-check" onClick={p.onCheck} className={cn(BTN, "ml-auto")}>Check now</button>}
@@ -104,7 +105,7 @@ function ServiceRow({ s, log, note, busy, onRestart, onRefresh }: { s: MachineSe
 				<span aria-hidden className={cn("size-2 rounded-full", TONE[s.tone])} />
 				<span className="text-foreground">{s.label}{s.count && s.count > 1 ? ` (${s.count})` : ""}</span>
 				<span data-testid="machine-service-status" className="text-muted-foreground">{s.status === "ok" ? "running" : s.down ? "down" : s.status}</span>
-				<span data-testid="machine-service-version" className="text-muted-foreground">{s.version ? `v${s.version}` : "version unknown"}</span>
+				<span data-testid="machine-service-version" className="text-muted-foreground">{s.version ? `v${s.version}` : (s.versionNote ?? "version unknown")}</span>
 				{onRefresh && <button type="button" data-testid="machine-log-refresh" onClick={onRefresh} className={cn(BTN, "ml-auto")}>Refresh log</button>}
 				{s.restart && (
 					<button type="button" data-testid="machine-restart" data-for={s.kind} disabled={busy} onClick={onRestart} className={cn(BTN, onRefresh ? "" : "ml-auto")}>{busy ? "Restarting…" : "Restart"}</button>
@@ -356,7 +357,29 @@ export function MachinesSection() {
 		const fake = process.env.NODE_ENV !== "production" ? new URLSearchParams(window.location.search).get("machineCmd") : null;
 		if (fake) setSend(() => fakeSend(fake));
 	}, []);
-	const cards = snapshot ? groupByHost(snapshot).filter((c) => c.checked) : [];
+	// The hub inventory is read with THIS browser's sign-in (the app's fetch wrapper adds the stored bearer), not a console token.
+	const [inv, setInv] = useState<{ state: "ok" | "unavailable" | "signed-out"; rows?: InventoryRowView[]; hubMachine?: string | null } | null>(null);
+	useEffect(() => {
+		if (fakeWanted) return;
+		let stop = false;
+		const load = async () => {
+			try {
+				const r = await fetch("/api/health/inventory", { cache: "no-store" });
+				const b = (await r.json()) as { state?: string; rows?: InventoryRowView[]; hubMachine?: string | null };
+				if (!stop) setInv(r.ok && (b.state === "ok" || b.state === "signed-out") ? (b as never) : { state: "unavailable" });
+			} catch {
+				if (!stop) setInv({ state: "unavailable" });
+			}
+		};
+		void load();
+		const t = setInterval(() => void load(), 5_000);
+		return () => {
+			stop = true;
+			clearInterval(t);
+		};
+	}, [fakeWanted]);
+	const merged = snapshot && inv ? { ...snapshot, inventory: { state: inv.state, rows: inv.state === "ok" ? (inv.rows ?? []) : [], stale: false, hubMachine: inv.hubMachine ?? null } } : snapshot;
+	const cards = merged ? groupByHost(merged).filter((c) => c.checked) : [];
 	const hubIdOf = useCallback((id: string) => snapshot?.hosts?.find((h) => h.id === id)?.hubId, [snapshot]);
 	const fetchLog = useCallback(
 		async (cardId: string, service: string) => {

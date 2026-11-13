@@ -50,7 +50,7 @@ export interface HealthSnapshotView {
 	/** The hosts the links run on, this console's own included (absent from older servers). */
 	hosts?: HostInfo[];
 	/** Other machines' services as the hub lists them; null/absent: the hub has no inventory (older hub). */
-	inventory?: { rows: InventoryRowView[]; stale: boolean; hubMachine: string | null } | null;
+	inventory?: { state?: InventoryState; rows: InventoryRowView[]; stale: boolean; hubMachine: string | null } | null;
 }
 
 /** X.Y.Z[-pre] of a version (any +build ignored), or null when it has none. */
@@ -132,6 +132,9 @@ export function machineServiceCards(
 	const links = [...(m.hub ? [m.hub] : []), ...m.workerds.flatMap((w) => [w.link, ...w.wolves]), ...m.wolves];
 	return serviceCards(links, actions, units);
 }
+
+/** How the last read of the hub inventory ended (GET /api/health/inventory, read with the viewer's bearer). */
+export type InventoryState = "ok" | "unavailable" | "signed-out";
 
 /** One inventory row as the panel gets it (src/server/pack/inventory.ts RemoteService). */
 export interface InventoryRowView {

@@ -35,6 +35,23 @@ const shape = (cards: HostCard[]) =>
 		wolves: c.wolves.map((x) => x.id),
 	}));
 
+describe("inventory rows land on the right card", () => {
+	it("puts the Mac's reports (machine lukas-macbook-pro, workerd id mac-1uk4) on the card its hub link is on, and carries the inventory state", () => {
+		const row = (kind: "workerd" | "wolfd", id: string, parent?: string) => ({ machine: "Lukas-MacBook-Pro.local", kind, id, ...(parent ? { parent } : {}), version: "0.1.20", ageS: 2, latest: null });
+		const snap: HealthSnapshotView = {
+			checkedAt: null,
+			intervalMs: 5000,
+			hosts: [{ id: "sfo-01", label: "sfo-01", isThisConsole: true }, { id: "lukas-macbook-pro", label: "Mac", isThisConsole: false }],
+			links: [link("hub-link@mac-1uk4", "lukas-macbook-pro")],
+			inventory: { state: "ok", stale: false, hubMachine: "sfo-01", rows: [row("workerd", "mac-1uk4"), row("wolfd", "luka", "mac-1uk4")] },
+		};
+		const mac = groupByHost(snap).find((c) => c.id === "lukas-macbook-pro")!;
+		assert.deepEqual(mac.inventory.map((r) => r.id), ["mac-1uk4", "luka"]);
+		assert.equal(mac.inventoryState, "ok");
+		assert.equal(groupByHost({ ...snap, inventory: { state: "signed-out", stale: false, hubMachine: null, rows: [] } }).find((c) => c.id === "lukas-macbook-pro")!.inventoryState, "signed-out");
+	});
+});
+
 describe("pack health by host", () => {
 	it("on sfo-01 puts the hub, both workerds with their wolves nested, the console and sfo-01's facts in one card, and keeps the Mac's facts as an unchecked card", () => {
 		const snap: HealthSnapshotView = {

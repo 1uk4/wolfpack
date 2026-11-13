@@ -36,8 +36,10 @@ async function latestFor(e: InventoryListed, cache: Map<string, ManifestResult>,
 export async function readInventory(o: ReadInventoryOptions): Promise<InventoryRead> {
 	if (!o.token) return { state: "signed-out" };
 	if (!o.hubUrl) return { state: "unavailable" };
+	const ac = new AbortController();
+	const timer = setTimeout(() => ac.abort(), o.timeoutMs ?? 2000); // a ref'd timer: AbortSignal.timeout's is unref'd and cannot be relied on to fire
 	try {
-		const r = await (o.fetch ?? fetch)(`${o.hubUrl}/v1/inventory`, { headers: { Authorization: `Bearer ${o.token}` }, signal: AbortSignal.timeout(o.timeoutMs ?? 2000) });
+		const r = await (o.fetch ?? fetch)(`${o.hubUrl}/v1/inventory`, { headers: { Authorization: `Bearer ${o.token}` }, signal: ac.signal });
 		if (r.status === 401 || r.status === 403) return { state: "signed-out" };
 		if (!r.ok) return { state: "unavailable" };
 		const body = (await r.json()) as { entries?: InventoryListed[]; hubMachine?: string };
@@ -48,6 +50,8 @@ export async function readInventory(o: ReadInventoryOptions): Promise<InventoryR
 		return { state: "ok", rows, hubMachine: typeof body.hubMachine === "string" ? body.hubMachine : null };
 	} catch {
 		return { state: "unavailable" };
+	} finally {
+		clearTimeout(timer);
 	}
 }
 

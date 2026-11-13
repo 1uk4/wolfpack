@@ -55,7 +55,7 @@ import { graduationActionsFor, memoryActionsFor, type MemoryActions } from "../m
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@wolfpack/kb/graph";
-import { readDenTopics } from "@wolfpack/memory";
+import { readDenTopics, recordOwnerMessage } from "@wolfpack/memory";
 import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryNode, readMemoryObservations, readMemoryStatus, readMemoryTree, readMemoryTopic, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
@@ -849,6 +849,8 @@ export class WolfServer {
         if (!body.success) throw new HttpError("invalid_request", "body must be {input, whenBusy: steer|followUp|reject}");
         const refs = body.data.attachments ?? [];
         if (body.data.input.trim() === "" && refs.length === 0) throw new HttpError("invalid_request", "input is required");
+        // The owner is active this hour: the clock the promote pass ages topics by. Never fails a submit.
+        if (this.opts.den) { try { recordOwnerMessage(this.opts.den); } catch { /* best effort */ } }
         // A subagent's messages from the operator go through its manager: ledger, resume, state.
         if (t.isChild && this.subagents) return this.json(res, 200, await this.subagents.submitFromOwner(t.summary.id, body.data.input, body.data.whenBusy, refs));
         return this.json(res, 200, await t.submit(body.data.input, body.data.whenBusy, refs));

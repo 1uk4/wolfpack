@@ -33,6 +33,7 @@ import {
   SubmitBodySchema,
   ThreadSettingsPatchSchema,
   KeepLocalBodySchema,
+  PromoteBodySchema,
   CompactBodySchema,
   matchRoute,
   type ThreadSettings,
@@ -1137,7 +1138,10 @@ export class WolfServer {
         this.checkWolf(params.name);
         const actions = this.memoryActions();
         if (!actions.promoteEnabled) throw new HttpError("promote_unavailable", "promote needs KB roots (KB_BASE and KB_OPS); this wolf has none");
-        const start = actions.promote();
+        // Optional body {ids}: promote only those topics. No body (or a malformed one): every topic.
+        const pbody = PromoteBodySchema.safeParse(await readJson(req));
+        const ids = pbody.success ? pbody.data.ids : undefined;
+        const start = actions.promote(ids?.length ? { ids } : undefined);
         // The extension emits promote_started/finished/failed itself; `done` is only observed here so a failed job
         // is not an unhandled rejection.
         if (start.status === "started") start.done.catch(() => {});

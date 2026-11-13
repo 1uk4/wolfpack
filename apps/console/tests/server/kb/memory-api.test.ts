@@ -60,13 +60,14 @@ describe("memory API: pass-through", () => {
 			stub({
 				getWorkRecord: async (w: string, id: string) => ({ w, id }),
 				consolidateMemory: async (w: string) => ({ consolidated: w }),
-				promoteMemory: async (w: string) => ({ jobId: w }),
+				promoteMemory: async (w: string, o?: { ids?: string[] }) => ({ jobId: `${w}:${o?.ids?.join(",") ?? "all"}` }),
 				getKbEntry: async (w: string, id: string) => ({ w, id }),
 			}),
 		);
 		assert.deepEqual(await body(await api.workRecord("a", "wk")), { w: "a", id: "wk" });
 		assert.deepEqual(await body(await api.consolidate("a")), { consolidated: "a" });
-		assert.deepEqual(await body(await api.promote("a")), { jobId: "a" });
+		assert.deepEqual(await body(await api.promote("a")), { jobId: "a:all" });
+		assert.deepEqual(await body(await api.promote("a", ["t1", "t2"])), { jobId: "a:t1,t2" });
 		assert.deepEqual(await body(await api.kbEntry("lib", "e1")), { w: "lib", id: "e1" });
 	});
 

@@ -1264,6 +1264,9 @@ export type ConsolidateResponse = z.infer<typeof ConsolidateResponseSchema>;
  * `promote_finished` / `promote_failed` MemoryEvents carrying the same `jobId`. `already_running` (HTTP 409) names
  * the job in flight and starts nothing (HTTP 202 as well: every non-2xx is an ErrorEnvelope).
  */
+/** Optional `POST .../memory/promote` body: promote only these session topics. No body or no ids: every topic. */
+export const PromoteBodySchema = z.object({ ids: z.array(z.string().min(1)).max(200).optional() });
+export type PromoteBody = z.infer<typeof PromoteBodySchema>;
 export const PromoteResponseSchema = z.object({
   jobId: z.string(),
   status: z.enum(["started", "already_running"]),

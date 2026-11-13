@@ -469,8 +469,8 @@ export class HttpConsoleClient implements ConsoleClient {
   }
 
   /** Never waits for the job. `already_running` (the running job's id) is a normal 202 answer, not an error. */
-  async promoteMemory(wolf: string): Promise<PromoteResponse> {
-    return (await this.json("promoteMemory", { name: wolf }, ROUTES.promoteMemory.response.schema, undefined, wolf)) as PromoteResponse;
+  async promoteMemory(wolf: string, opts: { ids?: string[] } = {}): Promise<PromoteResponse> {
+    return (await this.json("promoteMemory", { name: wolf }, ROUTES.promoteMemory.response.schema, opts.ids?.length ? { ids: opts.ids } : undefined, wolf)) as PromoteResponse;
   }
 
   async getMemoryStatus(wolf: string, opts: { thread?: string } = {}): Promise<MemoryStatus> {

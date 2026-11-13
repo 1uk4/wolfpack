@@ -135,8 +135,9 @@ export function postConsolidate(wolf: string): Promise<KbResult<ConsolidateRespo
 	return request(`/api/wolves/${seg(wolf)}/memory/consolidate`, { method: "POST" });
 }
 
-export function postPromote(wolf: string): Promise<KbResult<PromoteResponse>> {
-	return request(`/api/wolves/${seg(wolf)}/memory/promote`, { method: "POST" });
+/** Promote every topic, or only `ids` (one row's Promote button). */
+export function postPromote(wolf: string, ids?: string[]): Promise<KbResult<PromoteResponse>> {
+	return request(`/api/wolves/${seg(wolf)}/memory/promote`, ids?.length ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) } : { method: "POST" });
 }
 
 /** Graduation step 1 on a wolf: start the background preview job (answers the running job at once; nothing is sent). */

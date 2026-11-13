@@ -330,8 +330,8 @@ function TopicsSection({ wolf }: { wolf: string }) {
 		if (!r.ok) setError(r.message);
 		await load();
 	};
-	const promote = async () => {
-		const r = await postPromote(wolf);
+	const promote = async (id: string) => {
+		const r = await postPromote(wolf, [id]);
 		if (!r.ok) setError(r.message);
 		await load();
 	};
@@ -355,7 +355,7 @@ function TopicsSection({ wolf }: { wolf: string }) {
 								<div className="flex flex-wrap items-center gap-1.5">
 									<span className={`rounded-full px-1.5 text-[10px] ${chip.tone === "warn" ? "bg-amber-50 text-amber-700" : "bg-muted text-muted-foreground"}`} data-testid="memory-topic-chip">{chip.label}</span>
 									<span className="min-w-0 truncate text-[10px] text-muted-foreground">{sourceLabels(t.sources).join(", ")}</span>
-									<Button variant="ghost" size="sm" className="ml-auto h-5 px-1.5 text-[10px]" onClick={() => void promote()}>Promote</Button>
+									<Button variant="ghost" size="sm" className="ml-auto h-5 px-1.5 text-[10px]" onClick={() => void promote(t.id)}>Promote</Button>
 									<label className="flex items-center gap-1 text-[10px] text-muted-foreground">
 										<input type="checkbox" checked={t.keepLocal} onChange={(e) => void toggle(t.id, e.target.checked)} />
 										keep local

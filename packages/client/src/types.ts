@@ -195,7 +195,7 @@ export interface ConsoleClient {
    * promote_failed MemoryEvents with that jobId (watchMemory). Rejects with ProtocolError `memory_unavailable` or
    * `promote_unavailable` (no KB roots). Optional like watchMemory.
    */
-  promoteMemory?(wolf: string): Promise<PromoteResponse>;
+  promoteMemory?(wolf: string, opts?: { ids?: string[] }): Promise<PromoteResponse>;
   /**
    * Read-only memory status of a wolf (`thread`: report that thread's bound work item): state with reason, pool vs thresholds, session/den topic lists, last promote.
    * Resolves (does not reject) when memory is inert or off: that is the state. Optional like watchMemory.

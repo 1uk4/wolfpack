@@ -269,11 +269,11 @@ export function createMemoryApi(source: ClientSource) {
 			}
 		},
 
-		async promote(wolf: string): Promise<Response> {
+		async promote(wolf: string, ids?: string[]): Promise<Response> {
 			try {
 				const client = source();
 				if (!client.promoteMemory) return unsupported("memory_unavailable", "promote");
-				return json(await client.promoteMemory(wolf));
+				return json(await client.promoteMemory(wolf, ids?.length ? { ids } : undefined));
 			} catch (err) {
 				return failure(err);
 			}

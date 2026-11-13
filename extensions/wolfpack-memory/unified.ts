@@ -856,7 +856,7 @@ export default function createMemoryExtension(
     // A manual Consolidate ignores the retry backoff; the timer/threshold path keeps it.
     consolidate: () => consolidateToSessions({ minObservations: 1, ignoreBackoff: true }),
     promoteForFeature: async (featureId: string) => { if (kbRoots) await serialized(() => runPass({ kind: "graduation", featureId })); },
-    promote() {
+    promote(popts) {
       if (promoting) return { status: "already_running", jobId: promoting };
       const jobId = `promote-${Date.now().toString(36)}-${++jobSeq}`;
       promoting = jobId;
@@ -868,7 +868,7 @@ export default function createMemoryExtension(
           // inside promoteSessionTopics, as in pi.
           const { consolidated, promoted } = await serialized(async () => {
             const c = (await consolidateInner({ minObservations: 1 })).observationsProcessed;
-            const pass = await runPass({ kind: "owner" });
+            const pass = await runPass({ kind: "owner", ...(popts?.ids?.length ? { ids: popts.ids } : {}) });
             const p = pass.promoteResult ?? { sessionId: "durable", topicsProcessed: 0, topicsMerged: 0, topicsCreated: 0, topicsSkipped: 0, claimsSubmitted: 0, topicsHeld: 0, trivialSkipped: 0, details: [] };
             return { consolidated: c, promoted: p };
           });

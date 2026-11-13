@@ -27,6 +27,7 @@ import {
   KeepLocalResponseSchema,
   MemoryNodeObservationsSchema,
   PendingCardSchema,
+  PromoteBodySchema,
   PromoteResponseSchema,
   SubmitAckSchema,
   SubmitRequestSchema,
@@ -419,6 +420,7 @@ export const ROUTES = {
   promoteMemory: {
     method: "POST",
     path: "/v1/wolves/:name/memory/promote",
+    body: PromoteBodySchema,
     response: { kind: "json", schema: PromoteResponseSchema },
     status: [202],
     error: err,

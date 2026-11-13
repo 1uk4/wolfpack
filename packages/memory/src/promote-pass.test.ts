@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { recordOwnerMessage } from "./active-hours.js";
-import { runPromotePass, type PassDeps, type TopicOutcome } from "./promote-pass.js";
-import { readPromoteState } from "./promote-state.js";
+import { enforceByteCap, runPromotePass, type PassDeps, type TopicOutcome } from "./promote-pass.js";
+import { readPromoteState, updateTopicState } from "./promote-state.js";
 import { readRoutingIndex } from "./routing-index.js";
 import { readTopics, writeTopic } from "./session/memory.js";
 
@@ -95,6 +95,21 @@ describe("promote pass", () => {
     await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...d });
     expect(rewrites).toBe(1);
     expect(existsSync(join(root, "retired", "a.md"))).toBe(true);
+  });
+
+  it("over the byte cap, retires the least recently updated confirmed topic first, then evicts unconfirmed ones, never keep-local", async () => {
+    const { den, root } = setup([20]);
+    const big = "x".repeat(50);
+    topic(root, "old-confirmed", { body: big, updated: "2026-11-01 00:00" });
+    topic(root, "new-confirmed", { body: big, updated: "2026-11-12 00:00" });
+    topic(root, "old-plain", { body: big, updated: "2026-11-02 00:00" });
+    topic(root, "pinned", { body: big, updated: "2026-10-01 00:00", keepLocal: true });
+    for (const id of ["old-confirmed", "new-confirmed"]) updateTopicState(den, id, { promotedAt: "2026-11-12T00:00:00.000Z", receipt: { outcome: "create", entryIds: ["kb-x"] } });
+    const r = enforceByteCap({ den, root, maxBytes: 450, now: NOW });
+    expect(r.retired).toEqual(["old-confirmed"]);
+    expect(r.evicted).toEqual(["old-plain"]);
+    expect(ids(root)).toEqual(["new-confirmed", "pinned"]);
+    expect(existsSync(join(root, "evicted", "old-plain.md"))).toBe(true);
   });
 
   it("drops a stale routing link when its entry resolves to nothing", async () => {

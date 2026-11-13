@@ -10,7 +10,7 @@
  * Retiring (move to `retired/` beside `evicted/`, never a delete) needs all three: promoted, a create/merge receipt
  * confirmed it, inactive 8 active hours. A still-active topic stays local even when promoted. Nothing closes threads.
  */
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { activeHoursSince } from "./active-hours.js";
 import { readPromoteState, updateTopicState } from "./promote-state.js";
@@ -142,6 +142,44 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
     }
   }
   return result;
+}
+
+/** 180 KB across all session topics. */
+export const TOPICS_BYTE_CAP = 180 * 1024;
+/** An oversized topic (characters) must be split by subject. */
+export const TOPIC_CHAR_CAP = 8000;
+
+/**
+ * Keep the session topics under `maxBytes` in total. Least recently updated first, never a keep-local topic: a topic a
+ * receipt confirmed is retired (retired/), any other is evicted (evicted/). Both are moves, never deletes.
+ */
+export function enforceByteCap(o: { den: string; root: string; maxBytes?: number; now?: Date }): { retired: string[]; evicted: string[] } {
+  const max = o.maxBytes ?? TOPICS_BYTE_CAP;
+  const now = o.now ?? new Date();
+  const out = { retired: [] as string[], evicted: [] as string[] };
+  const topics = readTopics(o.root).map((t) => ({ t, bytes: (() => { try { return statSync(join(o.root, t.filename)).size; } catch { return 0; } })() }));
+  let total = topics.reduce((n, x) => n + x.bytes, 0);
+  if (total <= max) return out;
+  const stamp = (t: TopicFile) => topicActivity({ ...t, lastNote: undefined })?.getTime() ?? 0;
+  const order = topics.filter((x) => !x.t.keepLocal).sort((a, b) => stamp(a.t) - stamp(b.t) || (a.t.filename < b.t.filename ? -1 : 1));
+  for (const { t, bytes } of order) {
+    if (total <= max) break;
+    const st = readPromoteState(o.den).topics[t.id];
+    const confirmed = !!st?.promotedAt && (st.receipt?.outcome === "create" || st.receipt?.outcome === "merge");
+    if (confirmed) {
+      updateTopicState(o.den, t.id, { retiredAt: now.toISOString() });
+      retireTopic(o.root, t, now);
+      out.retired.push(t.id);
+    } else {
+      const dest = join(o.root, "evicted");
+      mkdirSync(dest, { recursive: true });
+      const name = existsSync(join(dest, t.filename)) ? t.filename.replace(/\.md$/, `-${now.getTime().toString(36)}.md`) : t.filename;
+      renameSync(join(o.root, t.filename), join(dest, name));
+      out.evicted.push(t.id);
+    }
+    total -= bytes;
+  }
+  return out;
 }
 
 /** The target hint for a new topic on `subject`: its KB entry, resolved now through `resolveEntry`. */

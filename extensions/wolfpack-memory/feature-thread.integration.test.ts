@@ -142,7 +142,7 @@ async function newItem(t: TestWolf, body: Record<string, unknown>): Promise<stri
 }
 
 describe("unbound talk that names exactly one work item", () => {
-  it("is tagged with that item (task: work + its feature; feature: feature alone); zero, two or unknown ids stay untagged", async () => {
+  it("is tagged with that item (task: work + its feature; feature: feature alone); two items sharing a feature get that feature; zero or unknown ids stay untagged", async () => {
     const dev = await devRoot();
     const notes = (...ids: string[]) => `NOTE: we agreed to cache the lookups for five minutes because the endpoint is hot ${ids.join(" and ")} ok`;
     tw = await boot(dev, [1, 2, 3, 4, 5].map((n) => fauxAssistantMessage(say(`A_N${n}`))), noteEngine());
@@ -164,10 +164,14 @@ describe("unbound talk that names exactly one work item", () => {
     const f = by(`${featureId} ok`);
     expect(f.feature).toBe(featureId);
     expect(f.work).toBeUndefined();
-    for (const needle of ["Nope000", "nothing named", `${taskId} and ${featureId}`]) {
+    for (const needle of ["Nope000", "nothing named"]) {
       expect(by(needle).work).toBeUndefined();
       expect(by(needle).feature).toBeUndefined();
     }
+    // two items sharing a feature: the feature alone, never one of the tasks
+    const both = by(`${taskId} and ${featureId}`);
+    expect(both.feature).toBe(featureId);
+    expect(both.work).toBeUndefined();
   });
 });
 

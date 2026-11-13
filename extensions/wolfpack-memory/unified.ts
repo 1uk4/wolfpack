@@ -38,7 +38,8 @@ import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { memoryEmitter } from "./memory-events.js";
 import { crawlMode, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
 import { readBoundTask } from "./unified-tasks.js";
-import { durableSubagent, featureResolver, FINAL_ONLY_AGENTS, SUBAGENT_OBSERVE_EVERY_TURNS, SUBAGENT_OBSERVE_TOKENS, type SubagentTag } from "./subagent-tag.js";
+import { sharedFeature, subagentReportTag } from "./observation-tag.js";
+import { durableSubagent, knownChildren, featureResolver, FINAL_ONLY_AGENTS, SUBAGENT_OBSERVE_EVERY_TURNS, SUBAGENT_OBSERVE_TOKENS, type SubagentTag } from "./subagent-tag.js";
 import { WorkClient } from "./work-client.js";
 import { drainInbox, kbLockFile, listParked, readEntryMarkdown, readLedger, resolveAliasedEntry, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { dailyPassDue, markDailyPass, type PassTrigger } from "@wolfpack/memory";
@@ -545,9 +546,19 @@ export default function createMemoryExtension(
     for (const o of obs) {
       if (config.generalToDen === true && o.general === true) { out.push(null); continue; }
       const ids = [...new Set(proseOnly(o.content).match(NAMED_WORK_ID) ?? [])];
-      // Only an item of the observation's own domain (the id carries it): no lookup for another domain's id.
-      if (ids.length !== 1 || ids[0].split("-")[1] !== (o.domain || defaultDomain)) { out.push(null); continue; }
-      out.push(await lookupNamed(ids[0]));
+      if (ids.length === 0) {
+        // A subagent's report narrated here inherits that subagent's task (registry names and tasks, feature looked up).
+        const kids = knownChildren(wolfDen);
+        const hit = subagentReportTag(o.content, kids, () => undefined);
+        if (hit) { const f = await featureOf(hit.taskId); out.push({ taskId: hit.taskId, ...(f ? { featureId: f } : {}) }); } else out.push(null);
+        continue;
+      }
+      // Only items of the observation's own domain (the id carries it): no lookup for another domain's id.
+      const dom = o.domain || defaultDomain;
+      if (ids.some((id) => id.split("-")[1] !== dom)) { out.push(null); continue; }
+      if (ids.length === 1) { out.push(await lookupNamed(ids[0])); continue; }
+      // Several items: their shared feature, else nothing (a failed lookup is null: never a guess).
+      out.push(sharedFeature(await Promise.all(ids.map(lookupNamed))));
     }
     return out;
   }

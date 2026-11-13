@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { InventoryListed } from "@wolfpack/protocol";
-import { createInventoryClient } from "../../../src/server/pack/inventory.ts";
+import { createHealthApi } from "../../../src/server/pack/health-api.ts";
+import { createInventoryClient, readInventory } from "../../../src/server/pack/inventory.ts";
 import { createPackHealth } from "../../../src/server/pack/pack-health.ts";
 
 const manifest = (v: string) => async () => ({ manifest: { schema: 1 as const, generatedAt: "", components: { workerd: { version: v, tag: "", sha: "", publishedAt: "", notesUrl: "" }, wolfd: { version: v, tag: "", sha: "", publishedAt: "", notesUrl: "" } } } });
@@ -19,7 +20,6 @@ const client = (h: ReturnType<typeof hub>, main = "0.1.7-main.2", stable = "0.1.
 	createInventoryClient({
 		hubUrl: "http://hub",
 		token: () => "tok",
-		self: () => ({ machine: "mac", kind: "console", id: "console", version: "0.1.19" }),
 		manifest: async (c) => (c === "main" ? manifest(main)() : manifest(stable)()),
 		fetch: h.f,
 	});
@@ -44,7 +44,7 @@ describe("inventory client", () => {
 		assert.equal(none.view(), null);
 		let status = 200;
 		const f = (async () => (status === 200 ? Response.json({ entries: [listed({ version: "0.1.6", channel: "stable" })], hubMachine: "sfo-01" }) : new Response("{}", { status }))) as unknown as typeof fetch;
-		const c = createInventoryClient({ hubUrl: "http://hub", token: () => "t", self: () => ({ machine: "m", kind: "console", id: "console" }), manifest: manifest("0.1.6"), fetch: f });
+		const c = createInventoryClient({ hubUrl: "http://hub", token: () => "t", manifest: manifest("0.1.6"), fetch: f });
 		await c.poll();
 		status = 502;
 		await c.poll();
@@ -56,7 +56,7 @@ describe("inventory client", () => {
 		for (const status of [401, 403, 404]) {
 			const h = hub([], status);
 			let t = 1_000_000;
-			const c = createInventoryClient({ hubUrl: "http://hub", token: () => "t", self: () => ({ machine: "m", kind: "console", id: "console" }), manifest: manifest("0.1.6"), fetch: h.f, now: () => t });
+			const c = createInventoryClient({ hubUrl: "http://hub", token: () => "t", manifest: manifest("0.1.6"), fetch: h.f, now: () => t });
 			await c.poll();
 			await c.poll();
 			assert.equal(h.calls.length, 1, String(status));
@@ -65,14 +65,35 @@ describe("inventory client", () => {
 			assert.equal(h.calls.length, 2, String(status));
 		}
 	});
+});
 
-	it("heartbeats the console's own entry and backs off after a 403", async () => {
-		const h = hub([], 403);
-		const c = client(h);
-		await c.heartbeat();
-		await c.heartbeat();
-		assert.equal(h.calls.length, 1);
-		assert.deepEqual(JSON.parse(h.calls[0]!.body!), { entry: { machine: "mac", kind: "console", id: "console", version: "0.1.19" } });
+describe("readInventory (the viewer's own sign-in)", () => {
+	it("reads /v1/inventory with the caller's bearer and says why when it cannot", async () => {
+		const h = hub([listed({ version: "0.1.5", channel: "stable" })]);
+		const ok = await readInventory({ hubUrl: "http://hub", token: "viewer-tok", manifest: manifest("0.1.6"), fetch: h.f });
+		assert.equal(h.calls[0]!.auth, "Bearer viewer-tok");
+		assert.equal(ok.state, "ok");
+		assert.deepEqual(ok.state === "ok" ? ok.rows.map((r) => r.latest) : [], ["0.1.6"]);
+		const none = hub([]);
+		assert.equal((await readInventory({ hubUrl: "http://hub", token: undefined, manifest: manifest("0.1.6"), fetch: none.f })).state, "signed-out");
+		assert.equal(none.calls.length, 0);
+		assert.equal((await readInventory({ hubUrl: "http://hub", token: "t", manifest: manifest("0.1.6"), fetch: hub([], 401).f })).state, "signed-out");
+		assert.equal((await readInventory({ hubUrl: "http://hub", token: "t", manifest: manifest("0.1.6"), fetch: hub([], 502).f })).state, "unavailable");
+		assert.equal((await readInventory({ hubUrl: undefined, token: "t", manifest: manifest("0.1.6") })).state, "unavailable");
+		const hang = ((_u: string, init?: RequestInit) => new Promise((_r, rej) => init?.signal?.addEventListener("abort", () => rej(new Error("aborted"))))) as unknown as typeof fetch;
+		assert.equal((await readInventory({ hubUrl: "http://hub", token: "t", manifest: manifest("0.1.6"), fetch: hang, timeoutMs: 20 })).state, "unavailable");
+	});
+});
+
+describe("GET /api/health/inventory", () => {
+	it("reads with the request's bearer and answers the state, never an error status", async () => {
+		const seen: (string | undefined)[] = [];
+		const api = createHealthApi({ readInventory: async (t: string | undefined) => (seen.push(t), t === "good" ? { state: "ok", rows: [], hubMachine: "sfo-01" } : t ? { state: "unavailable" } : { state: "signed-out" }) } as unknown as Parameters<typeof createHealthApi>[0]);
+		const get = async (auth?: string) => (await api.inventory(new Request("http://c/api/health/inventory", { headers: auth ? { authorization: auth } : {} }))).json();
+		assert.deepEqual(await get("Bearer good"), { state: "ok", rows: [], hubMachine: "sfo-01" });
+		assert.deepEqual(await get("Bearer other"), { state: "unavailable" });
+		assert.deepEqual(await get(), { state: "signed-out" });
+		assert.deepEqual(seen, ["good", "other", undefined]);
 	});
 });
 

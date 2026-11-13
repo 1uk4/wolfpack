@@ -33,7 +33,7 @@ import { bearerOf } from "../../core/ui/hub-auth.ts";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type PackHealth, type Restarter } from "./pack-health.ts";
 import { createReleaseReader, createRollbacker, createUpdater, type ReleaseReader, type Rollbacker, type UpdateUnit, type Updater } from "./pack-actions.ts";
 import { DEFAULT_MAIN_MANIFEST_URL, consoleVersion, createUpdatesHandler } from "./updates-api.ts";
-import { createInventoryClient, type InventoryClient } from "./inventory.ts";
+import { createInventoryClient, readInventory, type InventoryClient, type InventoryRead } from "./inventory.ts";
 import { DEFAULT_MANIFEST_URL, createManifestFetcher, type InventoryEntry } from "@wolfpack/protocol";
 import { createLagMonitor, machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
 import { sessionWitness, type SessionWitness } from "../thread/session-witness.ts";
@@ -71,6 +71,8 @@ export interface HealthApiDeps {
 	witness: SessionWitness;
 	/** Live bearer check against the hub, tried first on every restart (see RESTART AUTH). */
 	checkToken: HubTokenCheck;
+	/** Reads the hub inventory with the caller's bearer (undefined: signed out). The credential source lives here, not in the reader. */
+	readInventory?: (token: string | undefined) => Promise<InventoryRead>;
 	now?: () => number;
 }
 
@@ -142,6 +144,18 @@ export function createHealthApi(d: HealthApiDeps) {
 		async get(): Promise<Response> {
 			const s = d.health.snapshot().checkedAt === null ? await d.health.tick() : d.health.snapshot();
 			return Response.json(s, { headers: NO_STORE });
+		},
+
+		/** GET /api/health/inventory: the hub inventory read with the viewer's own bearer. Always 200 with {state: ok | unavailable | signed-out, ...}. */
+		async inventory(req: Request): Promise<Response> {
+			const token = bearerOf(req.headers.get("authorization"));
+			let out: InventoryRead;
+			try {
+				out = d.readInventory ? await d.readInventory(token) : { state: "unavailable" };
+			} catch {
+				out = { state: "unavailable" };
+			}
+			return Response.json(out, { headers: NO_STORE });
 		},
 
 		stream(signal?: AbortSignal): Response {
@@ -257,7 +271,7 @@ export function packHealth(env: Record<string, string | undefined> = process.env
 	if (!h[MONITOR]) {
 		const interval = Number(env.WOLFPACK_HEALTH_INTERVAL_MS);
 		const releases = releaseReader();
-		// The pack inventory (work-wolfpack-ZproKxi): polled from the hub with the env hub token; this console's heartbeat rides the same client.
+		// The pack inventory (work-wolfpack-ZproKxi): the panel reads it with the viewer's bearer; each machine's workerd reports its console, so the console no longer heartbeats.
 		const stable = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || DEFAULT_MANIFEST_URL });
 		const main = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MAIN_MANIFEST_URL?.trim() || DEFAULT_MAIN_MANIFEST_URL });
 		const started = Date.now();
@@ -269,8 +283,7 @@ export function packHealth(env: Record<string, string | undefined> = process.env
 		};
 		const inv: InventoryClient = createInventoryClient({
 			hubUrl: env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "") || undefined,
-			token: () => env.WOLFPACK_HUB_TOKEN?.trim() || undefined,
-			self,
+			token: () => env.WOLFPACK_HUB_TOKEN?.trim() || undefined, // optional fallback only; the Pack panel reads with the viewer's bearer (GET /api/health/inventory)
 			manifest: async (c) => (c === "main" ? main() : stable()),
 		});
 		inv.start();
@@ -299,6 +312,11 @@ export function healthApi(env: Record<string, string | undefined> = process.env)
 			updater: createUpdater({ available: availableUpdates(env) }),
 			witness: sessionWitness(env),
 			checkToken: hubTokenCheck(hubTarget(env).wolvesUrl),
+			readInventory: (token) => {
+				const main = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MAIN_MANIFEST_URL?.trim() || DEFAULT_MAIN_MANIFEST_URL });
+				const stable = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || DEFAULT_MANIFEST_URL });
+				return readInventory({ hubUrl: env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "") || undefined, token, manifest: async (c) => (c === "main" ? main() : stable()) });
+			},
 		});
 	}
 	return h[KEY];

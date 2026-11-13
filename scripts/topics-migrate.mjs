@@ -60,6 +60,20 @@ function backfill(r) {
 	}
 }
 
+/** Confirm topics the KB already absorbed (distill record / archived den topic), then retire the inactive ones (legacy counts as inactive). */
+function absorbAndRetire(d, r) {
+	const { confirmed } = mem.reconcileAbsorbed({ den: d, root: r, denLocal: path.join(den, "kb") });
+	const retired = [];
+	for (const t of mem.readTopics(r)) {
+		if (!confirmed.includes(t.id)) continue;
+		if (!(t.sources ?? []).includes("legacy") && !mem.isQuiet(d, t)) continue;
+		mem.updateTopicState(d, t.id, { retiredAt: new Date().toISOString() });
+		mem.retireTopic(r, t, new Date());
+		retired.push(t.id);
+	}
+	return { confirmed, retired };
+}
+
 const bytesOf = (r) => (fs.existsSync(r) ? fs.readdirSync(r).filter((f) => f.endsWith(".md") && f !== "INDEX.md").reduce((n, f) => n + fs.statSync(path.join(r, f)).size, 0) : 0);
 
 // Work on a copy: the pass and the cap run for real, only on the copy.
@@ -73,6 +87,7 @@ backfill(simRoot);
 
 const before = mem.readTopics(simRoot);
 const beforeBytes = bytesOf(simRoot);
+const absorbed = absorbAndRetire(sim, simRoot);
 const promoted = [];
 const pass = await mem.runPromotePass({
 	den: sim, root: simRoot, trigger: { kind: "migration" },
@@ -85,7 +100,7 @@ const cap = mem.enforceByteCap({ den: sim, root: simRoot });
 const decisions = before.map((t) => ({
 	id: t.id,
 	chars: t.body.length,
-	decision: cap.retired.includes(t.id) ? "retire" : cap.evicted.includes(t.id) ? "evict" : t.body.length > mem.TOPIC_CHAR_CAP ? "split" : t.keepLocal ? "keep" : promoted.includes(t.id) ? "promote" : "keep",
+	decision: absorbed.retired.includes(t.id) ? "retire" : cap.retired.includes(t.id) ? "retire" : cap.evicted.includes(t.id) ? "evict" : t.body.length > mem.TOPIC_CHAR_CAP ? "split" : t.keepLocal ? "keep" : promoted.includes(t.id) ? "promote" : "keep",
 }));
 const summary = {
 	den, mode: apply ? "apply" : "dry-run", topics: before.length, bytesBefore: beforeBytes, bytesAfterCap: bytesOf(simRoot),
@@ -95,6 +110,7 @@ const summary = {
 if (apply) {
 	mem.seedActiveHours(den, archivedStamps());
 	backfill(root);
+	absorbAndRetire(den, root);
 	mem.enforceByteCap({ den, root });
 }
 fs.rmSync(sim, { recursive: true, force: true });

@@ -401,6 +401,88 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
       expect(poolLines()).toEqual([]);
       expect(readFileSync(join(den, ".memory", "pool", "archive.jsonl"), "utf-8")).toContain("observation 0");
     });
+
+    describe("topic cap (memory.consolidation.maxTopics)", () => {
+      const topic = (id: string, updated: string, body = `body of ${id}`) =>
+        writeFileSync(join(sessions(), `${id}.md`), `---\nid: ${id}\ntitle: ${id}\nsummary: s\nupdated: ${updated}\n---\n\n${body}\n`);
+      // t0 is the oldest, t(n-1) the newest
+      const seed = (n: number) => {
+        mkdirSync(sessions(), { recursive: true });
+        for (let i = 0; i < n; i++) topic(`t${i}`, `2026-10-${String(10 + i).padStart(2, "0")} 10:00`);
+      };
+      const run = (prompts: string[], maxTopics?: number) => {
+        poolWith([o(0)]);
+        return consolidatePool({ wolfDen: den, wolfName: WOLF, engine: sessionEngine(prompts), sessionTopics: durableSessionTopics(den), minObservations: 1, ...(maxTopics ? { maxTopics } : {}) });
+      };
+      const evictedFiles = () => readdirSync(join(sessions(), "evicted")).sort();
+
+      it("sends the model at most maxTopics topics, moving the least recently updated to evicted/ (nothing deleted)", async () => {
+        seed(6);
+        const prompts: string[] = [];
+        await run(prompts, 4);
+        expect(prompts[0]).not.toContain("### t0 ");
+        expect(prompts[0]).not.toContain("### t1 ");
+        for (const id of ["t2", "t3", "t4", "t5"]) expect(prompts[0]).toContain(`### ${id} `);
+        expect(evictedFiles()).toEqual(["t0.md", "t1.md"]);
+        expect(readFileSync(join(sessions(), "evicted", "t0.md"), "utf-8")).toContain("body of t0");
+      });
+
+      it("defaults to 40 topics", async () => {
+        seed(43);
+        await run([]);
+        expect(evictedFiles().length).toBe(3);
+      });
+
+      it("a run that writes an id sitting in evicted/ keeps the evicted body", async () => {
+        seed(2);
+        topic("t", "2026-01-01 00:00", "old body of t"); // the engine stub writes id "t"; this is the oldest
+        await run([], 2); // evicts "t", then the engine writes a new "t": the evicted body is set aside under a dated id
+        const files = evictedFiles();
+        expect(files).not.toContain("t.md");
+        const setAside = files.filter((f) => f.startsWith("t-evicted-"));
+        expect(setAside.length).toBe(1);
+        const raw = readFileSync(join(sessions(), "evicted", setAside[0]), "utf-8");
+        expect(raw).toContain(`id: ${setAside[0].replace(/\.md$/, "")}\n`);
+        expect(raw).toContain("old body of t");
+        expect(readFileSync(join(sessions(), "t.md"), "utf-8")).toContain("\nb\n");
+        // promote sees the evicted body and the new topic: t0, t1, t-evicted-*, t
+        const clean = { slug: "main", title: "T", summary: "S.", body: "## Design\nx" };
+        const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ contributions: [clean] }) } as unknown as Engine;
+        const r = await promoteSessionTopics({ wolfDen: den, wolfName: WOLF, engine, kbRoots: roots, defaultDomain: "wolfpack" });
+        expect(r.topicsProcessed).toBe(4);
+      });
+
+      it("promote reads an evicted topic that shares an id with a live one, keeping both bodies", async () => {
+        mkdirSync(join(sessions(), "evicted"), { recursive: true });
+        topic("t", "2026-10-10 10:00", "live body of t");
+        writeFileSync(join(sessions(), "evicted", "t.md"), `---\nid: t\ntitle: t\nsummary: s\nupdated: 2026-01-01 00:00\n---\n\nevicted body of t\n`);
+        const clean = { slug: "main", title: "T", summary: "S.", body: "## Design\nx" };
+        const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ contributions: [clean] }) } as unknown as Engine;
+        const r = await promoteSessionTopics({ wolfDen: den, wolfName: WOLF, engine, kbRoots: roots, defaultDomain: "wolfpack" });
+        expect(r.topicsProcessed).toBe(2);
+        const bodies = readdirSync(join(den, "memory", "topics")).map((f) => readFileSync(join(den, "memory", "topics", f), "utf-8"));
+        expect(bodies.some((b) => b.includes("live body of t"))).toBe(true);
+        expect(bodies.some((b) => b.includes("evicted body of t"))).toBe(true);
+      });
+
+      it("a failed model call moves the evicted topics back, changing nothing", async () => {
+        seed(6);
+        poolWith([o(0)]);
+        const failing = { call: async () => { throw new Error("model down"); } } as unknown as Engine;
+        await consolidatePool({ wolfDen: den, wolfName: WOLF, engine: failing, sessionTopics: durableSessionTopics(den), minObservations: 1, maxTopics: 4 }).catch(() => undefined);
+        expect(readdirSync(sessions()).filter((f) => f.endsWith(".md")).sort()).toEqual(["t0.md", "t1.md", "t2.md", "t3.md", "t4.md", "t5.md"]);
+        expect(existsSync(join(sessions(), "evicted")) ? evictedFiles() : []).toEqual([]);
+      });
+
+      it("promote still reads evicted topics", async () => {
+        seed(3);
+        await run([], 1);
+        const clean = { slug: "main", title: "T", summary: "S.", body: "## Design\nx" };
+        const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ contributions: [clean] }) } as unknown as Engine;
+        const r = await promoteSessionTopics({ wolfDen: den, wolfName: WOLF, engine, kbRoots: roots, defaultDomain: "wolfpack" });
+        expect(r.topicsProcessed).toBe(4); // t0, t1 (evicted), t2, and the topic the run wrote
+      });
+    });
   });
 });
 

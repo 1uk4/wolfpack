@@ -64,7 +64,7 @@ export function effectiveConsolidationInterval(interval: string | undefined): st
 }
 
 /** Pi's consolidation defaults (extensions/wolfpack-memory/index.ts), plus the existing trigger and interval. */
-export const DEFAULT_CONSOLIDATION = { threshold: 20000, poolTarget: 10000, trigger: "hybrid", interval: "4h" } as const;
+export const DEFAULT_CONSOLIDATION = { threshold: 20000, poolTarget: 10000, trigger: "hybrid", interval: "4h", maxTopics: 40 } as const;
 
 const TierOverride = z
   .object({ model: z.string().min(1).optional(), thinking: z.string().min(1).optional() })
@@ -130,6 +130,7 @@ export const WolfFileSchema = z.object({
         .object({
           threshold: z.number().int().positive().optional(),
           poolTarget: z.number().int().nonnegative().optional(),
+          maxTopics: z.number().int().positive().optional(),
           trigger: z.enum(["threshold", "timer", "hybrid", "manual"]).optional(),
           interval: z.string().regex(/^\d+(s|m|h|d)$/, 'expected a duration like "30m", "4h", "1d"').optional(),
         })
@@ -226,6 +227,8 @@ export interface WolfConfig {
       threshold: number;
       /** Pool tokens left behind by a consolidation (the newest observations). */
       poolTarget: number;
+      /** Session topics the consolidator sends the model; older ones move to `evicted/` (default 40). */
+      maxTopics: number;
       trigger: "threshold" | "timer" | "hybrid" | "manual";
       interval: string;
     };

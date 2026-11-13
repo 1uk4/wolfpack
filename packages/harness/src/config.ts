@@ -28,6 +28,7 @@ export interface WolfConfig {
       interval?: string;         // e.g. "24h" - pi-durable only
       threshold?: number;        // pool tokens that trigger consolidation (default: 20000)
       poolTarget?: number;       // pool tokens left after a consolidation (default: 10000)
+      maxTopics?: number;        // session topics sent to the model; older move to evicted/ (default: 40)
     };
     /** Librarian mode - enables KB inbox tools and sweep */
     librarian?: boolean;

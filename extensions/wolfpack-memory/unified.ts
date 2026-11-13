@@ -65,6 +65,8 @@ export interface MemoryConfig {
     threshold?: number;
     /** Pool tokens left in the pool by a consolidation (default 10000, pi's value). */
     poolTarget?: number;
+    /** Session topics sent to the model per consolidation (default 40); older ones move to evicted/. */
+    maxTopics?: number;
     interval?: string;
   };
   /** `memory.defaultDomain` in wolf.yaml: domain for observations the observer leaves untagged (default: first of `domains`). */
@@ -708,6 +710,7 @@ export default function createMemoryExtension(
       domains,
       sessionTopics: durableSessionTopics(wolfDen),
       ...(opts.poolTarget !== undefined ? { poolTarget: opts.poolTarget } : {}),
+      ...(consolidation?.maxTopics ? { maxTopics: consolidation.maxTopics } : {}),
       minObservations: opts.minObservations,
       ...(opts.ignoreBackoff ? { ignoreBackoff: true } : {}),
       onProgress: (msg) => console.log(`[memory] ${msg}`),

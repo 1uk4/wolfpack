@@ -22,6 +22,7 @@ export const EDITABLE_KEYS: readonly string[] = [
   "memory.sweepInterval",
   "memory.consolidation.threshold",
   "memory.consolidation.poolTarget",
+  "memory.consolidation.maxTopics",
   "memory.consolidation.trigger",
   "memory.consolidation.interval",
 ];

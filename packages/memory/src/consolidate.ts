@@ -23,7 +23,7 @@ import { promoteTopics } from "./distill.js";
 import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { readTopics, readJourney, type TopicFile } from "./session/memory.js";
+import { readTopics, readEvictedTopics, readJourney, type TopicFile } from "./session/memory.js";
 import {
   readDenJourney,
   writeDenTopic,
@@ -124,7 +124,14 @@ export async function consolidateSession(
 
   // Step 1: Read session memory
   const sessionDir = join(memoryRoot, sessionId);
-  const sessionTopics = refuseTagged(readTopics(sessionDir), onProgress);
+  // Topics evicted by the cap (memory.consolidation.maxTopics) are still session knowledge: promote reads them too.
+  const live = readTopics(sessionDir);
+  const liveIds = new Set(live.map((t) => t.id));
+  // An evicted topic sharing an id with a live one is promoted under an in-memory renamed id, so both bodies go through.
+  const evictedTopics = readEvictedTopics(sessionDir).map((t) =>
+    liveIds.has(t.id) ? { ...t, id: `${t.id}-evicted-${t.filename.replace(/\.md$/, "").replace(/[^A-Za-z0-9_-]/g, "")}` } : t,
+  );
+  const sessionTopics = refuseTagged([...live, ...evictedTopics], onProgress);
   const sessionJourney = readJourney(sessionDir);
   if (sessionTopics.length === 0) {
     onProgress?.("no session topics to promote — nothing to do");

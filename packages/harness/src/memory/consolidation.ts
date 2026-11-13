@@ -33,6 +33,10 @@ import {
   buildDomainContext,
   consolidateSession,
   readTopics,
+  evictOldTopics,
+  restoreEvicted,
+  setAsideEvicted,
+  DEFAULT_MAX_TOPICS,
   readJourney,
   writeTopic,
   renderIndex,
@@ -151,6 +155,8 @@ export interface ConsolidationConfig {
   onRecord?: (r: { work: string; observationCount: number; chars?: number }) => void;
   /** Called per den topic archived by the legacy path's reconcile (`entryId` null: rejected). */
   onArchive?: (a: { id: string; entryId: string | null }) => void;
+  /** `memory.consolidation.maxTopics`: session topics the model is sent; the least recently updated move to `evicted/` (default 40). */
+  maxTopics?: number;
   /** Engine override (tests); built from the table when omitted. */
   engine?: Engine;
   /** Where work Records are written (default: the Work API from WORK_ENDPOINT / WORK_TOKEN, when set). */
@@ -763,6 +769,9 @@ async function consolidateToSessionTopics(
   const obsLines = observations
     .map((o) => `${o.timestamp}${o.domain ? ` [${o.domain}]` : ""}  ${o.content}`)
     .join("\n");
+  // The cap: the model is never sent more than maxTopics topics. Evicted files stay on disk (promote reads them).
+  const evicted = evictOldTopics(root, config.maxTopics ?? DEFAULT_MAX_TOPICS);
+  if (evicted.length) onProgress?.(`  moved ${evicted.length} least recently updated session topic(s) to evicted/`);
   const existing = readTopics(root);
   const journey = readJourney(root);
   const existingSection =
@@ -780,7 +789,13 @@ async function consolidateToSessionTopics(
   }
 
   onProgress?.("Running LLM consolidation into session topics...");
-  const result = await engine.call("consolidate", ConsolidationResultSchema, { system, prompt });
+  let result;
+  try {
+    result = await engine.call("consolidate", ConsolidationResultSchema, { system, prompt });
+  } catch (err) {
+    restoreEvicted(root, evicted); // a failed run changes nothing
+    throw err;
+  }
 
   const now = new Date().toISOString().replace("T", " ").slice(0, 16);
   // As pi: a dropped topic domain falls back to the batch's domain when the batch has exactly one.
@@ -802,6 +817,9 @@ async function consolidateToSessionTopics(
       continue;
     }
     const isUpdate = existing.some((t) => t.id === r.id);
+    // The model never saw an evicted topic. A merge into an evicted id therefore starts a fresh topic, and the old
+    // body is kept as `<id>-evicted-<stamp>` (file and frontmatter id), so nothing is lost and promote reads both.
+    if (!isUpdate) setAsideEvicted(root, r.id);
     writeTopic(root, { id: r.id, title: r.title, summary: r.summary, updated: now, body: r.body, domain: r.domain || soleDomain });
     safely(() => config.onTopic?.({ id: r.id, domain: r.domain || soleDomain, change: isUpdate ? "merge" : "create", scope: "session", observationCount: observations.length }));
     onProgress?.(`  ${isUpdate ? "updated" : "created"} session topic: ${r.title}`);

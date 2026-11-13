@@ -213,6 +213,9 @@ export {
 } from "./work-pending.js";
 export { withPoolLock, type PoolLockOptions } from "./pool-lock.js";
 export { writeFileAtomic } from "./atomic-write.js";
+export { ACTIVE_HOURS_RETENTION_DAYS, activeHoursFile, activeHoursSince, hourKey, readActiveHours, recordOwnerMessage, seedActiveHours } from "./active-hours.js";
+export { readRoutingIndex, recordReject, recordRouting, routingHint, subjectKey, type RoutingIndex, type RoutingSubject } from "./routing-index.js";
+export { dailyPassDue, markDailyPass, readPromoteState, updateTopicState, type PromoteState, type TopicPromoteState } from "./promote-state.js";
 export { observationHash, observationIds, type ObservationIdFields } from "./observation-id.js";
 export { CHILDREN_CAP, LOG_TAIL, shapeWorkList, shapeWorkRecord, toWorkChild, withoutLog, logTail, type ShapeWorkItem, type ShapedWorkChild, type ShapedWorkListItem, type ShapedWorkRecord } from "./work-shape.js";
 export { parseRecordLines, stripSources, lineRef, numberRecordLines, formatSources, SOURCE_CAP, type RecordLine, type SourceRef } from "./record-sources.js";

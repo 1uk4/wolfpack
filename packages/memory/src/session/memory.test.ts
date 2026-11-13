@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { evictOldTopics, setAsideEvicted } from "./memory.js";
+import { evictOldTopics, readTopics, setAsideEvicted, writeTopic } from "./memory.js";
 
 let root: string;
 beforeEach(() => {
@@ -84,5 +84,23 @@ describe("evicted name collisions", () => {
     const raw = readFileSync(join(root, "evicted", f), "utf-8");
     expect(raw).toContain(`---\nid: ${f.replace(/\.md$/, "")}\n`);
     expect(raw).toContain("\nid: body-line\n");
+  });
+});
+
+describe("topic lifecycle fields", () => {
+  it("writeTopic keeps sources, last_note, keep_local and state so readTopics returns them", () => {
+    writeTopic(root, {
+      id: "t", title: "T", summary: "s", updated: "2026-11-13 09:00", body: "b",
+      sources: ["thread:7", "work-wolfpack-abc"], lastNote: "2026-11-13T08:30:00.000Z", keepLocal: true, state: "parked",
+    });
+    const [t] = readTopics(root);
+    expect(t).toMatchObject({ id: "t", sources: ["thread:7", "work-wolfpack-abc"], lastNote: "2026-11-13T08:30:00.000Z", keepLocal: true, state: "parked" });
+  });
+
+  it("a topic with none of them reads back without the fields", () => {
+    topic("plain", "2026-10-10 10:00");
+    const [t] = readTopics(root);
+    expect(t.sources).toBeUndefined();
+    expect(t.keepLocal).toBeUndefined();
   });
 });

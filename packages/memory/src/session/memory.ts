@@ -22,6 +22,14 @@ export interface TopicFile {
   /** Work tags (frontmatter). A topic carrying one is work knowledge and never promotes. */
   work?: string;
   feature?: string;
+  /** Threads (`thread:<id>`) and work ids whose notes fed this topic. Absent on topics from before the promote pass. */
+  sources?: string[];
+  /** ISO time of the newest note folded in: the topic's activity clock. */
+  lastNote?: string;
+  /** Never auto-promoted (frontmatter `keep_local: true`). */
+  keepLocal?: boolean;
+  /** `parked`: the KB parked or could not classify it; the panel shows it as needing attention. */
+  state?: "parked";
   filename: string;
 }
 
@@ -57,6 +65,10 @@ export function readTopics(root: string): TopicFile[] {
       domain: fields.domain ? String(fields.domain) : undefined,
       ...(fields.work ? { work: String(fields.work) } : {}),
       ...(fields.feature ? { feature: String(fields.feature) } : {}),
+      ...(Array.isArray(fields.sources) && fields.sources.length ? { sources: fields.sources.map(String) } : {}),
+      ...(fields.last_note ? { lastNote: String(fields.last_note) } : {}),
+      ...(fields.keep_local === true || fields.keep_local === "true" ? { keepLocal: true } : {}),
+      ...(fields.state === "parked" ? { state: "parked" as const } : {}),
       filename,
     };
   });
@@ -155,6 +167,10 @@ export function writeTopic(
     updated: string;
     body: string;
     domain?: string;
+    sources?: string[];
+    lastNote?: string;
+    keepLocal?: boolean;
+    state?: "parked";
   }
 ): void {
   mkdirSync(root, { recursive: true });
@@ -165,6 +181,10 @@ export function writeTopic(
     `summary: ${topic.summary}`,
     `updated: ${topic.updated}`,
     ...(topic.domain ? [`domain: ${topic.domain}`] : []),
+    ...(topic.sources?.length ? ["sources:", ...topic.sources.map((s) => `  - ${s}`)] : []),
+    ...(topic.lastNote ? [`last_note: ${topic.lastNote}`] : []),
+    ...(topic.keepLocal ? ["keep_local: true"] : []),
+    ...(topic.state ? [`state: ${topic.state}`] : []),
     "---",
     "",
     topic.body,

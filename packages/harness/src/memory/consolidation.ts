@@ -803,6 +803,9 @@ async function consolidateToSessionTopics(
   const batchDomains = new Set(observations.map((o) => o.domain).filter(Boolean));
   const soleDomain = batchDomains.size === 1 ? [...batchDomains][0] : undefined;
 
+  // Where this run's notes came from: thread ids and any work/feature ids, plus the newest observation time.
+  const runSources = [...new Set(observations.flatMap((o) => [o.thread ? `thread:${o.thread}` : "", o.work ?? "", o.feature ?? "", o.origin?.work ?? "", o.origin?.feature ?? ""]).filter(Boolean))];
+  const runLastNote = observations.map((o) => o.timestamp).sort().at(-1);
   let created = 0;
   let merged = 0;
   let skipped = 0;
@@ -850,7 +853,13 @@ async function consolidateToSessionTopics(
     // The model never saw an evicted topic. A merge into an evicted id therefore starts a fresh topic, and the old
     // body is kept as `<id>-evicted-<stamp>` (file and frontmatter id), so nothing is lost and promote reads both.
     if (!isUpdate) setAsideEvicted(root, r.id);
-    writeTopic(root, { id: r.id, title: r.title, summary: r.summary, updated: now, body: r.body, domain: r.domain || soleDomain });
+    const prev = existing.find((t) => t.id === r.id);
+    writeTopic(root, {
+      id: r.id, title: r.title, summary: r.summary, updated: now, body: r.body, domain: r.domain || soleDomain,
+      sources: [...new Set([...(prev?.sources ?? []), ...runSources])],
+      ...(runLastNote ? { lastNote: prev?.lastNote && prev.lastNote > runLastNote ? prev.lastNote : runLastNote } : prev?.lastNote ? { lastNote: prev.lastNote } : {}),
+      ...(prev?.keepLocal ? { keepLocal: true } : {}),
+    });
     safely(() => config.onTopic?.({ id: r.id, domain: r.domain || soleDomain, change: isUpdate ? "merge" : "create", scope: "session", observationCount: observations.length }));
     onProgress?.(`  ${isUpdate ? "updated" : "created"} session topic: ${r.title}`);
     if (isUpdate) merged++;

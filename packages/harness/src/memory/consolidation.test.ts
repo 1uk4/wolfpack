@@ -440,6 +440,20 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
       });
     });
 
+    describe("topic sources and activity clock", () => {
+      it("a written topic carries the run's thread ids (kept across a merge) and the newest observation time as last_note", async () => {
+        mkdirSync(sessions(), { recursive: true });
+        writeFileSync(join(sessions(), "t.md"), `---\nid: t\ntitle: T\nsummary: s\nupdated: 2026-10-01 00:00\nsources:\n  - thread:old\n---\n\nb\n`);
+        poolWith([o(1, { thread: "thread-a" }), o(3, { thread: "thread-b" }), o(2, { thread: "thread-a" })]);
+        await consolidatePool({ wolfDen: den, wolfName: WOLF, engine: sessionEngine([]), sessionTopics: durableSessionTopics(den), minObservations: 1 });
+        const raw = readFileSync(join(sessions(), "t.md"), "utf-8");
+        expect(raw).toContain("  - thread:old\n");
+        expect(raw).toContain("  - thread:thread-a\n");
+        expect(raw).toContain("  - thread:thread-b\n");
+        expect(raw).toContain("last_note: 2026-10-20T10:03:00Z");
+      });
+    });
+
     describe("180 KB cap over session topics", () => {
       it("after a run the least recently updated topics beyond the cap move to evicted/, nothing is deleted, and the model is sent all topics", async () => {
         mkdirSync(sessions(), { recursive: true });

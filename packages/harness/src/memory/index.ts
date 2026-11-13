@@ -14,6 +14,8 @@ export {
   type SessionTopicsLocation,
 } from "./consolidation.js";
 
+export { runSessionPromotePass, type PromoteRunConfig } from "./promote-run.js";
+
 // Re-export shared prompt context from @wolfpack/memory
 export { renderDenContext, renderKbAccess } from "@wolfpack/memory";
 export {

@@ -466,9 +466,11 @@ export function createOrchestrator(
       system += `\n\nObservations carry domain tags [domain]. When creating or merging topics, set the domain field to match the dominant domain of the observations in that group. NEVER merge observations from different domains into the same topic.\n\n${domainContext}`;
     }
 
+    // No retry: a retry resends the whole (topic-store sized) prompt; the next consolidation run is the retry.
     const result = await engine.call("consolidate", ConsolidationResultSchema, {
       system,
       prompt,
+      maxRetries: 0,
     });
 
     const now = new Date().toISOString().replace("T", " ").slice(0, 16);

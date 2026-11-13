@@ -351,6 +351,10 @@ export class StubServer {
         if (limit !== null && !/^[1-9]\d{0,6}$/.test(limit)) throw new HttpError("invalid_request", "limit must be a positive integer");
         throw new HttpError("memory_unavailable", "memory is not loaded on this wolf");
       }
+      case "getMemorySessionTopics":
+      case "putMemoryKeepLocal":
+        this.wolf(params.name);
+        throw new HttpError("memory_unavailable", "memory is not loaded on this wolf");
       case "getMemoryTree":
       case "getMemoryNodeObservations":
         this.wolf(params.name);

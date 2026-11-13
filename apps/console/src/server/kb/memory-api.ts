@@ -107,6 +107,28 @@ export function createMemoryApi(source: ClientSource) {
 			}
 		},
 
+		async memorySessionTopics(wolf: string): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.getMemorySessionTopics) return unsupported("memory_unavailable", "memory session topics");
+				return json(await client.getMemorySessionTopics(wolf));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		async memoryKeepLocal(wolf: string, id: string, input: unknown): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.putMemoryKeepLocal) return unsupported("memory_unavailable", "memory keep-local");
+				const keepLocal = (input as { keepLocal?: unknown } | null)?.keepLocal;
+				if (typeof keepLocal !== "boolean") return json({ error: "keepLocal must be a boolean", code: "invalid_request" }, 400);
+				return json(await client.putMemoryKeepLocal(wolf, id, keepLocal));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
 		async memoryTree(wolf: string): Promise<Response> {
 			try {
 				const client = source();
@@ -247,11 +269,11 @@ export function createMemoryApi(source: ClientSource) {
 			}
 		},
 
-		async promote(wolf: string): Promise<Response> {
+		async promote(wolf: string, ids?: string[]): Promise<Response> {
 			try {
 				const client = source();
 				if (!client.promoteMemory) return unsupported("memory_unavailable", "promote");
-				return json(await client.promoteMemory(wolf));
+				return json(await client.promoteMemory(wolf, ids?.length ? { ids } : undefined));
 			} catch (err) {
 				return failure(err);
 			}

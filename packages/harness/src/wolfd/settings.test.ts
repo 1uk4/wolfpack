@@ -123,6 +123,15 @@ describe("thread settings", () => {
     await vi.waitFor(() => expect(slow.configured).toEqual([{ model: modelOf("fast") }]), { timeout: 5000 });
   });
 
+  it("an owner message counts the current UTC hour as an active hour (the clock the promote pass ages topics by)", async () => {
+    const den = newDen();
+    const { url } = await harness(den).boot();
+    await fetch(`${url}/v1/threads/w%2Fhome/submit`, { method: "POST", body: JSON.stringify({ input: "hello", whenBusy: "reject" }) });
+    const file = JSON.parse(readFileSync(join(den, "memory", "active-hours.json"), "utf8"));
+    expect(file.version).toBe(1);
+    expect(file.hours).toEqual([new Date().toISOString().slice(0, 13)]);
+  });
+
   it("persists across a restart: registry/home file, and the extension's per-conversation auto-ship flag", async () => {
     const den = newDen();
     const h = harness(den);

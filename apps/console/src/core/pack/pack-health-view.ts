@@ -50,7 +50,7 @@ export interface HealthSnapshotView {
 	/** The hosts the links run on, this console's own included (absent from older servers). */
 	hosts?: HostInfo[];
 	/** Other machines' services as the hub lists them; null/absent: the hub has no inventory (older hub). */
-	inventory?: { rows: InventoryRowView[]; stale: boolean; hubMachine: string | null } | null;
+	inventory?: { state?: InventoryState; rows: InventoryRowView[]; stale: boolean; hubMachine: string | null } | null;
 }
 
 /** X.Y.Z[-pre] of a version (any +build ignored), or null when it has none. */
@@ -132,6 +132,9 @@ export function machineServiceCards(
 	const links = [...(m.hub ? [m.hub] : []), ...m.workerds.flatMap((w) => [w.link, ...w.wolves]), ...m.wolves];
 	return serviceCards(links, actions, units);
 }
+
+/** How the last read of the hub inventory ended (GET /api/health/inventory, read with the viewer's bearer). */
+export type InventoryState = "ok" | "unavailable" | "signed-out" | "loading";
 
 /** One inventory row as the panel gets it (src/server/pack/inventory.ts RemoteService). */
 export interface InventoryRowView {
@@ -233,20 +236,44 @@ export function machineServices(card: Pick<HostCard, "console" | "hub" | "worker
 	const hubE = inv.find((e) => e.kind === "hubd");
 	if (card.hub || hubE) rows.push(mk("hubd", hubE?.id ?? "hubd", "Hub", card.hub, hubE));
 	const used = new Set<InventoryRowView>();
+	const usedLinks = new Set<HealthLink>();
 	const workerE = inv.filter((e) => e.kind === "workerd");
 	const wolvesOf = (w: { link: HealthLink; wolves: HealthLink[] } | undefined, parent: string): ServiceRow[] => {
 		const out: ServiceRow[] = [];
 		for (const e of inv.filter((x) => x.kind === "wolfd" && x.parent === parent)) {
 			used.add(e);
-			out.push(mk("wolfd", e.id, e.id, w?.wolves.find((l) => bare(l.id) === e.id) ?? null, e));
+			// A wolf's probe or hub-presence link may sit under its workerd or at the card's top level (a Mac has no workerd link): one row either way.
+			const l = w?.wolves.find((x) => bare(x.id) === e.id) ?? card.wolves.find((x) => bare(x.id) === e.id) ?? null;
+			if (l) usedLinks.add(l);
+			out.push(mk("wolfd", e.id, e.id, l, e));
 		}
 		for (const l of w?.wolves ?? []) if (!out.some((r) => r.name === bare(l.id))) out.push(mk("wolfd", l.id, bare(l.id), l, undefined));
 		return out;
 	};
 	const linked = new Set<string>();
+	// A workerd link pairs with the inventory workerd of the same id; the console's local probe (id "workerd") has a different id from the
+	// inventory's ("mac-1uk4"), so a link left over takes the one unlinked inventory workerd, or the one whose wolves share its wolves' names.
+	const pairs = new Map<(typeof card.workerds)[number], InventoryRowView>();
 	for (const w of card.workerds) {
 		const e = workerE.find((x) => x.id === bare(w.link.id) || x.id === w.link.id);
-		if (e) linked.add(e.id);
+		if (e) {
+			pairs.set(w, e);
+			linked.add(e.id);
+		}
+	}
+	for (const w of card.workerds) {
+		if (pairs.has(w)) continue;
+		const free = workerE.filter((x) => !linked.has(x.id));
+		const names = new Set(w.wolves.map((l) => bare(l.id)));
+		const byWolves = free.filter((x) => inv.some((y) => y.kind === "wolfd" && y.parent === x.id && names.has(y.id)));
+		const e = free.length === 1 ? free[0] : byWolves.length === 1 ? byWolves[0] : undefined;
+		if (e) {
+			pairs.set(w, e);
+			linked.add(e.id);
+		}
+	}
+	for (const w of card.workerds) {
+		const e = pairs.get(w);
 		const row = mk("workerd", e?.id ?? w.link.id, e?.id ?? bare(w.link.id), w.link, e);
 		row.children = wolvesOf(w, e?.id ?? bare(w.link.id));
 		rows.push(row);
@@ -257,7 +284,7 @@ export function machineServices(card: Pick<HostCard, "console" | "hub" | "worker
 		row.children = wolvesOf(undefined, e.id);
 		rows.push(row);
 	}
-	for (const l of card.wolves) rows.push(mk("wolfd", l.id, bare(l.id), l, undefined));
+	for (const l of card.wolves.filter((x) => !usedLinks.has(x))) rows.push(mk("wolfd", l.id, bare(l.id), l, undefined));
 	for (const e of inv.filter((x) => x.kind === "wolfd" && !used.has(x) && !rows.some((r) => r.children.some((c) => c.name === x.id)))) rows.push(mk("wolfd", e.id, e.id, null, e));
 	for (const e of inv.filter((x) => x.kind === "console")) rows.push(mk("console", e.id, "Console", null, e));
 	if (card.console && !inv.some((x) => x.kind === "console")) {

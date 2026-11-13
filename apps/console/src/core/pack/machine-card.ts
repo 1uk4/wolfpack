@@ -26,11 +26,15 @@ export interface MachineServiceView {
 	status: HealthStatus;
 	tone: Tone;
 	version: string | null;
+	/** Why `version` is empty when the inventory could not be read; absent when it was read (then "version unknown" is honest). */
+	versionNote?: string;
 	down: boolean;
 	/** `logs.fetch` service name for a down service (hubd, workerd, console, or the first down wolf's name). */
 	logService?: string;
 	/** Wolf runtime: how many wolves. */
 	count?: number;
+	/** Wolf runtime: one entry per wolf, sorted by name, with its own status and version (`versionNote`: why the version is empty when the inventory could not be read). */
+	wolves?: { name: string; status: HealthStatus; tone: Tone; version: string | null; versionNote?: string }[];
 	/** A down service the machine advertised a restart for. */
 	restart?: RestartKind;
 	/** A down service the machine cannot restart from here: why. */
@@ -41,9 +45,10 @@ export interface MachineCardView {
 	label: string;
 	online: boolean;
 	services: MachineServiceView[];
-	channel: { value: "stable" | "main" | null; editable: boolean; note?: string };
+	channel: { value: "stable" | "main" | null; editable: boolean; note?: string; /** Shown instead of "unknown" when the inventory could not be read. */ missing?: string };
 }
 
+const UNREAD = { unavailable: "reports unavailable", "signed-out": "sign in on this device first", loading: "loading…" } as const;
 const LABEL = { console: "Console", hubd: "Hub", wolfd: "Wolf runtime", workerd: "Background service" } as const;
 const ORDER = ["console", "hubd", "wolfd", "workerd"] as const;
 const RANK: Record<Tone, number> = { green: 0, grey: 1, amber: 2, red: 3 };
@@ -61,8 +66,15 @@ export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null
 		if (rs.length === 0) continue;
 		const worst = rs.reduce((a, r) => (RANK[toneOf(r.status)] > RANK[toneOf(a.status)] ? r : a));
 		const downs = rs.filter((r) => toneOf(r.status) === "red");
-		const v: MachineServiceView = { kind, label: LABEL[kind], status: worst.status, tone: toneOf(worst.status), version: rs[0]!.version, down: downs.length > 0 };
-		if (kind === "wolfd") v.count = rs.length;
+		const v: MachineServiceView = { kind, label: LABEL[kind], status: worst.status, tone: toneOf(worst.status), version: rs.find((r) => r.version)?.version ?? null, down: downs.length > 0 };
+		const unread = card.inventoryState && card.inventoryState !== "ok" ? UNREAD[card.inventoryState] : undefined;
+		if (!v.version && unread) v.versionNote = unread;
+		if (kind === "wolfd") {
+			v.count = rs.length;
+			v.wolves = [...rs]
+				.sort((a, b) => a.name.localeCompare(b.name))
+				.map((r) => ({ name: r.name, status: r.status, tone: toneOf(r.status), version: r.version, ...(!r.version && unread ? { versionNote: unread } : {}) }));
+		}
 		// workerd's logs.fetch reads wolf logs anywhere, but console / hubd / workerd only from systemd units (Linux): never ask the Mac for those.
 		const canLog = !!card.hubId && !!card.commands?.includes("logs.fetch") && (kind === "wolfd" || card.facts?.host !== "Mac");
 		if (downs.length > 0 && canLog) v.logService = kind === "wolfd" ? downs[0]!.name : kind;
@@ -82,12 +94,13 @@ export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null
 	const fromInv = card.inventory.find((e) => e.channel)?.channel ?? null;
 	const value = card.console ? ownChannel : fromInv;
 	const editable = card.console && ownChannel !== null;
+	const missing = value === null && card.inventoryState && card.inventoryState !== "ok" ? UNREAD[card.inventoryState] : undefined;
 	return {
 		id: card.id,
 		label: card.label,
 		online,
 		services,
-		channel: { value, editable, ...(editable ? {} : { note: CHANNEL_READONLY_NOTE }) },
+		channel: { value, editable, ...(editable ? {} : { note: CHANNEL_READONLY_NOTE }), ...(missing ? { missing } : {}) },
 	};
 }
 

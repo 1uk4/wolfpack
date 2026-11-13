@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import {
 	ageText,
 	groupByHost,
+	type InventoryRowView,
 	logLines,
 	machineCard,
 	restartSummary,
@@ -87,7 +88,7 @@ export function MachineCard(p: {
 						<option value="main">main (testing)</option>
 					</select>
 				) : (
-					<span data-testid="machine-channel-value" className="rounded-sm border px-1.5 text-foreground">{view.channel.value ?? "unknown"}</span>
+					<span data-testid="machine-channel-value" className="rounded-sm border px-1.5 text-foreground">{view.channel.value ?? view.channel.missing ?? "unknown"}</span>
 				)}
 				{view.channel.note && <span className="text-muted-foreground/70">{view.channel.note}</span>}
 				{p.onCheck && <button type="button" data-testid="machine-check" onClick={p.onCheck} className={cn(BTN, "ml-auto")}>Check now</button>}
@@ -104,12 +105,24 @@ function ServiceRow({ s, log, note, busy, onRestart, onRefresh }: { s: MachineSe
 				<span aria-hidden className={cn("size-2 rounded-full", TONE[s.tone])} />
 				<span className="text-foreground">{s.label}{s.count && s.count > 1 ? ` (${s.count})` : ""}</span>
 				<span data-testid="machine-service-status" className="text-muted-foreground">{s.status === "ok" ? "running" : s.down ? "down" : s.status}</span>
-				<span data-testid="machine-service-version" className="text-muted-foreground">{s.version ? `v${s.version}` : "version unknown"}</span>
+				<span data-testid="machine-service-version" className="text-muted-foreground">{s.version ? `v${s.version}` : (s.versionNote ?? "version unknown")}</span>
 				{onRefresh && <button type="button" data-testid="machine-log-refresh" onClick={onRefresh} className={cn(BTN, "ml-auto")}>Refresh log</button>}
 				{s.restart && (
 					<button type="button" data-testid="machine-restart" data-for={s.kind} disabled={busy} onClick={onRestart} className={cn(BTN, onRefresh ? "" : "ml-auto")}>{busy ? "Restarting…" : "Restart"}</button>
 				)}
 			</div>
+			{s.wolves && s.wolves.length > 0 && (
+				<ul data-testid="machine-wolves" className="mt-1 space-y-0.5 pl-4 text-xs">
+					{s.wolves.map((w) => (
+						<li key={`${s.kind}:${w.name}`} data-testid="machine-wolf" data-wolf={w.name} className="flex flex-wrap items-center gap-x-2">
+							<span aria-hidden className={cn("size-1.5 rounded-full", TONE[w.tone])} />
+							<span className="text-foreground">{w.name}</span>
+							<span className="text-muted-foreground">{w.status === "ok" ? "running" : w.tone === "red" ? "down" : w.status === "unknown" ? "not reporting" : w.status}</span>
+							<span className="text-muted-foreground">{w.version ? `v${w.version}` : (w.versionNote ?? "version unknown")}</span>
+						</li>
+					))}
+				</ul>
+			)}
 			{s.hint && <p data-testid="machine-restart-hint" className="mt-1 text-muted-foreground">{s.hint}</p>}
 			{note && <p data-testid="machine-service-note" className="mt-1 text-muted-foreground">{note}</p>}
 			{s.down && log !== undefined && (
@@ -356,7 +369,36 @@ export function MachinesSection() {
 		const fake = process.env.NODE_ENV !== "production" ? new URLSearchParams(window.location.search).get("machineCmd") : null;
 		if (fake) setSend(() => fakeSend(fake));
 	}, []);
-	const cards = snapshot ? groupByHost(snapshot).filter((c) => c.checked) : [];
+	// The hub inventory is read with THIS browser's sign-in (the app's fetch wrapper adds the stored bearer), not a console token.
+	type Inv = { state: "ok" | "unavailable" | "signed-out"; rows?: InventoryRowView[]; hubMachine?: string | null };
+	const [inv, setInv] = useState<Inv | null>(null);
+	useEffect(() => {
+		if (fakeWanted) return;
+		const ac = new AbortController();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		// One poll at a time: the next is scheduled after the previous settles; unmount aborts the one in flight.
+		const load = async () => {
+			let next: Inv = { state: "unavailable" };
+			try {
+				const r = await fetch("/api/health/inventory", { cache: "no-store", signal: ac.signal });
+				const b = (await r.json()) as Inv;
+				if (r.ok && (b.state === "ok" || b.state === "signed-out")) next = b;
+			} catch {
+				/* unavailable */
+			}
+			if (ac.signal.aborted) return;
+			setInv(next);
+			timer = setTimeout(() => void load(), 5_000);
+		};
+		void load();
+		return () => {
+			ac.abort();
+			clearTimeout(timer);
+		};
+	}, [fakeWanted]);
+	// Before the first per-viewer answer the cards show a neutral "loading" note, never snapshot data or "version unknown".
+	const merged = snapshot ? { ...snapshot, inventory: inv ? { state: inv.state, rows: inv.state === "ok" ? (inv.rows ?? []) : [], stale: false, hubMachine: inv.hubMachine ?? null } : { state: "loading" as const, rows: [], stale: false, hubMachine: null } } : snapshot;
+	const cards = merged ? groupByHost(merged).filter((c) => c.checked) : [];
 	const hubIdOf = useCallback((id: string) => snapshot?.hosts?.find((h) => h.id === id)?.hubId, [snapshot]);
 	const fetchLog = useCallback(
 		async (cardId: string, service: string) => {

@@ -28,11 +28,12 @@ export const ev = {
     action: EntryAction
   ): KbEvent => ({ t: "entry_written", ...stamp(), entryId, canonicalId, action }),
 
-  entryRetired: (entryId: string, reason?: string): KbEvent => ({
+  entryRetired: (entryId: string, reason?: string, survivors?: string[]): KbEvent => ({
     t: "entry_retired",
     ...stamp(),
     entryId,
     ...(reason ? { reason } : {}),
+    ...(survivors ? { survivors } : {}),
   }),
 
   aliased: (

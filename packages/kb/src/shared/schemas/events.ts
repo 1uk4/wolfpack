@@ -107,6 +107,9 @@ export const KbEventSchema = z.discriminatedUnion("t", [
     t: z.literal("entry_retired"),
     entryId: z.string(),
     reason: z.string().optional(),
+    /** Entries that replaced this one, first = primary. Absent on old events
+     *  (fall back to the reason wording); `[]` = retired with no replacement. */
+    survivors: z.array(z.string()).optional(),
   }),
   z.object({
     ...base,

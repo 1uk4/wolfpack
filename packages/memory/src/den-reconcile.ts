@@ -22,7 +22,8 @@ import { readDistillRecord } from "./distill.js";
 const ABSORBED = new Set(["create", "merge", "reject"]);
 
 export type DenTopicStatus =
-  | { kind: "absorbed"; entryId: string | null; absorbedAt: string }
+  /** `entryId` is the primary entry; `entryIds` is every target of the receipt (primary first), empty for a reject. */
+  | { kind: "absorbed"; entryId: string | null; entryIds: string[]; absorbedAt: string }
   | { kind: "awaiting-domain"; domain: string }
   | { kind: "parked" }
   | { kind: "held"; reason: string }
@@ -51,7 +52,9 @@ function receiptStems(id: string, body: string): string[] {
   return [...new Set([receiptStem(id, body), `${id}-${contentHash(body).slice(7, 17)}`])];
 }
 
-function readReceiptFor(dir: string, id: string, body: string): { outcome: string; processed: string; detail: string } | null {
+type Receipt = { outcome: string; processed: string; detail: string; targets: string[] };
+
+function readReceiptFor(dir: string, id: string, body: string): Receipt | null {
   for (const stem of receiptStems(id, body)) {
     const r = readReceipt(join(dir, `${stem}.md`));
     if (r) return r;
@@ -59,13 +62,22 @@ function readReceiptFor(dir: string, id: string, body: string): { outcome: strin
   return null;
 }
 
-function readReceipt(path: string): { outcome: string; processed: string; detail: string } | null {
+function readReceipt(path: string): Receipt | null {
   if (!existsSync(path)) return null;
   const raw = readFileSync(path, "utf-8");
   const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
   if (!m) return null;
   const field = (k: string) => new RegExp(`^${k}:\\s*(.*)$`, "m").exec(m[1])?.[1]?.trim() ?? "";
-  return { outcome: field("outcome"), processed: field("processed"), detail: m[2].trim() };
+  // routing.targets (all ids, primary first) when present, else routing.target; old receipts have neither.
+  let targets: string[] = [];
+  try {
+    const routing = JSON.parse(field("routing") || "{}") as { target?: unknown; targets?: unknown };
+    if (Array.isArray(routing.targets)) targets = routing.targets.filter((x): x is string => typeof x === "string" && x.length > 0);
+    else if (typeof routing.target === "string" && routing.target) targets = [routing.target];
+  } catch {
+    targets = [];
+  }
+  return { outcome: field("outcome"), processed: field("processed"), detail: m[2].trim(), targets };
 }
 
 function readEmittedMap(roots: KbRoots): Record<string, string> {
@@ -126,11 +138,12 @@ function statusOf(
   return states.find((s) => s.kind !== "absorbed") ?? states[0];
 }
 
-function asAbsorbed(r: { outcome: string; processed: string; detail: string }): Extract<DenTopicStatus, { kind: "absorbed" }> | null {
+function asAbsorbed(r: Receipt): Extract<DenTopicStatus, { kind: "absorbed" }> | null {
   if (!ABSORBED.has(r.outcome)) return null;
   // create/merge receipts name the entry; reject names the reason instead.
   const entryId = /^kb-\S+$/.test(r.detail) ? r.detail : null;
-  return { kind: "absorbed", entryId, absorbedAt: r.processed };
+  const entryIds = r.outcome === "reject" ? [] : r.targets.length ? r.targets : entryId ? [entryId] : [];
+  return { kind: "absorbed", entryId: entryIds[0] ?? entryId, entryIds, absorbedAt: r.processed };
 }
 
 /**

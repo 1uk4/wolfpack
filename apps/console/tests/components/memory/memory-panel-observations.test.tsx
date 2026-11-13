@@ -58,6 +58,7 @@ Object.assign(globalThis, {
 		if (u.endsWith("/memory/observations")) {
 			return poolStatus === 200 ? json({ observations: pool, total: pool.length, ...(poolPending ? { pending: poolPending } : {}) }) : json({ error: "nope", code: "memory_unavailable" }, poolStatus);
 		}
+		if (u.endsWith("/memory/session-topics")) return json({ topics: [], totalBytes: 0, capBytes: 184320 });
 		if (u.endsWith("/memory/tree")) {
 			treeFetches++;
 			return poolStatus === 200 ? json(tree()) : json({ error: "nope", code: "memory_unavailable" }, poolStatus);

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { fetchMemoryNode, fetchMemoryObservations, fetchMemoryStatus, fetchMemoryTree, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb/kb-client";
+import { fetchSessionTopics, putKeepLocal, fetchMemoryNode, fetchMemoryObservations, fetchMemoryStatus, fetchMemoryTree, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb/kb-client";
 import { WorkIdChip } from "@/components/work/work-id-chip";
 import { ContextSection } from "@/components/thread/context-section";
 import { useMemoryEvents } from "@/components/memory/memory-events";
@@ -26,6 +26,10 @@ import {
 	type MemoryNodeObservations,
 	type MemoryTree,
 	focusRefetchDue,
+	formatTopicSize,
+	sourceLabels,
+	topicChip,
+	type MemoryTopics,
 	latestOnly,
 	parseOpen,
 	poolSummary,
@@ -283,6 +287,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 				</div>
 			)}
 
+			<TopicsSection wolf={wolf} />
 			<ObservationsSection wolf={wolf} observations={{ tree, error: treeError ?? poolError, pool: obsPool, pending: poolPending, info: groupInfo, open: openGroup, onOpen: setOpenGroup, version: treeVersion }} />
 		</div>
 	);
@@ -308,6 +313,62 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 			</div>
 			{content}
 		</aside>
+	);
+}
+
+/** One row per session topic: title, size, sources, state chip, a Promote button and a keep-local toggle. */
+function TopicsSection({ wolf }: { wolf: string }) {
+	const [topics, setTopics] = useState<MemoryTopics | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const load = useCallback(async () => {
+		const r = await fetchSessionTopics(wolf);
+		// An older wolfd or a stub can answer with another shape: show it as unavailable, never crash the panel.
+		if (r.ok && Array.isArray(r.data?.topics)) { setTopics(r.data); setError(null); }
+		else { setTopics(null); setError(r.ok ? "unexpected response" : r.message); }
+	}, [wolf]);
+	useEffect(() => { void load(); }, [load]);
+	const toggle = async (id: string, keepLocal: boolean) => {
+		const r = await putKeepLocal(wolf, id, keepLocal);
+		if (!r.ok) setError(r.message);
+		await load();
+	};
+	const promote = async (id: string) => {
+		const r = await postPromote(wolf, [id]);
+		if (!r.ok) setError(r.message);
+		await load();
+	};
+	return (
+		<section className="mt-3" data-testid="memory-topics">
+			<h3 className="mb-1 text-xs font-medium uppercase text-muted-foreground">Topics</h3>
+			{topics === null ? (
+				<p className="text-xs text-muted-foreground">{error ? `Topics unavailable: ${error}` : "Loading…"}</p>
+			) : topics.topics.length === 0 ? (
+				<p className="text-xs text-muted-foreground">No session topics.</p>
+			) : (
+				<ul className="flex min-w-0 flex-col gap-1">
+					{topics.topics.map((t) => {
+						const chip = topicChip(t);
+						return (
+							<li key={t.id} className="flex flex-col gap-0.5 px-1.5 py-1 text-xs" data-testid="memory-topic-row">
+								<div className="flex items-center gap-1.5">
+									<span className="min-w-0 truncate font-medium">{t.title}</span>
+									<span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{formatTopicSize(t.bytes)}</span>
+								</div>
+								<div className="flex flex-wrap items-center gap-1.5">
+									<span className={`rounded-full px-1.5 text-[10px] ${chip.tone === "warn" ? "bg-amber-50 text-amber-700" : "bg-muted text-muted-foreground"}`} data-testid="memory-topic-chip">{chip.label}</span>
+									<span className="min-w-0 truncate text-[10px] text-muted-foreground">{sourceLabels(t.sources).join(", ")}</span>
+									<Button variant="ghost" size="sm" className="ml-auto h-5 px-1.5 text-[10px]" onClick={() => void promote(t.id)}>Promote</Button>
+									<label className="flex items-center gap-1 text-[10px] text-muted-foreground">
+										<input type="checkbox" checked={t.keepLocal} onChange={(e) => void toggle(t.id, e.target.checked)} />
+										keep local
+									</label>
+								</div>
+							</li>
+						);
+					})}
+				</ul>
+			)}
+		</section>
 	);
 }
 

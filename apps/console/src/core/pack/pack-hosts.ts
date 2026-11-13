@@ -13,7 +13,7 @@
  *     no `host` yet), is the map host that runs hubd: its links move to that host's card (label and facts with them).
  * A map host no live link runs on still gets a card with its facts, marked not checked from here.
  */
-import type { HealthLink, HealthSnapshotView, InventoryRowView } from "./pack-health-view.ts";
+import type { HealthLink, HealthSnapshotView, InventoryRowView, InventoryState } from "./pack-health-view.ts";
 import { PACK_MAP, type PackMapHost } from "./pack-map.ts";
 
 export interface HostInfo {
@@ -91,6 +91,8 @@ export interface HostCard {
 	wolves: HealthLink[];
 	/** The hub's inventory rows for this machine (other machines only; empty without an inventory). */
 	inventory: InventoryRowView[];
+	/** Whether the inventory could be read (absent: not asked, treated as ok). */
+	inventoryState?: InventoryState;
 	/** This console's own entry (only on the console's card). */
 	self?: HealthSnapshotView["self"];
 }
@@ -148,6 +150,8 @@ export function groupByHost(snapshot: HealthSnapshotView): HostCard[] {
 		const id = hostId(e.machine);
 		card(alias.get(id) ?? id).inventory.push(e);
 	}
+	const state = snapshot.inventory?.state;
+	if (state) for (const c of cards.values()) c.inventoryState = state;
 	const hubHost = links.find((l) => l.kind === "hubd");
 	const rank = (c: HostCard) => (c.console ? 0 : hubHost && c.id === hostOf(hubHost) ? 1 : 2);
 	const live = [...cards.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));

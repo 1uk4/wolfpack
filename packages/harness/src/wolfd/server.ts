@@ -32,6 +32,8 @@ import {
   PROTOCOL_VERSION_HEADER,
   SubmitBodySchema,
   ThreadSettingsPatchSchema,
+  KeepLocalBodySchema,
+  PromoteBodySchema,
   CompactBodySchema,
   matchRoute,
   type ThreadSettings,
@@ -55,8 +57,8 @@ import { graduationActionsFor, memoryActionsFor, type MemoryActions } from "../m
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@wolfpack/kb/graph";
-import { readDenTopics } from "@wolfpack/memory";
-import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryNode, readMemoryObservations, readMemoryStatus, readMemoryTree, readMemoryTopic, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
+import { readDenTopics, recordOwnerMessage } from "@wolfpack/memory";
+import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryNode, readMemoryObservations, readMemoryStatus, readMemoryTree, readMemoryTopic, readSessionTopics, setTopicKeepLocal, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
 import type { AskBridge } from "../extensions/ask.js";
@@ -849,6 +851,8 @@ export class WolfServer {
         if (!body.success) throw new HttpError("invalid_request", "body must be {input, whenBusy: steer|followUp|reject}");
         const refs = body.data.attachments ?? [];
         if (body.data.input.trim() === "" && refs.length === 0) throw new HttpError("invalid_request", "input is required");
+        // The owner is active this hour: the clock the promote pass ages topics by. Never fails a submit.
+        if (this.opts.den) { try { recordOwnerMessage(this.opts.den); } catch { /* best effort */ } }
         // A subagent's messages from the operator go through its manager: ledger, resume, state.
         if (t.isChild && this.subagents) return this.json(res, 200, await this.subagents.submitFromOwner(t.summary.id, body.data.input, body.data.whenBusy, refs));
         return this.json(res, 200, await t.submit(body.data.input, body.data.whenBusy, refs));
@@ -979,6 +983,22 @@ export class WolfServer {
         const { state, reason } = memoryState(this.memoryReadInput());
         if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
         return this.json(res, 200, await readMemoryObservations(this.opts.den!, rawLimit === null ? undefined : Number(rawLimit), this.opts.work ?? {}));
+      }
+      case "getMemorySessionTopics": {
+        this.checkWolf(params.name);
+        const { state, reason } = memoryState(this.memoryReadInput());
+        if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
+        return this.json(res, 200, readSessionTopics(this.opts.den!));
+      }
+      case "putMemoryKeepLocal": {
+        this.checkWolf(params.name);
+        if (!isTopicId(params.id)) throw new HttpError("invalid_request", "malformed topic id");
+        const body = KeepLocalBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {keepLocal: boolean}");
+        const { state, reason } = memoryState(this.memoryReadInput());
+        if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
+        if (!setTopicKeepLocal(this.opts.den!, params.id, body.data.keepLocal)) throw new HttpError("not_found", `topic ${params.id}`);
+        return this.json(res, 200, { id: params.id, keepLocal: body.data.keepLocal });
       }
       case "getMemoryTree": {
         this.checkWolf(params.name);
@@ -1118,7 +1138,10 @@ export class WolfServer {
         this.checkWolf(params.name);
         const actions = this.memoryActions();
         if (!actions.promoteEnabled) throw new HttpError("promote_unavailable", "promote needs KB roots (KB_BASE and KB_OPS); this wolf has none");
-        const start = actions.promote();
+        // Optional body {ids}: promote only those topics. No body (or a malformed one): every topic.
+        const pbody = PromoteBodySchema.safeParse(await readJson(req));
+        const ids = pbody.success ? pbody.data.ids : undefined;
+        const start = actions.promote(ids?.length ? { ids } : undefined);
         // The extension emits promote_started/finished/failed itself; `done` is only observed here so a failed job
         // is not an unhandled rejection.
         if (start.status === "started") start.done.catch(() => {});

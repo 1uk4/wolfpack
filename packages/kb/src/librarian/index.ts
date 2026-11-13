@@ -12,7 +12,7 @@ export { renderDomainDigest } from "./domains.js";
 export { syncDelivered } from "./groups.js";
 export { writeSections, readSections, foldSections } from "./sections.js";
 export { groupOf } from "./anchors.js";
-export { entryDomain, survivorOf, resolveAliasedEntry } from "./alias.js";
+export { entryDomain, survivorOf, survivorsOf, resolveAliasedEntry } from "./alias.js";
 export { acquireLease, freshLease, freshLeaseIn, readLease, wolfLeaseDirs, assertNoLiveHub, leaseFile, LEASE_FILE, LEASE_STALE_MS, type Lease, type LeaseHandle, type LeaseOwner } from "./curator-lease.js";
 export {
   workIdOfTopic,

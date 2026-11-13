@@ -72,6 +72,16 @@ export function fetchMemoryObservations(wolf: string): Promise<KbResult<MemoryOb
 	return request(`/api/wolves/${seg(wolf)}/memory/observations`);
 }
 
+/** Every session topic with its state, plus retired ones and the byte budget. */
+export function fetchSessionTopics(wolf: string): Promise<KbResult<import("@wolfpack/protocol").MemoryTopics>> {
+	return request(`/api/wolves/${seg(wolf)}/memory/session-topics`);
+}
+
+/** Set or clear a topic's keep-local flag. */
+export function putKeepLocal(wolf: string, topicId: string, keepLocal: boolean): Promise<KbResult<{ id: string; keepLocal: boolean }>> {
+	return request(`/api/wolves/${seg(wolf)}/memory/session-topics/${seg(topicId)}/keep-local`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keepLocal }) });
+}
+
 /** Observation counts per feature → task (pending, and archived over the last 7 days). */
 export function fetchMemoryTree(wolf: string): Promise<KbResult<MemoryTree>> {
 	return request(`/api/wolves/${seg(wolf)}/memory/tree`);
@@ -125,8 +135,9 @@ export function postConsolidate(wolf: string): Promise<KbResult<ConsolidateRespo
 	return request(`/api/wolves/${seg(wolf)}/memory/consolidate`, { method: "POST" });
 }
 
-export function postPromote(wolf: string): Promise<KbResult<PromoteResponse>> {
-	return request(`/api/wolves/${seg(wolf)}/memory/promote`, { method: "POST" });
+/** Promote every topic, or only `ids` (one row's Promote button). */
+export function postPromote(wolf: string, ids?: string[]): Promise<KbResult<PromoteResponse>> {
+	return request(`/api/wolves/${seg(wolf)}/memory/promote`, ids?.length ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) } : { method: "POST" });
 }
 
 /** Graduation step 1 on a wolf: start the background preview job (answers the running job at once; nothing is sent). */

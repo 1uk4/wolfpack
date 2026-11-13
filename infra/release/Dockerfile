@@ -34,9 +34,13 @@ RUN A=$(case $(uname -m) in x86_64) echo x64;; aarch64) echo arm64;; esac) \
 # Extension bundles, built exactly as `wolfpack sync` builds them (buildDurableExtension -> extensions/<dir>/index.js); launch.sh installs them
 # into the wolf's den. Extensions without a pi-durable entry (subagents) or whose optional deps are missing are skipped. STAMP = version + content hash.
 ARG RELEASE_VERSION
-RUN node --input-type=module -e 'const m=await import("/src/packages/cli/dist/bundle.js");const {AVAILABLE_EXTENSIONS:A}=await import("/src/packages/cli/dist/extensions.js");for(const e of A){const ok=await m.buildDurableExtension(e.key,"/stage/extensions");console.log("extension",e.key,ok?"bundled":"skipped")}' \
+# KEYS = "key dir" lines from the same AVAILABLE_EXTENSIONS source `wolfpack sync` maps through; launch.sh maps wolf.yaml keys with it.
+# A skip fails the build unless the extension is on ALLOW_SKIP (subagents has no pi-durable entry); skipReasons says why.
+# STAMP hashes the bundle bytes only (no paths or times); the stamp comparison in launch.sh uses just that hash.
+ARG ALLOW_SKIP=subagents
+RUN ALLOW_SKIP="$ALLOW_SKIP" node --input-type=module -e 'const m=await import("/src/packages/cli/dist/bundle.js");const {AVAILABLE_EXTENSIONS:A}=await import("/src/packages/cli/dist/extensions.js");const fs=await import("node:fs");const allow=(process.env.ALLOW_SKIP||"").split(",").filter(Boolean);const keys=[];let bad=0;for(const e of A){const ok=await m.buildDurableExtension(e.key,"/stage/extensions");console.log("extension",e.key,ok?"bundled":"skipped");if(ok)keys.push(e.key+" "+e.dir);else if(!allow.includes(e.key)){bad++;console.error("extension",e.key,"skipped unexpectedly:",m.skipReasons.get(e.key))}}if(bad)process.exit(1);fs.writeFileSync("/stage/extensions/KEYS",keys.join("\n")+"\n")' \
  && test -f /stage/extensions/wolfpack-memory/index.js \
- && { echo "${RELEASE_VERSION} $(cd /stage/extensions && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)" > /stage/extensions/STAMP; }
+ && { echo "${RELEASE_VERSION} $(cd /stage/extensions && find . -type f ! -name STAMP -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)" > /stage/extensions/STAMP; }
 COPY infra/release/launch.sh infra/release/wolfd.service /stage/
 COPY infra/release/install-claude-cli.sh /stage/tools/
 COPY infra/release/templates /stage/templates

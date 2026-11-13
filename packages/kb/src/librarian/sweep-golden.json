@@ -80,15 +80,15 @@
   ],
   [
    "ops/receipts/w1/alpha-HASH.md",
-   "---\nfrom: w1\nden_topic_id: alpha\noutcome: create\nprocessed: TS\nrouting: {\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\"}\n---\n\nID\n"
+   "---\nfrom: w1\nden_topic_id: alpha\noutcome: create\nprocessed: TS\nrouting: {\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\",\"targets\":[\"ID\"]}\n---\n\nID\n"
   ],
   [
    "ops/receipts/w1/beta-HASH.md",
-   "---\nfrom: w1\nden_topic_id: beta\noutcome: create\nprocessed: TS\nrouting: {\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\"}\n---\n\nID\n"
+   "---\nfrom: w1\nden_topic_id: beta\noutcome: create\nprocessed: TS\nrouting: {\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\",\"targets\":[\"ID\"]}\n---\n\nID\n"
   ],
   [
    "ops/receipts/w2/gamma-HASH.md",
-   "---\nfrom: w2\nden_topic_id: gamma\noutcome: create\nprocessed: TS\nrouting: {\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\"}\n---\n\nID\n"
+   "---\nfrom: w2\nden_topic_id: gamma\noutcome: create\nprocessed: TS\nrouting: {\"route\":\"new\",\"candidates\":[],\"band\":\"create\",\"target\":\"ID\",\"targets\":[\"ID\"]}\n---\n\nID\n"
   ]
  ]
 }

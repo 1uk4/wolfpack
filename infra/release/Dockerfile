@@ -8,6 +8,7 @@ WORKDIR /src
 COPY package.json package-lock.json tsconfig.json ./
 COPY packages ./packages
 COPY apps ./apps
+COPY extensions ./extensions
 ENV ONNXRUNTIME_NODE_INSTALL=skip
 RUN npm ci --no-audit --no-fund && npx tsc --build
 # Production-only install of the wolfd closure (no devDependencies, no apps/*): same lockfile, workspace-scoped.
@@ -30,6 +31,12 @@ RUN A=$(case $(uname -m) in x86_64) echo x64;; aarch64) echo arm64;; esac) \
  && mkdir -p /stage/tools/bin && ln -s ../../node_modules/@anthropic-ai/claude-agent-sdk-linux-$A/claude /stage/tools/bin/claude \
  && if [ "$WITH_CLI" = 1 ]; then cd /stage/tools && npm init -y >/dev/null && npm install --no-audit --no-fund @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && ./node_modules/.bin/claude --version | grep -F "${CLAUDE_CODE_VERSION}" && rm -f package.json package-lock.json; fi
+# Extension bundles, built exactly as `wolfpack sync` builds them (buildDurableExtension -> extensions/<dir>/index.js); launch.sh installs them
+# into the wolf's den. Extensions without a pi-durable entry (subagents) or whose optional deps are missing are skipped. STAMP = version + content hash.
+ARG RELEASE_VERSION
+RUN node --input-type=module -e 'const m=await import("/src/packages/cli/dist/bundle.js");const {AVAILABLE_EXTENSIONS:A}=await import("/src/packages/cli/dist/extensions.js");for(const e of A){const ok=await m.buildDurableExtension(e.key,"/stage/extensions");console.log("extension",e.key,ok?"bundled":"skipped")}' \
+ && test -f /stage/extensions/wolfpack-memory/index.js \
+ && { echo "${RELEASE_VERSION} $(cd /stage/extensions && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)" > /stage/extensions/STAMP; }
 COPY infra/release/launch.sh infra/release/wolfd.service /stage/
 COPY infra/release/install-claude-cli.sh /stage/tools/
 COPY infra/release/templates /stage/templates

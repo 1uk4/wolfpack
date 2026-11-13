@@ -322,7 +322,9 @@ function TopicsSection({ wolf }: { wolf: string }) {
 	const [error, setError] = useState<string | null>(null);
 	const load = useCallback(async () => {
 		const r = await fetchSessionTopics(wolf);
-		if (r.ok) { setTopics(r.data); setError(null); } else setError(r.message);
+		// An older wolfd or a stub can answer with another shape: show it as unavailable, never crash the panel.
+		if (r.ok && Array.isArray(r.data?.topics)) { setTopics(r.data); setError(null); }
+		else { setTopics(null); setError(r.ok ? "unexpected response" : r.message); }
 	}, [wolf]);
 	useEffect(() => { void load(); }, [load]);
 	const toggle = async (id: string, keepLocal: boolean) => {

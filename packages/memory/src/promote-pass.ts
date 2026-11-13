@@ -143,7 +143,7 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
               const o2 = opts.outcomeOf(again);
               if (o2.kind === "create" || o2.kind === "merge") {
                 recordRouting(den, t.id, o2.entryIds, now);
-                updateTopicState(den, t.id, { promotedAt: now.toISOString(), receipt: { outcome: o2.kind, entryIds: o2.entryIds } });
+                updateTopicState(den, t.id, { promotedAt: now.toISOString(), receipt: { outcome: o2.kind, entryIds: o2.entryIds }, heldRewriteTried: false });
               }
             }
           }

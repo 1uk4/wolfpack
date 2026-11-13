@@ -101,6 +101,15 @@ describe("promote pass", () => {
     expect(promoted).toEqual(["a", "a"]);
     expect(r.retired).toEqual([]);
     expect(readPromoteState(den).topics.a.receipt).toEqual({ outcome: "create", entryIds: ["kb-a"] });
+    expect(readPromoteState(den).topics.a.heldRewriteTried).toBeFalsy(); // promoted after the rewrite: no longer held
+  });
+
+  it("a held topic whose rewrite fails keeps heldRewriteTried", async () => {
+    const { den, root } = setup([20]);
+    topic(root, "a");
+    const d = { ...deps({ a: { kind: "held", reason: "distill: log-like" } }), rewriteHeld: async () => false };
+    await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...d });
+    expect(readPromoteState(den).topics.a.heldRewriteTried).toBe(true);
   });
 
   it("a held topic gets one forced rewrite, then is retired if still held", async () => {

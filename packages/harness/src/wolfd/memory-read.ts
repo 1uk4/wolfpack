@@ -41,7 +41,7 @@ export function readSessionTopics(den: string): MemoryTopics {
     let bytes = 0;
     try { bytes = statSync(join(dir, t.filename)).size; } catch { /* vanished */ }
     const confirmed = st?.receipt && st.receipt.outcome !== "reject";
-    const kind = retired ? "retired" : t.state === "parked" ? "parked" : st?.heldRewriteTried ? "held" : st?.promotedAt ? "promoted" : "active";
+    const kind = retired ? "retired" : t.state === "parked" ? "parked" : confirmed ? "promoted" : st?.heldRewriteTried ? "held" : st?.promotedAt ? "promoted" : "active";
     return {
       id: t.id, title: t.title, bytes, updated: t.updated,
       sources: t.sources ?? ["legacy"],

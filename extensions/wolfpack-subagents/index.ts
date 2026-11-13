@@ -38,7 +38,7 @@ import {
   wolfEnvPrefix,
 } from "./mux/index.ts";
 import { subagentEnvPrefix } from "./env-prefix.ts";
-import { resolveSubagentTask } from "./task-id.ts";
+import { readParentBoundTask, resolveSubagentTask } from "./task-id.ts";
 
 import {
   countSessionEntryLines,
@@ -1441,7 +1441,9 @@ async function launchSubagent(
   // Snapshot the fully-resolved sandbox beside the session file so a later
   // `subagent_message({ name })` resume can replay the exact same
   // restriction instead of relaunching pi with all global extensions + tools.
-  const subagentTask = resolveSubagentTask({ explicit: params.taskId, brief: params.task });
+  // The parent's own binding (memory extension's per-session file) is the last fallback for the tag.
+  const parentBound = readParentBoundTask(process.env.WOLF_DEN, sessionId);
+  const subagentTask = resolveSubagentTask({ explicit: params.taskId, brief: params.task, parentBound });
   const loadout: SubagentLoadout = {
     agent: params.agent ?? null,
     task: subagentTask ?? null,

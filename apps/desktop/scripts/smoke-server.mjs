@@ -40,8 +40,9 @@ const RUNTIME = ELECTRON_MODE ? createRequire(import.meta.url)("electron") : pro
 
 const POLL_MS = 500;
 const BOOT_TIMEOUT_MS = 30_000;
-/** GET-only probes — the routes that exercised today's failure class. */
-const PROBES = ["/api/graph/positions", "/api/keys", "/api/settings"];
+/** GET-only probes — the routes that exercised today's failure class. (/api/keys went with the console's key store, work-wolfpack-u6GH2kk;
+ *  the one route that reads the Pack key file, /api/stt/token, answers 503 with no Deepgram key, so it is not a 200 probe.) */
+const PROBES = ["/api/graph/positions", "/api/settings"];
 
 if (!fs.existsSync(SERVER)) {
 	console.error("[smoke-server] .next/standalone/server.js missing — run next build first.");

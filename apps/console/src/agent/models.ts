@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
+import { DEFAULT_THINKING_ORDER } from "../core/settings/settings.ts";
 import packageMetadata from "../../package.json" with { type: "json" };
 
 /** App identity is immutable and shared by Models and every native Agent.
@@ -58,11 +58,6 @@ export function piModels() {
 		for (const provider of builtinProviders()) collection.setProvider(provider);
 	}
 	return collection;
-}
-
-/** OpenRouter API key (BYOK); tests never read this — they inject engines. */
-export function openRouterApiKey(): string | undefined {
-	return process.env.OPENROUTER_API_KEY || undefined;
 }
 
 /** A fully-resolved model pin — the shape every engine now comes from:

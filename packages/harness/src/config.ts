@@ -11,6 +11,8 @@ export interface WolfConfig {
   specialty?: string;
   domains?: string[];
   extensions?: string[];
+  /** Provider plug-ins to load from the plugins folder (folder names). */
+  plugins?: string[];
   telegram?: {
     tokenEnv?: string;  // env var name for bot token (default: TELEGRAM_BOT_TOKEN)
     ownerId: number;    // allowed user id
@@ -26,6 +28,7 @@ export interface WolfConfig {
       interval?: string;         // e.g. "24h" - pi-durable only
       threshold?: number;        // pool tokens that trigger consolidation (default: 20000)
       poolTarget?: number;       // pool tokens left after a consolidation (default: 10000)
+      maxTopics?: number;        // session topics sent to the model; older move to evicted/ (default: 40)
     };
     /** Librarian mode - enables KB inbox tools and sweep */
     librarian?: boolean;
@@ -58,6 +61,10 @@ export async function loadWolfConfig(): Promise<WolfConfig> {
 
   if (!config.name) {
     throw new Error("wolf.yaml must specify 'name'");
+  }
+  const rawPlugins: unknown = config.plugins;
+  if (rawPlugins !== undefined && (!Array.isArray(rawPlugins) || rawPlugins.some((p) => typeof p !== "string"))) {
+    throw new Error(`invalid wolf.yaml: plugins must be a list of plug-in folder names (strings), got ${JSON.stringify(rawPlugins)}`);
   }
   const rawDefault: unknown = config.memory?.defaultDomain;
   if (rawDefault !== undefined && (typeof rawDefault !== "string" || !rawDefault)) {

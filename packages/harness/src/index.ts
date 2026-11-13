@@ -14,6 +14,7 @@ import type { ModelTable } from "@wolfpack/engine";
 import { backupSessionStore } from "./engine/backup.js";
 import { attachConversationReader } from "./engine/conversation-reader.js";
 import { engineVersion } from "./engine/version.js";
+import { loadPlugins } from "./plugins.js";
 import { loadWolfConfig, loadWolfModels, type WolfConfig } from "./config.js";
 import { loadExtensions as loadUnifiedExtensions, reportLoad } from "./loader.js";
 import { createWolfIdentityExtension } from "./extensions/wolf-identity.js";
@@ -28,6 +29,8 @@ import type { SweepManager } from "./sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 
 export { loadWolfConfig, type WolfConfig };
+export { loadPlugins, pluginsDir, type PluginModule, type PluginContext } from "./plugins.js";
+export { registerProviderFactory } from "./providers/index.js";
 export * from "./engine/index.js";
 export { createWolfIdentityExtension } from "./extensions/wolf-identity.js";
 export { createTelegramClient, type TelegramClient } from "./telegram/index.js";
@@ -78,6 +81,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
 
   // Resolved model table, shipped next to wolf.yaml by `wolfpack sync`. Must
   // load before extensions: it sets WOLFPACK_MODELS_FILE for the memory worker.
+  if (config.plugins?.length) await loadPlugins({ enabled: config.plugins });
   const table = loadWolfModels(config);
   // On subscription, engine steps (memory, consolidation, KB sweep) run on the
   // Max plan through the Agent SDK; the main agent uses the claude-stateless

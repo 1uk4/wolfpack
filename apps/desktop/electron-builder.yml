@@ -6,9 +6,10 @@
 #     because native .node/dylib can't dlopen from a read-only archive and
 #     server.js process.chdir()s into its own dir;
 #   - the asar holds only the shell (electron/main.cjs + package.json);
-#   - two local mac builds (scripts/dist.mjs): `pnpm dist` is unsigned and
-#     skips notarization; `pnpm dist:signed` signs with the Developer ID
-#     Application cert in the login keychain and notarizes through the
+#   - three local mac builds (scripts/dist.mjs): `pnpm dist` is unsigned and
+#     skips notarization; `pnpm dist:sign-only` signs with the Developer ID
+#     Application cert (hardened runtime, entitlements) but never notarizes;
+#     `pnpm dist:signed` signs and notarizes through the
 #     WOLFPACK_NOTARY keychain profile (APPLE_KEYCHAIN_PROFILE).
 appId: com.wolfpack.Console
 productName: Wolfpack Console
@@ -54,6 +55,8 @@ files:
   # were only unpacked because their packages were packed.
   - "!**/*"
   - electron/**/*
+  # Tests stay out of the asar. Must come right after the positive above: the last matching pattern wins.
+  - "!electron/**/*.test.*"
   - package.json
   # Auto-update (Wave C, 2026-10-10): electron-updater + its runtime tree
   # re-included explicitly. The negation above excludes node_modules, and
@@ -95,6 +98,19 @@ extraResources:
     to: server
     filter:
       - "standalone/**/*"
+  # The app's own runtime: hubd, workerd, wolfd and the memory extension (node apps/desktop/scripts/build-runtime.mjs),
+  # started by electron/supervisor.cjs under Electron's own Node.
+  # electron-builder never copies a folder named node_modules out of extraResources, so runtime/node_modules (onnx natives,
+  # tokenizers, Agent SDK JS) is dropped here and re-added by scripts/after-pack.cjs before signing.
+  - from: runtime
+    to: runtime
+  # Licence files travel with the app (AGPL LICENSE, NOTICE, third-party texts).
+  - from: ../../LICENSE
+    to: LICENSE
+  - from: ../../NOTICE
+    to: NOTICE
+  - from: ../../licenses
+    to: licenses
 mac:
   icon: build/icon.icon
   # zip rides next to dmg (flipped 2026-10-08): Squirrel.Mac — Electron's
@@ -127,11 +143,14 @@ mac:
   # Adds minutes per build (Apple's scan queue). Verification battery:
   # codesign --verify --deep / spctl --assess / stapler validate.
   notarize: true
+  # The 547 MB embed-model/model.onnx is data, not code: skip a per-file codesign --force on it (the bundle
+  # signature seals it anyway). Paired with the @electron/osx-sign>isbinaryfile 5.0.7 override in
+  # pnpm-workspace.yaml / package.json: osx-sign 1.3.3 pins isbinaryfile 4.0.10, which throws RangeError on
+  # this file, and signIgnore only applies after that walk.
+  signIgnore:
+    - "embed-model/.*\\.onnx$"
 dmg:
   title: "${productName} ${version}"
-  # Owner artwork: 540×380 at 1×; the sibling background@2x.png is
-  # combined into a Retina TIFF by dmg-builder. Centres use 1× coordinates.
-  background: build/background.png
   iconSize: 80
   contents:
     - x: 130

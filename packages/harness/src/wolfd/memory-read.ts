@@ -3,11 +3,11 @@
  * Pure reads of the wolf's own den (and its Work API client); nothing here writes. The topic lookup matches ids
  * against what the readers found on disk, so a request id is never joined into a path.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
-import { readDenTopics, readTopics, readPendingSummary, observationIds, shapeWorkList, shapeWorkRecord, toWorkChild, CHILDREN_CAP, LOG_TAIL, type ShapeWorkItem } from "@wolfpack/memory";
-import type { MemoryTree, MemoryNodeObservations, WorkListItem, BoundWork, LastPromote, MemoryObservation, MemoryObservations, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkChild, WorkRecordResponse } from "@wolfpack/protocol";
+import { readPromoteState, setKeepLocal, readDenTopics, readTopics, readPendingSummary, observationIds, shapeWorkList, shapeWorkRecord, toWorkChild, CHILDREN_CAP, LOG_TAIL, type ShapeWorkItem } from "@wolfpack/memory";
+import type { MemoryTopicRow, MemoryTopics, MemoryTree, MemoryNodeObservations, WorkListItem, BoundWork, LastPromote, MemoryObservation, MemoryObservations, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkChild, WorkRecordResponse } from "@wolfpack/protocol";
 import type { KbWorkSource } from "@wolfpack/kb/graph";
 import { DURABLE_SESSION_ID, getPoolStats, readPool } from "../memory/consolidation.js";
 
@@ -28,6 +28,37 @@ export const isWorkId = (id: string): boolean => WORK_ID.test(id);
 
 export function sessionTopicsRoot(den: string): string {
   return join(den, ".memory", "sessions", DURABLE_SESSION_ID);
+}
+
+const TOPICS_CAP_BYTES = 180 * 1024;
+
+/** The Memory panel's Topics section: live session topics, the retired ones, and the byte budget. */
+export function readSessionTopics(den: string): MemoryTopics {
+  const root = sessionTopicsRoot(den);
+  const state = readPromoteState(den).topics;
+  const row = (dir: string, retired: boolean) => (t: ReturnType<typeof readTopics>[number]): MemoryTopicRow => {
+    const st = state[t.id];
+    let bytes = 0;
+    try { bytes = statSync(join(dir, t.filename)).size; } catch { /* vanished */ }
+    const confirmed = st?.receipt && st.receipt.outcome !== "reject";
+    const kind = retired ? "retired" : t.state === "parked" ? "parked" : st?.heldRewriteTried ? "held" : st?.promotedAt ? "promoted" : "active";
+    return {
+      id: t.id, title: t.title, bytes, updated: t.updated,
+      sources: t.sources ?? ["legacy"],
+      state: kind,
+      ...(kind === "held" ? { reason: "distill held it; one rewrite tried" } : {}),
+      keepLocal: t.keepLocal === true,
+      entryIds: confirmed ? st!.receipt!.entryIds : [],
+    };
+  };
+  const topics = readTopics(root).map(row(root, false));
+  const retiredDir = join(root, "retired");
+  return { topics, totalBytes: topics.reduce((n, t) => n + t.bytes, 0), capBytes: TOPICS_CAP_BYTES, retired: readTopics(retiredDir).map(row(retiredDir, true)) };
+}
+
+/** Set or clear keep-local on a live session topic; false when it does not exist. */
+export function setTopicKeepLocal(den: string, topicId: string, keepLocal: boolean): boolean {
+  return setKeepLocal(sessionTopicsRoot(den), topicId, keepLocal);
 }
 
 const ref = (t: { id: string; title: string; summary: string; updated: string }, domain?: string): MemoryTopicRef => ({
@@ -476,7 +507,7 @@ export async function readMemoryTree(den: string, work?: { endpoint?: string; to
   const { buckets, info } = await bucketize([...pending, ...archived], treeApi(work), now);
   const features = new Map<string, MemoryTree["features"][number]>();
   const other = new Map<string, { id: string; pending: number; archived: number }>();
-  let denPending = 0;
+  const denCount = { pending: 0, archived: 0 };
   const feature = (id: string) => {
     let f = features.get(id);
     if (!f) {
@@ -488,7 +519,7 @@ export async function readMemoryTree(den: string, work?: { endpoint?: string; to
   };
   buckets.forEach((b, i) => {
     const key = i < pending.length ? "pending" : "archived";
-    if (b.t === "den") denPending++;
+    if (b.t === "den") denCount[key]++;
     else if (b.t === "own") feature(b.f).own[key]++;
     else if (b.t === "other") {
       const o = other.get(b.w) ?? { id: b.w, pending: 0, archived: 0 };
@@ -505,7 +536,7 @@ export async function readMemoryTree(den: string, work?: { endpoint?: string; to
       t[key]++;
     }
   });
-  return { features: [...features.values()], other: [...other.values()], den: { pending: denPending } };
+  return { features: [...features.values()], other: [...other.values()], den: denCount };
 }
 
 /**

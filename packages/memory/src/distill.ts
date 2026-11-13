@@ -340,6 +340,8 @@ export interface PromoteTopic {
   body: string;
   domain?: string;
   change: "create" | "merge";
+  /** Routing hint: the KB entry this subject was filed into before (already resolved); used when distill names no target. */
+  target?: string;
   /** Work tags: a tagged topic is refused (work knowledge reaches the KB only through graduation). */
   work?: string;
   feature?: string;
@@ -511,7 +513,7 @@ export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOpti
           summary: o.summary,
           body: o.body,
           session: opts.session,
-          ...(o.target ? { target: o.target } : {}),
+          ...((o.target ?? topic.target) ? { target: o.target ?? topic.target } : {}),
           ...(force ? { force: true } : {}),
         },
         (why) => {

@@ -17,6 +17,7 @@
  */
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
+import { packStateDir } from "@wolfpack/protocol/runtime-home";
 import { dirname, join, resolve } from "node:path";
 import { discoverAgents, formatRosterLines, orchestratorRules } from "@wolfpack/agents";
 import type { PromptSection } from "@wolfpack/engine";
@@ -48,6 +49,7 @@ export const DEFAULT_STRUCTURED_OUTPUT_GUIDANCE = `Besides prose you can show th
 - show_checklist: a linear to-do you tick off in place. Don't emit both a graph and a checklist for the same plan.
 - show_decision: records a choice you have made (options, the chosen one, the rationale). To ask the owner an open question or get a decision, use the ask tool instead.
 - Revise an object by reusing its objectId and resending it in full.
+- New objects pin automatically (the newest of each type shows at the top of the chat). Pass pinned: false on the show tool to keep one out, or use the pin tool ({objectId, pinned}) to pin or unpin an object later. Omitting pinned keeps the current pin state; new objects pin automatically.
 - No objects for trivial answers or one-step tasks.`;
 
 /** The "Ending a turn" section: a normal message for the big picture, then `ask` for the decision. */
@@ -57,7 +59,8 @@ export const ENDING_TURN_GUIDANCE = `When the owner has to make a decision, supp
 - ask ends your turn. Make no further tool calls after it. The owner fills in the pages at their own pace and submits once; their answers open your next turn.
 - Ask only when you cannot proceed without the owner. Ordinary conversation stays plain chat: thinking out loud, status updates, small clarifications, and anything you can decide yourself and say so.
 - Don't ask what you can find out by looking, and don't repeat a question the owner already answered.
-- A finished result with nothing to decide is a normal message, not an ask.`;
+- A finished result with nothing to decide is a normal message, not an ask.
+- After fire-and-forget tool results (a subagent launched or resumed, a note saved), still send the owner a short closing message: what started and what to expect.`;
 
 export interface FoundFile {
   path: string;
@@ -144,7 +147,7 @@ export function loadSkills(den: string): SkillSummary[] {
 
 /** Ops reference path for investigator briefs: $WOLFPACK_OPS_REF, then ~/.wolfpack/ops.md (named even when absent). */
 function opsRef(): string {
-  const fallback = join(homedir(), ".wolfpack", "ops.md");
+  const fallback = join(packStateDir(), "ops.md");
   const env = process.env.WOLFPACK_OPS_REF;
   return env && existsSync(env) ? env : fallback;
 }

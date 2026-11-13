@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
+import { registerMemoryActions, unregisterMemoryActions } from "@wolfpack/harness/memory";
 import createTasksExtension from "./unified-tasks.js";
 
 // task_graduate on the durable stack: an in-memory Work API behind fetch, a mocked engine, temp dirs.
@@ -156,6 +157,19 @@ describe("durable task_graduate: the owner's card, never an agent token", () => 
     expect(items.get(f.id)!.graduated).toBe("2026-10-22");
     expect(items.get(f.id)!.stage).toBe("archived");
     expect(items.get(t.id)!.stage).toBe("archived");
+  });
+
+  it("a graduation asks the memory actions to promote the topics sourced from that feature", async () => {
+    const { f } = ready();
+    const promoted: string[] = [];
+    const actions = { promoteEnabled: true, isBusy: () => false, consolidate: async () => ({}) as never, promote: () => ({ status: "already_running", jobId: "x" }) as never, promoteForFeature: async (id: string) => { promoted.push(id); } };
+    registerMemoryActions(den, actions);
+    try {
+      await askThenAnswer(f.id, true);
+      await vi.waitFor(() => expect(promoted).toEqual([f.id]));
+    } finally {
+      unregisterMemoryActions(den, actions);
+    }
   });
 
   it("a yes is spent once it graduated: the same card cannot graduate again", async () => {

@@ -138,7 +138,7 @@ describe("splitFatEntry", () => {
       expect(events).toContainEqual(expect.objectContaining({ t: "entry_written", entryId: s.entryId, canonicalId: s.entryId, action: "create" }));
       expect(events).toContainEqual(expect.objectContaining({ t: "entry_placed", entryId: s.entryId, sectionId: "sec-testdom-abc123" }));
     }
-    expect(events).toContainEqual(expect.objectContaining({ t: "entry_retired", entryId: "kb-testdom-parent1" }));
+    expect(events).toContainEqual(expect.objectContaining({ t: "entry_retired", entryId: "kb-testdom-parent1", survivors: r.shards.map((s) => s.entryId) }));
     const members = [...foldRegistry(readLedger(roots)).values()].flatMap((t) => t.entries);
     expect(members.sort()).toEqual(r.shards.map((s) => s.entryId).sort());
 

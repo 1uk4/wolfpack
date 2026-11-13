@@ -35,7 +35,7 @@ function domainOf(entryId: string): string {
 export function retireEntries(
   roots: KbRoots,
   entryIds: string[],
-  opts: { reason?: string; dryRun?: boolean; force?: boolean } = {}
+  opts: { reason?: string; /** Entries that replaced these; default: the one a "merged into"/"moved to" reason names, else none. */ survivors?: string[]; dryRun?: boolean; force?: boolean } = {}
 ): RetireResult {
   const bad = entryIds.filter((id) => !EntryId.safeParse(id).success);
   if (bad.length) throw new Error(`not entry ids (want kb-<domain>-<7id>): ${bad.join(", ")}`);
@@ -74,9 +74,12 @@ export function retireEntries(
 
   // Ledger first: if the file move then fails, a re-run still sees the entry
   // on disk and retires it again (the fold tolerates duplicate retirements).
-  appendLedger(roots, result.retired.map((r) => ev.entryRetired(r.entryId, opts.reason)));
+  // Always recorded: [] says "retired with no replacement", not "unknown".
+  const named = /\b(?:merged into|moved to)\s+(kb-[A-Za-z0-9-]+)/i.exec(opts.reason ?? "")?.[1];
+  const survivors = opts.survivors ?? (named ? [named] : []);
+  appendLedger(roots, result.retired.map((r) => ev.entryRetired(r.entryId, opts.reason, survivors)));
   for (const r of result.retired) {
-    if (r.hadFile) archiveRetiredEntry(roots, r.domain, r.entryId, join(entriesDir(roots, r.domain), `${r.entryId}.md`), opts.reason);
+    if (r.hadFile) archiveRetiredEntry(roots, r.domain, r.entryId, join(entriesDir(roots, r.domain), `${r.entryId}.md`), opts.reason, survivors);
   }
 
   renderRegistry(roots, foldRegistry(readLedger(roots)), result.domains);

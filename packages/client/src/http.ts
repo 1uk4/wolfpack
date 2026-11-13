@@ -26,6 +26,8 @@ import {
   type KbCommitResponse,
   DeviceList,
   MintPairingCodeResponse,
+  type CommandKind,
+  type CommandResponse,
 } from "@wolfpack/protocol";
 import {
   BusyError,
@@ -40,6 +42,8 @@ import {
   type MemoryStatus,
   type MemoryTopic,
   type MemoryObservations,
+  type MemoryTopics,
+  type KeepLocalResponse,
   type MemoryTree,
   type MemoryNodeObservations,
   type WorkRecordResponse,
@@ -278,6 +282,7 @@ export class HttpConsoleClient implements ConsoleClient {
     // lastId: highest id yielded (or the snapshot baseline); events <= it are dropped.
     let lastId: number | undefined = opts.from;
     let failures = 0;
+    const idleMs = opts.idleMs ?? 60_000; // wolfd sends a keepalive every 15s
 
     for (;;) {
       const ctl = new AbortController();
@@ -287,7 +292,15 @@ export class HttpConsoleClient implements ConsoleClient {
         const res = await this.request("streamThread", { id: threadId }, { headers, signal: ctl.signal }, threadId);
         if (!res.body) throw new TypeError("stream response has no body");
 
-        for await (const frame of sseFrames(res.body)) {
+        // Half-open guard: any bytes (frame or keepalive) re-arm it; silence aborts the request and we reconnect.
+        let idle: ReturnType<typeof setTimeout> | undefined;
+        const arm = () => {
+          clearTimeout(idle);
+          idle = setTimeout(() => ctl.abort(), idleMs);
+        };
+        arm();
+        try {
+        for await (const frame of sseFrames(res.body, arm)) {
           if (frame.data === SSE_DONE) return;
           let json: unknown;
           try {
@@ -310,6 +323,9 @@ export class HttpConsoleClient implements ConsoleClient {
           failures = 0;
           yield ev as ThreadEvent;
           if (ev.type === "turn-end") return;
+        }
+        } finally {
+          clearTimeout(idle);
         }
         // Clean EOF without [DONE]: treat as a dropped connection.
         throw new TypeError("stream ended without [DONE]");
@@ -453,8 +469,8 @@ export class HttpConsoleClient implements ConsoleClient {
   }
 
   /** Never waits for the job. `already_running` (the running job's id) is a normal 202 answer, not an error. */
-  async promoteMemory(wolf: string): Promise<PromoteResponse> {
-    return (await this.json("promoteMemory", { name: wolf }, ROUTES.promoteMemory.response.schema, undefined, wolf)) as PromoteResponse;
+  async promoteMemory(wolf: string, opts: { ids?: string[] } = {}): Promise<PromoteResponse> {
+    return (await this.json("promoteMemory", { name: wolf }, ROUTES.promoteMemory.response.schema, opts.ids?.length ? { ids: opts.ids } : undefined, wolf)) as PromoteResponse;
   }
 
   async getMemoryStatus(wolf: string, opts: { thread?: string } = {}): Promise<MemoryStatus> {
@@ -470,6 +486,14 @@ export class HttpConsoleClient implements ConsoleClient {
   async getMemoryObservations(wolf: string, opts: { limit?: number } = {}): Promise<MemoryObservations> {
     const query = opts.limit !== undefined ? `?limit=${encodeURIComponent(String(opts.limit))}` : "";
     return (await this.json("getMemoryObservations", { name: wolf }, ROUTES.getMemoryObservations.response.schema, undefined, wolf, query)) as MemoryObservations;
+  }
+
+  async getMemorySessionTopics(wolf: string): Promise<MemoryTopics> {
+    return (await this.json("getMemorySessionTopics", { name: wolf }, ROUTES.getMemorySessionTopics.response.schema, undefined, wolf)) as MemoryTopics;
+  }
+
+  async putMemoryKeepLocal(wolf: string, topicId: string, keepLocal: boolean): Promise<KeepLocalResponse> {
+    return (await this.json("putMemoryKeepLocal", { name: wolf, id: topicId }, ROUTES.putMemoryKeepLocal.response.schema, { keepLocal }, wolf)) as KeepLocalResponse;
   }
 
   async getMemoryTree(wolf: string): Promise<MemoryTree> {
@@ -496,6 +520,15 @@ export class HttpConsoleClient implements ConsoleClient {
   async listDevices(): Promise<DeviceList> {
     if (!this.hub) throw new ProtocolError("invalid_request", "listDevices needs a hub client", false);
     return (await this.json("hubListDevices", {}, ROUTES.hubListDevices.response.schema)) as DeviceList;
+  }
+
+  /**
+   * Hub only: run one command on a machine (POST /v1/machines/:id/commands). The hub answers 409 (not_sent_*) and 504 (timeout) with a
+   * CommandResponse body: those come back as a result, not an error. Any other refusal (400, 401, ...) still throws.
+   */
+  async machineCommand(hostId: string, cmd: { kind: CommandKind; args?: unknown; sealed?: string; id?: string }): Promise<CommandResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "machineCommand needs a hub client", false);
+    return (await this.json("hubMachineCommand", { id: hostId }, ROUTES.hubMachineCommand.response.schema, { kind: cmd.kind, args: cmd.args ?? {}, ...(cmd.sealed !== undefined ? { sealed: cmd.sealed } : {}), ...(cmd.id !== undefined ? { id: cmd.id } : {}) }, undefined, "", {}, [409, 504], MACHINE_COMMAND_TIMEOUT_MS)) as CommandResponse;
   }
 
   /** Hub only: revoke a device (may be this one); `cascade` also revokes the devices it added. 409 `conflict` when it would remove the last console token. */
@@ -643,7 +676,7 @@ export class HttpConsoleClient implements ConsoleClient {
     return { Authorization: `Bearer ${this.hub.token}` };
   }
 
-  private async request(name: RouteName, params: Record<string, string>, init: RequestInit & { headers?: Record<string, string> } = {}, threadId?: string, query = ""): Promise<Response> {
+  private async request(name: RouteName, params: Record<string, string>, init: RequestInit & { headers?: Record<string, string> } = {}, threadId?: string, query = "", accept: number[] = [], timeoutMs: number = this.requestTimeoutMs): Promise<Response> {
     const route: RouteDef = ROUTES[name];
     const hubRoute = route.scope === "hub";
     if (hubRoute && !this.hub) throw new ProtocolError("engine_error", `${name} needs a hub (HttpClientOptions.hub)`, false);
@@ -653,7 +686,7 @@ export class HttpConsoleClient implements ConsoleClient {
     const bounded = route.response.kind !== "sse";
     const timer = bounded ? new AbortController() : undefined;
     let timedOut = false;
-    const handle = timer ? setTimeout(() => { timedOut = true; timer.abort(); }, this.requestTimeoutMs) : undefined;
+    const handle = timer ? setTimeout(() => { timedOut = true; timer.abort(); }, timeoutMs) : undefined;
     const signal = timer ? (init.signal ? AbortSignal.any([init.signal, timer.signal]) : timer.signal) : init.signal;
     let res: Response;
     try {
@@ -664,12 +697,12 @@ export class HttpConsoleClient implements ConsoleClient {
         headers: { ...init.headers, ...this.hubHeaders(viaHub), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
       });
     } catch (e) {
-      if (timedOut) throw Object.assign(new ProtocolError("engine_error", `wolf did not answer in time (${this.requestTimeoutMs} ms)`, true), { timedOut: true });
+      if (timedOut) throw Object.assign(new ProtocolError("engine_error", `wolf did not answer in time (${timeoutMs} ms)`, true), { timedOut: true });
       throw e;
     } finally {
       if (handle) clearTimeout(handle);
     }
-    if (res.ok) return res;
+    if (res.ok || accept.includes(res.status)) return res;
     if (viaHub && res.status === 401) {
       // A hub 401 is ALWAYS "unauthorized", whatever the body (a proxy or old hub may send none): callers re-pair on this code.
       const err = await this.toError(res, threadId);
@@ -678,14 +711,14 @@ export class HttpConsoleClient implements ConsoleClient {
     throw await this.toError(res, threadId);
   }
 
-  private async json(name: RouteName, params: Record<string, string>, schema: { parse(x: unknown): unknown }, body?: unknown, threadId?: string, query = "", extraHeaders: Record<string, string> = {}): Promise<unknown> {
+  private async json(name: RouteName, params: Record<string, string>, schema: { parse(x: unknown): unknown }, body?: unknown, threadId?: string, query = "", extraHeaders: Record<string, string> = {}, accept: number[] = [], timeoutMs?: number): Promise<unknown> {
     const headers: Record<string, string> = { ...extraHeaders };
     const init: RequestInit & { headers: Record<string, string> } = { headers };
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(body);
     }
-    const res = await this.request(name, params, init, threadId, query);
+    const res = await this.request(name, params, init, threadId, query, accept, timeoutMs);
     let data: unknown;
     try {
       data = await res.json();
@@ -722,6 +755,9 @@ export class HttpConsoleClient implements ConsoleClient {
     return new ProtocolError(code, message, retryable, details);
   }
 }
+
+/** A machine command waits longer than the hub's own per-command limit (COMMAND_TIMEOUT_MS, at most 20 s), so the hub's 504 "outcome unknown" reaches the caller instead of this client aborting first. */
+const MACHINE_COMMAND_TIMEOUT_MS = 30_000;
 
 const abortableSleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve) => {

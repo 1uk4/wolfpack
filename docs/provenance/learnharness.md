@@ -1,6 +1,6 @@
 # learnharness provenance
 
-> Snapshot against upstream `6cba9c8` taken on 2026-11-05; totals refreshed after work-wolfpack-63WjMQd (see Removed in work-wolfpack-63WjMQd).
+> Snapshot against upstream `6cba9c8` taken on 2026-11-05; totals refreshed after work-wolfpack-63WjMQd (see Removed in work-wolfpack-63WjMQd). Measured figures for `apps/console` and `apps/desktop` were retaken on 2026-11-11 after work-wolfpack-xWID29J (see the section at the end): 33354 of 101930 text lines (33%) are still upstream text; the per-class tables below predate that and are not recomputed.
 
 Inventory of what `apps/console` and `apps/desktop` took from **learnharness** (https://github.com/amosblomqvist/learnharness, Copyright (c) Amos Blomqvist, AGPL-3.0-only; all 712 upstream commits are by him).
 
@@ -121,7 +121,6 @@ Not part of the learnharness copy. Upstream licences checked on 2026-11-05 (`gh 
 |---|---|---|---|
 | `extensions/wolfpack-telegram` | badlogic/pi-telegram | MIT | Keeps `"license": "MIT"`; credited in NOTICE |
 | `extensions/wolfpack-subagents` | amosblomqvist/pi-interactive-subagents (original HazAT/pi-interactive-subagents) | MIT (Copyright (c) 2026 HazAT) | MIT notice reproduced in NOTICE; package stays AGPL-3.0-only |
-| `extensions/wolfpack-visual-tools` | amosblomqvist/learn | **none** (no LICENSE file) | Needs the author's permission or a rewrite |
 | `extensions/wolfpack-memory` | none found | n/a | Written in this repo (first commit "replace packages/pi-extension with extensions/wolfpack-memory", no upstream references) |
 
 ## Known leftovers
@@ -246,30 +245,30 @@ Totals: tracked files 617; lines now 81641; upstream-derived 51%.
 - `apps/console/components.json`
 - `apps/console/components/ai-elements/conversation.tsx`
 - `apps/console/components/ai-elements/shimmer.tsx`
-- `apps/console/components/artifacts/tool-call-card.tsx`
-- `apps/console/components/backdrop-dismiss.ts`
-- `apps/console/components/cluster-geometry.ts`
-- `apps/console/components/confidence-rail.tsx`
+- `apps/console/components/thread/artifacts/tool-call-card.tsx`
+- `apps/console/components/shell/backdrop-dismiss.ts`
+- `apps/console/components/graph/cluster-geometry.ts`
+- `apps/console/components/ask/confidence-rail.tsx`
 - `apps/console/components/dock-state-key.ts`
-- `apps/console/components/focus-hygiene.ts`
-- `apps/console/components/keyboard-shortcuts.tsx`
+- `apps/console/components/shell/focus-hygiene.ts`
+- `apps/console/components/shell/keyboard-shortcuts.tsx`
 - `apps/console/components/lh-mark.tsx`
-- `apps/console/components/menu-shell.tsx`
-- `apps/console/components/mermaid-error.tsx`
-- `apps/console/components/mermaid-render.ts`
-- `apps/console/components/pan-zoom.ts`
-- `apps/console/components/popover-dismiss.ts`
-- `apps/console/components/session-find-dom.ts`
-- `apps/console/components/session-find.tsx`
-- `apps/console/components/session-navigation.tsx`
-- `apps/console/components/settings-signal.ts`
+- `apps/console/components/shell/menu-shell.tsx`
+- `apps/console/components/shell/mermaid-error.tsx`
+- `apps/console/components/shell/mermaid-render.ts`
+- `apps/console/components/shell/pan-zoom.ts`
+- `apps/console/components/shell/popover-dismiss.ts`
+- `apps/console/components/thread/session-find-dom.ts`
+- `apps/console/components/thread/session-find.tsx`
+- `apps/console/components/thread/session-navigation.tsx`
+- `apps/console/components/settings/settings-signal.ts`
 - `apps/console/components/settings/appearance.tsx`
 - `apps/console/components/settings/controls.tsx`
 - `apps/console/components/settings/keyboard-section.tsx`
 - `apps/console/components/settings/keys-section.tsx`
 - `apps/console/components/settings/model-menu.tsx`
-- `apps/console/components/thinking-block.tsx`
-- `apps/console/components/top-bar.tsx`
+- `apps/console/components/thread/thinking-block.tsx`
+- `apps/console/components/shell/top-bar.tsx`
 - `apps/console/components/ui/button-group.tsx`
 - `apps/console/components/ui/button.tsx`
 - `apps/console/components/ui/collapsible.tsx`
@@ -278,8 +277,8 @@ Totals: tracked files 617; lines now 81641; upstream-derived 51%.
 - `apps/console/components/ui/input.tsx`
 - `apps/console/components/ui/separator.tsx`
 - `apps/console/components/ui/tooltip.tsx`
-- `apps/console/components/update-banner.tsx`
-- `apps/console/components/usage-format.ts`
+- `apps/console/components/shell/update-banner.tsx`
+- `apps/console/components/thread/usage-format.ts`
 - `apps/console/eslint.config.mjs`
 - `apps/console/lib/utils.ts`
 - `apps/console/postcss.config.mjs`
@@ -287,21 +286,21 @@ Totals: tracked files 617; lines now 81641; upstream-derived 51%.
 - `apps/console/public/fonts/cmunbx.ttf`
 - `apps/console/public/worklets/pcm-capture.js`
 - `apps/console/scripts/dev-fresh.sh`
-- `apps/console/src/core/argument-heal.ts`
-- `apps/console/src/core/fuzzy.ts`
-- `apps/console/src/core/math-delims.ts`
-- `apps/console/src/core/prices.ts`
-- `apps/console/src/core/session-find.ts`
-- `apps/console/src/core/value-debris.ts`
-- `apps/console/src/server/keys.ts`
+- `apps/console/src/core/thread/argument-heal.ts`
+- `apps/console/src/core/ui/fuzzy.ts`
+- `apps/console/src/core/thread/math-delims.ts`
+- `apps/console/src/core/settings/prices.ts`
+- `apps/console/src/core/thread/session-find.ts`
+- `apps/console/src/core/thread/value-debris.ts`
+- `apps/console/src/server/settings/keys.ts`
 - `apps/console/src/store/auth.ts`
 - `apps/console/src/store/jobs.ts`
 - `apps/console/src/store/prompt-overrides.ts`
 - `apps/console/src/store/settings.ts`
 - `apps/console/tests/auth-store.test.ts`
-- `apps/console/tests/backdrop-dismiss.test.ts`
+- `apps/console/tests/components/shell/backdrop-dismiss.test.ts`
 - `apps/console/tests/byok-refusal.test.ts`
-- `apps/console/tests/dictation-warm.test.ts`
+- `apps/console/tests/components/composer/dictation-warm.test.ts`
 - `apps/console/tests/dock-state-key.test.ts`
 - `apps/console/tests/fixtures/golden-data/chats/chat_mv27rrra_feff23b6.json`
 - `apps/console/tests/fixtures/golden-data/chats/chat_mv293wv5_10656952.json`
@@ -312,23 +311,23 @@ Totals: tracked files 617; lines now 81641; upstream-derived 51%.
 - `apps/console/tests/fixtures/golden-data/jobs/job_mv28p0fs_0a16b76e.json`
 - `apps/console/tests/fixtures/golden-data/jobs/job_mv28tfii_2a54290a.json`
 - `apps/console/tests/fixtures/golden-data/settings.json`
-- `apps/console/tests/font-menu.test.tsx`
-- `apps/console/tests/fresh-env-keys.test.ts`
-- `apps/console/tests/fuzzy.test.ts`
+- `apps/console/tests/components/settings/font-menu.test.tsx`
+- `apps/console/tests/server/settings/fresh-env-keys.test.ts`
+- `apps/console/tests/core/ui/fuzzy.test.ts`
 - `apps/console/tests/katex-security.test.ts`
-- `apps/console/tests/keyboard-toggle-sidebar.test.ts`
-- `apps/console/tests/menu-shell-pure.test.ts`
-- `apps/console/tests/openrouter-free-models.test.ts`
-- `apps/console/tests/pan-zoom.test.ts`
-- `apps/console/tests/prices-sync.test.ts`
-- `apps/console/tests/render-markdown.test.tsx`
-- `apps/console/tests/render-update-banner.test.tsx`
-- `apps/console/tests/server-events.test.tsx`
-- `apps/console/tests/server-keys.test.ts`
-- `apps/console/tests/session-find.test.tsx`
-- `apps/console/tests/settings-signal.test.ts`
+- `apps/console/tests/core/ui/keyboard-toggle-sidebar.test.ts`
+- `apps/console/tests/components/shell/menu-shell-pure.test.ts`
+- `apps/console/tests/server/settings/openrouter-free-models.test.ts`
+- `apps/console/tests/components/shell/pan-zoom.test.ts`
+- `apps/console/tests/core/settings/prices-sync.test.ts`
+- `apps/console/tests/components/shell/render-markdown.test.tsx`
+- `apps/console/tests/components/shell/render-update-banner.test.tsx`
+- `apps/console/tests/components/shell/server-events.test.tsx`
+- `apps/console/tests/server/settings/server-keys.test.ts`
+- `apps/console/tests/components/thread/session-find.test.tsx`
+- `apps/console/tests/components/settings/settings-signal.test.ts`
 - `apps/console/tests/title-from-prompt.test.ts`
-- `apps/console/tests/tooltip-mechanism.test.tsx`
+- `apps/console/tests/core/ui/tooltip-mechanism.test.tsx`
 - `apps/console/tsconfig.json`
 - `apps/desktop/build/background.png`
 - `apps/desktop/build/background@2x.png`
@@ -357,23 +356,23 @@ Totals: tracked files 617; lines now 81641; upstream-derived 51%.
 - `apps/console/app/layout.tsx` (+22 / -10 of 41)
 - `apps/console/components/ai-elements/message.tsx` (+33 / -3 of 407)
 - `apps/console/components/ai-elements/reasoning.tsx` (+6 / -1 of 221)
-- `apps/console/components/answered-card.tsx` (+12 / -27 of 234)
-- `apps/console/components/braille-spinner.tsx` (+5 / -2 of 68)
+- `apps/console/components/ask/answered-card.tsx` (+12 / -27 of 234)
+- `apps/console/components/shell/braille-spinner.tsx` (+5 / -2 of 68)
 - `apps/console/components/chat.tsx` (+99 / -621 of 2376)
-- `apps/console/components/composer.tsx` (+144 / -105 of 162)
-- `apps/console/components/dictation.tsx` (+188 / -9 of 747)
-- `apps/console/components/graph-canvas.ts` (+585 / -261 of 1737)
-- `apps/console/components/graph-view.tsx` (+429 / -1521 of 1715)
-- `apps/console/components/md-blocks.tsx` (+167 / -1 of 472)
+- `apps/console/components/composer/composer.tsx` (+144 / -105 of 162)
+- `apps/console/components/composer/dictation.tsx` (+188 / -9 of 747)
+- `apps/console/components/graph/graph-canvas.ts` (+585 / -261 of 1737)
+- `apps/console/components/graph/graph-view.tsx` (+429 / -1521 of 1715)
+- `apps/console/components/shell/md-blocks.tsx` (+167 / -1 of 472)
 - `apps/console/components/question-dock.tsx` (+26 / -95 of 913)
-- `apps/console/components/server-events.tsx` (+28 / -0 of 155)
-- `apps/console/components/session-core.ts` (+277 / -65 of 745)
-- `apps/console/components/session-overlay.tsx` (+12 / -41 of 334)
-- `apps/console/components/session.ts` (+18 / -10 of 142)
+- `apps/console/components/shell/server-events.tsx` (+28 / -0 of 155)
+- `apps/console/components/thread/session-core.ts` (+277 / -65 of 745)
+- `apps/console/components/shell/session-overlay.tsx` (+12 / -41 of 334)
+- `apps/console/components/thread/session.ts` (+18 / -10 of 142)
 - `apps/console/components/settings/agent-section.tsx` (+54 / -345 of 924)
 - `apps/console/components/settings/appearance-section.tsx` (+2 / -95 of 428)
 - `apps/console/components/settings/settings-dialog.tsx` (+2 / -18 of 446)
-- `apps/console/components/sidebar.tsx` (+251 / -150 of 935)
+- `apps/console/components/shell/sidebar.tsx` (+251 / -150 of 935)
 - `apps/console/config.ts` (+5 / -46 of 145)
 - `apps/console/docs/desktop-release.md` (+2 / -0 of 98)
 - `apps/console/docs/keyboard.md` (+4 / -1 of 105)
@@ -383,75 +382,75 @@ Totals: tracked files 617; lines now 81641; upstream-derived 51%.
 - `apps/console/src/agent/models.ts` (+0 / -13 of 132)
 - `apps/console/src/agent/prompt-segments.ts` (+18 / -73 of 134)
 - `apps/console/src/agent/system-prompt.md` (+1 / -11 of 11)
-- `apps/console/src/core/auth-keys.ts` (+2 / -21 of 204)
-- `apps/console/src/core/compaction.ts` (+16 / -58 of 395)
+- `apps/console/src/core/settings/auth-keys.ts` (+2 / -21 of 204)
+- `apps/console/src/core/thread/compaction.ts` (+16 / -58 of 395)
 - `apps/console/src/core/contracts.ts` (+3 / -6 of 18)
 - `apps/console/src/core/contracts/chat.ts` (+9 / -160 of 319)
 - `apps/console/src/core/contracts/graph.ts` (+6 / -344 of 385)
 - `apps/console/src/core/contracts/jobs.ts` (+47 / -220 of 431)
 - `apps/console/src/core/contracts/models.ts` (+2 / -15 of 85)
-- `apps/console/src/core/events.ts` (+21 / -0 of 109)
+- `apps/console/src/core/thread/events.ts` (+21 / -0 of 109)
 - `apps/console/src/core/index.ts` (+42 / -26 of 77)
-- `apps/console/src/core/input-events.ts` (+11 / -94 of 249)
-- `apps/console/src/core/keyboard.ts` (+4 / -2 of 219)
-- `apps/console/src/core/layout.ts` (+100 / -256 of 720)
-- `apps/console/src/core/native-messages.ts` (+19 / -375 of 720)
-- `apps/console/src/core/pending.ts` (+5 / -69 of 174)
-- `apps/console/src/core/ports.ts` (+2 / -81 of 222)
+- `apps/console/src/core/thread/input-events.ts` (+11 / -94 of 249)
+- `apps/console/src/core/ui/keyboard.ts` (+4 / -2 of 219)
+- `apps/console/src/core/graph/layout.ts` (+100 / -256 of 720)
+- `apps/console/src/core/thread/native-messages.ts` (+19 / -375 of 720)
+- `apps/console/src/core/thread/pending.ts` (+5 / -69 of 174)
+- `apps/console/src/core/ui/ports.ts` (+2 / -81 of 222)
 - `apps/console/src/core/prompt-segments.ts` (+13 / -22 of 50)
-- `apps/console/src/core/question-core.ts` (+2 / -25 of 787)
-- `apps/console/src/core/render-settings.ts` (+40 / -14 of 394)
-- `apps/console/src/core/session-navigation.ts` (+0 / -8 of 47)
-- `apps/console/src/core/settings-resolution.ts` (+3 / -118 of 256)
-- `apps/console/src/core/settings.ts` (+16 / -176 of 644)
-- `apps/console/src/core/tool-parts.ts` (+0 / -6 of 139)
-- `apps/console/src/core/view.ts` (+69 / -104 of 457)
+- `apps/console/src/core/thread/question-core.ts` (+2 / -25 of 787)
+- `apps/console/src/core/graph/render-settings.ts` (+40 / -14 of 394)
+- `apps/console/src/core/thread/session-navigation.ts` (+0 / -8 of 47)
+- `apps/console/src/core/settings/settings-resolution.ts` (+3 / -118 of 256)
+- `apps/console/src/core/settings/settings.ts` (+16 / -176 of 644)
+- `apps/console/src/core/thread/tool-parts.ts` (+0 / -6 of 139)
+- `apps/console/src/core/thread/view.ts` (+69 / -104 of 457)
 - `apps/console/src/server/compaction.ts` (+3 / -11 of 301)
-- `apps/console/src/server/events-stream.ts` (+24 / -1 of 81)
+- `apps/console/src/server/thread/events-stream.ts` (+24 / -1 of 81)
 - `apps/console/src/server/index.ts` (+9 / -4 of 45)
-- `apps/console/src/server/model-catalog.ts` (+2 / -32 of 303)
-- `apps/console/src/server/settings-body.ts` (+6 / -111 of 390)
-- `apps/console/src/server/stores.ts` (+1 / -3 of 34)
+- `apps/console/src/server/settings/model-catalog.ts` (+2 / -32 of 303)
+- `apps/console/src/server/settings/settings-body.ts` (+6 / -111 of 390)
+- `apps/console/src/server/settings/stores.ts` (+1 / -3 of 34)
 - `apps/console/src/store/chats.ts` (+26 / -55 of 219)
 - `apps/console/src/store/render-settings.ts` (+0 / -3 of 43)
-- `apps/console/tests/auth-keys.test.ts` (+6 / -19 of 109)
-- `apps/console/tests/auth-provider-keys.test.ts` (+7 / -2 of 92)
-- `apps/console/tests/chat-store-events.test.ts` (+1 / -3 of 77)
+- `apps/console/tests/core/settings/auth-keys.test.ts` (+6 / -19 of 109)
+- `apps/console/tests/core/settings/auth-provider-keys.test.ts` (+7 / -2 of 92)
+- `apps/console/tests/core/thread/chat-store-events.test.ts` (+1 / -3 of 77)
 - `apps/console/tests/compaction-service.test.ts` (+0 / -1 of 206)
-- `apps/console/tests/compaction.test.ts` (+7 / -27 of 430)
+- `apps/console/tests/core/thread/compaction.test.ts` (+7 / -27 of 430)
 - `apps/console/tests/data-dir-seam.test.ts` (+3 / -2 of 50)
 - `apps/console/tests/desktop-payload.test.ts` (+15 / -11 of 96)
 - `apps/console/tests/desktop-platform.test.ts` (+11 / -8 of 258)
 - `apps/console/tests/esc-layering.test.ts` (+2 / -13 of 52)
-- `apps/console/tests/events.test.ts` (+3 / -0 of 131)
+- `apps/console/tests/core/thread/events.test.ts` (+3 / -0 of 131)
 - `apps/console/tests/fixtures/golden-data/README.md` (+3 / -5 of 47)
-- `apps/console/tests/golden-fixtures.test.ts` (+7 / -88 of 231)
-- `apps/console/tests/graph-canvas.test.ts` (+78 / -124 of 416)
-- `apps/console/tests/layout.test.ts` (+80 / -321 of 490)
+- `apps/console/tests/core/graph/golden-fixtures.test.ts` (+7 / -88 of 231)
+- `apps/console/tests/components/graph/graph-canvas.test.ts` (+78 / -124 of 416)
+- `apps/console/tests/core/graph/layout.test.ts` (+80 / -321 of 490)
 - `apps/console/tests/mac-signing-toolchain.test.ts` (+3 / -2 of 124)
-- `apps/console/tests/model-catalog.test.ts` (+0 / -38 of 329)
+- `apps/console/tests/server/settings/model-catalog.test.ts` (+0 / -38 of 329)
 - `apps/console/tests/prompt-overrides.test.ts` (+75 / -167 of 432)
-- `apps/console/tests/question-core.test.ts` (+5 / -28 of 821)
-- `apps/console/tests/render-cards.test.tsx` (+14 / -191 of 777)
-- `apps/console/tests/render-composer.test.tsx` (+2 / -36 of 118)
-- `apps/console/tests/render-graph-chrome.test.tsx` (+9 / -21 of 70)
-- `apps/console/tests/render-md-blocks.test.tsx` (+20 / -18 of 274)
-- `apps/console/tests/render-settings.test.ts` (+43 / -16 of 361)
-- `apps/console/tests/render-settings.test.tsx` (+20 / -124 of 283)
-- `apps/console/tests/render-sidebar.test.tsx` (+45 / -53 of 163)
+- `apps/console/tests/core/thread/question-core.test.ts` (+5 / -28 of 821)
+- `apps/console/tests/components/ask/render-cards.test.tsx` (+14 / -191 of 777)
+- `apps/console/tests/components/composer/render-composer.test.tsx` (+2 / -36 of 118)
+- `apps/console/tests/components/graph/render-graph-chrome.test.tsx` (+9 / -21 of 70)
+- `apps/console/tests/components/shell/render-md-blocks.test.tsx` (+20 / -18 of 274)
+- `apps/console/tests/core/graph/render-settings.test.ts` (+43 / -16 of 361)
+- `apps/console/tests/components/settings/render-settings.test.tsx` (+20 / -124 of 283)
+- `apps/console/tests/components/shell/render-sidebar.test.tsx` (+45 / -53 of 163)
 - `apps/console/tests/schema-stamps.test.ts` (+3 / -46 of 117)
-- `apps/console/tests/session-context.test.tsx` (+5 / -35 of 128)
-- `apps/console/tests/session-core.test.ts` (+44 / -45 of 1115)
-- `apps/console/tests/session-navigation.test.ts` (+5 / -23 of 84)
-- `apps/console/tests/settings-body.test.ts` (+9 / -105 of 291)
-- `apps/console/tests/settings-pure.test.ts` (+11 / -95 of 407)
-- `apps/console/tests/settings-resolution.test.ts` (+12 / -175 of 270)
+- `apps/console/tests/components/shell/session-context.test.tsx` (+5 / -35 of 128)
+- `apps/console/tests/components/thread/session-core.test.ts` (+44 / -45 of 1115)
+- `apps/console/tests/core/thread/session-navigation.test.ts` (+5 / -23 of 84)
+- `apps/console/tests/server/settings/settings-body.test.ts` (+9 / -105 of 291)
+- `apps/console/tests/components/settings/settings-pure.test.ts` (+11 / -95 of 407)
+- `apps/console/tests/core/settings/settings-resolution.test.ts` (+12 / -175 of 270)
 - `apps/console/tests/settings-store.test.ts` (+4 / -4 of 76)
-- `apps/console/tests/settings.test.ts` (+11 / -84 of 216)
-- `apps/console/tests/stream-activity.test.ts` (+1 / -2 of 59)
-- `apps/console/tests/tool-parts.test.ts` (+0 / -38 of 480)
-- `apps/console/tests/usage.test.ts` (+2 / -71 of 307)
-- `apps/console/tests/zero-keys.test.tsx` (+0 / -7 of 164)
+- `apps/console/tests/core/settings/settings.test.ts` (+11 / -84 of 216)
+- `apps/console/tests/core/thread/stream-activity.test.ts` (+1 / -2 of 59)
+- `apps/console/tests/core/thread/tool-parts.test.ts` (+0 / -38 of 480)
+- `apps/console/tests/core/settings/usage.test.ts` (+2 / -71 of 307)
+- `apps/console/tests/components/composer/zero-keys.test.tsx` (+0 / -7 of 164)
 - `apps/desktop/electron-builder.yml` (+3 / -3 of 184)
 - `apps/desktop/electron/main.cjs` (+65 / -71 of 610)
 - `apps/desktop/electron/preload.cjs` (+12 / -0 of 45)
@@ -504,205 +503,205 @@ Totals: tracked files 617; lines now 81641; upstream-derived 51%.
 - `apps/console/app/pipeline/page.tsx`
 - `apps/console/app/wolf/[name]/page.tsx`
 - `apps/console/app/wolf/[name]/thread/[threadId]/page.tsx`
-- `apps/console/components/ask-card.tsx`
-- `apps/console/components/attachment-thumbs.tsx`
-- `apps/console/components/attachments.ts`
-- `apps/console/components/branch-graph.tsx`
-- `apps/console/components/card-registry.tsx`
-- `apps/console/components/checklist-card.tsx`
-- `apps/console/components/command-palette.tsx`
-- `apps/console/components/composer-controls.tsx`
-- `apps/console/components/composer-settings.ts`
-- `apps/console/components/decision-card.tsx`
-- `apps/console/components/earlier-scroll.ts`
-- `apps/console/components/entry-reader.tsx`
-- `apps/console/components/feature-progress.tsx`
-- `apps/console/components/graduate-client.ts`
-- `apps/console/components/graduate-dialog.tsx`
-- `apps/console/components/graduate-store.ts`
-- `apps/console/components/graduation-signal.ts`
-- `apps/console/components/graph-card.tsx`
-- `apps/console/components/graph-home.tsx`
-- `apps/console/components/graph-pane.tsx`
-- `apps/console/components/graph-route-nav.tsx`
-- `apps/console/components/graph-settings-panel.tsx`
-- `apps/console/components/hub-auth.tsx`
-- `apps/console/components/kb-client.ts`
-- `apps/console/components/kb-markdown.tsx`
-- `apps/console/components/memory-events.tsx`
-- `apps/console/components/memory-panel.tsx`
-- `apps/console/components/needs-you-notify.ts`
-- `apps/console/components/needs-you.tsx`
-- `apps/console/components/object-card.tsx`
-- `apps/console/components/overlay-shell.tsx`
-- `apps/console/components/panel-host.tsx`
-- `apps/console/components/pinned-checklist.tsx`
+- `apps/console/components/ask/ask-card.tsx`
+- `apps/console/components/composer/attachment-thumbs.tsx`
+- `apps/console/components/composer/attachments.ts`
+- `apps/console/components/thread/branch-graph.tsx`
+- `apps/console/components/thread/card-registry.tsx`
+- `apps/console/components/thread/checklist-card.tsx`
+- `apps/console/components/shell/command-palette.tsx`
+- `apps/console/components/composer/composer-controls.tsx`
+- `apps/console/components/composer/composer-settings.ts`
+- `apps/console/components/thread/decision-card.tsx`
+- `apps/console/components/thread/earlier-scroll.ts`
+- `apps/console/components/kb/entry-reader.tsx`
+- `apps/console/components/thread/feature-progress.tsx`
+- `apps/console/components/kb/graduate-client.ts`
+- `apps/console/components/kb/graduate-dialog.tsx`
+- `apps/console/components/kb/graduate-store.ts`
+- `apps/console/components/kb/graduation-signal.ts`
+- `apps/console/components/graph/graph-card.tsx`
+- `apps/console/components/graph/graph-home.tsx`
+- `apps/console/components/graph/graph-pane.tsx`
+- `apps/console/components/graph/graph-route-nav.tsx`
+- `apps/console/components/graph/graph-settings-panel.tsx`
+- `apps/console/components/shell/hub-auth.tsx`
+- `apps/console/components/kb/kb-client.ts`
+- `apps/console/components/kb/kb-markdown.tsx`
+- `apps/console/components/memory/memory-events.tsx`
+- `apps/console/components/memory/memory-panel.tsx`
+- `apps/console/components/shell/needs-you-notify.ts`
+- `apps/console/components/shell/needs-you.tsx`
+- `apps/console/components/thread/object-card.tsx`
+- `apps/console/components/shell/overlay-shell.tsx`
+- `apps/console/components/shell/panel-host.tsx`
+- `apps/console/components/thread/pinned-checklist.tsx`
 - `apps/console/components/pipeline-client.ts`
 - `apps/console/components/pipeline-view.tsx`
-- `apps/console/components/plan-graph-card.tsx`
-- `apps/console/components/plan-graph-view.tsx`
-- `apps/console/components/speaker-colors.ts`
-- `apps/console/components/subagent-message.tsx`
-- `apps/console/components/subagent-modal.tsx`
-- `apps/console/components/subagent-strip.tsx`
-- `apps/console/components/task-graph.tsx`
-- `apps/console/components/thinking-toggle.ts`
-- `apps/console/components/thread-chat.tsx`
-- `apps/console/components/thread-compaction-divider.tsx`
-- `apps/console/components/thread-context.tsx`
-- `apps/console/components/thread-git-tree.tsx`
-- `apps/console/components/thread-transport.ts`
-- `apps/console/components/tool-row.tsx`
-- `apps/console/components/turn-timer.tsx`
-- `apps/console/components/use-graph-settings.ts`
-- `apps/console/components/use-kb-graph.ts`
-- `apps/console/components/use-librarian.ts`
-- `apps/console/components/work-badges.tsx`
-- `apps/console/components/work-client.ts`
-- `apps/console/components/work-id-chip.tsx`
-- `apps/console/components/work-item-page.tsx`
+- `apps/console/components/thread/plan-graph-card.tsx`
+- `apps/console/components/thread/plan-graph-view.tsx`
+- `apps/console/components/thread/speaker-colors.ts`
+- `apps/console/components/thread/subagent-message.tsx`
+- `apps/console/components/thread/subagent-modal.tsx`
+- `apps/console/components/thread/subagent-strip.tsx`
+- `apps/console/components/work/task-graph.tsx`
+- `apps/console/components/thread/thinking-toggle.ts`
+- `apps/console/components/thread/thread-chat.tsx`
+- `apps/console/components/thread/thread-compaction-divider.tsx`
+- `apps/console/components/thread/thread-context.tsx`
+- `apps/console/components/thread/thread-git-tree.tsx`
+- `apps/console/components/thread/thread-transport.ts`
+- `apps/console/components/thread/tool-row.tsx`
+- `apps/console/components/thread/turn-timer.tsx`
+- `apps/console/components/graph/use-graph-settings.ts`
+- `apps/console/components/graph/use-kb-graph.ts`
+- `apps/console/components/kb/use-librarian.ts`
+- `apps/console/components/work/work-badges.tsx`
+- `apps/console/components/work/work-client.ts`
+- `apps/console/components/work/work-id-chip.tsx`
+- `apps/console/components/work/work-item-page.tsx`
 - `apps/console/components/work-view-entry.tsx`
-- `apps/console/components/work-view.tsx`
+- `apps/console/components/work/work-view.tsx`
 - `apps/console/lib/composer-draft.ts`
 - `apps/console/scripts/test.sh`
-- `apps/console/src/core/branch-graph.ts`
-- `apps/console/src/core/coalesced-refresh.ts`
-- `apps/console/src/core/dep-draw-list.ts`
-- `apps/console/src/core/dep-palette.ts`
-- `apps/console/src/core/dep-route-adapter.ts`
-- `apps/console/src/core/entry-view.ts`
-- `apps/console/src/core/escape-html.ts`
-- `apps/console/src/core/feature-progress.ts`
-- `apps/console/src/core/graduate.ts`
-- `apps/console/src/core/graph-activity.ts`
-- `apps/console/src/core/graph-layout.ts`
-- `apps/console/src/core/graph-pane.ts`
-- `apps/console/src/core/graph-persistence.ts`
-- `apps/console/src/core/hub-auth.ts`
-- `apps/console/src/core/item-document.ts`
-- `apps/console/src/core/kb-graph-model.ts`
-- `apps/console/src/core/kb.ts`
-- `apps/console/src/core/memory-panel-model.ts`
-- `apps/console/src/core/needs-you.ts`
-- `apps/console/src/core/objects.ts`
-- `apps/console/src/core/palette.ts`
-- `apps/console/src/core/panel-host.ts`
+- `apps/console/src/core/graph/branch-graph.ts`
+- `apps/console/src/core/ui/coalesced-refresh.ts`
+- `apps/console/src/core/graph/dep-draw-list.ts`
+- `apps/console/src/core/graph/dep-palette.ts`
+- `apps/console/src/core/graph/dep-route-adapter.ts`
+- `apps/console/src/core/kb/entry-view.ts`
+- `apps/console/src/core/ui/escape-html.ts`
+- `apps/console/src/core/work/feature-progress.ts`
+- `apps/console/src/core/kb/graduate.ts`
+- `apps/console/src/core/graph/graph-activity.ts`
+- `apps/console/src/core/graph/graph-layout.ts`
+- `apps/console/src/core/graph/graph-pane.ts`
+- `apps/console/src/core/graph/graph-persistence.ts`
+- `apps/console/src/core/ui/hub-auth.ts`
+- `apps/console/src/core/kb/item-document.ts`
+- `apps/console/src/core/graph/kb-graph-model.ts`
+- `apps/console/src/core/kb/kb.ts`
+- `apps/console/src/core/kb/memory-panel-model.ts`
+- `apps/console/src/core/thread/needs-you.ts`
+- `apps/console/src/core/thread/objects.ts`
+- `apps/console/src/core/ui/palette.ts`
+- `apps/console/src/core/ui/panel-host.ts`
 - `apps/console/src/core/pipeline-model.ts`
-- `apps/console/src/core/route-layout.ts`
-- `apps/console/src/core/subagent-message.ts`
-- `apps/console/src/core/subagents.ts`
-- `apps/console/src/core/task-graph-layout.ts`
-- `apps/console/src/core/task-graph.ts`
-- `apps/console/src/core/thread-adapter.ts`
-- `apps/console/src/core/thread-cards.ts`
-- `apps/console/src/core/thread-lists.ts`
-- `apps/console/src/core/tool-rows.ts`
-- `apps/console/src/core/work-connectors.ts`
-- `apps/console/src/core/work-id-link.ts`
-- `apps/console/src/core/work-route.ts`
-- `apps/console/src/core/work-select.ts`
-- `apps/console/src/core/work-table.ts`
-- `apps/console/src/core/work-view.ts`
-- `apps/console/src/server/branch-graph.ts`
-- `apps/console/src/server/console-client.ts`
-- `apps/console/src/server/graph-positions.ts`
-- `apps/console/src/server/memory-api.ts`
-- `apps/console/src/server/needs-you-api.ts`
+- `apps/console/src/core/graph/route-layout.ts`
+- `apps/console/src/core/thread/subagent-message.ts`
+- `apps/console/src/core/thread/subagents.ts`
+- `apps/console/src/core/work/task-graph-layout.ts`
+- `apps/console/src/core/work/task-graph.ts`
+- `apps/console/src/core/thread/thread-adapter.ts`
+- `apps/console/src/core/thread/thread-cards.ts`
+- `apps/console/src/core/thread/thread-lists.ts`
+- `apps/console/src/core/thread/tool-rows.ts`
+- `apps/console/src/core/work/work-connectors.ts`
+- `apps/console/src/core/work/work-id-link.ts`
+- `apps/console/src/core/work/work-route.ts`
+- `apps/console/src/core/work/work-select.ts`
+- `apps/console/src/core/work/work-table.ts`
+- `apps/console/src/core/work/work-view.ts`
+- `apps/console/src/server/thread/branch-graph.ts`
+- `apps/console/src/server/thread/console-client.ts`
+- `apps/console/src/server/kb/graph-positions.ts`
+- `apps/console/src/server/kb/memory-api.ts`
+- `apps/console/src/server/thread/needs-you-api.ts`
 - `apps/console/src/server/pipeline-api.ts`
-- `apps/console/src/server/thread-api.ts`
+- `apps/console/src/server/thread/thread-api.ts`
 - `apps/console/src/store/graph-positions.ts`
-- `apps/console/tests/ask-card-kinds.test.tsx`
-- `apps/console/tests/ask-card-optional.test.tsx`
-- `apps/console/tests/ask-card-other.test.tsx`
-- `apps/console/tests/ask-card-ship.test.tsx`
-- `apps/console/tests/ask-card-steps.test.tsx`
-- `apps/console/tests/branch-graph.test.ts`
-- `apps/console/tests/card-registry.test.tsx`
-- `apps/console/tests/coalesced-refresh.test.ts`
-- `apps/console/tests/composer-controls.test.tsx`
+- `apps/console/tests/components/ask/ask-card-kinds.test.tsx`
+- `apps/console/tests/components/ask/ask-card-optional.test.tsx`
+- `apps/console/tests/components/ask/ask-card-other.test.tsx`
+- `apps/console/tests/components/ask/ask-card-ship.test.tsx`
+- `apps/console/tests/components/ask/ask-card-steps.test.tsx`
+- `apps/console/tests/core/graph/branch-graph.test.ts`
+- `apps/console/tests/components/thread/card-registry.test.tsx`
+- `apps/console/tests/core/ui/coalesced-refresh.test.ts`
+- `apps/console/tests/components/composer/composer-controls.test.tsx`
 - `apps/console/tests/composer-draft.test.tsx`
-- `apps/console/tests/console-client.test.ts`
-- `apps/console/tests/dep-routes-render.test.ts`
+- `apps/console/tests/server/thread/console-client.test.ts`
+- `apps/console/tests/core/graph/dep-routes-render.test.ts`
 - `apps/console/tests/desktop-remote.test.ts`
-- `apps/console/tests/dictation-store-notify.test.tsx`
-- `apps/console/tests/entry-view.test.ts`
-- `apps/console/tests/escape-raw-html.test.tsx`
-- `apps/console/tests/feature-progress.test.tsx`
-- `apps/console/tests/feature-ready-label.test.ts`
-- `apps/console/tests/feature-threads.test.tsx`
-- `apps/console/tests/git-tree.test.tsx`
-- `apps/console/tests/graduate.test.tsx`
-- `apps/console/tests/graph-activity.test.ts`
-- `apps/console/tests/graph-layout.test.ts`
-- `apps/console/tests/graph-pane.test.tsx`
-- `apps/console/tests/graph-persistence.test.ts`
-- `apps/console/tests/graph-route.test.tsx`
-- `apps/console/tests/graph-work-depth.test.ts`
+- `apps/console/tests/components/settings/dictation-store-notify.test.tsx`
+- `apps/console/tests/core/kb/entry-view.test.ts`
+- `apps/console/tests/components/ask/escape-raw-html.test.tsx`
+- `apps/console/tests/components/thread/feature-progress.test.tsx`
+- `apps/console/tests/core/graph/feature-ready-label.test.ts`
+- `apps/console/tests/components/work/feature-threads.test.tsx`
+- `apps/console/tests/components/thread/git-tree.test.tsx`
+- `apps/console/tests/components/kb/graduate.test.tsx`
+- `apps/console/tests/core/graph/graph-activity.test.ts`
+- `apps/console/tests/core/graph/graph-layout.test.ts`
+- `apps/console/tests/components/graph/graph-pane.test.tsx`
+- `apps/console/tests/core/graph/graph-persistence.test.ts`
+- `apps/console/tests/components/graph/graph-route.test.tsx`
+- `apps/console/tests/core/graph/graph-work-depth.test.ts`
 - `apps/console/tests/helpers/thread-fetch.ts`
-- `apps/console/tests/hub-auth.test.ts`
-- `apps/console/tests/inline-mic.test.tsx`
-- `apps/console/tests/item-document.test.ts`
-- `apps/console/tests/kb-core.test.ts`
-- `apps/console/tests/kb-graph-model.test.ts`
-- `apps/console/tests/live-bridge-real-wolf.test.ts`
-- `apps/console/tests/memory-api.test.ts`
+- `apps/console/tests/core/ui/hub-auth.test.ts`
+- `apps/console/tests/components/settings/inline-mic.test.tsx`
+- `apps/console/tests/core/kb/item-document.test.ts`
+- `apps/console/tests/core/kb/kb-core.test.ts`
+- `apps/console/tests/core/graph/kb-graph-model.test.ts`
+- `apps/console/tests/server/thread/live-bridge-real-wolf.test.ts`
+- `apps/console/tests/server/kb/memory-api.test.ts`
 - `apps/console/tests/memory-bind.test.tsx`
-- `apps/console/tests/memory-events-hub.test.ts`
-- `apps/console/tests/memory-panel-model.test.ts`
-- `apps/console/tests/memory-panel-observations.test.tsx`
-- `apps/console/tests/needs-you.test.ts`
-- `apps/console/tests/observation-groups.test.ts`
+- `apps/console/tests/components/memory/memory-events-hub.test.ts`
+- `apps/console/tests/core/kb/memory-panel-model.test.ts`
+- `apps/console/tests/components/memory/memory-panel-observations.test.tsx`
+- `apps/console/tests/server/thread/needs-you.test.ts`
+- `apps/console/tests/core/kb/observation-groups.test.ts`
 - `apps/console/tests/overlay-shell.test.tsx`
-- `apps/console/tests/palette.test.ts`
-- `apps/console/tests/panel-host.test.tsx`
+- `apps/console/tests/core/ui/palette.test.ts`
+- `apps/console/tests/components/shell/panel-host.test.tsx`
 - `apps/console/tests/pipeline-api.test.ts`
 - `apps/console/tests/pipeline-model.test.ts`
-- `apps/console/tests/plan-graph-click.test.tsx`
-- `apps/console/tests/plan-graph.test.tsx`
-- `apps/console/tests/render-entry-reader.test.tsx`
-- `apps/console/tests/render-graph-card.test.tsx`
-- `apps/console/tests/render-memory-panel.test.tsx`
-- `apps/console/tests/render-needs-you.test.tsx`
+- `apps/console/tests/components/thread/plan-graph-click.test.tsx`
+- `apps/console/tests/components/thread/plan-graph.test.tsx`
+- `apps/console/tests/components/kb/render-entry-reader.test.tsx`
+- `apps/console/tests/components/graph/render-graph-card.test.tsx`
+- `apps/console/tests/components/memory/render-memory-panel.test.tsx`
+- `apps/console/tests/components/shell/render-needs-you.test.tsx`
 - `apps/console/tests/render-pipeline-view.test.tsx`
-- `apps/console/tests/render-subagent-modal.test.tsx`
-- `apps/console/tests/render-task-graph.test.tsx`
-- `apps/console/tests/route-layout.test.ts`
-- `apps/console/tests/route-same-nodes.test.ts`
-- `apps/console/tests/structured-objects.test.tsx`
-- `apps/console/tests/subagent-modal-dup.test.tsx`
-- `apps/console/tests/subagent-strip.test.tsx`
-- `apps/console/tests/task-graph-layout.test.ts`
-- `apps/console/tests/task-graph.test.ts`
-- `apps/console/tests/thread-adapter.test.ts`
-- `apps/console/tests/thread-api-cards.test.ts`
-- `apps/console/tests/thread-api.test.ts`
-- `apps/console/tests/thread-attachments-ui.test.tsx`
-- `apps/console/tests/thread-attachments.test.tsx`
-- `apps/console/tests/thread-chat-card.test.tsx`
-- `apps/console/tests/thread-chat-dictation.test.tsx`
-- `apps/console/tests/thread-chat-draft.test.tsx`
-- `apps/console/tests/thread-chat-live-real-wolf.test.tsx`
-- `apps/console/tests/thread-chat-live.test.tsx`
-- `apps/console/tests/thread-chat-subagent-message.test.tsx`
-- `apps/console/tests/thread-chat-thinking.test.tsx`
+- `apps/console/tests/components/thread/render-subagent-modal.test.tsx`
+- `apps/console/tests/components/work/render-task-graph.test.tsx`
+- `apps/console/tests/core/graph/route-layout.test.ts`
+- `apps/console/tests/components/graph/route-same-nodes.test.ts`
+- `apps/console/tests/components/thread/structured-objects.test.tsx`
+- `apps/console/tests/components/thread/subagent-modal-dup.test.tsx`
+- `apps/console/tests/components/thread/subagent-strip.test.tsx`
+- `apps/console/tests/core/work/task-graph-layout.test.ts`
+- `apps/console/tests/core/work/task-graph.test.ts`
+- `apps/console/tests/components/thread/thread-adapter.test.ts`
+- `apps/console/tests/server/thread/thread-api-cards.test.ts`
+- `apps/console/tests/server/thread/thread-api.test.ts`
+- `apps/console/tests/components/thread/thread-attachments-ui.test.tsx`
+- `apps/console/tests/components/thread/thread-attachments.test.tsx`
+- `apps/console/tests/components/thread/thread-chat-card.test.tsx`
+- `apps/console/tests/components/thread/thread-chat-dictation.test.tsx`
+- `apps/console/tests/components/settings/thread-chat-draft.test.tsx`
+- `apps/console/tests/components/thread/thread-chat-live-real-wolf.test.tsx`
+- `apps/console/tests/components/thread/thread-chat-live.test.tsx`
+- `apps/console/tests/components/thread/thread-chat-subagent-message.test.tsx`
+- `apps/console/tests/components/shell/thread-chat-thinking.test.tsx`
 - `apps/console/tests/thread-closed.test.tsx`
-- `apps/console/tests/thread-compaction-divider.test.tsx`
-- `apps/console/tests/thread-context.test.tsx`
-- `apps/console/tests/thread-lists.test.ts`
-- `apps/console/tests/thread-steer.test.ts`
-- `apps/console/tests/tool-keys.test.ts`
-- `apps/console/tests/tool-rows.test.tsx`
-- `apps/console/tests/transcript-paging.test.ts`
-- `apps/console/tests/turn-timers.test.tsx`
-- `apps/console/tests/work-connectors.test.ts`
-- `apps/console/tests/work-id-chip.test.tsx`
+- `apps/console/tests/components/thread/thread-compaction-divider.test.tsx`
+- `apps/console/tests/components/thread/thread-context.test.tsx`
+- `apps/console/tests/core/thread/thread-lists.test.ts`
+- `apps/console/tests/components/thread/thread-steer.test.ts`
+- `apps/console/tests/components/thread/tool-keys.test.ts`
+- `apps/console/tests/components/thread/tool-rows.test.tsx`
+- `apps/console/tests/components/thread/transcript-paging.test.ts`
+- `apps/console/tests/components/thread/turn-timers.test.tsx`
+- `apps/console/tests/core/work/work-connectors.test.ts`
+- `apps/console/tests/components/work/work-id-chip.test.tsx`
 - `apps/console/tests/work-reader-overlay.test.tsx`
-- `apps/console/tests/work-route.test.ts`
-- `apps/console/tests/work-select.test.ts`
-- `apps/console/tests/work-table.test.ts`
+- `apps/console/tests/core/work/work-route.test.ts`
+- `apps/console/tests/core/work/work-select.test.ts`
+- `apps/console/tests/core/work/work-table.test.ts`
 - `apps/console/tests/work-view-select.test.tsx`
-- `apps/console/tests/work-view.test.ts`
-- `apps/console/tests/work-view.test.tsx`
+- `apps/console/tests/core/work/work-view.test.ts`
+- `apps/console/tests/components/work/work-view.test.tsx`
 - `apps/desktop/README.md`
 - `apps/desktop/electron/notify.cjs`
 - `apps/desktop/electron/remote.cjs`
@@ -892,3 +891,26 @@ Totals: tracked files 617; lines now 81641; upstream-derived 51%.
 - `tests/web-search.test.ts`
 
 </details>
+
+## Removed in work-wolfpack-xWID29J
+
+Measured against `060c20cf` (upstream `6cba9c8`) with the same method: every tracked text file under `apps/console` and `apps/desktop` compared by git blob hash with the mapped upstream blob; modified files diffed with `git diff --numstat`; upstream-derived lines = current lines minus lines added vs upstream.
+
+| | Before | After |
+|---|---|---|
+| Tracked text lines | 103636 | 101930 |
+| Upstream-derived lines | 35348 | 33354 |
+| Share upstream-derived | 34% | 33% |
+| Files unchanged / modified / new | 54 / 143 / 428 | 35 / 157 / 428 |
+
+(Binary files count in file totals only.)
+
+What changed:
+
+- Unused exports (nothing live imports them) and the code only they needed were deleted from 22 copied files (knip, run from outside the repo with a config that treats `app/`, `proxy.ts`, `scripts/` and the tests as entry points), then barrels and tests re-checked. 884 lines removed.
+- `components/ui/{button,button-group,collapsible,input,separator}.tsx` and `lib/utils.ts` are now the shadcn/ui `new-york-v4` registry sources (MIT, Copyright (c) 2023 shadcn). `tooltip.tsx` is the registry file with Wolfpack's tuning kept as a labelled edit. Noted in NOTICE.
+- `components/ai-elements/*` were rewritten small from what the call sites use; Vercel AI Elements is Apache-2.0 and is credited in NOTICE. Unused branch, action, toolbar, download and scroll-button pieces are gone; shimmer is now plain CSS (`.wp-shimmer` in `globals.css`).
+- `eslint.config.mjs`, `postcss.config.mjs`, `tsconfig.json`, `next.config.ts` and the console `.gitignore` were rewritten fresh.
+- `apps/desktop/build/background.png` and `background@2x.png` (upstream dmg artwork) were deleted with the `dmg.background` setting. `entitlements.mac.plist` was rewritten with two keys: `allow-jit` (V8) and `device.audio-input` (dictation).
+- Deleted as unreferenced: `apps/console/public/fonts/cmunbx.ttf`, `OFL.txt` (no CSS, code or build reference; NOTICE paragraph removed) and `apps/console/components.json` (shadcn CLI config only). Without `components.json`, `npx shadcn add` no longer works; recreate it first if you need the CLI.
+- Kept on purpose: `public/worklets/pcm-capture.js` (knip calls it unused, but `components/composer/dictation.tsx` loads it with `audioWorklet.addModule`), and `apps/console/docs/keyboard.md` and `desktop-release.md` (linked from both READMEs).

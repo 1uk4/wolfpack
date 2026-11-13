@@ -113,14 +113,11 @@ describe("orchestrator UI-check rule", () => {
 });
 
 describe("bundled visualizer", () => {
-  it("is in the bundled roster with the visual-tools tool loadout", () => {
+  it("is in the bundled roster with read-only tools only", () => {
     const def = loadAgent("visualizer", { cwd: tmp(), agentDir: tmp() });
     expect(def).not.toBeNull();
     const tools = (def?.tools ?? "").split(",").map((t) => t.trim());
-    for (const t of ["write_mermaid", "edit_mermaid", "render_mermaid", "write_svg", "edit_svg", "render_svg"]) {
-      expect(tools).toContain(t);
-    }
-    expect(def?.body).toMatch(/visual-tools/);
+    expect(tools).toEqual(["read", "grep", "find", "ls"]);
   });
 });
 

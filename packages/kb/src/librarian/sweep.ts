@@ -197,8 +197,10 @@ export function mergeBand(ranked: Array<{ id: string; score: number }>): MergeBa
 /** How a contribution was routed; written to its receipt as `routing:` JSON. */
 export interface RoutingRecord {
   route: "alias" | "anchor" | "similarity" | "new";
-  /** The entry written (set on commit). */
+  /** The entry written (set on commit). With a split it is the first of `targets`. */
   target?: string;
+  /** Every entry the contribution produced, in order (main entry first, then a split-out overflow). */
+  targets?: string[];
   /** Top-3 similarity candidates (best first). */
   candidates: Array<{ id: string; score: number }>;
   band?: string;
@@ -1017,6 +1019,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       }
 
       routing.target = entry.id;
+      routing.targets = [entry.id, ...(routing.overflow?.target ? [routing.overflow.target] : [])];
       await w.writeReceipt(roots, c.from, c, action, entry.id, routing);
       await w.markProcessed(c);
       itemEvent = { outcome: action === "create" ? "create" : "merge", entryId: entry.id, decision: placed.decision };

@@ -1,8 +1,9 @@
 /** Hub pairing for workerd: `workerd pair <hub-url> <code>` trades a code for a worker token and stores it in hub.json (0600). */
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { PairResponseSchema } from "@wolfpack/protocol";
+import { workerdConfigDir as resolveWorkerdConfigDir } from "@wolfpack/protocol/runtime-home";
 
 export interface HubConfig {
   hubUrl: string;
@@ -11,7 +12,7 @@ export interface HubConfig {
 }
 
 /** ~/.wolfpack/workerd (the ~/.wolfpack convention), or $WORKERD_CONFIG_DIR. */
-export const workerdConfigDir = (): string => process.env.WORKERD_CONFIG_DIR ?? join(homedir(), ".wolfpack", "workerd");
+export const workerdConfigDir = (): string => resolveWorkerdConfigDir();
 export const hubConfigFile = (dir = workerdConfigDir()): string => join(dir, "hub.json");
 
 export function loadHubConfig(dir?: string): HubConfig | undefined {

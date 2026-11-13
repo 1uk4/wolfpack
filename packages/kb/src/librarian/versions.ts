@@ -94,11 +94,11 @@ export function snapshotIfChanged(
  * recorded in the copy's frontmatter (`retired`, `retiredInto`), so a wolf that
  * has the KB mirror but not the ledger can still follow the entry to it.
  */
-export function archiveRetiredEntry(roots: KbRoots, domain: string, entryId: string, file: string, reason?: string): string {
+export function archiveRetiredEntry(roots: KbRoots, domain: string, entryId: string, file: string, reason?: string, survivors?: string[]): string {
   const dir = entryVersionsDir(roots, domain, entryId);
   mkdirSync(dir, { recursive: true });
   const name = stamp(dir, "-retired");
-  const into = reason ? /\b(?:merged into|moved to)\s+(kb-[A-Za-z0-9-]+)/i.exec(reason)?.[1] : undefined;
+  const into = survivors?.[0] ?? (reason ? /\b(?:merged into|moved to)\s+(kb-[A-Za-z0-9-]+)/i.exec(reason)?.[1] : undefined);
   const raw = reason && into ? readFileSync(file, "utf-8") : null;
   if (raw && reason && /^---\n/.test(raw)) {
     const extra = `retired: ${JSON.stringify(reason)}\nretiredInto: ${into}`;

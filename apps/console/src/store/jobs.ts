@@ -11,9 +11,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
-import { emit } from "../core/events.ts";
-import type { JobStore } from "../core/ports.ts";
-import type { CreateJobInit, JobPatch } from "../core/ports.ts";
+import { emit } from "../core/thread/events.ts";
+import type { JobStore } from "../core/ui/ports.ts";
+import type { CreateJobInit, JobPatch } from "../core/ui/ports.ts";
 import type { JobRecord } from "../core/contracts.ts";
 
 /** Background jobs (data/jobs). Not in config.ts PATHS (orchestrator-owned). */

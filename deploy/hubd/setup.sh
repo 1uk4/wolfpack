@@ -10,17 +10,19 @@
 # The unit is written by `setup` and ALSO refreshed by `install` when the installed unit still binds a /home path, so a release
 # deploy (which only runs `install`) migrates an old unit and drops the stale drop-ins by itself.
 set -euo pipefail
+# SETUP_ROOT: path prefix for the install tree and unit, so tests can drive `install` in a temp dir (also skips the root check). Unset on hosts.
+R="${SETUP_ROOT:-}"
 
 DRY=0 CMD="" BUNDLE="" BIND="" PORT=3150 PURGE=0
 HUBD_USER=hubd
 HUBD_GROUP=hubd
 DATA_DIR=/var/lib/hubd
 DOMAINS=$DATA_DIR/kb/base/domains
-OPT=/opt/wolfpack-hubd
+OPT="$R"/opt/wolfpack-hubd
 ENV_DIR=/etc/wolfpack
 ENV_FILE=$ENV_DIR/hubd.env
-UNIT=/etc/systemd/system/hubd.service
-DROPIN_DIR=/etc/systemd/system/hubd.service.d
+UNIT="$R"/etc/systemd/system/hubd.service
+DROPIN_DIR="$R"/etc/systemd/system/hubd.service.d
 KEEP_RELEASES=5
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -57,7 +59,7 @@ while (($#)); do
 done
 [[ -n $CMD ]] || die "usage: setup.sh [--dry-run] setup|install|rollback|uninstall [options]"
 valid_port "$PORT" || die "bad --port $PORT (1024-65535, and never 3141: wolfpack-agent)"
-((DRY)) || [[ $EUID -eq 0 ]] || die "run as root (or use --dry-run)"
+((DRY)) || [[ -n $R || $EUID -eq 0 ]] || die "run as root (or use --dry-run)"
 
 hubd_user_exists() { id "$HUBD_USER" >/dev/null 2>&1; }
 
@@ -80,7 +82,7 @@ resolve_node() {
   if [[ $n == /usr/bin/node || $n == /usr/local/bin/node ]]; then echo "$n"; return 0; fi
   if [[ -f $UNIT ]]; then
     u="$(sed -n 's|^ExecStart=\(/[^ ]*\) .*|\1|p' "$UNIT" | head -n1)"
-    if [[ $u == /usr/bin/node || $u == /usr/local/bin/node ]] && [[ -x $u ]]; then echo "$u"; return 0; fi
+    if [[ $u == /usr/bin/node || $u == /usr/local/bin/node ]] && [[ -x "$R$u" ]]; then echo "$u"; return 0; fi
   fi
   return 1
 }
@@ -173,18 +175,18 @@ cmd_setup() {
   echo "setup done. Next: install a bundle (setup.sh install --bundle <dir>), then 'systemctl start hubd'."
 }
 
-# `install` (every release deploy) refreshes the unit only when the installed one still binds a /home path (the pre-2026-11-06 unit).
-# A current unit is left alone, so a hand-tuned unit is not overwritten on every deploy.
+# `install` (every release deploy) rewrites the unit from the bundle whenever the rendered unit differs from the installed one
+# (work-wolfpack-jScCkFy), so a unit change reaches hosts that already have one. An identical unit is left alone (no backup, no reload).
 migrate_old_unit() {
   local tpl node ts bak
   [[ -f $UNIT ]] || return 0
-  grep -Eq '^(BindReadOnlyPaths|BindPaths|ReadWritePaths)=.*/home/' "$UNIT" || return 0
   tpl="$BUNDLE/hubd.service"; [[ -f $tpl ]] || tpl="$HERE/hubd.service"
-  [[ -f $tpl ]] || { warn "installed $UNIT binds /home paths but no hubd.service template was found next to the bundle or setup.sh; run 'setup.sh setup' by hand"; return 0; }
+  [[ -f $tpl ]] || { warn "installed $UNIT exists but no hubd.service template was found next to the bundle or setup.sh; run 'setup.sh setup' by hand"; return 0; }
   node="$(resolve_node)" || die "cannot fill @NODE@: node on PATH is not /usr/bin/node or /usr/local/bin/node and the installed unit's ExecStart does not name one; nothing changed (run 'setup.sh setup' by hand)"
+  if sed "s|@NODE@|$node|" "$tpl" | cmp -s - "$UNIT"; then return 0; fi
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   bak="$OPT/unit-backup-$ts"
-  log "installed unit still binds /home paths: backing up to $UNIT.bak-$ts and $bak, then replacing it from $tpl"
+  log "installed unit differs from the bundle: backing up to $UNIT.bak-$ts and $bak, then replacing it from $tpl"
   # The unit copy sits beside the unit (not a *.service, systemd ignores it); the drop-ins go outside /etc/systemd so they are never loaded.
   run cp -a "$UNIT" "$UNIT.bak-$ts"
   run install -d -m 0700 "$bak"

@@ -13,7 +13,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { wolvesRoot } from "@wolfpack/protocol/runtime-home";
 import { emitDelta } from "@wolfpack/kb/client";
 import type { Contribution, KbRoots } from "@wolfpack/kb/shared";
 import { CRAWL } from "@wolfpack/engine";
@@ -108,7 +108,7 @@ export function emitCrawl(
   // throwaway.
   const denLocal = opts.dryRun
     ? join(sink.dir, "den-kb")
-    : (opts.roots?.denLocal ?? join(process.env.WOLF_DEN ?? join(homedir(), "wolves", "den"), "kb"));
+    : (opts.roots?.denLocal ?? join(process.env.WOLF_DEN ?? join(wolvesRoot(), "den"), "kb"));
   const roots: KbRoots = {
     kbBase: opts.roots?.kbBase ?? process.env.KB_BASE ?? "",
     opsRoot,

@@ -1,4 +1,6 @@
-/** /settings opens the Settings modal on its tab (AppShell's SettingsDialogProvider reads the URL); the page itself draws nothing. */
-export default function Page() {
-	return null;
+import { redirect } from "next/navigation";
+
+/** /settings used to open the Settings dialog on Wolf settings; the Pack's Wolves section holds that now (work-wolfpack-u6GH2kk). */
+export default function Page(): never {
+	redirect("/?pack=wolves");
 }

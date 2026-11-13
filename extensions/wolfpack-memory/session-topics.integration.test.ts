@@ -15,7 +15,7 @@ import type { Engine } from "@wolfpack/engine";
 import { takeSnapshot } from "@wolfpack/engine";
 import { startLocalWorkServer } from "@wolfpack/work-server";
 import { contentHash } from "@wolfpack/kb/shared";
-import { writeDenTopic } from "@wolfpack/memory";
+import { writeDenTopic, writeTopic } from "@wolfpack/memory";
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { attachConversationReader } from "../../packages/harness/src/engine/conversation-reader.js";
 import { ENGINE_CONTEXT as ctx } from "../../packages/harness/src/engine/index.js";
@@ -152,6 +152,18 @@ describe("session-topic layer (sandboxed durable wolf)", () => {
     expect(files.every((f) => f.startsWith("caching"))).toBe(true);
     expect(stub.steps).toEqual(expect.arrayContaining(["consolidate", "distill"]));
     expect(hashTree(live)).toEqual(before);
+  });
+
+  it("promote with topic ids promotes only those topics, and without ids promotes them all", async () => {
+    const stub = stubEngine();
+    const { den } = await startWolf(stub.engine);
+    seedPool(den);
+    writeTopic(join(den, ".memory", "sessions", "durable"), { id: "other", title: "Other", summary: "Another subject", updated: "2026-10-25 09:00", body: "Another subject body.", sources: ["thread:1"], lastNote: "2026-10-25T09:00:00.000Z" });
+    const start = memoryActionsFor(den)!.promote({ ids: ["caching"] });
+    if (start.status !== "started") throw new Error("promote not started");
+    await start.done;
+    expect(existsSync(join(den, "memory/topics/caching.md"))).toBe(true);
+    expect(existsSync(join(den, "memory/topics/other.md"))).toBe(false);
   });
 
   it("a second concurrent promote is refused by the single-promote guard; a later one runs", async () => {

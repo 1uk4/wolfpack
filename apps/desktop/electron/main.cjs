@@ -24,7 +24,7 @@
  *     would shadow every settings-page key change until restart.
  */
 
-const { app, BrowserWindow, Menu, Notification, ipcMain, session, shell, dialog } = require("electron");
+const { app, BrowserWindow, Menu, Notification, Tray, nativeImage, ipcMain, session, shell, dialog, clipboard } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -32,8 +32,15 @@ const net = require("node:net");
 const path = require("node:path");
 const { createNeedsYouNotifier } = require("./notify.cjs");
 const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs");
+const { createSupervisor } = require("./supervisor.cjs");
+const { KEYS_FILE } = require("./key-file.cjs"); // the console reads/writes the same keys.env workerd does (Pack → Keys)
+const { shouldCurate, parseBatteryPercent } = require("./curator-gate.cjs");
+const { needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup, wolfIdFor } = require("./setup.cjs");
+const { consoleEnv } = require("./console-env.cjs");
+const { windowAllClosedAction, createTray } = require("./tray.cjs");
+const { createAppSettings } = require("./app-settings.cjs");
 
-// Mirrors SIDEBAR_AUTOCLOSE in components/sidebar.tsx — keep in sync (the
+// Mirrors SIDEBAR_AUTOCLOSE in components/shell/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
 const SIDEBAR_AUTOCLOSE = 928;
 
@@ -80,6 +87,221 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 let serverProcess = null;
+let supervisor = null; // hubd + workerd + wolfd, this Mac only (supervisor.cjs)
+let appRuntime = false; // true once the app runs its own services (menu-bar app); remote/dev modes stay false
+let tray = null;
+let updateDialogOpen = false; // the failed-update dialog is showing: nothing is running, so a quit just exits
+let systemShutdown = false; // set by powerMonitor "shutdown": before-quit must not hold the quit
+
+let chatWolf = "wolf"; // the wolf whose chat the window opens on (chosen in the setup wizard)
+let wizardWindow = null; // the first-run setup window, closed once the main window is up
+let wizardFinishing = false; // finish has started: closing the wizard window must not quit the app (set until the chat window exists)
+
+/** Suggested wolf name: the macOS user's first name + "'s wolf". */
+function suggestedWolfName() {
+	let first = "";
+	try {
+		first = String(require("node:child_process").execFileSync("id", ["-F"], { encoding: "utf8" })).trim().split(/\s+/)[0];
+	} catch {
+		/* fall back to the login name */
+	}
+	if (!first) first = require("node:os").userInfo().username;
+	first = first.replace(/[^\p{L}\p{N}]/gu, "");
+	return wolfIdFor(first) ? `${first.charAt(0).toUpperCase()}${first.slice(1)}'s wolf` : "My wolf";
+}
+
+/**
+ * First launch (or a relaunch after an unfinished setup): show the setup wizard, prefilled with what was stored; resolve to the running
+ * supervisor once the user finishes. No runtime service (hubd, workerd, wolfd) starts before the wizard finishes; only the console page host does. Once finish has begun, closing the window is fine: the chat
+ * window opens when the runtime is ready (and a failure after that shows the start-error dialog).
+ */
+function runWizard(opts) {
+	return new Promise((resolve, reject) => {
+		const envKey = process.env.WOLFPACK_APP_API_KEY || ""; // dev/test override: skips the sign-in step
+		const win = new BrowserWindow({
+			width: 560,
+			height: 680,
+			title: PRODUCT_NAME,
+			backgroundColor: "#0f141a",
+			...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" } : {}),
+			webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload: path.join(__dirname, "preload.cjs"), additionalArguments: ["--wolfpack-setup"] },
+		});
+		wizardWindow = win;
+		const wc = win.webContents;
+		wc.on("will-navigate", (e) => e.preventDefault()); // the wizard page never goes anywhere else
+		wc.setWindowOpenHandler(() => ({ action: "deny" }));
+		let finishing = false;
+		const ch = ["info", "name", "check-key", "open-external", "finish"].map((c) => `wolfpack:setup:${c}`);
+		const cleanup = () => ch.forEach((c) => ipcMain.removeHandler(c));
+		// Only the wizard window's own top frame, showing our setup page from disk, may call these.
+		const fromWizard = (e) => {
+			if (e.sender !== wc || e.senderFrame !== wc.mainFrame) return false;
+			try {
+				const u = new URL(e.senderFrame.url);
+				return u.protocol === "file:" && u.pathname.endsWith("/setup/index.html");
+			} catch {
+				return false;
+			}
+		};
+		ipcMain.handle("wolfpack:setup:info", (e) => {
+			if (!fromWizard(e)) return null;
+			const stored = readSetup(opts.stateDir);
+			// The key never reaches the page: only whether one is saved.
+			return {
+				keyEnv: !!envKey,
+				keySaved: !!storedKey(opts.stateDir),
+				prefill: stored ? { wolfName: stored.wolfName, domains: stored.domains } : null,
+			};
+		});
+		ipcMain.handle("wolfpack:setup:name", (e) => (fromWizard(e) ? suggestedWolfName() : ""));
+		ipcMain.handle("wolfpack:setup:check-key", (e, key) => (fromWizard(e) ? checkKey(String(key ?? ""), { baseUrl: opts.modelBaseUrl }) : { ok: false, error: "Not allowed" }));
+		ipcMain.handle("wolfpack:setup:open-external", (e, url) => {
+			if (fromWizard(e) && url === "https://console.anthropic.com/settings/keys") void shell.openExternal(url);
+		});
+		ipcMain.handle("wolfpack:setup:finish", async (e, answers) => {
+			if (!fromWizard(e) || finishing) return { ok: false, error: "Setup is already running." };
+			finishing = true;
+			wizardFinishing = true;
+			const fail = (message) => {
+				finishing = false;
+				wizardFinishing = false;
+				return { ok: false, error: message };
+			};
+			try {
+				const k = await resolveFinishKey(answers, { envKey, stateDir: opts.stateDir, baseUrl: opts.modelBaseUrl });
+				if (!k.ok) return fail(k.error);
+				const sup = await runSetup({ ...answers, apiKey: k.key }, { ...opts, onCreate: (s) => (supervisor = s) });
+				chatWolf = readWolfId(opts.stateDir);
+				cleanup();
+				resolve(sup);
+				return { ok: true };
+			} catch (err) {
+				const failed = supervisor;
+				supervisor = null;
+				if (err?.stopped) {
+					// Quit while starting: normal, quiet. startRuntime sees the same rejection.
+					cleanup();
+					reject(err);
+					return { ok: false, error: "Cancelled." };
+				}
+				log(`setup failed: ${err?.stack ?? err}`);
+				const message = String(err?.message ?? err).split("\n")[0];
+				if (win.isDestroyed()) {
+					// The user closed the wizard while it was starting: nobody to show the error to, so the start-error dialog does.
+					await failed?.stop?.().catch(() => {}); // runSetup already stopped it; make sure
+					cleanup();
+					reject(new Error(message));
+					return { ok: false, error: message };
+				}
+				return fail(message);
+			}
+		});
+		win.on("closed", () => {
+			if (wizardWindow === win) wizardWindow = null;
+			if (finishing) return; // the chat window opens when the runtime is ready
+			cleanup();
+			reject(Object.assign(new Error("setup closed"), { stopped: true }));
+			app.quit(); // closing the wizard before finishing quits: nothing was started
+		});
+		void win.loadFile(path.join(__dirname, "setup", "index.html"));
+	});
+}
+
+/** The pack state dir (keys.env, setup.json, hub/): one place decides it. */
+const appStateDir = () => process.env.WOLFPACK_APP_HOME || app.getPath("userData");
+
+/** work-wolfpack-u6Z4dRY: back up, migrate, restore on failure (electron/migrate.cjs). On failure: plain-words dialog, then quit; throws {stopped} so no service starts. */
+async function safeUpdate(stateDir, wolvesDir) {
+	const { runUpdate } = require("./migrate.cjs");
+	const r = await runUpdate({ stateDir, wolvesDir, version: app.getVersion(), migrations: require("./migrations/index.cjs"), trash: (p) => shell.trashItem(p), log: (l) => log(l) });
+	if (r.ok) return;
+	log(`update failed (${r.stage}): ${r.error}`);
+	const short = String(r.error).slice(0, 300);
+	const message = r.restored
+		? "Wolfpack couldn't finish updating, so it put your data back the way it was."
+		: r.stage === "backup"
+			? "Wolfpack couldn't finish updating, and nothing was changed."
+			: "Wolfpack couldn't finish updating, and putting your data back also failed.";
+	const detail = `${r.restored || r.stage === "backup" ? "Your wolves are safe. " : "Your data is in the backup folder. "}Please send this to whoever gave you the app:\n\n${short}`;
+	log(`update dialog: ${message} ${detail.replace(/\n+/g, " ")}`);
+	updateDialogOpen = true;
+	let response;
+	try {
+		({ response } = await dialog.showMessageBox({ type: "error", message, detail, buttons: ["Show backup folder", "Quit"], defaultId: 1, cancelId: 1 }));
+	} finally {
+		updateDialogOpen = false;
+	}
+	if (response === 0) await shell.openPath(r.backupDir);
+	app.quit();
+	const e = new Error("update failed");
+	e.stopped = true;
+	throw e;
+}
+
+/** Start the app's own runtime. State: WOLFPACK_APP_HOME (default userData); wolves: WOLFPACK_APP_WOLVES (default ~/Wolves). Until setup.json says complete, the setup wizard runs (prefilled with the stored answers); WOLFPACK_APP_API_KEY skips its sign-in step. */
+async function startRuntime() {
+	// A dev run from the repo must not touch the owner's real folders: on a case-insensitive Mac the packaged default ~/Wolves IS the live ~/wolves.
+	if (!app.isPackaged && !(process.env.WOLFPACK_APP_HOME && process.env.WOLFPACK_APP_WOLVES)) {
+		throw new Error("Dev run: set both WOLFPACK_APP_HOME and WOLFPACK_APP_WOLVES to scratch folders (the defaults are the real app's userData and ~/Wolves).");
+	}
+	const stateDir = appStateDir();
+	const wolvesDir = process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves");
+	await safeUpdate(stateDir, wolvesDir); // first launch after an update: back up, migrate, or put the data back and quit
+	const runtimeDir = app.isPackaged ? path.join(process.resourcesPath, "runtime") : path.join(__dirname, "..", "runtime");
+	const opts = {
+		stateDir,
+		wolvesDir,
+		runtimeDir,
+		// The bundled nomic model (staged by dist); without model.onnx there the supervisor leaves KB curation off.
+		embedModelDir: process.env.WOLFPACK_APP_EMBED_MODEL_DIR || path.join(runtimeDir, "embed-model"),
+		nodeBin: process.execPath,
+		// Same override the harness honours (https or loopback http only); tests point it at a fake server.
+		modelBaseUrl: process.env.WOLFPACK_ANTHROPIC_BASE_URL || undefined,
+		log: (l) => log(`runtime: ${l}`),
+	};
+	if (needsSetup(stateDir)) {
+		await runWizard(opts); // sets `supervisor` and chatWolf; the runtime is already up when this returns
+		log(`runtime up: workerd ${supervisor.urls.workerd} hubd ${supervisor.urls.hubd}`);
+		startCurationGate(supervisor);
+		return;
+	}
+	chatWolf = readWolfId(stateDir);
+	supervisor = createSupervisor({ ...opts, wolfName: chatWolf, domains: readSetup(stateDir)?.domains });
+	await supervisor.start();
+	log(`runtime up: workerd ${supervisor.urls.workerd} hubd ${supervisor.urls.hubd}`);
+	startCurationGate(supervisor);
+}
+
+/**
+ * KB curation gate (work-wolfpack-F16FFQL): once a minute, ask curator-gate.cjs whether a window may run (10 min idle, 60 min since the
+ * last, not on battery below 30%). Battery percent comes from `pmset -g batt`, read only while on battery. Stops with the supervisor.
+ */
+let curationGateTimer = null;
+function startCurationGate(sup) {
+	if (curationGateTimer) clearInterval(curationGateTimer); // never more than one gate
+	const { powerMonitor } = require("electron");
+	const { execFile } = require("node:child_process");
+	let lastRunAt = null;
+	let busy = false;
+	const percent = () => new Promise((resolve) => execFile("/usr/bin/pmset", ["-g", "batt"], { timeout: 5000 }, (err, out) => resolve(err ? null : parseBatteryPercent(out))));
+	const timer = (curationGateTimer = setInterval(async () => {
+		if (busy || supervisor !== sup) return clearInterval(timer);
+		busy = true;
+		try {
+			const onBattery = powerMonitor.isOnBatteryPower();
+			const gate = { idleSeconds: powerMonitor.getSystemIdleTime(), onBattery, batteryPercent: onBattery ? await percent() : null, lastRunAt, now: Date.now() };
+			if (!shouldCurate(gate)) return;
+			lastRunAt = gate.now;
+			const r = await sup.curate();
+			log(`curation: ${r.line ?? `skipped (${r.skipped})`}`);
+		} catch (e) {
+			log(`curation: failed ${e?.message ?? e}`);
+		} finally {
+			busy = false;
+		}
+	}, 60_000));
+	timer.unref();
+}
 
 // A GUI shell must never die to a stray exception (EPIPE dialogs, a race
 // in an event handler): the window + child server are the product, and
@@ -135,14 +357,15 @@ function log(line) {
 	}
 }
 
-function startServer(port) {
+function startServer(port, extraEnv = {}, { appRuntime = false } = {}) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			process.execPath,
 			[serverEntry()],
 			{
 				cwd: path.dirname(serverEntry()),
-				env: {
+				// App runtime: allowlisted env (console-env.cjs), so nothing from the owner's shell can point the console off this Mac.
+				env: appRuntime ? consoleEnv(process.env, { PORT: String(port), WOLFPACK_DATA_DIR: DATA_DIR(), WOLFPACK_AUTH_FILE: AUTH_FILE(), ...extraEnv }) : {
 					...process.env,
 					ELECTRON_RUN_AS_NODE: "1",
 					NODE_ENV: "production",
@@ -153,6 +376,7 @@ function startServer(port) {
 					// (no env injection anymore: a spawn-time copy would shadow every
 					// settings-page key change until restart; env wins over file).
 					WOLFPACK_AUTH_FILE: AUTH_FILE(),
+					...extraEnv,
 				},
 				stdio: ["ignore", "pipe", "pipe"],
 			},
@@ -209,7 +433,7 @@ function killServer() {
  *    external links go to the real browser via shell.openExternal. */
 let remoteUrl = ""; // remote console URL (remote mode)
 let remoteTarget = false; // set in main(); remote mode adds the unreachable page
-function createWindow(url) {
+function createWindow(url, landing = url) {
 	const win = new BrowserWindow({
 		width: 1440,
 		height: 900,
@@ -221,7 +445,7 @@ function createWindow(url) {
 		// center (owner ask, 2026-09-17): macOS centers each 12px circle at
 		// y+6.75, and the pill box center measures 29.25 in the running app
 		// (band 0–59.5, pill box 19–39.5) — y 22.5 lands the circles at
-		// 29.25, exactly on the pill. Wordmark gutter: components/sidebar.tsx.
+		// 29.25, exactly on the pill. Wordmark gutter: components/shell/sidebar.tsx.
 		// Dragging comes from the renderer's .wp-drag bands (app/globals.css).
 		...(process.platform === "darwin"
 			? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 22.5 } }
@@ -240,6 +464,7 @@ function createWindow(url) {
 			sandbox: true,
 			nodeIntegration: false,
 			preload: path.join(__dirname, "preload.cjs"),
+			additionalArguments: supervisor ? ["--wolfpack-single-mac"] : [], // app runtime: preload exposes singleMac (work-wolfpack-TdmbaV4)
 		},
 		// Live-resize + first-paint flash (owner, 2026-09-17): during a resize
 		// the native window surface changes size before Chromium's compositor
@@ -254,7 +479,7 @@ function createWindow(url) {
 		// below it even a wrapped chrome row gets cramped and the chat header
 		// (lights gutter 92 + toggle + title) runs out of room. The sidebar
 		// auto-closes below 928 = 640 + 288 (sidebar) in the renderer
-		// (components/sidebar.tsx, SIDEBAR_AUTOCLOSE); its "wolfpack:expand-window"
+		// (components/shell/sidebar.tsx, SIDEBAR_AUTOCLOSE); its "wolfpack:expand-window"
 		// IPC widens the window back to that threshold.
 		minWidth: 640,
 		minHeight: 600,
@@ -292,7 +517,9 @@ function createWindow(url) {
 		return { action: "deny" };
 	});
 
-	void win.loadURL(url);
+	// Menu-bar app: a visible window brings the Dock icon back (it is hidden while no window is open).
+	if (appRuntime && process.platform === "darwin") void app.dock?.show();
+	void win.loadURL(landing);
 	if (remoteTarget) {
 		// Remote unreachable (Tailscale off…): swap the blank window for a local
 		// static page. did-fail-load fires for the main frame only when errorCode
@@ -529,16 +756,41 @@ function installMenu() {
 
 async function main() {
 	app.on("window-all-closed", () => {
-		// macOS convention: the app stays resident, reactivated from the Dock.
-		if (process.platform !== "darwin") app.quit();
+		// App runtime: closing the window never quits; the wolves keep running and the menu-bar item stays. The Dock icon goes.
+		if (wizardFinishing) return; // the setup wizard closed while the wolf starts: the chat window is about to open
+		const action = windowAllClosedAction({ appRuntime, platform: process.platform });
+		if (action === "hide") {
+			if (process.platform === "darwin") app.dock?.hide();
+		} else if (action === "quit") app.quit();
+		// "stay": macOS convention outside app runtime, reactivated from the Dock.
 	});
 
 	// The child must not outlive us — cover every quit path.
-	app.on("before-quit", killServer);
+	app.on("before-quit", (e) => {
+		if (updateDialogOpen) return app.exit(0); // quit while the dialog is open: nothing was started, nothing to stop
+		killServer();
+		try { tray?.destroy(); } catch { /* already gone */ }
+		tray = null;
+		if (!supervisor) return;
+		if (systemShutdown) return; // logout/shutdown: never hold it; the children were already sent SIGTERM and exit with the parent
+		// Quit stops every child: hold the quit until SIGTERM/SIGKILL are done.
+		// `supervisor` is nulled first, so the app.quit() below re-enters this handler, finds no supervisor and lets the quit through (the second-quit case).
+		e.preventDefault();
+		const s = supervisor;
+		supervisor = null;
+		s.stop().finally(() => app.quit());
+	});
 	process.on("exit", killServer);
 	process.on("SIGHUP", killServer);
+	process.on("SIGTERM", () => (updateDialogOpen ? app.exit(0) : app.quit())); // quit cleanly: before-quit stops the children
 
 	await app.whenReady();
+
+	// Logout/restart/shutdown must never wait on us: SIGTERM the children synchronously and do not preventDefault (Electron: only needed to delay the shutdown). The bundles' parent-pid watcher is the backstop. powerMonitor is unusable before ready, so it is read here.
+	require("electron").powerMonitor.on("shutdown", () => {
+		systemShutdown = true;
+		try { supervisor?.killAllSync(); } catch { /* best effort */ }
+	});
 
 	// Dev mode: point at a running `next dev` server (WOLFPACK_DEV_URL) — no
 	// spawn, no packaging, full HMR. The rest of this shell still applies
@@ -555,13 +807,36 @@ async function main() {
 	} else if (!devUrl) {
 		log(`starting server: ${serverEntry()}`);
 		log(`data dir: ${DATA_DIR()}${fs.existsSync(AUTH_FILE()) ? " · auth.json: present" : " · auth.json: ABSENT (no BYOK keys yet)"}`);
-		await startServer(new URL(url).port);
-		await waitUntilUp(url);
+		try {
+			await startRuntime();
+		} catch (err) {
+			// A quit while starting is a normal quit: no dialog.
+			if (err?.stopped) {
+				log("runtime start cancelled by quit");
+				return;
+			}
+			// No blank window: say what failed, then quit (before-quit cleans up whatever did start).
+			log(`runtime failed: ${err?.stack ?? err}`);
+			dialog.showErrorBox("Wolfpack could not start", String(err?.message ?? err));
+			app.quit();
+			return;
+		}
+		// The console talks to the app's own workerd only (loopback); no hub URL/token yet (ticket: hub token for work reads).
+		// A quit during startup nulls `supervisor` (before-quit): stop here instead of touching it.
+		if (!supervisor) return;
+		await startServer(new URL(url).port, { WOLFPACK_API_URL: supervisor.urls.workerd, WOLFPACK_WORKERD_DIRECT_URL: supervisor.urls.workerd, WOLFPACK_KEY_FILE: path.join(appStateDir(), KEYS_FILE) }, { appRuntime: true });
+		await waitUntilUp(url).catch((err) => {
+			if (supervisor) throw err;
+		});
+		if (!supervisor) return;
 		log(`server up: ${url}`);
+		appRuntime = true;
 	} else {
 		log(`dev mode: ${devUrl}`);
 	}
 
+	// App runtime: open on the chosen wolf's chat; every other mode opens the root exactly as before.
+	const landingUrl = appRuntime ? `${url}/wolf/${encodeURIComponent(chatWolf)}/thread/home` : url;
 	installMenu();
 
 	// Auto-update (Wave C): wire the updater before the window so the
@@ -590,10 +865,68 @@ async function main() {
 		if (width < target) win.setBounds({ x, y, width: target, height });
 	});
 	app.on("activate", () => {
-		if (BrowserWindow.getAllWindows().length === 0) createWindow(url);
+		if (BrowserWindow.getAllWindows().length === 0) createWindow(url, landingUrl);
 	});
-	createWindow(url);
-	log(`window open: ${url}`);
+	// Console Settings > Data and support (work-wolfpack-B97I0Gv): logic in app-settings.cjs; only the console window's own top frame on the app's own console origin may call.
+	if (appRuntime && supervisor) {
+		const stateDir = appStateDir();
+		const settings = createAppSettings({
+			stateDir, wolvesDir: process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves"),
+			getSup: () => supervisor, modelBaseUrl: process.env.WOLFPACK_ANTHROPIC_BASE_URL || undefined, version: app.getVersion(),
+			sysVersion: `${process.getSystemVersion()}`, log, shell, clipboard, app,
+			// The native second step for Reset and Change key: Cancel is the default, so Enter never confirms.
+			confirm: async ({ message, detail, button }) => {
+				const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows().find((w) => w !== wizardWindow);
+				const r = await dialog.showMessageBox(parent ?? undefined, { type: "warning", message, detail, buttons: ["Cancel", button], defaultId: 0, cancelId: 0 });
+				return r.response === 1;
+			},
+		});
+		const origin = new URL(url).origin;
+		const fromConsole = (e) => {
+			const win = BrowserWindow.fromWebContents(e.sender);
+			if (!win || win === wizardWindow || e.senderFrame !== e.sender.mainFrame) return false;
+			try { return new URL(e.senderFrame.url).origin === origin; } catch { return false; }
+		};
+		const on = (name, fn) => ipcMain.handle(`wolfpack:app:${name}`, (e, arg) => (fromConsole(e) ? fn(arg) : { ok: false, error: "Not allowed" }));
+		on("folders", () => settings.folders());
+		on("show-folder", (n) => settings.showFolder(String(n)));
+		on("login-item", () => settings.loginItem());
+		on("set-login-item", (v) => { const r = settings.setLoginItem(v === true); tray?.refresh(); return r; });
+		on("change-key", (k) => settings.changeKey(String(k ?? "")));
+		on("copy-diagnostics", () => settings.copyDiagnostics());
+		on("reset", () => settings.reset());
+		on("reset-app-ui", () => settings.resetAppUi());
+		const sup = supervisor;
+		tray = createTray({
+			app, Tray, Menu, nativeImage, log,
+			getStatus: () => (supervisor ? supervisor.status() : { running: false }),
+			openWindow: () => {
+				const w = BrowserWindow.getAllWindows()[0];
+				if (!w) return createWindow(url, landingUrl);
+				if (w.isMinimized()) w.restore();
+				w.show();
+				w.focus();
+			},
+			quit: () => app.quit(),
+		});
+		sup.onChange(() => tray?.refresh());
+	}
+	// Started at login: services run, no window (open it from the menu bar). macOS reports a login start through wasOpenedAtLogin; if it does not, the window simply opens (accepted limit).
+	const startHidden = appRuntime && app.getLoginItemSettings().wasOpenedAtLogin;
+	if (startHidden) {
+		if (process.platform === "darwin") app.dock?.hide();
+		log("started at login: no window");
+	} else {
+		createWindow(url, landingUrl);
+		log(`window open: ${landingUrl}`);
+	}
+	wizardFinishing = false;
+	// The setup wizard goes only after the chat window exists, so the last window never closes in between.
+	if (wizardWindow) {
+		const w = wizardWindow;
+		wizardWindow = null;
+		w.close();
+	}
 	// First update check AFTER the window exists (the downloaded-banner
 	// push needs a listener); dev builds no-op (no autoUpdater).
 	if (autoUpdater) {

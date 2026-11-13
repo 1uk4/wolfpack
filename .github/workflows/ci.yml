@@ -48,7 +48,7 @@ jobs:
           node scripts/affected.mjs "$BASE" "$HEAD" --github-output
       - id: flags
         run: |
-          node -e 'const a=JSON.parse(process.env.A);console.log("any="+(a.all||a.packages.length>0||a.extensionsTests||a.scriptsTests))' >> "$GITHUB_OUTPUT"
+          node -e 'const a=JSON.parse(process.env.A);console.log("any="+(a.all||a.packages.length>0||a.extensionsTests||a.scriptsTests||a.desktopTests))' >> "$GITHUB_OUTPUT"
         env:
           A: ${{ steps.a.outputs.affected }}
 
@@ -59,6 +59,7 @@ jobs:
     timeout-minutes: 30
     env:
       A: ${{ needs.detect.outputs.affected }}
+      WOLFPACK_DESKTOP_TEST_NODE: "1"   # apps/desktop supervisor test runs the runtime bundles under this job's Node 22 (no Electron binary on the runner)
     steps:
       - uses: actions/checkout@v6
         with:
@@ -85,6 +86,11 @@ jobs:
           mapfile -t P < <(node -p 'JSON.parse(process.env.A).tsProjects.join("\n")')
           # if/else, not `a && b || c`: with that form a failing tsc fell through to the echo and the step passed.
           if [ ${#P[@]} -gt 0 ]; then pnpm exec tsc --build "${P[@]}"; else echo "no TS projects affected"; fi
+      - name: desktop runtime bundles (the supervisor test starts the real hubd, workerd and wolfd)
+        if: needs.detect.outputs.affected && (fromJSON(needs.detect.outputs.affected).all || fromJSON(needs.detect.outputs.affected).desktopTests)
+        run: |
+          pnpm -r --filter "./packages/*" build
+          node apps/desktop/scripts/build-runtime.mjs
       - name: vitest (affected packages)
         run: |
           ALL=$(node -p 'JSON.parse(process.env.A).all')
@@ -94,6 +100,7 @@ jobs:
             const f=[...a.vitestPaths];
             if(a.extensionsTests)f.push("extensions/");
             if(a.scriptsTests)f.push("scripts/");
+            if(a.desktopTests)f.push("apps/desktop/electron/");
             console.log(f.join("\n"))')
           # if/else, not `a && b || c`: with that form a failing vitest fell through to the echo and the step passed.
           if [ -n "${F[0]:-}" ]; then pnpm exec vitest run --project default "${F[@]}"; else echo "no vitest paths affected"; fi

@@ -1,4 +1,4 @@
-import { WorkItemPage } from "@/components/work-item-page";
+import { WorkItemPage } from "@/components/work/work-item-page";
 
 export default async function KbWorkPage({ params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;

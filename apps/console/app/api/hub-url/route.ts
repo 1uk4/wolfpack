@@ -1,4 +1,4 @@
-import { hubPublicUrl } from "@/src/server/hub-public-url";
+import { hubPublicUrl } from "@/src/server/pack/hub-public-url";
 
 export const dynamic = "force-dynamic";
 

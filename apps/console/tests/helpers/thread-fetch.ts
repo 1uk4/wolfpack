@@ -1,5 +1,5 @@
 import type { ConsoleClient } from "@wolfpack/client";
-import { createThreadApi } from "../../src/server/thread-api.ts";
+import { createThreadApi } from "../../src/server/thread/thread-api.ts";
 
 /** A fetch that serves the /api/wolves thread routes straight from the
  *  handlers over `client` — the route files minus Next. */

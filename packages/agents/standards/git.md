@@ -17,6 +17,7 @@ Reviewers only check against this standard; they never commit, fix up or rebase.
   If you cannot determine it with certainty, do not rebase; report it.
 - Rebase only your own unmerged `feat/...` task branch with a clean tree. If the tree has changes that are not yours, or you are not on a task branch, do not rebase; report it.
 - Never use `--autostash`, stash or reset to get a clean tree. Never merge the parent into your branch.
+- The autosquash rebase above is the only rebase a worker may run. Moving a branch onto a new base (`git rebase <branch>`) is blocked for workers; the orchestrator thread does it and hands the worker the resolved branch.
 - The worker reduces its own branch before reporting done. After task_done the branch is merged and section 4 applies.
 - `workspaces.autosquash` (wolf.yaml, off by default): when on, wolfd folds a task branch's `fixup!` commits at ship. While it is off, the self-squash above still applies; that step will be removed when the flag defaults on.
 

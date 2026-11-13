@@ -1,4 +1,4 @@
-import { attachmentLimit } from "@/src/server/attachment-limit";
+import { attachmentLimit } from "@/src/server/thread/attachment-limit";
 
 export const dynamic = "force-dynamic";
 

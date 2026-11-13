@@ -147,7 +147,10 @@ export function curatorEngineFactory(o: CuratorOptions): () => Engine {
 }
 /** The embedder the curator (and the rebuild) use: the test seam, else the KB's cached embedder on embedUrl / embedModel / the process defaults. */
 export function curatorEmbedderFactory(roots: KbRoots, o: CuratorOptions): () => CachedEmbedder {
-  return o.getEmbedder ?? (() => createEmbedder(roots, { baseUrl: o.embedUrl ?? resolveEmbedConfig().baseUrl, model: o.embedModel ?? resolveEmbedConfig().model }));
+  return o.getEmbedder ?? (() => {
+    const env = resolveEmbedConfig();
+    return createEmbedder(roots, { ...env, baseUrl: o.embedUrl ?? env.baseUrl, model: o.embedModel ?? env.model });
+  });
 }
 
 /** The warm-up for the real engine: loads the SDK only when no engine is injected and the smart tier uses claude-agent-sdk. */
@@ -380,7 +383,7 @@ export function createCurator(deps: CuratorDeps): Curator {
         writer,
         createEngine: curatorEngineFactory(o),
         leaseOwner: "none", // the hub lease is held by this curator for its whole life
-        ...(o.getEmbedder ? { getEmbedder: o.getEmbedder } : o.embedUrl || o.embedModel ? { getEmbedder: () => createEmbedder(deps.roots, { baseUrl: o.embedUrl ?? resolveEmbedConfig().baseUrl, model: o.embedModel ?? resolveEmbedConfig().model }) } : {}),
+        ...(o.getEmbedder ? { getEmbedder: o.getEmbedder } : o.embedUrl || o.embedModel ? { getEmbedder: () => { const env = resolveEmbedConfig(); return createEmbedder(deps.roots, { ...env, baseUrl: o.embedUrl ?? env.baseUrl, model: o.embedModel ?? env.model }); } } : {}),
         budgetMs: o.budgetMs,
         outerBudgetMs: o.outerBudgetMs,
         abortGraceMs: o.abortGraceMs,

@@ -6,9 +6,9 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Engine } from "@wolfpack/engine";
-import { takeSnapshot } from "@wolfpack/engine";
+import { ENGINE_STEPS, takeSnapshot } from "@wolfpack/engine";
 import { startLocalWorkServer } from "@wolfpack/work-server";
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { ENGINE_CONTEXT as ctx } from "../../packages/harness/src/engine/index.js";
@@ -74,7 +74,15 @@ async function devRoot(): Promise<string> {
   return dev;
 }
 
-function startObserverWolf(opts: { dev: string; script: FauxResponseStep[]; engine: Engine; memoryYaml?: string }) {
+/** The test wolf's models.json with every tier on the anthropic provider (the app's real case), so a missing key matters. */
+function anthropicTable(file: string) {
+  const t = JSON.parse(readFileSync(file, "utf8"));
+  for (const k of Object.keys(t.tiers)) t.tiers[k] = { ...t.tiers[k], provider: "anthropic" };
+  for (const s of ENGINE_STEPS) t.steps[s] = { tier: "fast" }; // the test wolf's file has none; the engine reads one per step
+  return t;
+}
+
+function startObserverWolf(opts: { dev: string; script: FauxResponseStep[]; engine?: Engine; anthropicTable?: boolean; memoryYaml?: string }) {
   return startTestWolf({
     script: opts.script,
     yaml: `sandbox:\n  root: ${opts.dev}\n${opts.memoryYaml ?? ""}`,
@@ -84,8 +92,8 @@ function startObserverWolf(opts: { dev: string; script: FauxResponseStep[]; engi
         adaptToDurable(
           createMemoryExtension(
             // config.memory is the wolf.yaml memory block as the loader normalizes it (incl. consolidation).
-            { ...config.memory, engine: opts.engine },
-            { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env },
+            { ...config.memory, ...(opts.engine ? { engine: opts.engine } : {}) },
+            { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env, ...(opts.anthropicTable ? { modelTable: anthropicTable(env.WOLFPACK_MODELS_FILE!) } : {}) },
           ),
           { wolfDen: den, wolfName: "testwolf" },
         ),
@@ -130,6 +138,41 @@ async function runOn(conv: { submit: Function; waitForIdle: Function }, text: st
 }
 
 describe("full-transcript observer", () => {
+  it("with no Anthropic key, turns pass without model calls or an error per turn: one log line, and the watermark stays so a key added later catches up (work-wolfpack-71LeXut)", async () => {
+    const dev = await devRoot();
+    const lines: string[] = [];
+    // The SDK reads process.env itself when no key is passed, so the real env must hold none (restored after).
+    const saved = { key: process.env.ANTHROPIC_API_KEY, tok: process.env.ANTHROPIC_AUTH_TOKEN, mac: process.env.WOLFPACK_SINGLE_MAC };
+    process.env.ANTHROPIC_API_KEY = "";
+    process.env.ANTHROPIC_AUTH_TOKEN = "";
+    delete process.env.WOLFPACK_SINGLE_MAC;
+    const spies = ((["log", "warn", "error"] as const).map((k) => vi.spyOn(console, k).mockImplementation((...a: unknown[]) => void lines.push(a.join(" ")))));
+    const restore = () => {
+      for (const s of spies) s.mockRestore();
+      for (const [k, v] of [["ANTHROPIC_API_KEY", saved.key], ["ANTHROPIC_AUTH_TOKEN", saved.tok], ["WOLFPACK_SINGLE_MAC", saved.mac]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    };
+    try {
+      tw = await startObserverWolf({ dev, anthropicTable: true, script: [reply("A_ONE"), reply("A_TWO"), reply("A_THREE")] }); // no stub engine, no ANTHROPIC_API_KEY in env
+      for (const m of ["USER_ONE", "USER_TWO", "USER_THREE"]) {
+        await tw.submit(say(m));
+        await quiet();
+      }
+      const den = tw.wolf.config.den;
+      const newest = (await conversationReaderFor(den)!.messagesSince(1, 0)).at(-1)!.entryId;
+      const mark = existsSync(watermarkFile(den, 1)) ? JSON.parse(readFileSync(watermarkFile(den, 1), "utf8")).lastEntryId : 0;
+      restore();
+      expect(tw.afterResponse).toHaveLength(3);
+      expect(lines.filter((l) => /API key/i.test(l))).toEqual(["[memory] No Anthropic API key: not observing until one is added."]);
+      expect(lines.filter((l) => /observation error/i.test(l))).toEqual([]);
+      expect(mark).toBeLessThan(newest); // nothing was observed, so a key added later catches up
+    } finally {
+      restore();
+    }
+  });
+
   it("(a) a tool round observes user, assistant and tool result, each exactly once", async () => {
     const dev = await devRoot();
     const stub = stubEngine();
@@ -146,6 +189,8 @@ describe("full-transcript observer", () => {
     // the unbound observations went to the pool
     const pool = readFileSync(join(dev, "den/.memory/pool/observations.jsonl"), "utf8");
     expect(pool.trim().split("\n")).toHaveLength(stub.prompts.length);
+    // each line names the thread (conversation) it was observed in; the promote pass groups topics by it
+    for (const line of pool.trim().split("\n")) expect(JSON.parse(line).thread).toBe("1");
   });
 
   it("a general observation in a bound main session keeps the work tag only as origin when generalToDen is on, and is fully tagged when off", async () => {

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { packStateDir, wolvesDir } from "@wolfpack/protocol/runtime-home";
 import { parse as parseYaml } from "yaml";
 import { DEFAULT_CONSOLIDATION, KNOWN_TOP_LEVEL_KEYS, WolfFileSchema, type WolfConfig } from "./schema.js";
 
@@ -33,8 +34,8 @@ export function resolveDefaultDomain(defaultDomain: string | undefined, domains:
 }
 
 /** Default socket: ~/.wolfpack/run/<name>.sock */
-export function defaultSocketPath(name: string, home: string = os.homedir()): string {
-  return path.join(home, ".wolfpack", "run", `${name}.sock`);
+export function defaultSocketPath(name: string, home?: string): string {
+  return path.join(home ? path.join(home, ".wolfpack") : packStateDir(), "run", `${name}.sock`);
 }
 
 function expand(p: string, base: string, home: string): string {
@@ -113,7 +114,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       workspace: v.workspace ? expand(v.workspace, dir, home) : dir,
     },
     serve: {
-      socket: v.serve.socket ? expand(v.serve.socket, dir, home) : defaultSocketPath(v.name, home),
+      socket: v.serve.socket ? expand(v.serve.socket, dir, home) : defaultSocketPath(v.name, opts.home),
       ...(v.serve.port !== undefined ? { port: v.serve.port } : {}),
     },
     ...(v.subagents?.maxRunning !== undefined ? { subagents: { maxRunning: v.subagents.maxRunning } } : {}),
@@ -128,10 +129,12 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       ...(v.memory.subagentMemory ? { subagentMemory: v.memory.subagentMemory } : {}),
       ...(v.memory.workLog === "append" ? { workLog: "append" as const } : {}),
       ...(v.memory.defaultDomain ? { defaultDomain: v.memory.defaultDomain } : {}),
+      ...(v.memory.model ? { model: v.memory.model } : {}),
       ...(v.memory.sweepInterval ? { sweepInterval: v.memory.sweepInterval } : {}),
       consolidation: { ...DEFAULT_CONSOLIDATION, ...definedOnly(v.memory.consolidation) } as WolfConfig["memory"]["consolidation"],
     },
     extensions: v.extensions,
+    plugins: v.plugins,
     extensionConfig: Object.fromEntries(
       v.extensions.flatMap((n) => {
         const block = (doc as Record<string, unknown>)[n];
@@ -167,8 +170,8 @@ export interface DiscoveredWolves {
 }
 
 /** Default discovery root: ~/wolves/local */
-export function defaultWolvesRoot(home: string = os.homedir()): string {
-  return path.join(home, "wolves", "local");
+export function defaultWolvesRoot(home?: string): string {
+  return home ? path.join(home, "wolves", "local") : wolvesDir();
 }
 
 /** Find `<rootDir>/*\/wolf.yaml`. Broken files land in `errors`; a missing root yields nothing. */

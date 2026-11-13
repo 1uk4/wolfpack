@@ -624,7 +624,7 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 	const SLOT_USAGE = "usage: wolfpack preview slot get <worktree> [--json] | list [--json] | release <worktree|port> | pair <port> [--print-url]. A slot stops after 20 min without a `get`: re-run `slot get` to keep it alive.";
 	/** The two copy-paste setup steps shown when a slot has no hub token. */
 	const tokenSetup = () => [
-		`1. in the console: Settings → add device, copy the pairing code (or on the hub host: hubd pair --kind browser --label "preview ${os.hostname()}")`,
+		`1. in the console: Pack → Devices → add device, copy the pairing code (or on the hub host: hubd pair --kind browser --label "preview ${os.hostname()}")`,
 		"2. here: wolfpack preview token (paste the code)",
 	];
 
@@ -635,12 +635,12 @@ export async function runPreview({ argv = [], env = {}, cwd = process.cwd(), ste
 		const fromStdin = argv.includes("--code-stdin");
 		if (fromStdin && st.stdinIsTTY()) return fail("--code-stdin reads the code from a pipe, but stdin is a terminal: pipe the code in, or run `wolfpack preview token` without the flag to be prompted (typing is hidden)");
 		const code = await st.readCode({ fromStdin });
-		if (!code) return fail("no pairing code given. Get one from the console (Settings → add device) or with `hubd pair --kind browser` on the hub host (step 1 of the one-time setup), then paste it at the prompt");
+		if (!code) return fail("no pairing code given. Get one from the console (Pack → Devices → add device) or with `hubd pair --kind browser` on the hub host (step 1 of the one-time setup), then paste it at the prompt");
 		const label = `preview ${os.hostname()}`.slice(0, 64);
 		const r = await st.hubFetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, label }) /* no kind: the hub takes it from the code, so a browser and a console code both redeem */ });
 		if (r.status === 0) return fail(`could not reach the hub at ${hub.url}; nothing was saved`);
-		if (r.status !== 200 || typeof r.json?.token !== "string" || !r.json.token) return fail(`the hub answered ${r.status} to the pairing code: it is bad or expired (a code is single-use and lasts 10 minutes${r.status === 429 ? "; too many tries, wait a minute" : ""}). Get a new one (console: Settings → add device), then run \`wolfpack preview token\` again. Nothing was saved.`);
-		if (r.json.kind === "worker") return fail(`the hub issued a worker token (id ${r.json.tokenId ?? "unknown"}) for that code; slots need only a browser token, so nothing was saved. Revoke that token on the hub host (hubd tokens revoke ${r.json.tokenId ?? "<id>"}), then get a browser code from the console (Settings → add device)`);
+		if (r.status !== 200 || typeof r.json?.token !== "string" || !r.json.token) return fail(`the hub answered ${r.status} to the pairing code: it is bad or expired (a code is single-use and lasts 10 minutes${r.status === 429 ? "; too many tries, wait a minute" : ""}). Get a new one (console: Pack → Devices → add device), then run \`wolfpack preview token\` again. Nothing was saved.`);
+		if (r.json.kind === "worker") return fail(`the hub issued a worker token (id ${r.json.tokenId ?? "unknown"}) for that code; slots need only a browser token, so nothing was saved. Revoke that token on the hub host (hubd tokens revoke ${r.json.tokenId ?? "<id>"}), then get a browser code from the console (Pack → Devices → add device)`);
 		const file = path.join(dir, "hub-token");
 		const tmp = `${file}.tmp-${process.pid}`;
 		const oldMask = process.umask(0o077);

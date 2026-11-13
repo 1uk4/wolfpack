@@ -5,7 +5,7 @@
  * Core logic lives in @wolfpack/memory package.
  */
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import { join } from "node:path";
 import {
@@ -23,6 +23,7 @@ import {
 import {
   observe,
   renderDenContext,
+  renderRetiredContext,
   renderKbAccess,
   reconcileDen,
   serializeBranchEntries,
@@ -37,9 +38,12 @@ import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { memoryEmitter } from "./memory-events.js";
 import { crawlMode, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
 import { readBoundTask } from "./unified-tasks.js";
-import { durableSubagent, featureResolver, FINAL_ONLY_AGENTS, SUBAGENT_OBSERVE_EVERY_TURNS, SUBAGENT_OBSERVE_TOKENS, type SubagentTag } from "./subagent-tag.js";
+import { sharedFeature, subagentReportTag } from "./observation-tag.js";
+import { durableSubagent, knownChildren, featureResolver, FINAL_ONLY_AGENTS, SUBAGENT_OBSERVE_EVERY_TURNS, SUBAGENT_OBSERVE_TOKENS, type SubagentTag } from "./subagent-tag.js";
 import { WorkClient } from "./work-client.js";
-import { drainInbox, kbLockFile, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
+import { drainInbox, kbLockFile, listParked, readEntryMarkdown, readLedger, resolveAliasedEntry, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
+import { dailyPassDue, markDailyPass, type PassTrigger } from "@wolfpack/memory";
+import { runSessionPromotePass } from "@wolfpack/harness/memory";
 import { ledgerFile, vectorsDir, workLedgerFile } from "@wolfpack/kb/shared";
 import { DEFAULT_CONSOLIDATION_INTERVAL_MS, parseConsolidationInterval, effectiveConsolidationInterval, assertLibrarianSandboxed, assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
 
@@ -65,6 +69,8 @@ export interface MemoryConfig {
     threshold?: number;
     /** Pool tokens left in the pool by a consolidation (default 10000, pi's value). */
     poolTarget?: number;
+    /** Session topics sent to the model per consolidation (default 40); older ones move to evicted/. */
+    maxTopics?: number;
     interval?: string;
   };
   /** `memory.defaultDomain` in wolf.yaml: domain for observations the observer leaves untagged (default: first of `domains`). */
@@ -268,36 +274,74 @@ export function newObserverChunks(
   return { chunks: chunk(), next: { lastEntryId, tail: fp, tailAfter: lastEntryId } };
 }
 
+/** The feature a conversation is the thread of (wolfd's registry `<den>/wolfd/threads.json`), or undefined for home and free-standing threads. */
+function featureThreadOf(wolfDen: string, conversationId: number): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(join(wolfDen, "wolfd", "threads.json"), "utf8");
+  } catch {
+    return undefined; // no registry yet: home only
+  }
+  try {
+    const reg = JSON.parse(text) as { threads?: Array<Record<string, unknown>> };
+    const t = reg.threads?.find((x) => x.kind === "feature" && String(x.conversationId) === String(conversationId));
+    return typeof t?.workItemId === "string" && t.workItemId ? t.workItemId : undefined;
+  } catch (err) {
+    console.warn(`[memory] threads.json unreadable, feature thread tag skipped: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
+}
+
+/** A full work id (shape of the KB schema: work-<domain>-<7 alphanumerics>). */
+const NAMED_WORK_ID = /(?<![A-Za-z0-9-])work-[a-z0-9]+-[0-9A-Za-z]{7}(?![A-Za-z0-9-])/g;
+
+/** Prose only: fenced code, inline code, URLs and path-like tokens (anything with a `/`) removed. */
+const proseOnly = (s: string): string =>
+  s.replace(/```[\s\S]*?```/g, " ").replace(/`[^`\n]*`/g, " ").replace(/[A-Za-z][A-Za-z0-9+.-]*:\/\/\S+/g, " ").replace(/\S*\/\S*/g, " ");
+
+/** Stages at which an item still takes new talk; a done item counts as unknown. */
+const OPEN_STAGES = new Set(["idea", "plan", "feasibility", "approved", "in_build"]);
+const NAMED_HIT_TTL_MS = 5 * 60_000;
+const NAMED_MISS_TTL_MS = 30_000;
+const NAMED_LOOKUP_TIMEOUT_MS = 2000;
+
+/** A bound task (work + its feature), or a feature alone (a feature thread with no task bound). */
+type PoolTag = { taskId?: string; featureId?: string };
+
 /**
  * Append observations to the pool. While a task is bound they are stamped
- * `work: <task id>`: they feed that item's Record, not the den.
+ * `work: <task id>`: they feed that item's Record, not the den. `bound` is one tag for every line, or one per line.
  */
 async function writeToPool(
   wolfDen: string,
   observations: RawObservation[],
-  bound: { taskId: string; featureId?: string } | null = null,
+  boundArg: PoolTag | null | Array<PoolTag | null> = null,
   defaultDomain?: string,
   generalToDen = false,
   poolLock = false,
+  thread?: number,
 ): Promise<void> {
   if (observations.length === 0) return;
   const poolDir = join(wolfDen, ".memory", "pool");
   await mkdir(poolDir, { recursive: true });
   const poolFile = join(poolDir, "observations.jsonl");
   const timestamp = new Date().toISOString();
-  const lines = observations.map(obs =>
-    JSON.stringify({
+  const lines = observations.map((obs, i) => {
+    const bound = Array.isArray(boundArg) ? boundArg[i] ?? null : boundArg;
+    return JSON.stringify({
       ...obs,
       general: undefined, // routing flag only; the pool line carries origin instead
       // Stamped at observe time (as pi's orchestrator does), so consolidation never has to guess a domain.
       ...(defaultDomain ? { domain: obs.domain || defaultDomain } : {}),
       recordedAt: timestamp,
+      // The conversation it was observed in: the promote pass groups a topic's sources by it. Not part of the observation id.
+      ...(thread !== undefined ? { thread: String(thread) } : {}),
       ...(bound ? (() => {
-        const ids = { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) };
+        const ids = { ...(bound.taskId ? { work: bound.taskId } : {}), ...(bound.featureId ? { feature: bound.featureId } : {}) };
         return generalToDen && obs.general === true ? { origin: ids } : ids;
       })() : {}),
-    }) + "\n"
-  );
+    }) + "\n";
+  });
   // The lock exists for subagents writing the parent's pool (memory.subagentMemory: on); off, a plain append as at the base.
   if (poolLock) await withPoolLock(wolfDen, () => appendFile(poolFile, lines.join("")));
   else await appendFile(poolFile, lines.join(""));
@@ -449,6 +493,23 @@ export default function createMemoryExtension(
   // ─── Observer ──────────────────────────────────────────────────────────────
   const observing = new Map<number, Promise<void>>();
   let warnedNoReads = false;
+  let warnedNoKey = false;
+  /**
+   * The Anthropic SDK's own error when it has neither apiKey nor authToken (it also reads process.env itself, so we never
+   * guess from env: only the SDK knows). Matched by its message; nothing else in the engine throws this text.
+   * The desktop app can run with no key yet: one log line, the watermark stays put (it only advances after a successful
+   * observation), so a key added later catches up on the backlog.
+   */
+  function swallowNoKey(err: unknown): boolean {
+    if (!(err instanceof Error) || !/Could not resolve authentication method/.test(err.message)) return false;
+    if (!warnedNoKey) {
+      warnedNoKey = true;
+      console.warn(process.env.WOLFPACK_SINGLE_MAC === "1"
+        ? "[memory] No Anthropic API key: not observing until one is added (Pack → Keys)"
+        : "[memory] No Anthropic API key: not observing until one is added.");
+    }
+    return true;
+  }
   let consolidating: Promise<void> | null = null;
   const mem = memoryEmitter(wolfDen, wolfName, defaultDomain);
   // Subagent memory: responses seen since a subagent conversation last observed, and the cached task → feature lookup.
@@ -456,6 +517,51 @@ export default function createMemoryExtension(
   const featureOf = featureResolver(() => (context.env
     ? new WorkClient(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "", undefined, undefined, wolfName)
     : new WorkClient(undefined, undefined, undefined, undefined, wolfName)));
+  // Unbound talk that names one open work item of the observation's domain: id -> tag, resolved through the Work API.
+  // Hits are cached 5 min, failures (hub unreachable, timeout, unknown or done item) 30 s; a lookup never throws.
+  const namedCache = new Map<string, { tag: PoolTag | null; until: number }>();
+  const namedClient = () => (context.env
+    ? new WorkClient(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "", undefined, undefined, wolfName)
+    : new WorkClient(undefined, undefined, undefined, undefined, wolfName));
+  async function lookupNamed(id: string): Promise<PoolTag | null> {
+    const hit = namedCache.get(id);
+    if (hit && hit.until > Date.now()) return hit.tag;
+    let tag: PoolTag | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const item = await Promise.race([
+        namedClient().get(id),
+        new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("lookup timed out")), NAMED_LOOKUP_TIMEOUT_MS); }),
+      ]);
+      const partOf = typeof item.partOf === "string" && item.partOf ? item.partOf : undefined;
+      if (!OPEN_STAGES.has(String(item.stage))) tag = null;
+      else if (item.kind === "feature") tag = { featureId: id };
+      else if (item.kind === "task" || item.kind === "issue" || item.kind === "spike") tag = { taskId: id, ...(partOf ? { featureId: partOf } : {}) };
+    } catch { tag = null; } finally { if (timer) clearTimeout(timer); }
+    namedCache.set(id, { tag, until: Date.now() + (tag ? NAMED_HIT_TTL_MS : NAMED_MISS_TTL_MS) });
+    return tag;
+  }
+  async function namedTags<T extends { content: string; general?: boolean; domain?: string }>(obs: T[]): Promise<Array<PoolTag | null>> {
+    const out: Array<PoolTag | null> = [];
+    for (const o of obs) {
+      if (config.generalToDen === true && o.general === true) { out.push(null); continue; }
+      const ids = [...new Set(proseOnly(o.content).match(NAMED_WORK_ID) ?? [])];
+      if (ids.length === 0) {
+        // A subagent's report narrated here inherits that subagent's task (registry names and tasks, feature looked up).
+        const kids = knownChildren(wolfDen);
+        const hit = subagentReportTag(o.content, kids, () => undefined);
+        if (hit) { const f = await featureOf(hit.taskId); out.push({ taskId: hit.taskId, ...(f ? { featureId: f } : {}) }); } else out.push(null);
+        continue;
+      }
+      // Only items of the observation's own domain (the id carries it): no lookup for another domain's id.
+      const dom = o.domain || defaultDomain;
+      if (ids.some((id) => id.split("-")[1] !== dom)) { out.push(null); continue; }
+      if (ids.length === 1) { out.push(await lookupNamed(ids[0])); continue; }
+      // Several items: their shared feature, else nothing (a failed lookup is null: never a guess).
+      out.push(sharedFeature(await Promise.all(ids.map(lookupNamed))));
+    }
+    return out;
+  }
   const subTag = async (sub: SubagentTag) => {
     const featureId = await featureOf(sub.taskId);
     return { taskId: sub.taskId, ...(featureId ? { featureId } : {}) };
@@ -493,7 +599,7 @@ export default function createMemoryExtension(
       const result = await observe({ engine: getEngine(), chunkText: `[assistant]\n${text}`, mode: "conversation", domainContext: domainContext || undefined, generalFlag: config.generalToDen === true });
       if (result.observations.length > 0) {
         const bound = await subTag(sub);
-        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
+        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true, config.subagentMemory === "on", ctx.conversationId);
         mem.observed(result.observations, bound, ctx.conversationId);
       }
       return;
@@ -545,8 +651,21 @@ export default function createMemoryExtension(
       const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation", domainContext: domainContext || undefined, generalFlag: config.generalToDen === true });
       if (result.observations.length > 0) {
         const bound = sub ? await subTag(sub) : await readBoundTask(ctx); // re-read every chunk, never cached
-        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
-        mem.observed(result.observations, bound, ctx.conversationId);
+        // A feature thread with no task bound: the feature alone (a bound task still wins).
+        const featureOnly = !bound && !sub ? featureThreadOf(ctx.wolfDen, ctx.conversationId) : undefined;
+        const tag: PoolTag | null = bound ?? (featureOnly ? { featureId: featureOnly } : null);
+        // Nothing bound: an observation naming exactly one open work item is tagged with it, line by line.
+        const perLine: Array<PoolTag | null> = tag || sub ? result.observations.map(() => tag) : await namedTags(result.observations);
+        await writeToPool(ctx.wolfDen, result.observations, perLine, defaultDomain, config.generalToDen === true, config.subagentMemory === "on", ctx.conversationId);
+        // One event per run of equally tagged lines; a feature-only tag reports workId = the feature.
+        for (let k = 0; k < result.observations.length;) {
+          const t = perLine[k];
+          let e = k + 1;
+          while (e < result.observations.length && JSON.stringify(perLine[e]) === JSON.stringify(t)) e++;
+          const reported = t ? { taskId: t.taskId ?? t.featureId!, ...(t.featureId ? { featureId: t.featureId } : {}) } : null;
+          mem.observed(result.observations.slice(k, e), reported, ctx.conversationId);
+          k = e;
+        }
       }
       // Persist per chunk: a failure in a later chunk retries from here, not from the start.
       const last = i === chunks.length - 1;
@@ -622,7 +741,7 @@ export default function createMemoryExtension(
     timer = setInterval(() => {
       void (async () => {
         try {
-          if (consolidating) return;
+          if (consolidating || warnedNoKey) return; // no key: a tick would only log its start line and fail again
           const stats = await getPoolStats(wolfDen);
           if (stats.count === 0 || poolSig(stats) === lastSavedPool) return; // empty, or nothing new since the last save
           if (!actions.promoteEnabled) {
@@ -634,7 +753,7 @@ export default function createMemoryExtension(
           const job = actions.promote();
           if (job.status === "started") await job.done;
         } catch (err) {
-          console.error("[memory] timer error:", err instanceof Error ? err.message : err);
+          if (!swallowNoKey(err)) console.error("[memory] timer error:", err instanceof Error ? err.message : err);
         }
       })();
     }, timerMs);
@@ -691,6 +810,7 @@ export default function createMemoryExtension(
       domains,
       sessionTopics: durableSessionTopics(wolfDen),
       ...(opts.poolTarget !== undefined ? { poolTarget: opts.poolTarget } : {}),
+      ...(consolidation?.maxTopics ? { maxTopics: consolidation.maxTopics } : {}),
       minObservations: opts.minObservations,
       ...(opts.ignoreBackoff ? { ignoreBackoff: true } : {}),
       onProgress: (msg) => console.log(`[memory] ${msg}`),
@@ -699,6 +819,18 @@ export default function createMemoryExtension(
       onArchive: mem.topicArchived,
     });
   }
+  /** The promote pass over the real KB; the alias resolver is the kb package's, passed in as a function. */
+  const runPass = (trigger: PassTrigger) => {
+    if (!kbRoots) throw new Error("promote needs KB_BASE and KB_OPS (no KB roots configured); nothing was changed");
+    const roots = kbRoots;
+    return runSessionPromotePass({
+      wolfDen, wolfName, engine: getEngine(), kbRoots: roots, defaultDomain, domains, env: context.env ?? process.env, trigger,
+      resolveEntry: (id) => resolveAliasedEntry(roots, readLedger(roots), id, defaultDomain)?.id ?? null,
+      onProgress: (msg) => console.log(`[memory] ${msg}`),
+      onEmit: mem.contribution,
+      onArchive: mem.topicArchived,
+    });
+  };
   const consolidateToSessions = (opts: { poolTarget?: number; minObservations: number; ignoreBackoff?: boolean }) => serialized(() => consolidateInner(opts));
 
   /** Consolidate the pool down to poolTarget (drain: the whole pool, as the timer does). Never overlaps itself. */
@@ -709,8 +841,14 @@ export default function createMemoryExtension(
         // minObservations 1: the trigger already decided; the manual-use size floor doesn't apply
         const consResult = await consolidateToSessions({ ...(opts.drain ? {} : { poolTarget }), minObservations: 1 });
         console.log(`[memory] Auto-consolidated into session topics: ${consResult.topicsCreated} created, ${consResult.topicsMerged} updated`);
+        // Promotion is its own pass: at most once per active day, topics whose threads were quiet 8 active hours.
+        if (kbRoots && dailyPassDue(wolfDen)) {
+          markDailyPass(wolfDen);
+          const r = await serialized(() => runPass({ kind: "daily" }));
+          console.log(`[memory] Daily promote pass: ${r.promoted.length} promoted, ${r.retired.length} retired`);
+        }
       } catch (consErr) {
-        console.error("[memory] Auto-consolidation failed:", consErr instanceof Error ? consErr.message : consErr);
+        if (!swallowNoKey(consErr)) console.error("[memory] Auto-consolidation failed:", consErr instanceof Error ? consErr.message : consErr);
       } finally {
         consolidating = null;
       }
@@ -728,7 +866,8 @@ export default function createMemoryExtension(
     promotingJob: () => promoting,
     // A manual Consolidate ignores the retry backoff; the timer/threshold path keeps it.
     consolidate: () => consolidateToSessions({ minObservations: 1, ignoreBackoff: true }),
-    promote() {
+    promoteForFeature: async (featureId: string) => { if (kbRoots) await serialized(() => runPass({ kind: "graduation", featureId })); },
+    promote(popts) {
       if (promoting) return { status: "already_running", jobId: promoting };
       const jobId = `promote-${Date.now().toString(36)}-${++jobSeq}`;
       promoting = jobId;
@@ -740,18 +879,8 @@ export default function createMemoryExtension(
           // inside promoteSessionTopics, as in pi.
           const { consolidated, promoted } = await serialized(async () => {
             const c = (await consolidateInner({ minObservations: 1 })).observationsProcessed;
-            const p = await promoteSessionTopics({
-              wolfDen,
-              wolfName,
-              engine: getEngine(),
-              kbRoots,
-              defaultDomain,
-              domains,
-              env: context.env ?? process.env,
-              onProgress: (msg) => console.log(`[memory] ${msg}`),
-              onEmit: mem.contribution,
-              onArchive: mem.topicArchived,
-            });
+            const pass = await runPass({ kind: "owner", ...(popts?.ids?.length ? { ids: popts.ids } : {}) });
+            const p = pass.promoteResult ?? { sessionId: "durable", topicsProcessed: 0, topicsMerged: 0, topicsCreated: 0, topicsSkipped: 0, claimsSubmitted: 0, topicsHeld: 0, trivialSkipped: 0, details: [] };
             return { consolidated: c, promoted: p };
           });
           const outcome = { consolidated, promoted };
@@ -1252,6 +1381,22 @@ export default function createMemoryExtension(
         const content = renderDenContext(ctx.wolfDen, ctx.wolfName, kbRoots ?? undefined);
         return content ?? undefined;
       }),
+      section("wolf_memory_retired", (ctx) => {
+        const roots = kbRoots;
+        if (!roots) return undefined;
+        const log = readLedger(roots);
+        const content = renderRetiredContext(ctx.wolfDen, {
+          resolveEntry: (id) => resolveAliasedEntry(roots, log, id, defaultDomain)?.id ?? null,
+          readEntry: (id) => {
+            const hit = resolveAliasedEntry(roots, log, id, defaultDomain);
+            const md = hit ? readEntryMarkdown(roots, hit.domain, hit.id) : null;
+            if (!md) return null;
+            const field = (k: string) => md.match(new RegExp(`^${k}:\\s*(.+)$`, "m"))?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+            return { title: field("title") || id, summary: field("summary") };
+          },
+        });
+        return content ?? undefined;
+      }),
       section("kb_access", (ctx) => {
         const content = renderKbAccess(kbBase, domains);
         return content ?? undefined;
@@ -1273,6 +1418,7 @@ export default function createMemoryExtension(
         }
         const prev = observing.get(ctx.conversationId) ?? Promise.resolve();
         const run = prev.then(() => observeConversation(message, ctx, { planning, final: !message.content.some((b) => b.type === "toolCall") })).catch((err) => {
+          if (swallowNoKey(err)) return;
           console.error("[memory] observation error:", err instanceof Error ? err.message : err);
         });
         observing.set(ctx.conversationId, run);

@@ -69,8 +69,10 @@ const VALUE_NEEDLES = [
 ];
 // NAME needles: the env var names of our credentials. Legitimate in SERVER code (console-client reads WOLFPACK_HUB_TOKEN, the engine reads
 // OAUTH_TOKEN), so they are checked in the browser bundle only, where their presence means a build-time inline.
-// (ghp_ / github_pat_ / AKIA are prefixes, not names: bare substrings occur in library code, so they are matched only in VALUE form above.)
-const NAME_NEEDLES = ["WOLFPACK_HUB_TOKEN", "OAUTH_TOKEN", "sk-ant-"];
+// (ghp_ / github_pat_ / AKIA / sk-ant- are prefixes, not names: bare substrings are legitimate in the bundle, so they are matched only in
+// VALUE form above. sk-ant- ships on purpose: Pack > Keys checks a key's shape and seals it in the browser (the console never sees the
+// key), so the provider list's shape rule (prefix and pattern, packages/protocol/src/providers.ts) is client code.)
+const NAME_NEEDLES = ["WOLFPACK_HUB_TOKEN", "OAUTH_TOKEN"];
 const SCAN_EXT = /\.(js|mjs|cjs|css|html|rsc|body|json|map|txt|segment)$/;
 const scan = (root, names) => {
 	if (!fs.existsSync(root)) return;

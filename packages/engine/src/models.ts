@@ -27,7 +27,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { packStateDir } from "@wolfpack/protocol/runtime-home";
 import { parse as parseYaml } from "yaml";
+import { hasAdapter } from "./adapters/registry.js";
 
 export const TIERS = ["main", "smart", "fast"] as const;
 export type Tier = (typeof TIERS)[number];
@@ -295,9 +297,9 @@ export function resolveModelTable(input: ResolveInput): ModelTable {
     const configured = nonEmpty(wolfTier?.provider) ?? nonEmpty(packTier?.provider);
     const piProvider = configured ? canonicalPiProvider(configured) : providers.pi;
     const engineProvider = ENGINE_PROVIDER_FOR_PI[piProvider] ?? piProvider;
-    if (ENGINE_STEP_TIERS.includes(tier) && !ENGINE_ADAPTER_PROVIDERS.includes(engineProvider)) {
+    if (ENGINE_STEP_TIERS.includes(tier) && !ENGINE_ADAPTER_PROVIDERS.includes(engineProvider) && !hasAdapter(engineProvider)) {
       throw new ModelConfigError(
-        `models.${tier}.provider "${piProvider}" has no engine adapter; engine steps (memory, consolidation, KB sweep) need ${ENGINE_ADAPTER_PROVIDERS.join("|")} for the ${tier} tier (only main can use other providers)`,
+        `models.${tier}.provider "${piProvider}" has no engine adapter; engine steps (memory, consolidation, KB sweep) need ${ENGINE_ADAPTER_PROVIDERS.join("|")} or the plug-in that provides it enabled (wolf.yaml plugins:) for the ${tier} tier (only main can use other providers)`,
       );
     }
     const resolved: ResolvedTier = {
@@ -376,8 +378,8 @@ function canonicalJson(value: unknown): string {
 export const MODELS_FILE_ENV = "WOLFPACK_MODELS_FILE";
 
 /** The pack config file: ~/.wolfpack/config.yaml. */
-export function packConfigPath(home: string = os.homedir()): string {
-  return path.join(home, ".wolfpack", "config.yaml");
+export function packConfigPath(home?: string): string {
+  return home ? path.join(home, ".wolfpack", "config.yaml") : path.join(packStateDir(), "config.yaml");
 }
 
 /** Read the `models:` block of a pack config file (undefined if absent or unreadable). */

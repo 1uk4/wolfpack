@@ -9,6 +9,7 @@
  * Request ids are prefixed by the side that opened them: `h-` (hub) or `w-` (worker; reserved, not used yet).
  */
 import { z } from "zod";
+import { CommandKindSchema, LinkCmdResultSchema, LinkCmdSchema } from "./command.js";
 import { INVENTORY_MAX_ENTRIES, InventoryEntrySchema } from "./inventory.js";
 
 export const LINK_PROTOCOL_VERSION = 1;
@@ -79,6 +80,10 @@ export const LinkHelloSchema = z.object({
   wolves: z.array(LinkWolfSchema).max(LINK_MAX_WOLVES),
   /** Per-domain KB cursors the worker has applied. */
   kbRevisions: Revisions.default({}),
+  /** Additive: the command kinds this worker can run (see command.ts). Absent = an older worker = none. */
+  commands: z.array(CommandKindSchema).max(16).optional(),
+  /** Additive: the machine's public key for sealed key delivery (used by the Keys task; the command channel only carries it). */
+  pubkey: z.string().min(1).max(512).optional(),
 });
 export const LinkWelcomeSchema = z.object({
   t: z.literal("welcome"),
@@ -198,8 +203,12 @@ export const LinkFrameSchema = z.discriminatedUnion("t", [
   LinkRerrSchema,
   LinkPauseSchema,
   LinkResumeSchema,
+  LinkCmdSchema,
+  LinkCmdResultSchema,
 ]);
 export type LinkFrame = z.infer<typeof LinkFrameSchema>;
+export type LinkCmd = z.infer<typeof LinkCmdSchema>;
+export type LinkCmdResult = z.infer<typeof LinkCmdResultSchema>;
 export type LinkHello = z.infer<typeof LinkHelloSchema>;
 export type LinkReport = z.infer<typeof LinkReportSchema>;
 export type LinkGrants = z.infer<typeof LinkGrantsSchema>;

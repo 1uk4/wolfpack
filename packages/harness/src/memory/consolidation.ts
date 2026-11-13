@@ -33,8 +33,15 @@ import {
   buildDomainContext,
   consolidateSession,
   readTopics,
+  enforceByteCap,
+  retireTopic,
+  TOPIC_CHAR_CAP,
+  restoreEvicted,
+  setAsideEvicted,
+  DEFAULT_MAX_TOPICS,
   readJourney,
   writeTopic,
+  targetHint,
   renderIndex,
   SESSION_CONSOLIDATION_USER_PROMPT,
   fillPromptTemplate,
@@ -67,6 +74,8 @@ export interface PoolObservation {
   content: string;
   recordedAt: string;
   domain?: string;
+  /** The conversation (thread) it was observed in. Absent on older lines; never part of the observation id. */
+  thread?: string;
   /** Task bound when this was observed: it feeds that item's Record, not the den. */
   work?: string;
   /** The bound task's parent feature. */
@@ -117,6 +126,8 @@ export interface ConsolidationConfig {
    * promoteSessionTopics moves them to the den and the KB inbox. Omitted: the legacy pool → den path.
    */
   sessionTopics?: SessionTopicsLocation;
+  /** The kb package's resolveAliasedEntry as a function; a new session topic whose subject the routing index knows records the resolved entry as its hint. */
+  resolveEntry?: (entryId: string) => string | null;
   wolfDen: string;
   wolfName: string;
   /** The wolf's resolved model table (default: loadModelTable(), i.e. the
@@ -151,6 +162,8 @@ export interface ConsolidationConfig {
   onRecord?: (r: { work: string; observationCount: number; chars?: number }) => void;
   /** Called per den topic archived by the legacy path's reconcile (`entryId` null: rejected). */
   onArchive?: (a: { id: string; entryId: string | null }) => void;
+  /** `memory.consolidation.maxTopics`: session topics the model is sent; the least recently updated move to `evicted/` (default 40). */
+  maxTopics?: number;
   /** Engine override (tests); built from the table when omitted. */
   engine?: Engine;
   /** Where work Records are written (default: the Work API from WORK_ENDPOINT / WORK_TOKEN, when set). */
@@ -763,6 +776,7 @@ async function consolidateToSessionTopics(
   const obsLines = observations
     .map((o) => `${o.timestamp}${o.domain ? ` [${o.domain}]` : ""}  ${o.content}`)
     .join("\n");
+  // No count-based eviction before the call: the model sees every topic. The 180 KB cap is enforced after the run.
   const existing = readTopics(root);
   const journey = readJourney(root);
   const existingSection =
@@ -780,17 +794,54 @@ async function consolidateToSessionTopics(
   }
 
   onProgress?.("Running LLM consolidation into session topics...");
-  const result = await engine.call("consolidate", ConsolidationResultSchema, { system, prompt });
+  let result;
+  try {
+    result = await engine.call("consolidate", ConsolidationResultSchema, { system, prompt });
+  } catch (err) {
+    throw err;
+  }
 
   const now = new Date().toISOString().replace("T", " ").slice(0, 16);
   // As pi: a dropped topic domain falls back to the batch's domain when the batch has exactly one.
   const batchDomains = new Set(observations.map((o) => o.domain).filter(Boolean));
   const soleDomain = batchDomains.size === 1 ? [...batchDomains][0] : undefined;
 
+  // Where this run's notes came from: thread ids and any work/feature ids, plus the newest observation time.
+  const runSources = [...new Set(observations.flatMap((o) => [o.thread ? `thread:${o.thread}` : "", o.work ?? "", o.feature ?? "", o.origin?.work ?? "", o.origin?.feature ?? ""]).filter(Boolean))];
+  const runLastNote = observations.map((o) => o.timestamp).sort().at(-1);
   let created = 0;
   let merged = 0;
   let skipped = 0;
+  // A topic over TOPIC_CHAR_CAP is sent back once, asking for a split by subject. Every part must be under the cap;
+  // otherwise the oversized write is dropped and the original topic stays as it was.
+  const actions: typeof result.actions = [];
   for (const action of result.actions) {
+    const big = action.action !== "skip" && action.result && action.result.body.length > TOPIC_CHAR_CAP ? action.result : undefined;
+    if (!big) {
+      actions.push(action);
+      continue;
+    }
+    let parts: typeof result.actions | undefined;
+    try {
+      const split = await engine.call("consolidate", ConsolidationResultSchema, {
+        system,
+        prompt: `The topic below is ${big.body.length} characters, over the ${TOPIC_CHAR_CAP}-character cap. Please split it by subject into separate topics, each body under ${TOPIC_CHAR_CAP} characters, losing no facts. Return one create action per part, each with its own id.\n\n### ${big.id} — ${big.title}\nSummary: ${big.summary}\n\n${big.body}`,
+      });
+      const ok = split.actions.length > 1 && split.actions.every((a) => a.action !== "skip" && a.result && a.result.body.length <= TOPIC_CHAR_CAP && isSafeSegment(a.result.id));
+      if (ok) parts = split.actions;
+    } catch {
+      parts = undefined;
+    }
+    if (!parts) {
+      skipped++;
+      onProgress?.(`  split of ${big.id} failed; the original stays unchanged`);
+      continue;
+    }
+    const orig = existing.find((t) => t.id === big.id);
+    if (orig && !parts.some((p) => p.result?.id === big.id)) retireTopic(root, orig, new Date());
+    actions.push(...parts);
+  }
+  for (const action of actions) {
     if (action.action === "skip" || !action.result) {
       skipped++;
       continue;
@@ -802,12 +853,27 @@ async function consolidateToSessionTopics(
       continue;
     }
     const isUpdate = existing.some((t) => t.id === r.id);
-    writeTopic(root, { id: r.id, title: r.title, summary: r.summary, updated: now, body: r.body, domain: r.domain || soleDomain });
+    // The model never saw an evicted topic. A merge into an evicted id therefore starts a fresh topic, and the old
+    // body is kept as `<id>-evicted-<stamp>` (file and frontmatter id), so nothing is lost and promote reads both.
+    if (!isUpdate) setAsideEvicted(root, r.id);
+    const prev = existing.find((t) => t.id === r.id);
+    writeTopic(root, {
+      id: r.id, title: r.title, summary: r.summary, updated: now, body: r.body, domain: r.domain || soleDomain,
+      sources: [...new Set([...(prev?.sources ?? []), ...runSources])],
+      ...(runLastNote ? { lastNote: prev?.lastNote && prev.lastNote > runLastNote ? prev.lastNote : runLastNote } : prev?.lastNote ? { lastNote: prev.lastNote } : {}),
+      ...(prev?.keepLocal ? { keepLocal: true } : {}),
+      ...(() => {
+        const hint = prev?.routingHint ?? (!isUpdate && config.resolveEntry ? targetHint(config.wolfDen, r.id, config.resolveEntry) : null);
+        return hint ? { routingHint: hint } : {};
+      })(),
+    });
     safely(() => config.onTopic?.({ id: r.id, domain: r.domain || soleDomain, change: isUpdate ? "merge" : "create", scope: "session", observationCount: observations.length }));
     onProgress?.(`  ${isUpdate ? "updated" : "created"} session topic: ${r.title}`);
     if (isUpdate) merged++;
     else created++;
   }
+  const capped = enforceByteCap({ den: config.wolfDen, root });
+  if (capped.retired.length || capped.evicted.length) onProgress?.(`  180 KB cap: ${capped.retired.length} retired, ${capped.evicted.length} moved to evicted/`);
   renderIndex(root);
   onProgress?.(`Done: ${created} session topic(s) created, ${merged} updated, ${skipped} skipped`);
   return { created, merged, skipped };
@@ -828,6 +894,10 @@ export interface PromoteSessionConfig {
   onEmit?: (c: { id: string; denTopicId: string; domain: string }) => void;
   /** Called per den topic the promote's reconcile step archived (`entryId` null: rejected). */
   onArchive?: (a: { id: string; entryId: string | null }) => void;
+  /** Promote only these session topics (the promote pass chooses). Omitted: all. */
+  onlyIds?: readonly string[];
+  /** Resolved routing hints by topic id: the emit target for that topic. */
+  targets?: Record<string, string>;
 }
 
 /**
@@ -845,6 +915,8 @@ export function promoteSessionTopics(config: PromoteSessionConfig): Promise<Cons
     defaultDomain: config.defaultDomain,
     allowedDomains: config.domains?.length ? config.domains : envDomains(config.env),
     skipClaims: false,
+    ...(config.onlyIds ? { onlyIds: config.onlyIds } : {}),
+    ...(config.targets ? { targets: config.targets } : {}),
     onProgress: config.onProgress,
     onEmit: config.onEmit,
     onArchive: config.onArchive,

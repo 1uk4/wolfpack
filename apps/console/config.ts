@@ -41,13 +41,13 @@ export const PATHS = {
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /** The graph's stored node positions: a plain JSON map nodeId → {x,y}
- *  (src/core/graph-persistence.ts). The console's own store; the KB is
+ *  (src/core/graph/graph-persistence.ts). The console's own store; the KB is
  *  never written. */
 export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
 
 /**
  * Graph render settings (the settings-panel controls): one small JSON blob,
- * read-modify-write. Shared shape/sanitizer: src/core/render-settings.ts.
+ * read-modify-write. Shared shape/sanitizer: src/core/graph/render-settings.ts.
  */
 export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json");
 
@@ -57,35 +57,17 @@ export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json
  * non-secret product preference — general, agent (background
  * model/thinking overrides + tool toggles + prompt-override switches),
  * appearance, graph. Explicit user choices only: ABSENT keys resolve to the
- * factory defaults compiled into src/core/settings.ts (FACTORY_SETTINGS), so
+ * factory defaults compiled into src/core/settings/settings.ts (FACTORY_SETTINGS), so
  * a software update that adds a knob (new tool, new role, new appearance
  * field) needs no migration — old records simply lack the new keys. The
  * version field is a PRIVATE schema counter for breaking shape changes
  * only (field renamed/meaning changed), unrelated to the app release
- * version. Secrets (API keys, login tokens) NEVER live here — auth.json /
- * .env.local keep that role. (The `chat` default-settings section died
+ * version. Secrets (API keys, login tokens) NEVER live here — the Pack key
+ * file / .env.local keep that role. (The `chat` default-settings section died
  * with per-session models, owner 2026-09-28 — sessions own their model
  * from birth, stamped from the strong slot.)
  */
 export const SETTINGS_FILE = path.join(DATA_ROOT, "settings.json");
 
-/**
- * THE AUTH/KEY STORE (auth-keys wave, 2026-09-19): BYOK provider keys in a
- * flat {VAR: value} JSON map — the SAME file the Electron app has always
- * hand-edited (owner decision: option A, zero migration). Desktop main.cjs
- * passes WOLFPACK_AUTH_FILE pointing at userData/auth.json (mode 0600); in dev
- * (no Electron) the default is the repo-root auth.json (gitignored, same
- * pattern as .env.local — a worktree may symlink it to the master copy).
- * The SERVER reads/writes this file directly at call time (no restart to
- * change a key); it reflects the values into process.env at boot with
- * FILL-GAP precedence — real environment variables (incl. .env.local in
- * dev) always win (src/server/keys.ts). Hand-edits still work: the file is
- * re-read from disk on every API access. Secrets NEVER go in settings.json
- * — this file keeps that role, alongside .env.local.
- */
-const AUTH_FILE_ENV = process.env.WOLFPACK_AUTH_FILE || undefined;
-export const AUTH_FILE = AUTH_FILE_ENV
-	? path.resolve(AUTH_FILE_ENV)
-	: DATA_DIR_ENV
-		? path.join(DATA_ROOT, "auth.json")
-		: path.join(ROOT, "auth.json");
+// Keys: the console keeps no key store of its own (work-wolfpack-u6GH2kk). They live in the Pack key file (WOLFPACK_KEY_FILE),
+// read by src/server/settings/keys.ts.

@@ -129,6 +129,7 @@ describe("startWolf", () => {
       "ask_revise",
       "bash",
       "edit",
+      "pin",
       "read",
       "show_checklist",
       "show_decision",
@@ -152,6 +153,27 @@ describe("startWolf", () => {
     const again = await start();
     const detail2: any = await (await fetch(`${again.url}${buildPath("getThread", { id: "bootwolf/home" })}`)).json();
     expect(detail2.id).toBe("bootwolf/home");
+  });
+
+  it("memory.model reaches the sweep's engine (smart steps only); the chat keeps its own model", async () => {
+    const t = (model: string) => ({ model, modelSource: "default", provider: "anthropic", piModel: `anthropic/${model}` });
+    writeFileSync(join(root, "models.json"), JSON.stringify({ location: "local", transport: "api", transportSource: "default", tiers: { main: t("claude-haiku-5-5"), smart: t("claude-sonnet-5-5"), fast: t("claude-haiku-5-5") }, steps: {}, warnings: [] }));
+    writeFileSync(join(root, "wolf.yaml"), `name: bootwolf\nworkspace: ${join(root, "work")}\nmemory:\n  librarian: true\n  sweepInterval: 1s\n  model: claude-opus-5-5\n`);
+    mkdirSync(join(root, "kb"));
+    env = { ...env, KB_BASE: join(root, "kb"), KB_OPS: join(root, "kb"), ANTHROPIC_API_KEY: "sk-ant-test-not-real-0000000000000000" };
+    let engine: { config: { defaultModel?: string; steps?: Record<string, { model?: string }> } } | undefined;
+    const w = await startWolf({
+      configPath: join(root, "wolf.yaml"), env, home: root,
+      sweepTick: (async (o: { createEngine: () => unknown }) => { engine = o.createEngine() as typeof engine; return { outcome: "idle", sweep: { processed: 0, created: 0, merged: 0, rejected: 0, parked: [], remaining: 0 } }; }) as never,
+    });
+    running.push(w);
+    for (let i = 0; i < 40 && !engine; i++) await new Promise((r) => setTimeout(r, 100)); // the 1s sweep timer fires the tick
+    expect(engine?.config.defaultModel).toBe("claude-opus-5-5");
+    expect(engine?.config.steps?.consolidate?.model).toBe("claude-opus-5-5");
+    expect(engine?.config.steps?.classify?.model).toBe("claude-haiku-5-5");
+    const watch = await w.conversation.watch();
+    expect(watch.snapshot.agent.model).toMatchObject({ modelId: "claude-haiku-5-5" });
+    await watch.stop();
   });
 
   it("boots a subscription-transport table (legacy claude-bridge piModel) onto claude-stateless (no model call)", async () => {

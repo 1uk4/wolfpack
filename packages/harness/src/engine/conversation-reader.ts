@@ -23,6 +23,8 @@ export interface ConversationReader {
    * first. A fork's inherited history is excluded, so a fork reads only what happened after the fork point.
    */
   messagesSince(conversationId: number, afterEntryId?: number): Promise<ConversationMessage[]>;
+  /** Every message visible to the conversation, inherited fork history included, oldest first. */
+  messagesInHistory(conversationId: number): Promise<ConversationMessage[]>;
   /**
    * The newest card raised by `tool` for which `matches(card)` holds, read from the structured entries (the card in the
    * tool result's details, the answer entry keyed by its call id) and scanned newest-first, so it stops at the hit.
@@ -61,7 +63,7 @@ export function createConversationReader(harness: Harness): ConversationReader {
     return cls;
   }
 
-  async function messagesSince(id: number, afterEntryId = 0): Promise<ConversationMessage[]> {
+  async function readMessages(id: number, afterEntryId: number, inherited: boolean): Promise<ConversationMessage[]> {
     const conv: Conversation | undefined = await harness.conversation(id as never, ctx);
     if (!conv) return [];
     const out: ConversationMessage[] = [];
@@ -70,7 +72,7 @@ export function createConversationReader(harness: Harness): ConversationReader {
       const page = await conv.entries({ order: "ascending", minEntryId: (afterEntryId + 1) as never }, PAGE, cursor, ctx);
       for (const entry of page.items) {
         // entries() is fork-aware: skip what the parent appended and this conversation inherited.
-        if (Number(entry.conversationId) !== id) continue;
+        if (!inherited && Number(entry.conversationId) !== id) continue;
         // A compaction summary restates messages the observer already saw (or flushed just before it): not new talk.
         if (CompactionEntry.is(entry)) continue;
         for (const message of entry.model ?? []) out.push({ entryId: Number(entry.id), message });
@@ -125,7 +127,8 @@ export function createConversationReader(harness: Harness): ConversationReader {
 
   return {
     classify,
-    messagesSince,
+    messagesSince: (id, after = 0) => readMessages(id, after, false),
+    messagesInHistory: (id) => readMessages(id, 0, true),
     latestCard,
     onClose: (fn) => void closers.add(fn),
     close: () => {

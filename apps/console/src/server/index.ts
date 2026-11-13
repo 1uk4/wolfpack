@@ -4,9 +4,9 @@
  * here; nothing under app/ touches src/store or src/agent directly.
  */
 
-export * from "./events-stream.ts";
-export * from "./graph-positions.ts";
-export * from "./stores.ts";
+export * from "./thread/events-stream.ts";
+export * from "./kb/graph-positions.ts";
+export * from "./settings/stores.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
 // The settings record + prompt overrides (settings-storage wave, 2026-09-19).
 // The *Record aliases keep the app/api/settings routes explicit about which
@@ -17,29 +17,28 @@ export {
 	settingsStore,
 } from "../store/settings.ts";
 
-// The auth/keys composition (auth-keys wave, 2026-09-19): the curated
-// key catalog + the env-reflecting store behind GET/PUT/DELETE /api/keys.
-// Importing this module runs the idempotent boot fill-gap — every consumer
-// keeps its plain process.env reads (that seam is the point).
-export * from "./keys.ts";
-export { authStore } from "../store/auth.ts";
-export * from "./settings-body.ts";
-export * from "./model-catalog.ts";
+// Key reads (work-wolfpack-u6GH2kk): the Pack key file first, then the real env. Read-only; nothing is seeded into process.env.
+export * from "./settings/keys.ts";
+export * from "./settings/settings-body.ts";
+export * from "./settings/model-catalog.ts";
 
 // The ConsoleClient seam (client-rewire wave): the factory + the thin
 // Response handlers the /api/wolves routes and the wolf pages share.
-export * from "./console-client.ts";
-export * from "./thread-api.ts";
-export * from "./memory-api.ts";
-export * from "./kb-activity-api.ts";
-export * from "./needs-you-api.ts";
-export * from "./devices-api.ts";
-export * from "./prompts-api.ts";
-export * from "./settings-overview-api.ts";
-export * from "./wolf-settings-api.ts";
+export * from "./thread/console-client.ts";
+export * from "./thread/thread-api.ts";
+export * from "./kb/memory-api.ts";
+export * from "./kb/kb-activity-api.ts";
+export * from "./thread/needs-you-api.ts";
+export * from "./pack/devices-api.ts";
+export * from "./pack/machines-api.ts";
+export * from "./settings/prompts-api.ts";
+export * from "./settings/settings-overview-api.ts";
+export * from "./settings/wolf-settings-api.ts";
 // Pack health (work-wolfpack-LUQ7C2B): probes + restarts that never go through the hub.
-export * from "./health-api.ts";
-export * from "./pack-health.ts";
-export * from "./pack-actions.ts";
-export * from "./session-witness.ts";
-export * from "./domains-api.ts";
+export * from "./pack/health-api.ts";
+export * from "./pack/pack-health.ts";
+export * from "./pack/pack-actions.ts";
+export * from "./thread/session-witness.ts";
+export * from "./pack/domains-api.ts";
+export * from "./pack/keys-api.ts";
+export * from "./pack/model-options.ts";

@@ -7,7 +7,8 @@
  *
  * DevicesView is the props-driven markup (SSR-testable); DevicesSection owns the fetches.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { canPair, canRevoke, devicesToShow } from "@/src/core";
 
 export interface DeviceRow {
 	id: string;
@@ -61,6 +62,15 @@ export function DevicesView(p: {
 	onCascade?: (on: boolean) => void;
 	onAdd: () => void;
 	onDismissCode: () => void;
+	/** No Revoke on any row. */
+	readOnly?: boolean;
+	/** Pairing allowed (default true). When false there is no Add device or code panel; `pairNote` says why. */
+	canPair?: boolean;
+	pairNote?: string;
+	/** Shown instead of "No devices paired." when the list is empty. */
+	emptyText?: string;
+	/** Pack: drawn above the pairing code (a QR of the pairing link). Receives the link. */
+	renderQr?: (url: string) => ReactNode;
 }) {
 	return (
 		<div data-testid="devices-section" className="flex flex-col gap-3">
@@ -72,7 +82,7 @@ export function DevicesView(p: {
 			{p.devices === undefined ? (
 				<p className="text-xs text-muted-foreground/70">Loading devices…</p>
 			) : p.devices.length === 0 ? (
-				<p className="text-xs text-muted-foreground/70">No devices paired.</p>
+				<p className="text-xs text-muted-foreground/70">{p.emptyText ?? "No devices paired."}</p>
 			) : (
 				<ul className="flex flex-col divide-y divide-border/60" data-testid="devices-list">
 					{p.devices.map((d) => (
@@ -91,7 +101,7 @@ export function DevicesView(p: {
 									{d.addedBy && <span data-testid="device-added-by"> · added by {d.addedBy}</span>}
 								</p>
 							</div>
-							{p.confirming === d.id ? (
+							{p.readOnly ? null : p.confirming === d.id ? (
 								<div className="flex flex-col gap-2 md:items-end" data-testid="device-confirm">
 									{addedDescendants(p.devices!, d.id).length > 0 && (
 										<label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground md:min-h-0">
@@ -117,14 +127,23 @@ export function DevicesView(p: {
 					))}
 				</ul>
 			)}
-			<div>
-				<button type="button" data-testid="device-add" disabled={p.busy} className={BTN} onClick={p.onAdd}>
-					Add device
-				</button>
-			</div>
-			{p.code && (
+			{p.canPair === false ? (
+				p.pairNote && (
+					<p data-testid="device-pair-note" className="text-xs text-muted-foreground">
+						{p.pairNote}
+					</p>
+				)
+			) : (
+				<div>
+					<button type="button" data-testid="device-add" disabled={p.busy} className={BTN} onClick={p.onAdd}>
+						Add device
+					</button>
+				</div>
+			)}
+			{p.code && p.canPair !== false && (
 				<div data-testid="device-code" className="flex flex-col gap-2 rounded-sm border border-border p-3">
 					<p className="text-xs text-muted-foreground">On the new device, open the link or enter the code on the pairing page. Single use, expires {new Date(p.code.expiresAt).toLocaleTimeString()}.</p>
+					{p.code.url && p.renderQr?.(p.code.url)}
 					<p className="break-all font-mono text-lg tracking-wider text-foreground" data-testid="device-code-value">
 						{p.code.code}
 					</p>
@@ -144,7 +163,21 @@ export function DevicesView(p: {
 	);
 }
 
-export function DevicesSection() {
+/** The outcome of one Revoke press: the hub's refusal (if any) and the refreshed list. Pure over `fetchFn` so it is testable without a DOM. */
+export async function revokeAndReload(fetchFn: typeof fetch, id: string, cascadeToo: boolean): Promise<{ error: string | null; devices?: DeviceRow[] }> {
+	let error: string | null = null;
+	const r = await fetchFn(`/api/devices/${encodeURIComponent(id)}${cascadeToo ? "?cascade=1" : ""}`, { method: "DELETE" });
+	if (!r.ok) {
+		const b = (await r.json().catch(() => ({}))) as { error?: string };
+		error = b.error ?? `status ${r.status}`;
+	}
+	const l = await fetchFn("/api/devices");
+	const body = (await l.json().catch(() => ({}))) as { devices?: DeviceRow[]; error?: string };
+	if (!l.ok) return { error: body.error ?? `status ${l.status}` };
+	return { error, devices: body.devices ?? [] }; // the refusal stays: a clean reload must not wipe it
+}
+
+export function DevicesSection({ singleMac, renderQr, pairNote, emptyText }: { singleMac?: boolean; renderQr?: (url: string) => ReactNode; pairNote?: string; emptyText?: string } = {}) {
 	const [devices, setDevices] = useState<DeviceRow[] | undefined>();
 	const [error, setError] = useState<string | null>(null);
 	const [confirming, setConfirming] = useState<string | null>(null);
@@ -173,13 +206,13 @@ export function DevicesSection() {
 		setBusy(true);
 		try {
 			// A self-revoke makes the NEXT /api call a hub 401, which the global fetch wrapper (hub-auth.tsx) turns into sign-out + /pair; the reload below is that call.
-			const r = await fetch(`/api/devices/${encodeURIComponent(id)}${cascadeToo ? "?cascade=1" : ""}`, { method: "DELETE" });
-			if (!r.ok) {
-				const b = (await r.json().catch(() => ({}))) as { error?: string };
-				setError(b.error ?? `status ${r.status}`);
-			}
+			const out = await revokeAndReload(fetch, id, cascadeToo);
 			setConfirming(null);
-			await load();
+			setError(out.error);
+			if (out.devices) {
+				setNow(Date.now());
+				setDevices(out.devices);
+			}
 		} finally {
 			setBusy(false);
 		}
@@ -196,5 +229,5 @@ export function DevicesSection() {
 			setBusy(false);
 		}
 	};
-	return <DevicesView devices={devices} error={error} now={now} confirming={confirming} busy={busy} code={code} onAsk={(id) => { setCascade(false); setConfirming(id); }} cascade={cascade} onCascade={setCascade} onRevoke={(id, c) => void revoke(id, c)} onAdd={() => void add()} onDismissCode={() => { setCode(null); void load(); }} />;
+	return <DevicesView devices={devices && devicesToShow(devices, !!singleMac)} readOnly={!canRevoke(!!singleMac)} canPair={canPair(!!singleMac)} pairNote={pairNote} emptyText={emptyText} renderQr={renderQr} error={error} now={now} confirming={confirming} busy={busy} code={code} onAsk={(id) => { setCascade(false); setConfirming(id); }} cascade={cascade} onCascade={setCascade} onRevoke={(id, c) => void revoke(id, c)} onAdd={() => void add()} onDismissCode={() => { setCode(null); void load(); }} />;
 }

@@ -178,8 +178,14 @@
 	}
 }
 
+/* html's background propagates to the canvas, which paints the whole screen, including the strip iOS's home-screen app leaves below the
+   layout viewport. A mounted thread sets --wp-canvas-bg to its tint so that strip matches the chat; elsewhere the default dark. */
+html {
+	background-color: var(--wp-canvas-bg, var(--color-background));
+}
+
 body {
-	background: var(--color-background);
+	background: var(--wp-canvas-bg, var(--color-background)); /* iOS's home-screen app paints the strip below the viewport from body, not html */
 	color: var(--color-foreground);
 	font-family: var(--font-ui);
 }
@@ -396,7 +402,7 @@ body {
    advance (every session ends in Teaching), so phase-as-signal was
    decoration; the --phase-* tokens and every phase-dot state are gone.
    What state deserved — "a turn is in flight" — is carried by MOTION
-   alone: the terminal braille spinner (components/braille-spinner.tsx),
+   alone: the terminal braille spinner (components/shell/braille-spinner.tsx),
    monochrome, existing only while true. */
 
 /* One keyframes, all ten frames: each frame <g> holds opacity 1 for its
@@ -442,16 +448,6 @@ body {
 	to {
 		opacity: 1;
 		scale: 1;
-	}
-}
-
-.settings-dialog-pop {
-	animation: settings-pop 150ms ease-out;
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.settings-dialog-pop {
-		animation: none;
 	}
 }
 
@@ -643,8 +639,8 @@ body {
 }
 
 /* ---- Phone layout (< 768px, Tailwind md). Desktop is untouched: everything below lives in this one media block. ----
-   One column (the sidebar is the full-screen list layer; see src/core/mobile-layout.ts), 44px tap targets, no horizontal scroll,
-   the thread sized to the VISIBLE viewport (--wp-vvh from components/viewport-vars.tsx, so the composer clears the keyboard),
+   One column (the sidebar is the full-screen list layer; see src/core/ui/mobile-layout.ts), 44px tap targets, no horizontal scroll,
+   the thread sized to the VISIBLE viewport (--wp-vvh from components/shell/viewport-vars.tsx, so the composer clears the keyboard),
    safe-area insets for the iOS notch / home bar. */
 @media (max-width: 767px) {
 	/* P12: the document never scrolls on a phone (no iOS rubber-band, no gap under the composer). The shell is a fixed-height
@@ -691,7 +687,7 @@ body {
 	/* fills main (the shell's content box, below the top inset) rather than re-deriving the height from dvh */
 	[data-testid="thread-chat"] {
 		height: 100%;
-		padding-bottom: env(safe-area-inset-bottom);
+		padding-bottom: var(--wp-safe-bottom, env(safe-area-inset-bottom)); /* viewport-vars sets 0px while the keyboard is open */
 	}
 	/* composer + card answers + list rows: >= 44px tap targets */
 	[data-testid="composer"] > button,
@@ -711,14 +707,10 @@ body {
 	[data-testid="composer-controls"] label {
 		min-height: 44px;
 	}
-	/* the textarea gets its own full-width row; attach / model / auto-ship / send wrap beneath it */
+	/* the text wrapper gets its own full-width row (max-md:order-first basis-full in composer.tsx; the textarea sits inside that
+	   wrapper, so order/flex on the textarea itself never reached the form's row); attach / model / auto-ship / send wrap beneath it */
 	[data-testid="composer"] {
-		flex-wrap: wrap;
 		align-items: center;
-	}
-	[data-testid="composer"] textarea {
-		order: -1;
-		flex: 1 1 100%;
 	}
 	/* send stays at the right end of the button row even with no controls beside it (the floating chat has none) */
 	[data-testid="composer"] > button[type="submit"] {
@@ -783,4 +775,24 @@ main {
 html,
 body {
 	touch-action: manipulation;
+}
+
+/* Text shimmer (components/ai-elements/shimmer.tsx): a highlight sweeps across muted text. */
+@keyframes wp-shimmer-sweep {
+	from { background-position: 100% center, 0 0; }
+	to { background-position: 0% center, 0 0; }
+}
+.wp-shimmer {
+	background-image:
+		linear-gradient(90deg, #0000 calc(50% - var(--spread)), var(--color-background), #0000 calc(50% + var(--spread))),
+		linear-gradient(var(--color-muted-foreground), var(--color-muted-foreground));
+	background-size: 250% 100%, auto;
+	background-repeat: no-repeat;
+	background-clip: text;
+	animation: wp-shimmer-sweep var(--shimmer-duration, 2s) linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.wp-shimmer {
+		animation: none;
+	}
 }

@@ -30,13 +30,13 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { discoverAgents, formatRosterLines, loadAgent, parseCommaList, type AgentDefinition, type AgentIsolation, type DiscoverOptions } from "@wolfpack/agents";
 import { TIERS, isTier } from "@wolfpack/engine";
 import { readBindingFile } from "@wolfpack/memory";
 import { WriterGuard, abandonChild, dependenciesLine, installDependencies, wantsInstall, gitOk, mergeChild, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, workspaceConflict, featureBranch, type InstallResult, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
 import type { Card, LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
+import { runDir } from "@wolfpack/protocol/runtime-home";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
 import { fenceRoot, markSubagentConversation, offLimitsRegex, unfenceRoot, unmarkSubagentConversation } from "../engine/fence.js";
 import { HttpError } from "./http-error.js";
@@ -254,7 +254,7 @@ export class SubagentManager {
     for (const r of this.records) for (const d of r.outbox) this.deliverySeq = Math.max(this.deliverySeq, d.n);
     for (const r of this.records) this.queueSeq = Math.max(this.queueSeq, r.queuedSeq ?? 0);
     this.maxRunning = Math.max(1, Math.floor(opts.maxRunning ?? 3));
-    this.pool = new SlotPool(opts.slotDir ?? join(homedir(), ".wolfpack", "run", "subagent-slots"), Math.max(1, Math.floor(opts.hostMax ?? DEFAULT_HOST_MAX)), port.name, (e) => this.slotError(e));
+    this.pool = new SlotPool(opts.slotDir ?? join(runDir(), "subagent-slots"), Math.max(1, Math.floor(opts.hostMax ?? DEFAULT_HOST_MAX)), port.name, (e) => this.slotError(e));
   }
 
   close(): void {

@@ -1,37 +1,27 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { threadHref } from "@/src/core";
 import { getConsoleClient, isNotFound } from "@/src/server";
-import { SidebarToggle } from "@/components/sidebar";
 
 export const dynamic = "force-dynamic";
 
-/** One wolf's threads. */
+/**
+ * /wolf/<name> has no page of its own: it lands in the wolf's Home thread. A wolf without one gets one created here
+ * (owner decision, work-wolfpack-i2hZIv9). Creation is `createThread({kind:"home"})`, the call the wolf itself makes
+ * idempotent (an existing Home is returned unchanged, never a second), so concurrent visits cannot create two.
+ * An unknown wolf is a 404.
+ */
 export default async function WolfPage({ params }: { params: Promise<{ name: string }> }) {
 	const { name } = await params;
-	const threads = await getConsoleClient()
-		.listThreads(name)
-		.catch((err) => {
-			if (isNotFound(err)) return null;
-			throw err;
-		});
+	const client = getConsoleClient();
+	const threads = await client.listThreads(name).catch((err) => {
+		if (isNotFound(err)) return null;
+		throw err;
+	});
 	if (!threads) notFound();
-	return (
-		<div className="min-h-dvh">
-			<header className="wp-drag wp-wco-gutter flex h-15 items-center gap-3 border-b border-border px-3">
-				<SidebarToggle />
-				<h1 className="font-title text-3xl tracking-tight">{name}</h1>
-			</header>
-			<ul className="mx-auto flex w-full max-w-2xl flex-col gap-1 px-6 py-6" data-testid="thread-list">
-				{threads.map((t) => (
-					<li key={t.id}>
-						<Link href={threadHref(name, t.id)} className="block rounded-md px-2 py-1.5 text-sm hover:bg-accent">
-							{t.title}
-							<span className="ml-2 text-xs text-muted-foreground">{t.kind}</span>
-						</Link>
-					</li>
-				))}
-			</ul>
-		</div>
-	);
+	let home = threads.find((t) => t.kind === "home");
+	if (!home) {
+		if (!client.createThread) throw new Error(`wolf ${name} has no Home thread and this client cannot create one`);
+		home = await client.createThread(name, { kind: "home" });
+	}
+	redirect(threadHref(name, home.id));
 }

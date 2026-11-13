@@ -1,7 +1,7 @@
 /** The per-wolf settings store behind /v1/wolves/:name/settings: reads wolf.yaml, validates and atomically writes edits, names env vars. */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { atomicWrite, backupFile } from "@wolfpack/agents";
 import { WolfFileSchema } from "@wolfpack/engine";
 import { THREAD_COLOR_KEYS, isMaskedConfigKey, isSecretValue, maskSecrets, type EnvVarView } from "@wolfpack/protocol";
@@ -18,9 +18,11 @@ export const EDITABLE_KEYS: readonly string[] = [
   "compaction.reserveTokens",
   "compaction.keepRecentTokens",
   "memory.defaultDomain",
+  "memory.model",
   "memory.sweepInterval",
   "memory.consolidation.threshold",
   "memory.consolidation.poolTarget",
+  "memory.consolidation.maxTopics",
   "memory.consolidation.trigger",
   "memory.consolidation.interval",
 ];
@@ -72,13 +74,17 @@ export class WolfSettingsStore {
     return d && typeof d === "object" && !Array.isArray(d) ? (d as Record<string, unknown>) : {};
   }
 
-  view(tierModels: Record<string, string>, restartable: boolean, restartAvailableInSeconds: number) {
+  view(tierModels: Record<string, string>, restartable: boolean, restartAvailableInSeconds: number, wolfName?: string, tierProviders?: Record<string, string>) {
     const text = this.text();
+    const config = maskSecrets(this.doc()) as Record<string, unknown>;
+    // The answer always names the wolf: a wolf.yaml without `name:` is the wolf of its directory (the name wolfd serves it under).
+    if (typeof config.name !== "string" || !config.name) config.name = wolfName ?? basename(this.wolfHome);
     return {
       etag: etagOf(text),
-      config: maskSecrets(this.doc()) as Record<string, unknown>,
+      config,
       editable: [...EDITABLE_KEYS],
       tierModels,
+      ...(tierProviders ? { tierProviders } : {}),
       env: this.envNames(),
       restartNeeded: etagOf(text) !== this.bootEtag,
       restartable,

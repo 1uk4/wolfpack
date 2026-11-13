@@ -15,7 +15,7 @@
  * every page picks appearance up on load. The settings page writes a
  * section, hands the new appearance here, and the vars move immediately.
  *
- * (The open-settings keyboard chord lives in components/keyboard-shortcuts.tsx
+ * (The open-settings keyboard chord lives in components/shell/keyboard-shortcuts.tsx
  * with the other navigations — mod+, pushes /settings from anywhere.)
  */
 

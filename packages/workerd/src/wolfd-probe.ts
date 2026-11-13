@@ -74,7 +74,30 @@ function hostPort(url: string): { hostname: string; port: number } {
   return { hostname: u.hostname, port: Number(u.port) || (u.protocol === "https:" ? 443 : 80) };
 }
 
+/** GET <consoleUrl>/api/health and read its `self` part (version, channel, uptime, lag). undefined when the console does not answer with a 200 and a usable body: no entry is invented. */
+async function probeConsole(consoleUrl: string, machine: string, timeoutMs: number): Promise<InventoryEntry | undefined> {
+  try {
+    const r = await fetch(`${consoleUrl.replace(/\/+$/, "")}/api/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok) return undefined;
+    const s = ((await r.json()) as { self?: { version?: unknown; channel?: unknown; uptimeS?: unknown; lagMs?: unknown } | null }).self;
+    if (!s || typeof s !== "object") return undefined;
+    return {
+      machine,
+      kind: "console",
+      id: "console",
+      ...(typeof s.version === "string" && s.version ? { version: s.version.slice(0, 64) } : {}),
+      ...(s.channel === "stable" || s.channel === "main" ? { channel: s.channel } : {}),
+      ...(typeof s.uptimeS === "number" && s.uptimeS >= 0 ? { uptimeS: Math.round(s.uptimeS) } : {}),
+      ...(typeof s.lagMs === "number" && s.lagMs >= 0 ? { lagMs: Math.round(s.lagMs) } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export interface InventoryReporterOptions {
+  /** This machine's console origin (e.g. http://127.0.0.1:3200). Absent: no console entry. */
+  consoleUrl?: string;
   hostId: string;
   machine: string;
   version?: string;
@@ -85,6 +108,12 @@ export interface InventoryReporterOptions {
   send: (entries: InventoryEntry[]) => boolean;
   /** True once the hub's welcome advertised inventory. Nothing is sent before. */
   enabled: () => boolean;
+  /** Key presence per slot for the workerd entry (masks only, never values). */
+  keys?: () => InventoryEntry["keys"];
+  /** Whether a turn is running in the named wolf (supervisor.wolfBusy). Absent = busy is not reported. */
+  busy?: (name: string) => Promise<boolean>;
+  /** A wolf's transport (wolfTransport). Absent = not reported. */
+  transport?: (name: string) => "api" | "subscription";
   intervalMs?: number;
   probeTimeoutMs?: number;
 }
@@ -105,11 +134,16 @@ export function createInventoryReporter(o: InventoryReporterOptions): InventoryR
     const channel = o.channel();
     const base = { machine: o.machine, ...(channel ? { channel } : {}) };
     const kids = o.children();
-    const probed = await Promise.all(kids.map((c) => (c.url && c.state === "online" ? probeWolfd(c.url, timeoutMs) : Promise.resolve(undefined))));
+    const [probed, busy, con] = await Promise.all([
+      Promise.all(kids.map((c) => (c.url && c.state === "online" ? probeWolfd(c.url, timeoutMs) : Promise.resolve(undefined)))),
+      Promise.all(kids.map((c) => (o.busy && c.state === "online" ? o.busy(c.name).catch(() => false) : Promise.resolve(false)))),
+      o.consoleUrl ? probeConsole(o.consoleUrl, o.machine, timeoutMs) : Promise.resolve(undefined),
+    ]);
     const entries: InventoryEntry[] = [
-      { ...base, kind: "workerd", id: o.hostId, ...(o.version ? { version: o.version } : {}), uptimeS: Math.round(process.uptime()) },
-      ...kids.map((c, i): InventoryEntry => ({ ...base, kind: "wolfd", id: c.name, parent: o.hostId, ...probed[i] })),
+      { ...base, kind: "workerd", id: o.hostId, ...(o.version ? { version: o.version } : {}), uptimeS: Math.round(process.uptime()), ...(o.keys ? { keys: o.keys() } : {}) },
+      ...kids.map((c, i): InventoryEntry => ({ ...base, kind: "wolfd", id: c.name, parent: o.hostId, ...probed[i], ...(busy[i] ? { busy: true } : {}), ...(o.transport ? { transport: o.transport(c.name) } : {}) })),
     ];
+    if (con) entries.push(con);
     o.send(entries.slice(0, 128));
   }
   const report = (): Promise<void> => {

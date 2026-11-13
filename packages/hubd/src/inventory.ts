@@ -7,7 +7,7 @@ import { normaliseMachine } from "@wolfpack/protocol/health-lag";
  * that first wrote them) and hubd's own entry. Nothing is persisted: a restart starts empty and the next reports fill it.
  */
 export interface Inventory {
-  /** Replace what `hostId` reported. `machine` is the hello machine (overrides each entry's own). Only workerd and wolfd entries are kept. */
+  /** Replace what `hostId` reported. `machine` is the hello machine (overrides each entry's own). Only workerd, wolfd and console (the machine's own, probed by its workerd) entries are kept. */
   setHost(hostId: string, machine: string | undefined, entries: InventoryEntry[]): void;
   clearHost(hostId: string): void;
   /** A console heartbeat. "invalid": no usable machine; "forbidden": another token owns the row; "full": too many console rows. */
@@ -27,9 +27,26 @@ export function createInventory(now: () => number = Date.now): Inventory {
     setHost(hostId, machine, entries) {
       // A hello without a machine (older worker) is not trusted to name one through its entries: drop them.
       const kept: InventoryEntry[] = [];
+      let sawConsole = false;
       if (machine) {
         for (const e of entries) {
           if (e.kind === "workerd" || e.kind === "wolfd") kept.push({ ...e, machine });
+          else if (e.kind === "console" && !sawConsole) {
+            // The machine's own console, as its workerd probed it: one per report, fixed id, only the version facts (no parent, keys, busy...).
+            sawConsole = true;
+            const num = (n: number | undefined) => (typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : undefined);
+            const uptimeS = num(e.uptimeS);
+            const lagMs = num(e.lagMs);
+            kept.push({
+              machine,
+              kind: "console",
+              id: "console",
+              ...(e.version ? { version: e.version.slice(0, 64) } : {}),
+              ...(e.channel ? { channel: e.channel } : {}),
+              ...(uptimeS !== undefined ? { uptimeS: Math.round(uptimeS) } : {}),
+              ...(lagMs !== undefined ? { lagMs } : {}),
+            });
+          }
         }
       }
       hosts.set(hostId, { at: now(), entries: kept });
@@ -53,7 +70,10 @@ export function createInventory(now: () => number = Date.now): Inventory {
       const t = now();
       const out: InventoryListed[] = [{ ...self, ageS: 0 }];
       for (const v of hosts.values()) for (const e of v.entries) out.push({ ...e, ageS: Math.round((t - v.at) / 1000) });
-      for (const v of consoles.values()) out.push({ ...v.entry, ageS: Math.round((t - v.at) / 1000) });
+      // Skew: an old console still heartbeats while its machine's workerd reports the console too; the workerd's entry wins.
+      const reported = new Set<string>();
+      for (const v of hosts.values()) for (const e of v.entries) if (e.kind === "console") reported.add(e.machine);
+      for (const v of consoles.values()) if (!reported.has(v.entry.machine)) out.push({ ...v.entry, ageS: Math.round((t - v.at) / 1000) });
       return out;
     },
   };

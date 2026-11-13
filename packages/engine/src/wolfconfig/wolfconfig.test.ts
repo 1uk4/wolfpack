@@ -1,10 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { discoverWolves, loadWolfConfig, WolfConfigError } from "./load.js";
-import { applyWolfTierOverrides, resolveWolfModel, TierResolutionError } from "./tiers.js";
-import { STARTER_PACK_MODELS, detectWolfLocation, regenerateWolfModelsFile, resolveModelTable, type ModelTable } from "../models.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultSocketPath, defaultWolvesRoot, discoverWolves, loadWolfConfig, WolfConfigError } from "./load.js";
+import { applyWolfMemoryModel, applyWolfTierOverrides, resolveWolfModel, TierResolutionError } from "./tiers.js";
+import { STARTER_PACK_MODELS, detectWolfLocation, engineSteps, regenerateWolfModelsFile, resolveModelTable, type ModelTable } from "../models.js";
 
 let tmp: string;
 beforeEach(() => {
@@ -76,9 +76,9 @@ describe("loadWolfConfig", () => {
 
   it("memory.consolidation: pi's thresholds by default, overridable per key", () => {
     const d = loadWolfConfig(wolf("c1", "name: c1\n"), { home: "/h" }).config.memory.consolidation;
-    expect(d).toEqual({ threshold: 20000, poolTarget: 10000, trigger: "hybrid", interval: "4h" });
-    const o = loadWolfConfig(wolf("c2", "name: c2\nmemory:\n  consolidation:\n    threshold: 500\n    trigger: manual\n"), { home: "/h" }).config.memory.consolidation;
-    expect(o).toEqual({ threshold: 500, poolTarget: 10000, trigger: "manual", interval: "4h" });
+    expect(d).toEqual({ threshold: 20000, poolTarget: 10000, trigger: "hybrid", interval: "4h", maxTopics: 40 });
+    const o = loadWolfConfig(wolf("c2", "name: c2\nmemory:\n  consolidation:\n    threshold: 500\n    trigger: manual\n    maxTopics: 12\n"), { home: "/h" }).config.memory.consolidation;
+    expect(o).toEqual({ threshold: 500, poolTarget: 10000, trigger: "manual", interval: "4h", maxTopics: 12 });
     expect(() => loadWolfConfig(wolf("c3", "name: c3\nmemory:\n  consolidation:\n    interval: soon\n"), { home: "/h" })).toThrow(WolfConfigError);
   });
 
@@ -237,6 +237,47 @@ describe("applyWolfTierOverrides", () => {
   });
 });
 
+describe("wolf.yaml memory.model", () => {
+  const base = () => resolveModelTable({ pack: STARTER_PACK_MODELS, wolf: undefined, location: "vps" });
+  const cfg = (model?: string) => ({ identity: { name: "dewey" }, memory: { ...(model ? { model } : {}) } }) as never;
+
+  it("is read from wolf.yaml, and absent when not set", () => {
+    expect(loadWolfConfig(wolf("mm", "name: mm\nmemory:\n  model: claude-opus-5-5\n"), { home: "/h" }).config.memory.model).toBe("claude-opus-5-5");
+    expect(loadWolfConfig(wolf("mm2", "name: mm2\n"), { home: "/h" }).config.memory.model).toBeUndefined();
+  });
+
+  it("replaces the smart tier's model and piModel; the fast and main tiers stay", () => {
+    const b = base();
+    const out = applyWolfMemoryModel(b, cfg("claude-opus-5-5"));
+    expect(out.tiers.smart.model).toBe("claude-opus-5-5");
+    expect(out.tiers.smart.piModel).toBe("anthropic/claude-opus-5-5");
+    expect(out.tiers.fast).toEqual(b.tiers.fast);
+    expect(out.tiers.main).toEqual(b.tiers.main);
+  });
+
+  it("the steps on the smart tier use it and the quick steps keep the fast model", () => {
+    const steps = engineSteps(applyWolfMemoryModel(base(), cfg("claude-opus-5-5")));
+    for (const s of ["consolidate", "distill", "workRecord", "workDistill", "workTidy", "produce"] as const) expect(steps[s].model).toBe("claude-opus-5-5");
+    for (const s of ["classify", "workLog", "workCompact"] as const) expect(steps[s].model).toBe("claude-haiku-5-5");
+  });
+
+  it("leaves the table alone, and logs the wolf and model id, when the smart tier is not an Anthropic one", () => {
+    const b = base();
+    b.tiers.smart = { ...b.tiers.smart, provider: "openai", piProvider: "openai", piModel: "openai/gpt-x", model: "gpt-x" };
+    const lines: string[] = [];
+    const out = applyWolfMemoryModel(b, cfg("claude-opus-5-5"), (l) => lines.push(l));
+    expect(out.tiers.smart.model).toBe("gpt-x");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("dewey");
+    expect(lines[0]).toContain("claude-opus-5-5");
+  });
+
+  it("no memory.model: the same table", () => {
+    const b = base();
+    expect(applyWolfMemoryModel(b, cfg())).toBe(b);
+  });
+});
+
 describe("wolf.yaml models:", () => {
   const YAML = "name: m\nmodels:\n  smart:\n    provider: claude-stateless\n    model: claude-sonnet-5-5\n";
   const packFile = () => {
@@ -357,5 +398,29 @@ describe("wolf.yaml models:", () => {
     expect(after).toEqual(current);
     // With that step present (the current shape) it is `unchanged`.
     expect(regen().status).toBe("unchanged");
+  });
+});
+
+describe("default paths follow the runtime home", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("an explicit home gives the dev-stack paths, whatever the ambient env says", () => {
+    vi.stubEnv("WOLFPACK_HOME", "/ambient/state");
+    vi.stubEnv("WOLFPACK_WOLVES_DIR", "/ambient/wolves");
+    expect(defaultSocketPath("ada", "/fake")).toBe("/fake/.wolfpack/run/ada.sock");
+    expect(defaultWolvesRoot("/fake")).toBe("/fake/wolves/local");
+  });
+  it("without a home, an unset env gives the paths under HOME", () => {
+    vi.stubEnv("HOME", "/fake");
+    vi.stubEnv("WOLFPACK_HOME", "");
+    vi.stubEnv("WOLFPACK_WOLVES_DIR", "");
+    vi.stubEnv("WOLFPACK_WOLVES_ROOT", "");
+    expect(defaultSocketPath("ada")).toBe("/fake/.wolfpack/run/ada.sock");
+    expect(defaultWolvesRoot()).toBe("/fake/wolves/local");
+  });
+  it("without a home, the env vars move them", () => {
+    vi.stubEnv("WOLFPACK_HOME", "/app/state");
+    vi.stubEnv("WOLFPACK_WOLVES_DIR", "/app/wolves");
+    expect(defaultSocketPath("ada")).toBe("/app/state/run/ada.sock");
+    expect(defaultWolvesRoot()).toBe("/app/wolves");
   });
 });

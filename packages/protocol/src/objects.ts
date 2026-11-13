@@ -7,6 +7,12 @@
  * REV RULE (one definition, used by wolfd's live events and its history fold): rev = the number of successful,
  * completed calls of the object's tool with that objectId so far in the thread (1 for the first). A call that is
  * aborted, faulted, errored or fails validation counts for nothing.
+ *
+ * PIN RULE: pinRev = the number of successful explicit pin actions on the object so far (a `pinned` on a show call, or
+ * a `pin` call), absent while there were none. The latest pinned/pinRev win. Shown in the chat strip, per type: the
+ * object with the most recent event (upsert, or pin with pinned true) whose resulting state is not `pinned: false`;
+ * an object never explicitly pinned auto-pins. Omitting `pinned` on a revision keeps the current pin state, so an object
+ * shown with `pinned: false` stays unpinned until pinned explicitly. A client compares its local dismissal against pinRev: a higher pinRev wins.
  */
 
 /** Object types this version knows. A new type adds its name here, a parser below and a schemas.ts entry. */

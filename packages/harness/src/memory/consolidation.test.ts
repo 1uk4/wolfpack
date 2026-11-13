@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
-import { replaceRecordSection, writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive, withPoolLock } from "@wolfpack/memory";
+import { recordRouting, replaceRecordSection, writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive, withPoolLock } from "@wolfpack/memory";
 import { consolidatePool, drainWorkObservations, durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
 
 const WOLF = "w1";
@@ -389,6 +389,13 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
       expect(poolLines()).toEqual([]);
     });
 
+    it("a new topic whose subject the routing index knows records the resolved entry as its hint", async () => {
+      poolWith([o(0)]);
+      recordRouting(den, "t", ["kb-old"]);
+      await consolidatePool({ wolfDen: den, wolfName: WOLF, engine: sessionEngine([]), sessionTopics: durableSessionTopics(den), minObservations: 1, resolveEntry: (id) => (id === "kb-old" ? "kb-new" : null) });
+      expect(readFileSync(join(sessions(), "t.md"), "utf-8")).toContain("routing_hint: kb-new");
+    });
+
     it("a tagged observation whose item is gone is discarded, never a session topic", async () => {
       poolWith([o(0, { work: "gone" })]);
       const m = mocks();
@@ -400,6 +407,79 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
       expect(existsSync(sessions())).toBe(false);
       expect(poolLines()).toEqual([]);
       expect(readFileSync(join(den, ".memory", "pool", "archive.jsonl"), "utf-8")).toContain("observation 0");
+    });
+
+    describe("8,000-character topic cap", () => {
+      const seedTopic = () => {
+        mkdirSync(sessions(), { recursive: true });
+        writeFileSync(join(sessions(), "big.md"), `---\nid: big\ntitle: Big\nsummary: s\nupdated: 2026-10-10 10:00\n---\n\noriginal body\n`);
+      };
+      const act = (id: string, body: string) => ({ sessionTopicId: id, action: "merge", reasoning: "r", result: { id, title: id, summary: "s", body } });
+      const engineFor = (replies: unknown[][], calls: string[]) =>
+        ({
+          call: async (_step: string, schema: { parse: (v: unknown) => unknown }, p: { prompt: string }) => {
+            calls.push(p.prompt);
+            return schema.parse({ actions: replies[Math.min(calls.length - 1, replies.length - 1)] });
+          },
+        }) as unknown as Engine;
+      const run = (engine: Engine) => {
+        poolWith([o(0)]);
+        return consolidatePool({ wolfDen: den, wolfName: WOLF, engine, sessionTopics: durableSessionTopics(den), minObservations: 1 });
+      };
+      const topicFiles = () => readdirSync(sessions()).filter((f) => f.endsWith(".md") && f !== "INDEX.md").sort();
+
+      it("asks once for a split by subject and writes the parts when each is under the cap", async () => {
+        seedTopic();
+        const calls: string[] = [];
+        await run(engineFor([[act("big", "x".repeat(9000))], [act("big-a", "a".repeat(4000)), act("big-b", "b".repeat(4000))]], calls));
+        expect(calls.length).toBe(2);
+        expect(calls[1]).toContain("split");
+        expect(topicFiles()).toEqual(["big-a.md", "big-b.md"]);
+      });
+
+      it("a split that is still oversize leaves the original topic unchanged", async () => {
+        seedTopic();
+        const calls: string[] = [];
+        await run(engineFor([[act("big", "x".repeat(9000))], [act("big-a", "a".repeat(9000)), act("big-b", "b".repeat(100))]], calls));
+        expect(calls.length).toBe(2);
+        expect(topicFiles()).toEqual(["big.md"]);
+        expect(readFileSync(join(sessions(), "big.md"), "utf-8")).toContain("original body");
+      });
+    });
+
+    describe("topic sources and activity clock", () => {
+      it("a written topic carries the run's thread ids (kept across a merge) and the newest observation time as last_note", async () => {
+        mkdirSync(sessions(), { recursive: true });
+        writeFileSync(join(sessions(), "t.md"), `---\nid: t\ntitle: T\nsummary: s\nupdated: 2026-10-01 00:00\nsources:\n  - thread:old\n---\n\nb\n`);
+        poolWith([o(1, { thread: "thread-a" }), o(3, { thread: "thread-b" }), o(2, { thread: "thread-a" })]);
+        await consolidatePool({ wolfDen: den, wolfName: WOLF, engine: sessionEngine([]), sessionTopics: durableSessionTopics(den), minObservations: 1 });
+        const raw = readFileSync(join(sessions(), "t.md"), "utf-8");
+        expect(raw).toContain("  - thread:old\n");
+        expect(raw).toContain("  - thread:thread-a\n");
+        expect(raw).toContain("  - thread:thread-b\n");
+        expect(raw).toContain("last_note: 2026-10-20T10:03:00Z");
+      });
+    });
+
+    describe("180 KB cap over session topics", () => {
+      it("after a run the least recently updated topics beyond the cap move to evicted/, nothing is deleted, and the model is sent all topics", async () => {
+        mkdirSync(sessions(), { recursive: true });
+        // 30 topics of ~7.5 KB = ~225 KB; t0 is the oldest
+        for (let i = 0; i < 30; i++) {
+          const day = String(1 + i).padStart(2, "0");
+          writeFileSync(join(sessions(), `t${i}.md`), `---\nid: t${i}\ntitle: t${i}\nsummary: s\nupdated: 2026-09-${day} 10:00\n---\n\n${"x".repeat(7500)}\n`);
+        }
+        const prompts: string[] = [];
+        poolWith([o(0)]);
+        await consolidatePool({ wolfDen: den, wolfName: WOLF, engine: sessionEngine(prompts), sessionTopics: durableSessionTopics(den), minObservations: 1 });
+        expect(prompts[0]).toContain("### t0 ");
+        const live = readdirSync(sessions()).filter((f) => f.endsWith(".md") && f !== "INDEX.md");
+        const bytes = live.reduce((n, f) => n + readFileSync(join(sessions(), f)).length, 0);
+        expect(bytes).toBeLessThanOrEqual(180 * 1024);
+        const moved = readdirSync(join(sessions(), "evicted"));
+        expect(moved).toContain("t0.md");
+        expect(live.length + moved.length).toBe(31);
+      });
     });
   });
 });
@@ -610,6 +690,16 @@ describe("work log append mode (pi-durable)", () => {
     expect(r.recordsWritten).toBe(1);
     expect(poolContents()).toEqual([]);
     expect(readArchive(den).map((e) => [e.outcome, e.target])).toEqual(Array(6).fill(["written", "t1"]));
+  });
+
+  it("append mode appends feature-only observations (a feature thread with no task bound) to the feature", async () => {
+    poolWith([0, 1, 2, 3, 4, 5].map((n) => o(n, { feature: "f1" })));
+    const m = mocks();
+    const r = await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(m.appends.map((a) => a.id)).toEqual(["f1"]);
+    expect(r.recordsWritten).toBe(1);
+    expect(poolContents()).toEqual([]);
+    expect(readArchive(den).map((e) => [e.outcome, e.target])).toEqual(Array(6).fill(["written", "f1"]));
   });
 
   it("append mode flushes a single observation older than 10 minutes", async () => {

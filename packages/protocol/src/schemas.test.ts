@@ -32,6 +32,8 @@ import {
   OBJECT_TYPES,
   OBJECT_TOOL_TYPES,
   OBJECT_TOOL_PARAMS,
+  PinParamsSchema,
+  objectToolJsonSchema,
   WolfSummarySchema,
   parseThreadEvent,
 } from "./index.js";
@@ -309,6 +311,29 @@ describe("structured objects", () => {
     expect(ThreadObjectSchema.safeParse({ ...o, rev: -1 }).success).toBe(false);
     expect(ThreadMessageSchema.parse({ ...message, role: "assistant", objects: [o] }).objects).toHaveLength(1);
     expect(ThreadMessageSchema.parse(message).objects).toBeUndefined();
+  });
+
+  it("pinning: every show tool takes `pinned`, `pin` takes {objectId, pinned}, and events/objects carry pin state", () => {
+    const checklist = { items: [{ id: "i", label: "L", state: "todo" }] };
+    const graph = { nodes: [{ id: "n", label: "N", kind: "step", status: "todo" }], edges: [] };
+    const payloads = { show_decision: decision, show_checklist: checklist, show_graph: graph } as const;
+    for (const [name, data] of Object.entries(payloads)) {
+      const spec = OBJECT_TOOL_PARAMS[name as keyof typeof payloads];
+      expect(spec.schema.parse({ ...data, objectId: "o", pinned: false })).toMatchObject({ pinned: false });
+      expect(spec.schema.safeParse({ ...data, objectId: "o", pinned: "yes" }).success).toBe(false);
+      expect(spec.schema.parse({ ...data, objectId: "o" })).not.toHaveProperty("pinned");
+      expect(Object.keys(objectToolJsonSchema(name as keyof typeof payloads).properties as object)).toContain("pinned");
+    }
+    expect(PinParamsSchema.parse({ objectId: "o", pinned: true })).toEqual({ objectId: "o", pinned: true });
+    expect(PinParamsSchema.safeParse({ objectId: "o" }).success).toBe(false);
+    expect(PinParamsSchema.safeParse({ objectId: "", pinned: true }).success).toBe(false);
+    const pin = { ...env(10), type: "object-pin", turnId: "t1", objectId: "o1", pinned: false, pinRev: 2 };
+    expect(ThreadEventSchema.parse(pin)).toMatchObject({ type: "object-pin", pinned: false, pinRev: 2 });
+    expect(ThreadEventSchema.safeParse({ ...pin, pinRev: 0 }).success).toBe(false);
+    const up = { ...env(9), type: "object-upsert", turnId: "t1", objectId: "o1", objectType: "decision", rev: 1, data: decision, pinned: true, pinRev: 1 };
+    expect(ThreadEventSchema.parse(up)).toMatchObject({ pinned: true, pinRev: 1 });
+    const o = { objectId: "o1", type: "decision", rev: 1, data: decision, pinned: false, pinRev: 3 };
+    expect(ThreadObjectSchema.parse(o)).toMatchObject({ pinned: false, pinRev: 3 });
   });
 
   it("parseObjectData validates per type and chosen against option ids", () => {

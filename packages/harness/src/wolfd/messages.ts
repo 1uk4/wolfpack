@@ -19,7 +19,7 @@
  * - `at` is the message's own timestamp (ms epoch) when present, else the time we first saw the entry.
  */
 import { visibleFields, type ThreadMessage, type ThreadObject } from "@wolfpack/protocol";
-import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, objectFromCall, type CardAnswerData, type EngineEvent } from "../engine/index.js";
+import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, objectFromCall, pinFromCall, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 import { answerValue } from "./cards.js";
 import { stripSupersededNotes, stripTaskNotice, type SupersededCard } from "../superseded-note.js";
 
@@ -178,7 +178,7 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
         if (round !== undefined) callRound.set(call, round);
         (target.tools ??= []).push(call);
         // Only object tools need their uncapped args (to build the object); don't pin every call's arguments.
-        if (objectFromCall(b.name, b.arguments)) callFullArgs.set(call, b.arguments);
+        if (objectFromCall(b.name, b.arguments) || pinFromCall(b.name, b.arguments)) callFullArgs.set(call, b.arguments);
       }
     }
     if (roundText !== "") target.text = target.text === "" ? roundText : `${target.text}\n\n${roundText}`;
@@ -198,6 +198,16 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
       call.result = sliceSafe(text, TOOL_CAP);
       if (text.length > TOOL_CAP) call.resultTruncated = true;
       call.isError = msg.isError === true;
+      const pin = first && !call.isError ? pinFromCall(call.name, callFullArgs.get(call)) : undefined;
+      if (pin) {
+        // A pin action rewrites pinned/pinRev on the object and counts as its latest event (seq), but leaves rev and data.
+        const byId = objectsById(list);
+        const prior = byId.get(pin.objectId);
+        if (prior) {
+          const seq = Math.max(0, ...[...byId.values()].map((o) => o.seq ?? 0)) + 1;
+          Object.assign(prior, { pinned: pin.pinned, pinRev: (prior.pinRev ?? 0) + 1, seq });
+        }
+      }
       const obj = first && !call.isError ? objectFromCall(call.name, callFullArgs.get(call)) : undefined;
       if (obj) {
         // A revision replaces the object where it first appeared (latest rev wins); a new id lands with its call.
@@ -206,8 +216,10 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
         const byId = objectsById(list);
         const seq = Math.max(0, ...[...byId.values()].map((o) => o.seq ?? 0)) + 1; // this upsert's thread-wide ordinal
         const prior = byId.get(obj.objectId);
-        if (prior) Object.assign(prior, { type: obj.type, data: obj.data, rev: prior.rev + 1, seq });
-        else (list[i].objects ??= []).push({ ...obj, rev: 1, seq, ...(call.textOffset !== undefined ? { textOffset: call.textOffset } : {}) });
+        const { pinned, ...shown } = obj;
+        const pinFields = (was?: number) => (pinned !== undefined ? { pinned, pinRev: (was ?? 0) + 1 } : {});
+        if (prior) Object.assign(prior, { type: obj.type, data: obj.data, rev: prior.rev + 1, seq, ...pinFields(prior.pinRev) });
+        else (list[i].objects ??= []).push({ ...shown, rev: 1, seq, ...pinFields(), ...(call.textOffset !== undefined ? { textOffset: call.textOffset } : {}) });
       }
       const card = cardOfToolMessage(entry.model?.[0]);
       // An ask_revise result carries a card only as its payload: the call is not itself a pending card.

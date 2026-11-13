@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { registerAdapter } from "./adapters/registry.js";
 import { resolveModel, type EngineConfig } from "./config.js";
 import {
   tierPiProvider,
@@ -311,6 +312,12 @@ describe("per-tier providers and engine-step tiers", () => {
     for (const tier of ["smart", "fast"]) {
       expect(() => resolveModelTable({ pack: pack({ [tier]: { model: "x", provider: "openrouter" } }), location: "local" })).toThrow(/models\.(smart|fast)\.provider "openrouter" has no engine adapter/);
     }
+  });
+  it("an engine-step tier naming a registered plug-in adapter passes; a typo'd provider still fails and mentions plug-ins", () => {
+    registerAdapter("fixture-plugin", () => ({}) as never);
+    const t = resolveModelTable({ pack: pack({ smart: { model: "x", provider: "fixture-plugin" } }), location: "local" });
+    expect(t.tiers.smart).toMatchObject({ provider: "fixture-plugin", piProvider: "fixture-plugin" });
+    expect(() => resolveModelTable({ pack: pack({ smart: { model: "x", provider: "fixture-plugni" } }), location: "local" })).toThrow('models.smart.provider "fixture-plugni" has no engine adapter; engine steps (memory, consolidation, KB sweep) need anthropic|claude-agent-sdk or the plug-in that provides it enabled (wolf.yaml plugins:) for the smart tier');
   });
   it("claude-stateless on an engine-step tier maps to the claude-agent-sdk adapter", () => {
     const t = resolveModelTable({ pack: pack({ smart: { model: "claude-sonnet-5-5", provider: "claude-stateless" } }), location: "local" });

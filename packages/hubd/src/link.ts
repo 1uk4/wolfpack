@@ -32,6 +32,7 @@ import {
   type LinkContribute,
   type LinkContributeAck,
   type LinkPresence,
+  type CommandKind,
 } from "@wolfpack/protocol";
 import { normaliseMachine } from "@wolfpack/protocol/health-lag";
 import type { AuthIdentity } from "./auth.js";
@@ -60,10 +61,14 @@ export interface LinkOptions {
   };
   /** A `report` frame arrived from a registered host (its machine = the hello's, undefined for an older worker). Setting this makes the welcome advertise `inventory`. */
   onReport?: (hostId: string, machine: string | undefined, entries: LinkReport["entries"]) => void;
+  /** A hello was accepted from `hostId` (used to record its pubkey). */
+  onHello?: (hostId: string, hello: LinkHello) => void;
   /** A host's current link closed (not a replaced one). */
   onHostGone?: (hostId: string) => void;
   /** A relay frame (res/chunk/end/rerr) arrived from a registered host's live link. */
   onRelayFrame?: (hostId: string, epoch: number, frame: LinkFrame) => void;
+  /** A cmd.result frame arrived from a registered host's live link. */
+  onCommandResult?: (hostId: string, epoch: number, frame: Extract<LinkFrame, { t: "cmd.result" }>) => void;
   /** A registered link (identified by its epoch) closed, for whatever reason (including being replaced). */
   onDown?: (hostId: string, epoch: number) => void;
 }
@@ -92,6 +97,8 @@ export interface Link {
   epoch(hostId: string): number | undefined;
   /** The machine the host last reported in its hello (kept while it is offline); undefined for an older worker. */
   machine(hostId: string): string | undefined;
+  /** Command kinds the host advertised in its hello (empty for an older worker or an offline host). */
+  commands(hostId: string): readonly CommandKind[];
   readonly relayHeadTimeoutMs: number;
 }
 
@@ -257,6 +264,11 @@ export function createLink(opts: LinkOptions): Link {
     }
     byHost.set(c.hostId, c);
     c.hello = h;
+    try {
+      opts.onHello?.(c.hostId, h);
+    } catch (e) {
+      log(`hubd: link ${c.hostId}: onHello failed: ${(e as Error).message}`);
+    }
     const machine = normaliseMachine(h.machine);
     if (machine) machines.set(c.hostId, machine);
     else machines.delete(c.hostId); // an older worker reconnecting clears the stale value
@@ -341,6 +353,8 @@ export function createLink(opts: LinkOptions): Link {
         return;
       case "receipt.ack":
         return opts.contributions?.onReceiptAck(c.hostId, f.id);
+      case "cmd.result":
+        return opts.onCommandResult?.(c.hostId, c.epoch, f);
       case "res":
       case "chunk":
       case "end":
@@ -430,6 +444,7 @@ export function createLink(opts: LinkOptions): Link {
     sendToHost,
     epoch: (hostId) => byHost.get(hostId)?.epoch,
     machine: (hostId) => machines.get(hostId),
+    commands: (hostId) => byHost.get(hostId)?.hello?.commands ?? [],
     relayHeadTimeoutMs: t.relayHeadTimeoutMs,
     pushKbChanged,
     sendToWolf(wolf, frame) {

@@ -7,7 +7,7 @@ import { parseServeArgs } from "../cli-args.js";
 import { pairWithHub } from "../hub-config.js";
 import { runWorkerd } from "../run.js";
 
-const USAGE = "usage: workerd pair <hub-url> <code>\n       workerd [--wolves <dir>] [--port N] [--host H] [--only name]... [--wolfd <command>] [--wolfd-transport socket|tcp]\n       workerd --link-only --announce <wolf>... [--host 127.0.0.1] [--port N]   (hub link + KB sync only; spawns no wolfd)";
+const USAGE = "usage: workerd pair <hub-url> <code>\n       workerd [--wolves <dir>] [--port N] [--host H] [--only name]... [--wolfd <command>] [--wolfd-transport socket|tcp]\n       workerd --link-only --announce <wolf>... [--host 127.0.0.1] [--port N]   (hub link + KB sync only; spawns no wolfd)\n       key store: --key-file <path> (or WORKERD_KEY_FILE); one-time copy of existing keys: --migrate-keys [--migrate-wolf-env-file F]... [--migrate-env-file F]... [--migrate-auth-json F] (or WORKERD_MIGRATE_KEYS=1)";
 
 async function main(): Promise<void> {
   if (process.argv[2] === "pair") {

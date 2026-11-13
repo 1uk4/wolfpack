@@ -18,6 +18,7 @@ import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfModels } from "../commands/wolf-models.js";
 import { usageCmd } from "../commands/usage.js";
 import { releaseCmd } from "../commands/release.js";
+import { runReleaseCli } from "../release-args.js";
 import { postMergeCmd, prCmd } from "../commands/pr.js";
 import { previewCmd } from "../commands/preview.js";
 import { stackCmd } from "../commands/stack.js";
@@ -415,23 +416,12 @@ async function main(): Promise<void> {
       }
 
       case "release": {
-        const a = process.argv.slice(3);
-        if (a[0] === "publish") {
-          // Dispatch release-main.yml from <ref> (the workflow file comes from that branch, so it works before it reaches stable) (tags + builds -main.N prereleases + writes main.json). Needs an authenticated `gh`.
-          const ri = a.indexOf("--ref");
-          const ref = ri >= 0 ? a[ri + 1] : "wolf/1uk4";
-          if (!ref) throw new Error("Usage: wolfpack release publish [--ref <branch>]");
-          execFileSync("gh", ["workflow", "run", "release-main.yml", "--ref", ref, "-f", `ref=${ref}`], { stdio: "inherit" });
-          console.log(`dispatched release-main for ${ref}; watch it with: gh run list --workflow release-main.yml`);
-          break;
-        }
-        const vi = a.indexOf("--version");
-        await releaseCmd({
-          only: a.filter((x, i) => !x.startsWith("-") && a[i - 1] !== "--version"),
-          bump: a.includes("--major") ? "major" : a.includes("--minor") ? "minor" : "patch",
-          version: vi >= 0 ? a[vi + 1] : undefined,
-          dryRun: a.includes("--dry-run"),
-          yes: a.includes("--yes") || a.includes("-y"),
+        // Allow-list parsing (release-args.ts): --help prints usage, unknown flags are refused before any tag or dispatch.
+        // publish dispatches release-main.yml from <ref> (the workflow file comes from that branch). Needs an authenticated `gh`.
+        await runReleaseCli(process.argv.slice(3), {
+          dispatch: (ref) => execFileSync("gh", ["workflow", "run", "release-main.yml", "--ref", ref, "-f", `ref=${ref}`], { stdio: "inherit" }),
+          release: releaseCmd,
+          print: (t) => process.stdout.write(t),
         });
         break;
       }

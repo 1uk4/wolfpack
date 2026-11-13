@@ -1,0 +1,370 @@
+/**
+ * Pure-helper tests for the hand-rolled canvas renderer
+ * (components/graph/graph-canvas.ts). The renderer class itself is DOM-bound
+ * (canvas, rAF, ResizeObserver) and is verified live in the browser; the
+ * math it runs on every frame must be exact, so it is pinned here.
+ *
+ * The camera-ratio convention is the load-bearing contract with the
+ * persisted settings: sigma's ratio (1 = fit, SMALLER = zoomed in) is kept
+ * verbatim so stored labelZoom values survive the renderer swap.
+ */
+
+import assert from "node:assert/strict";
+import { describe, it, it as test } from "node:test";
+import {
+	boxBlurRound,
+	createCommitScheduler,
+	edgeGeometry,
+	fitTransform,
+	labelAlpha,
+	pickNearest,
+	wrapRegionLabel,
+	zoomRatioOf,
+	LABELS_FADE_RATIO,
+} from "../../../components/graph/graph-canvas.ts";
+import {
+	sanitizePhysicsTuning,
+	sanitizeRegionTuning,
+	DEFAULT_PHYSICS_TUNING,
+	DEFAULT_REGION_TUNING,
+	REGION_BITMAP_OPTIONS,
+	REGION_BLUR_LADDER,
+} from "../../../src/core/graph/render-settings.ts";
+
+describe("zoomRatioOf (the sigma-compatible camera ratio)", () => {
+	test("1 at fit zoom, smaller when zoomed in, larger when zoomed out", () => {
+		assert.equal(zoomRatioOf(2, 2), 1); // at fit
+		assert.equal(zoomRatioOf(2, 4), 0.5); // zoomed in 2x -> ratio halves
+		assert.equal(zoomRatioOf(2, 1), 2); // zoomed out 2x -> ratio doubles
+	});
+});
+
+describe("labelAlpha (the single zoom gate)", () => {
+	test("fully visible at/below the threshold, faded out after the span", () => {
+		// Proportional span: at gate 0.5 the span is 0.5 × 0.5 = 0.25.
+		assert.equal(labelAlpha(0.5, 0.5), 1); // at the threshold
+		assert.equal(labelAlpha(0.25, 0.5), 1); // zoomed further in: stays 1
+		assert.equal(labelAlpha(0.625, 0.5), 0.5); // mid-fade (span midpoint)
+		assert.equal(labelAlpha(0.75, 0.5), 0); // one proportional span out: gone
+		assert.equal(labelAlpha(2.0, 0.5), 0); // far out: clamped
+	});
+
+	test("the span is PROPORTIONAL to the gate (2026-09-17), not absolute", () => {
+		// The old absolute 0.5-ratio span read as a 100% relative change at
+		// the old 0.5 gate but a bare 12% sliver at the tuned 8× gate (ratio
+		// 4). Proportional = one consistent handoff feel at any gate.
+		assert.equal(LABELS_FADE_RATIO, 0.5);
+		// At the tuned default (gate 4): fades across ratio 4 → 6 (8× → 12×
+		// on screen), one full ladder stop.
+		assert.equal(labelAlpha(4, 4), 1); // at the gate
+		assert.equal(labelAlpha(5, 4), 0.5); // mid-fade
+		assert.equal(labelAlpha(6, 4), 0); // one proportional span out: gone
+		// The relative shape is identical at the old gate: 0.5 → 0.75.
+		assert.equal(labelAlpha(5, 4), 0.5); // mid-fade at the tuned gate, same relative shape
+	});
+
+	test("node labels and cluster labels cross-fade over the exact same span", () => {
+		// The renderer draws cluster labels at 1 - labelAlpha; the two must
+		// always sum to 1 within the fade and never coexist at full opacity.
+		for (const gate of [0.5, 4]) {
+			for (let ratio = 0; ratio <= 8; ratio += gate / 8) {
+				const node = labelAlpha(ratio, gate);
+				const cluster = 1 - node;
+				assert.ok(node + cluster > 0.999 && node + cluster < 1.001, `sum at gate ${gate} ratio ${ratio}`);
+				assert.ok(node <= 1 && cluster <= 1, `clamped at gate ${gate} ratio ${ratio}`);
+			}
+		}
+	});
+});
+
+describe("d3 camera composition (the persisted-camera restore path)", () => {
+	// The renderer restores a persisted camera via
+	// zoomIdentity.translate(x, y).scale(k) — the same composition fit()
+	// uses. d3's Transform.translate() shifts in SCALED space while
+	// .scale() keeps the translation: identity.translate(X, Y).scale(K)
+	// is exactly {k: K, x: X, y: Y}. This pins that law (the persisted
+	// {k, x, y} shape round-trips through the composition) so a d3
+	// upgrade that changes it fails here, not as a wrong camera.
+	test("zoomIdentity.translate(X, Y).scale(K) === {k: K, x: X, y: Y}", async () => {
+		const { zoomIdentity } = await import("d3-zoom");
+		const t = zoomIdentity.translate(120, -40).scale(3.5);
+		assert.equal(t.k, 3.5);
+		assert.equal(t.x, 120);
+		assert.equal(t.y, -40);
+		// And the inverse direction: a stored camera re-applies to the
+		// same screen position for the same world point.
+		const p = t.apply([7, 9]);
+		assert.deepEqual(p, [7 * 3.5 + 120, 9 * 3.5 - 40]);
+	});
+});
+
+describe("fitTransform", () => {
+	test("centers the bbox and respects padding", () => {
+		// A 100x50 graph in a 500x300 viewport, 40px padding:
+		// available 420x220 -> k = min(4.2, 4.4) = 4.2
+		const t = fitTransform({ minX: -50, maxX: 50, minY: -25, maxY: 25 }, 500, 300, 40);
+		assert.ok(Math.abs(t.k - 4.2) < 1e-9, `k=${t.k}`);
+		assert.ok(Math.abs(t.x - 250) < 1e-9, `x=${t.x}`); // centered
+		assert.ok(Math.abs(t.y - 150) < 1e-9, `y=${t.y}`);
+		// World center maps to viewport center:
+		assert.ok(Math.abs(0 * t.k + t.x - 250) < 1e-9);
+	});
+
+	test("never returns a non-positive scale for degenerate bboxes", () => {
+		const t = fitTransform({ minX: 5, maxX: 5, minY: 5, maxY: 5 }, 100, 100, 10);
+		assert.ok(t.k > 0 && Number.isFinite(t.k));
+	});
+});
+
+describe("edgeGeometry (plain segments, no arrowheads)", () => {
+	test("the segment is trimmed to clear both discs", () => {
+		const g = edgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 4);
+		assert.ok(g, "non-degenerate edge");
+		assert.ok(Math.abs(g!.from.x - 6) < 1e-9 && Math.abs(g!.from.y) < 1e-9);
+		assert.ok(Math.abs(g!.to.x - 96) < 1e-9 && Math.abs(g!.to.y) < 1e-9);
+	});
+
+	test("works at arbitrary angles (diagonal stays normalized)", () => {
+		const g = edgeGeometry({ x: 0, y: 0 }, { x: 60, y: 80 }, 10, 10)!; // len 100, dir (0.6, 0.8)
+		assert.ok(Math.abs(g.from.x - 6) < 1e-9 && Math.abs(g.from.y - 8) < 1e-9);
+		assert.ok(Math.abs(g.to.x - 54) < 1e-9 && Math.abs(g.to.y - 72) < 1e-9);
+	});
+
+	test("null for coincident or overlapping discs (never a NaN or backwards line)", () => {
+		assert.equal(edgeGeometry({ x: 5, y: 5 }, { x: 5, y: 5 }, 6, 6), null);
+		assert.equal(edgeGeometry({ x: 0, y: 0 }, { x: 10, y: 0 }, 6, 6), null);
+	});
+});
+
+describe("pickNearest (distance-check picking)", () => {
+	const nodes = [
+		{ id: "a", x: 10, y: 10 },
+		{ id: "b", x: 50, y: 50 },
+		{ id: "c", x: 90, y: 10 },
+	];
+
+	test("picks the nearest node within the pad", () => {
+		assert.equal(pickNearest(nodes, 12, 12, 16)?.id, "a");
+		assert.equal(pickNearest(nodes, 48, 52, 16)?.id, "b");
+		assert.equal(pickNearest(nodes, 88, 8, 16)?.id, "c");
+	});
+
+	test("the picking pad extends the hitbox beyond the disc", () => {
+		// 20px away, only reachable because the pad covers it.
+		assert.equal(pickNearest(nodes, 28, 18, 25)?.id, "a");
+		// Beyond the pad: nothing.
+		assert.equal(pickNearest(nodes, 30, 40, 3), null);
+	});
+
+	test("ties resolve deterministically (first scanned wins)", () => {
+		const pair = [
+			{ id: "first", x: 0, y: 0 },
+			{ id: "second", x: 10, y: 0 },
+		];
+		assert.equal(pickNearest(pair, 5, 0, 10)?.id, "first");
+	});
+
+	test("empty node list picks nothing", () => {
+		assert.equal(pickNearest([], 0, 0, 100), null);
+	});
+
+	test("distance is measured from the disc EDGE: a big node is hit across its body", () => {
+		const big = [{ id: "dom", x: 0, y: 0, r: 30 }];
+		assert.equal(pickNearest(big, 28, 0, 10)?.id, "dom", "inside the disc");
+		assert.equal(pickNearest(big, 38, 0, 10)?.id, "dom", "within the pad of the edge");
+		assert.equal(pickNearest(big, 45, 0, 10), null, "beyond the pad");
+	});
+
+	test("a small node on top of a big neighbour's pad is still pickable", () => {
+		const mixed = [
+			{ id: "big", x: 0, y: 0, r: 30 },
+			{ id: "small", x: 36, y: 0, r: 2 },
+		];
+		assert.equal(pickNearest(mixed, 36, 0, 10)?.id, "small", "dead on the small disc");
+		assert.equal(pickNearest(mixed, 31, 0, 10)?.id, "big", "just outside the big disc edge");
+	});
+});
+
+describe("sanitizeRegionTuning (dev number inputs)", () => {
+	test("defaults survive untouched; partial input keeps the rest", () => {
+		const t = sanitizeRegionTuning(undefined);
+		assert.deepEqual(t, DEFAULT_REGION_TUNING);
+		const half = sanitizeRegionTuning({ blur: 7.2 });
+		assert.equal(half.blur, 10); // snapped to the new ladder floor (owner, 2026-10-07)
+		assert.equal(half.dilation, DEFAULT_REGION_TUNING.dilation);
+	});
+
+	test("garbage clamps: NaN falls back, out-of-range clamps", () => {
+		const t = sanitizeRegionTuning({ dilation: Number.NaN, blur: -5, bitmap: 99999, edgeAlpha: 42 });
+		assert.equal(t.dilation, DEFAULT_REGION_TUNING.dilation); // NaN -> default
+		assert.equal(t.blur, REGION_BLUR_LADDER[0]); // snapped to the ladder floor
+		assert.equal(t.bitmap, REGION_BITMAP_OPTIONS[REGION_BITMAP_OPTIONS.length - 1]); // 99999 snaps to the largest option
+		assert.equal(t.edgeAlpha, 1);
+	});
+
+	test("empty string / null / undefined values fall back per-field", () => {
+		const t = sanitizeRegionTuning({ edgeAlpha: Number.NaN });
+		assert.equal(t.edgeAlpha, DEFAULT_REGION_TUNING.edgeAlpha);
+	});
+});
+
+describe("boxBlurRound (premultiplied region blur)", () => {
+	test("spreads a single opaque px into its neighborhood and conserves sum", () => {
+		// 5x5 RGBA, one white opaque pixel at (2,2)
+		const w = 5, h = 5;
+		const a = new Float32Array(w * h * 4);
+		const center = (2 * w + 2) * 4;
+		a[center] = 255; a[center + 1] = 255; a[center + 2] = 255; a[center + 3] = 255;
+		const tmp = new Float32Array(a.length);
+		const b = new Float32Array(a.length);
+		boxBlurRound(a, tmp, b, w, h, 1);
+		// Alpha conservation: total alpha unchanged.
+		let sumA = 0;
+		for (let i = 3; i < b.length; i += 4) sumA += b[i]!;
+		assert.ok(Math.abs(sumA - 255) < 1e-3, `alpha sum ${sumA}`);
+		// The center dimmed, the 8 neighbors picked some up.
+		assert.ok(b[center + 3]! < 255 && b[center + 3]! > 0);
+		const up = ((1 * w) + 2) * 4 + 3;
+		assert.ok(b[up]! > 0, "neighbor got alpha");
+		// Far corner (4,4) untouched.
+		assert.equal(b[(4 * 5 + 4) * 4 + 3], 0);
+	});
+
+	test("radius 0 is a plain copy", () => {
+		const a = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+		const tmp = new Float32Array(8);
+		const b = new Float32Array(8);
+		boxBlurRound(a, tmp, b, 1, 2, 0);
+		assert.deepEqual([...b], [1, 2, 3, 4, 5, 6, 7, 8]);
+	});
+});
+
+describe("sanitizePhysicsTuning (physics controls)", () => {
+	test("defaults survive untouched; partial input keeps the rest", () => {
+		assert.deepEqual(sanitizePhysicsTuning(undefined), DEFAULT_PHYSICS_TUNING);
+		const half = sanitizePhysicsTuning({ clusterPull: 0.6 });
+		assert.equal(half.clusterPull, 0.6);
+		assert.equal(half.chargeStrength, DEFAULT_PHYSICS_TUNING.chargeStrength);
+	});
+
+	test("garbage clamps: NaN falls back, out-of-range clamps", () => {
+		const t = sanitizePhysicsTuning({
+			chargeStrength: Number.NaN,
+			linkStrength: 99,
+			linkDistance: -5,
+			gravity: 7,
+			clusterPull: -1,
+			velocityDecay: 3,
+		});
+		assert.equal(t.chargeStrength, DEFAULT_PHYSICS_TUNING.chargeStrength);
+		assert.equal(t.linkStrength, 4); // sweep-validated cap (8 explodes, 5 wobbles)
+		assert.equal(t.linkDistance, 10);
+		assert.equal(t.gravity, 0.48);
+		assert.equal(t.clusterPull, 0);
+		assert.equal(t.velocityDecay, 0.9);
+	});
+});
+
+
+
+describe("wrapRegionLabel (wave 7: session names / file paths)", () => {
+	// A fake measure: chars are 5px wide, spaces 4px — enough to drive
+	// wrap decisions deterministically.
+	const measure = (s: string) => s.length * 5;
+	const W = 20; // 4 chars per line
+
+	it("fits → single line, untouched", () => {
+		assert.deepEqual(wrapRegionLabel("Plato", 100, 3, measure), ["Plato"]);
+	});
+
+	it("wraps words, no cap hit", () => {
+		// W=20 at 5px/char = 3 chars a line: every word lands alone, four
+		// lines, cap 4 never reached, no ellipsis.
+		assert.deepEqual(wrapRegionLabel("aaa bbb ccc ddd", W, 4, measure), [
+			"aaa",
+			"bbb",
+			"ccc",
+			"ddd",
+		]);
+	});
+
+	it("caps at maxLines with an ellipsis on the last line", () => {
+		const lines = wrapRegionLabel("aaaa bbbb cccc dddd eeee", W, 2, measure);
+		assert.equal(lines.length, 2);
+		assert.ok(lines[1]!.endsWith("…"), "last line ellipsized");
+		for (const line of lines) assert.ok(measure(line) <= W || line.length <= 2, "each line fits");
+	});
+
+	it("char-splits an unbroken path longer than the width (the notes case)", () => {
+		const path = "/users/amos/notes/physics/lecture-notes.md";
+		const lines = wrapRegionLabel(path, W, 3, measure);
+		assert.equal(lines.length, 3);
+		// every kept line fits the width; the last carries the ellipsis
+		assert.ok(lines[2]!.endsWith("…"), "long path capped with ellipsis");
+		assert.ok(measure(lines[0]!) <= W, "first chunk fits");
+		assert.ok(measure(lines[1]!) <= W, "second chunk fits");
+	});
+
+	it("a remainder that FITS the width rides as a plain last line (no false ellipsis)", () => {
+		// W=25 at 5px/char = 5 chars a line: "aa bb" fits exactly, the
+		// tail "cc dd" fits too — two plain lines, cap never binds.
+		assert.deepEqual(wrapRegionLabel("aa bb cc dd", 25, 3, measure), ["aa bb", "cc dd"]);
+	});
+
+	it("the ellipsis itself never exceeds the width", () => {
+		const lines = wrapRegionLabel("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", W, 2, measure);
+		assert.ok(measure(lines[1]!) <= W, "ellipsized tail fits");
+	});
+});
+
+describe("createCommitScheduler (flush on replace / destroy)", () => {
+	function fake() {
+		let next = 1;
+		const timers = new Map<number, () => void>();
+		return {
+			timers,
+			api: {
+				set: (fn: () => void) => {
+					timers.set(next, fn);
+					return next++;
+				},
+				clear: (h: unknown) => void timers.delete(h as number),
+			},
+			fire: () => [...timers.values()].forEach((f) => f()),
+		};
+	}
+
+	test("schedule runs once when the timer fires; rescheduling restarts it", () => {
+		const f = fake();
+		let runs = 0;
+		const s = createCommitScheduler(250, () => runs++, f.api);
+		s.schedule();
+		s.schedule();
+		assert.equal(f.timers.size, 1);
+		f.fire();
+		assert.equal(runs, 1);
+		assert.equal(s.pending(), false);
+	});
+
+	test("flush runs a pending commit immediately and disarms the timer", () => {
+		const f = fake();
+		let runs = 0;
+		const s = createCommitScheduler(250, () => runs++, f.api);
+		s.schedule();
+		s.flush();
+		assert.equal(runs, 1);
+		assert.equal(f.timers.size, 0);
+		s.flush(); // nothing pending → no second run
+		assert.equal(runs, 1);
+	});
+
+	test("cancel drops the pending commit without running it", () => {
+		const f = fake();
+		let runs = 0;
+		const s = createCommitScheduler(250, () => runs++, f.api);
+		s.schedule();
+		s.cancel();
+		s.flush();
+		assert.equal(runs, 0);
+	});
+});

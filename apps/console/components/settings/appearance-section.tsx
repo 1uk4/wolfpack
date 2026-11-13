@@ -28,7 +28,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { AppearanceSettings } from "@/src/core";
-import { MenuShell } from "@/components/menu-shell";
+import { MenuShell } from "@/components/shell/menu-shell";
 import { Hint } from "@/components/ui/hint";
 import { useAppearance } from "./appearance.tsx";
 import { FontMenuList } from "./model-menu";
@@ -217,7 +217,7 @@ export function AppearanceSection({
 								aria-expanded={fontMenuOpen}
 								data-testid="font-trigger"
 								onClick={openFontMenu}
-								className="flex h-7 min-w-20 items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+								className="flex h-7 max-md:h-11 min-w-20 items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
 							>
 								<span className="min-w-0 flex-1 truncate">{appearance?.fontFamily || DEFAULT_READING_FONT}</span>
 								<span aria-hidden className="text-muted-foreground">

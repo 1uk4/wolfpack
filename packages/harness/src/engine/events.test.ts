@@ -1,5 +1,5 @@
 /** Synthetic edge cases the recordings don't cover. Shapes follow the captured engine events. */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEventMapper, type EngineEvent, type EngineSnapshot } from "./events.js";
 
 const ev = (e: unknown) => e as EngineEvent;
@@ -106,6 +106,24 @@ describe("turn-end reason", () => {
     const out = map(start(), asstStart([]), asstEnd([], { stopReason: "error", errorMessage: "overloaded" }), end(), sub(1, "done"));
     expect(out.map((e) => e.type)).toEqual(["turn-start", "error", "turn-end"]);
     expect(out[1]).toMatchObject({ message: "overloaded" });
+  });
+  describe("a turn with no anthropic key (work-wolfpack-71LeXut)", () => {
+    const noKeyError = (errorMessage: string) => map(start(), asstStart([]), asstEnd([], { stopReason: "error", errorMessage }), end(), sub(1, "done"))[1];
+    const app = "No API key yet. Add one in Pack → Keys, then send again.";
+    const plain = "No Anthropic API key is set for this wolf. Add one in Pack → Keys, then send again.";
+    afterEach(() => vi.unstubAllEnvs());
+
+    it("in the desktop app (WOLFPACK_SINGLE_MAC=1) points to Pack → Keys, for both pi-ai phrasings and a wrapped message", () => {
+      vi.stubEnv("WOLFPACK_SINGLE_MAC", "1");
+      expect(noKeyError("Provider is not configured: anthropic")).toMatchObject({ type: "error", message: app });
+      expect(noKeyError("No API key for provider: anthropic")).toMatchObject({ message: app });
+      expect(noKeyError("Error: 401 - No API key for provider: anthropic. Use /login")).toMatchObject({ message: app });
+    });
+
+    it("without the flag gives the plain no-key message, with no app-only path", () => {
+      vi.stubEnv("WOLFPACK_SINGLE_MAC", "");
+      expect(noKeyError("Provider is not configured: anthropic")).toMatchObject({ message: plain });
+    });
   });
 });
 
@@ -249,6 +267,22 @@ describe("object-upsert (show_decision)", () => {
     );
     // c1 has no result entry: still in flight; it completes now.
     expect(upserts(m.push([toolEnd("c1")])).map((u) => u.rev)).toEqual([1]);
+  });
+
+  it("seedObjects: a mid-turn joiner's next pin continues the pinRev counted in the snapshot", () => {
+    const pinCall = (id: string, pinned: boolean) => ({ type: "toolCall", id, name: "pin", arguments: { objectId: "d1", pinned } });
+    const m = createEventMapper(snap([asstEntry([call("c0", { ...dec(), pinned: true }), pinCall("p0", false)]), resultEntry("c0"), resultEntry("p0")], { run: { inputs: [1] } }));
+    const out = m.push([
+      ev({ type: "tool_execution_start", toolCallId: "p1", toolName: "pin", args: { objectId: "d1", pinned: true } }),
+      ev({ type: "tool_execution_end", toolCallId: "p1", toolName: "pin", entry: { kind: "pi.tool_result", id: 9, conversationId: 1, model: [{ role: "toolResult", toolCallId: "p1", content: [{ type: "text", text: "ok" }], isError: false }] } }),
+    ]);
+    expect(out.filter((e) => e.type === "object-pin")).toEqual([expect.objectContaining({ objectId: "d1", pinned: true, pinRev: 3 })]);
+  });
+
+  it("a revision that omits `pinned` after `pinned: false` carries no pin state (the object stays unpinned)", () => {
+    const out = map(start(), toolStart("c1", { ...dec(), pinned: false }), toolEnd("c1"), toolStart("c2", dec("b")), toolEnd("c2"), end(), sub(1, "done"));
+    const ups = out.filter((e) => e.type === "object-upsert") as unknown as Array<{ pinned?: boolean; pinRev?: number }>;
+    expect(ups.map((u) => [u.pinned, u.pinRev])).toEqual([[false, 1], [undefined, undefined]]);
   });
 
   it("the resync path (mid-stream engine snapshot) re-seeds revs from the snapshot", () => {

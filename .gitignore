@@ -1,7 +1,7 @@
 # Runtime secrets
 keys/
-# ...but the console's /api/keys route is source, not a secret dir
-!apps/console/app/api/keys/
+# ...but a Next route directory named keys (apps/*/app/api/**/keys) is source, not a secret dir
+!apps/*/app/api/**/keys/
 *.env
 .vault_pass
 
@@ -48,7 +48,7 @@ coverage/
 .idea/
 .vscode/
 
-# visual-tools renders fall back to <cwd>/viz when WOLF_DEN is unset (never commit)
+# diagram tools fall back to <cwd>/viz when WOLF_DEN is unset (never commit)
 viz/
 .turbo/
 .next/
@@ -56,3 +56,6 @@ dist-release/
 
 # tracer --console output (screenshots)
 infra/tracer/out/
+
+# Desktop app runtime bundles (apps/desktop/scripts/build-runtime.mjs)
+/apps/desktop/runtime/

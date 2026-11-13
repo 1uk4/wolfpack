@@ -371,6 +371,7 @@ export async function splitFatEntry(opts: SplitFatOptions): Promise<SplitFatResu
 
     const retire = retireEntries(roots, [entryId], {
       reason: `split into ${shardIds.join(",")}`,
+      survivors: shardIds,
     });
     const ok = retire.retired.length > 0;
     notify?.(`[split-fat] ${entryId}: ${ok ? "retired" : "retire failed"}`);

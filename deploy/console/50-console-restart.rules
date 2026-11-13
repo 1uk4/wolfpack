@@ -2,7 +2,7 @@
 // START the rollback oneshot wolfpack-rollback@{hubd,workerd,console}.service, and START exactly wolfpack-auto-update-now.service (the Update
 // button, work-wolfpack-7eP9W3Z; not the timer-driven wolfpack-auto-update.service). Nothing else: no stop, no other unit, no other verb.
 // Installed to /etc/polkit-1/rules.d/ by deploy/console/setup.sh.
-// The console (apps/console/src/server/pack-health.ts, pack-actions.ts) runs `systemctl --no-ask-password --no-block restart|start <unit>.service`
+// The console (apps/console/src/server/pack/pack-health.ts, pack-actions.ts) runs `systemctl --no-ask-password --no-block restart|start <unit>.service`
 // with no shell, and only for names it validated against the links it knows (restart) or the fixed list hubd|workerd|console (rollback).
 polkit.addRule(function (action, subject) {
   if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "console") {

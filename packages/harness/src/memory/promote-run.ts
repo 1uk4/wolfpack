@@ -57,7 +57,7 @@ export async function runSessionPromotePass(c: PromoteRunConfig): Promise<Sessio
     const s = denTopicStates(c.wolfDen, c.kbRoots, c.wolfName).find((x) => x.topic.id === topic.id)?.status;
     if (!s) return { kind: "pending" };
     switch (s.kind) {
-      case "absorbed": return s.entryId ? { kind: "create", entryIds: [s.entryId] } : { kind: "reject" };
+      case "absorbed": return s.entryIds.length ? { kind: "create", entryIds: s.entryIds } : { kind: "reject" };
       case "parked": return { kind: "parked" };
       case "awaiting-domain": return { kind: "parked" };
       case "held": return { kind: "held", reason: s.reason };

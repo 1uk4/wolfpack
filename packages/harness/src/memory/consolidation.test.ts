@@ -694,6 +694,16 @@ describe("work log append mode (pi-durable)", () => {
     expect(readArchive(den).map((e) => [e.outcome, e.target])).toEqual(Array(6).fill(["written", "t1"]));
   });
 
+  it("append mode appends feature-only observations (a feature thread with no task bound) to the feature", async () => {
+    poolWith([0, 1, 2, 3, 4, 5].map((n) => o(n, { feature: "f1" })));
+    const m = mocks();
+    const r = await consolidatePool(cfg(m, { workLog: "append" }));
+    expect(m.appends.map((a) => a.id)).toEqual(["f1"]);
+    expect(r.recordsWritten).toBe(1);
+    expect(poolContents()).toEqual([]);
+    expect(readArchive(den).map((e) => [e.outcome, e.target])).toEqual(Array(6).fill(["written", "f1"]));
+  });
+
   it("append mode flushes a single observation older than 10 minutes", async () => {
     poolWith([o(0, { work: "t1" }, 11)]);
     const m = mocks();

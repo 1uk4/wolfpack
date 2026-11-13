@@ -270,28 +270,48 @@ export function newObserverChunks(
   return { chunks: chunk(), next: { lastEntryId, tail: fp, tailAfter: lastEntryId } };
 }
 
-/**
- * Append observations to the pool. While a task is bound they are stamped
- * `work: <task id>`: they feed that item's Record, not the den.
- */
 /** The feature a conversation is the thread of (wolfd's registry `<den>/wolfd/threads.json`), or undefined for home and free-standing threads. */
 function featureThreadOf(wolfDen: string, conversationId: number): string | undefined {
+  let text: string;
   try {
-    const reg = JSON.parse(readFileSync(join(wolfDen, "wolfd", "threads.json"), "utf8")) as { threads?: Array<Record<string, unknown>> };
+    text = readFileSync(join(wolfDen, "wolfd", "threads.json"), "utf8");
+  } catch {
+    return undefined; // no registry yet: home only
+  }
+  try {
+    const reg = JSON.parse(text) as { threads?: Array<Record<string, unknown>> };
     const t = reg.threads?.find((x) => x.kind === "feature" && String(x.conversationId) === String(conversationId));
     return typeof t?.workItemId === "string" && t.workItemId ? t.workItemId : undefined;
-  } catch {
+  } catch (err) {
+    console.warn(`[memory] threads.json unreadable, feature thread tag skipped: ${err instanceof Error ? err.message : String(err)}`);
     return undefined;
   }
 }
 
+/** A full work id (shape of the KB schema: work-<domain>-<7 alphanumerics>). */
+const NAMED_WORK_ID = /(?<![A-Za-z0-9-])work-[a-z0-9]+-[0-9A-Za-z]{7}(?![A-Za-z0-9-])/g;
+
+/** Prose only: fenced code, inline code, URLs and path-like tokens (anything with a `/`) removed. */
+const proseOnly = (s: string): string =>
+  s.replace(/```[\s\S]*?```/g, " ").replace(/`[^`\n]*`/g, " ").replace(/[A-Za-z][A-Za-z0-9+.-]*:\/\/\S+/g, " ").replace(/\S*\/\S*/g, " ");
+
+/** Stages at which an item still takes new talk; a done item counts as unknown. */
+const OPEN_STAGES = new Set(["idea", "plan", "feasibility", "approved", "in_build"]);
+const NAMED_HIT_TTL_MS = 5 * 60_000;
+const NAMED_MISS_TTL_MS = 30_000;
+const NAMED_LOOKUP_TIMEOUT_MS = 2000;
+
 /** A bound task (work + its feature), or a feature alone (a feature thread with no task bound). */
 type PoolTag = { taskId?: string; featureId?: string };
 
+/**
+ * Append observations to the pool. While a task is bound they are stamped
+ * `work: <task id>`: they feed that item's Record, not the den. `bound` is one tag for every line, or one per line.
+ */
 async function writeToPool(
   wolfDen: string,
   observations: RawObservation[],
-  bound: PoolTag | null = null,
+  boundArg: PoolTag | null | Array<PoolTag | null> = null,
   defaultDomain?: string,
   generalToDen = false,
   poolLock = false,
@@ -301,8 +321,9 @@ async function writeToPool(
   await mkdir(poolDir, { recursive: true });
   const poolFile = join(poolDir, "observations.jsonl");
   const timestamp = new Date().toISOString();
-  const lines = observations.map(obs =>
-    JSON.stringify({
+  const lines = observations.map((obs, i) => {
+    const bound = Array.isArray(boundArg) ? boundArg[i] ?? null : boundArg;
+    return JSON.stringify({
       ...obs,
       general: undefined, // routing flag only; the pool line carries origin instead
       // Stamped at observe time (as pi's orchestrator does), so consolidation never has to guess a domain.
@@ -312,8 +333,8 @@ async function writeToPool(
         const ids = { ...(bound.taskId ? { work: bound.taskId } : {}), ...(bound.featureId ? { feature: bound.featureId } : {}) };
         return generalToDen && obs.general === true ? { origin: ids } : ids;
       })() : {}),
-    }) + "\n"
-  );
+    }) + "\n";
+  });
   // The lock exists for subagents writing the parent's pool (memory.subagentMemory: on); off, a plain append as at the base.
   if (poolLock) await withPoolLock(wolfDen, () => appendFile(poolFile, lines.join("")));
   else await appendFile(poolFile, lines.join(""));
@@ -489,6 +510,41 @@ export default function createMemoryExtension(
   const featureOf = featureResolver(() => (context.env
     ? new WorkClient(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "", undefined, undefined, wolfName)
     : new WorkClient(undefined, undefined, undefined, undefined, wolfName)));
+  // Unbound talk that names one open work item of the observation's domain: id -> tag, resolved through the Work API.
+  // Hits are cached 5 min, failures (hub unreachable, timeout, unknown or done item) 30 s; a lookup never throws.
+  const namedCache = new Map<string, { tag: PoolTag | null; until: number }>();
+  const namedClient = () => (context.env
+    ? new WorkClient(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "", undefined, undefined, wolfName)
+    : new WorkClient(undefined, undefined, undefined, undefined, wolfName));
+  async function lookupNamed(id: string): Promise<PoolTag | null> {
+    const hit = namedCache.get(id);
+    if (hit && hit.until > Date.now()) return hit.tag;
+    let tag: PoolTag | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const item = await Promise.race([
+        namedClient().get(id),
+        new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("lookup timed out")), NAMED_LOOKUP_TIMEOUT_MS); }),
+      ]);
+      const partOf = typeof item.partOf === "string" && item.partOf ? item.partOf : undefined;
+      if (!OPEN_STAGES.has(String(item.stage))) tag = null;
+      else if (item.kind === "feature") tag = { featureId: id };
+      else if (item.kind === "task" || item.kind === "issue" || item.kind === "spike") tag = { taskId: id, ...(partOf ? { featureId: partOf } : {}) };
+    } catch { tag = null; } finally { if (timer) clearTimeout(timer); }
+    namedCache.set(id, { tag, until: Date.now() + (tag ? NAMED_HIT_TTL_MS : NAMED_MISS_TTL_MS) });
+    return tag;
+  }
+  async function namedTags<T extends { content: string; general?: boolean; domain?: string }>(obs: T[]): Promise<Array<PoolTag | null>> {
+    const out: Array<PoolTag | null> = [];
+    for (const o of obs) {
+      if (config.generalToDen === true && o.general === true) { out.push(null); continue; }
+      const ids = [...new Set(proseOnly(o.content).match(NAMED_WORK_ID) ?? [])];
+      // Only an item of the observation's own domain (the id carries it): no lookup for another domain's id.
+      if (ids.length !== 1 || ids[0].split("-")[1] !== (o.domain || defaultDomain)) { out.push(null); continue; }
+      out.push(await lookupNamed(ids[0]));
+    }
+    return out;
+  }
   const subTag = async (sub: SubagentTag) => {
     const featureId = await featureOf(sub.taskId);
     return { taskId: sub.taskId, ...(featureId ? { featureId } : {}) };
@@ -581,8 +637,18 @@ export default function createMemoryExtension(
         // A feature thread with no task bound: the feature alone (a bound task still wins).
         const featureOnly = !bound && !sub ? featureThreadOf(ctx.wolfDen, ctx.conversationId) : undefined;
         const tag: PoolTag | null = bound ?? (featureOnly ? { featureId: featureOnly } : null);
-        await writeToPool(ctx.wolfDen, result.observations, tag, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
-        mem.observed(result.observations, bound ?? (featureOnly ? { taskId: featureOnly, featureId: featureOnly } : null), ctx.conversationId);
+        // Nothing bound: an observation naming exactly one open work item is tagged with it, line by line.
+        const perLine: Array<PoolTag | null> = tag || sub ? result.observations.map(() => tag) : await namedTags(result.observations);
+        await writeToPool(ctx.wolfDen, result.observations, perLine, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
+        // One event per run of equally tagged lines; a feature-only tag reports workId = the feature.
+        for (let k = 0; k < result.observations.length;) {
+          const t = perLine[k];
+          let e = k + 1;
+          while (e < result.observations.length && JSON.stringify(perLine[e]) === JSON.stringify(t)) e++;
+          const reported = t ? { taskId: t.taskId ?? t.featureId!, ...(t.featureId ? { featureId: t.featureId } : {}) } : null;
+          mem.observed(result.observations.slice(k, e), reported, ctx.conversationId);
+          k = e;
+        }
       }
       // Persist per chunk: a failure in a later chunk retries from here, not from the start.
       const last = i === chunks.length - 1;

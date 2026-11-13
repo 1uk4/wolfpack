@@ -236,12 +236,16 @@ export function machineServices(card: Pick<HostCard, "console" | "hub" | "worker
 	const hubE = inv.find((e) => e.kind === "hubd");
 	if (card.hub || hubE) rows.push(mk("hubd", hubE?.id ?? "hubd", "Hub", card.hub, hubE));
 	const used = new Set<InventoryRowView>();
+	const usedLinks = new Set<HealthLink>();
 	const workerE = inv.filter((e) => e.kind === "workerd");
 	const wolvesOf = (w: { link: HealthLink; wolves: HealthLink[] } | undefined, parent: string): ServiceRow[] => {
 		const out: ServiceRow[] = [];
 		for (const e of inv.filter((x) => x.kind === "wolfd" && x.parent === parent)) {
 			used.add(e);
-			out.push(mk("wolfd", e.id, e.id, w?.wolves.find((l) => bare(l.id) === e.id) ?? null, e));
+			// A wolf's probe or hub-presence link may sit under its workerd or at the card's top level (a Mac has no workerd link): one row either way.
+			const l = w?.wolves.find((x) => bare(x.id) === e.id) ?? card.wolves.find((x) => bare(x.id) === e.id) ?? null;
+			if (l) usedLinks.add(l);
+			out.push(mk("wolfd", e.id, e.id, l, e));
 		}
 		for (const l of w?.wolves ?? []) if (!out.some((r) => r.name === bare(l.id))) out.push(mk("wolfd", l.id, bare(l.id), l, undefined));
 		return out;
@@ -260,7 +264,7 @@ export function machineServices(card: Pick<HostCard, "console" | "hub" | "worker
 		row.children = wolvesOf(undefined, e.id);
 		rows.push(row);
 	}
-	for (const l of card.wolves) rows.push(mk("wolfd", l.id, bare(l.id), l, undefined));
+	for (const l of card.wolves.filter((x) => !usedLinks.has(x))) rows.push(mk("wolfd", l.id, bare(l.id), l, undefined));
 	for (const e of inv.filter((x) => x.kind === "wolfd" && !used.has(x) && !rows.some((r) => r.children.some((c) => c.name === x.id)))) rows.push(mk("wolfd", e.id, e.id, null, e));
 	for (const e of inv.filter((x) => x.kind === "console")) rows.push(mk("console", e.id, "Console", null, e));
 	if (card.console && !inv.some((x) => x.kind === "console")) {

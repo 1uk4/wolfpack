@@ -5,7 +5,7 @@
  * Core logic lives in @wolfpack/memory package.
  */
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import { join } from "node:path";
 import {
@@ -274,10 +274,24 @@ export function newObserverChunks(
  * Append observations to the pool. While a task is bound they are stamped
  * `work: <task id>`: they feed that item's Record, not the den.
  */
+/** The feature a conversation is the thread of (wolfd's registry `<den>/wolfd/threads.json`), or undefined for home and free-standing threads. */
+function featureThreadOf(wolfDen: string, conversationId: number): string | undefined {
+  try {
+    const reg = JSON.parse(readFileSync(join(wolfDen, "wolfd", "threads.json"), "utf8")) as { threads?: Array<Record<string, unknown>> };
+    const t = reg.threads?.find((x) => x.kind === "feature" && String(x.conversationId) === String(conversationId));
+    return typeof t?.workItemId === "string" && t.workItemId ? t.workItemId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A bound task (work + its feature), or a feature alone (a feature thread with no task bound). */
+type PoolTag = { taskId?: string; featureId?: string };
+
 async function writeToPool(
   wolfDen: string,
   observations: RawObservation[],
-  bound: { taskId: string; featureId?: string } | null = null,
+  bound: PoolTag | null = null,
   defaultDomain?: string,
   generalToDen = false,
   poolLock = false,
@@ -295,7 +309,7 @@ async function writeToPool(
       ...(defaultDomain ? { domain: obs.domain || defaultDomain } : {}),
       recordedAt: timestamp,
       ...(bound ? (() => {
-        const ids = { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) };
+        const ids = { ...(bound.taskId ? { work: bound.taskId } : {}), ...(bound.featureId ? { feature: bound.featureId } : {}) };
         return generalToDen && obs.general === true ? { origin: ids } : ids;
       })() : {}),
     }) + "\n"
@@ -564,8 +578,11 @@ export default function createMemoryExtension(
       const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation", domainContext: domainContext || undefined, generalFlag: config.generalToDen === true });
       if (result.observations.length > 0) {
         const bound = sub ? await subTag(sub) : await readBoundTask(ctx); // re-read every chunk, never cached
-        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
-        mem.observed(result.observations, bound, ctx.conversationId);
+        // A feature thread with no task bound: the feature alone (a bound task still wins).
+        const featureOnly = !bound && !sub ? featureThreadOf(ctx.wolfDen, ctx.conversationId) : undefined;
+        const tag: PoolTag | null = bound ?? (featureOnly ? { featureId: featureOnly } : null);
+        await writeToPool(ctx.wolfDen, result.observations, tag, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
+        mem.observed(result.observations, bound ?? (featureOnly ? { taskId: featureOnly, featureId: featureOnly } : null), ctx.conversationId);
       }
       // Persist per chunk: a failure in a later chunk retries from here, not from the start.
       const last = i === chunks.length - 1;

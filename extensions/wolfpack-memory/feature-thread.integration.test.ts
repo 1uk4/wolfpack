@@ -164,6 +164,24 @@ describe("feature threads", () => {
     expect((await tw.client.getMemoryStatus!("testwolf", { thread: tw.home })).bound).toBeNull();
   });
 
+  it("tag their talk with the feature alone once no task is bound", async () => {
+    const dev = await devRoot();
+    tw = await boot(dev, [fauxAssistantMessage(say("A_UNB"))]);
+    const den = tw.wolf.config.den;
+    const featureId = await newFeature(tw);
+    const thread = await tw.client.createThread!("testwolf", { kind: "feature", workItemId: featureId });
+    const cid = conversationOf(den, thread.id);
+    expect((await tool(den, cid, "task_unbind")).isError).toBe(false);
+    expect(readBindingFile(den, cid)).toBeNull();
+
+    await tw.client.submit(thread.id, say("MARK_UNB"), { whenBusy: "reject" });
+    await drain(thread.id);
+    await observed(tw, cid);
+    const [obs] = pool(den).filter((o) => o.content.includes("MARK_UNB"));
+    expect(obs.feature).toBe(featureId);
+    expect(obs.work).toBeUndefined();
+  });
+
   it("are still there, and still bound, after a restart", async () => {
     const dev = await devRoot();
     tw = await boot(dev, []);

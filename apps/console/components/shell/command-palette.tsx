@@ -125,7 +125,7 @@ export function CommandPalette() {
 		);
 	}, [open]);
 
-	// One Esc, one action (the one-Esc law, as settings-dialog.tsx): claim at
+	// One Esc, one action (the one-Esc law): claim at
 	// the document so the window chain (dictation / abort turn) never fires.
 	// Other registry shortcuts are swallowed while the palette is up (⌘K
 	// itself still toggles); a route change closes it.

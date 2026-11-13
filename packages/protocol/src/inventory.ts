@@ -22,6 +22,23 @@ export const InventoryEntrySchema = z.object({
   lagMs: z.number().nonnegative().optional(),
   /** Measured round trip of a /healthz probe, ms (only where someone probes: workerd -> wolfd). */
   responseMs: z.number().nonnegative().optional(),
+  /** A wolfd entry only: a turn is running in this wolf right now (restarting it would cut the reply off). Absent = idle or unknown. */
+  busy: z.boolean().optional(),
+  /** A wolfd entry only: how this wolf reaches its model. Only "api" wolves receive the Pack's Anthropic key. Absent = not reported. */
+  transport: z.enum(["api", "subscription"]).optional(),
+  /** Key presence per slot (workerd entries only, work-wolfpack-6EmU8pu). Never the value: only a mask. */
+  keys: z
+    .array(
+      z.object({
+        slot: z.string().min(1).max(64),
+        present: z.boolean(),
+        masked: z.string().max(32).optional(),
+        source: z.enum(["pack", "env"]).optional(),
+        shadowsEnv: z.boolean().optional(),
+      }),
+    )
+    .max(16)
+    .optional(),
 });
 export type InventoryEntry = z.infer<typeof InventoryEntrySchema>;
 
@@ -35,6 +52,9 @@ export const WORKERD_REPORT_EVERY_MS = 30_000;
 export const CONSOLE_REPORT_EVERY_MS = 15_000;
 export const WORKERD_TTL_MS = 90_000;
 export const CONSOLE_TTL_MS = 45_000;
+
+/** Body of the machine key ack (work-wolfpack-6EmU8pu): the fingerprint being accepted, so a key that changed again is not accepted blind. */
+export const MachineKeyAckBodySchema = z.object({ fingerprint: z.string().min(1).max(128) });
 
 export const InventoryReportBodySchema = z.object({ entry: InventoryEntrySchema });
 export interface InventoryResponse {

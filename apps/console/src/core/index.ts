@@ -49,9 +49,7 @@ export * from "./settings/settings.ts";
 export * from "./settings/settings-resolution.ts";
 export * from "./thread/session-find.ts";
 export * from "./thread/session-navigation.ts";
-// auth-keys.ts (auth-keys wave, 2026-09-19): the curated key catalog +
-// shape rules + masking — pure, browser-safe (the auth page binds to the
-// /api/keys routes built on it).
+// auth-keys.ts: the model-provider key table (provider id → env var) — pure, browser-safe.
 export * from "./settings/auth-keys.ts";
 // keyboard.ts: the shortcut registry + binding normalization (pure, browser-safe).
 export * from "./ui/keyboard.ts";
@@ -97,4 +95,23 @@ export * from "./graph/branch-graph.ts";
 export { graphKey, newestRequest } from "./graph/graph-fetch.ts";
 export * from "./work/work-id-link.ts";
 export * from "./settings/wolf-settings-form.ts";
-export { updateWarnings } from "./pack/pack-health-view.ts";
+// pack-sections.ts: the Pack panel sections, badges and entry summary. Pure.
+export * from "./pack/pack-sections.ts";
+export type { Tone, HealthLink, HealthSnapshotView } from "./pack/pack-health-view.ts";
+export { ageText, BACK_MS, packSummary } from "./pack/pack-health-view.ts";
+export { groupByHost } from "./pack/pack-hosts.ts";
+export type { HostInfo, HostCard } from "./pack/pack-hosts.ts";
+export { createHealthConnection } from "./pack/pack-health-connection.ts";
+export type { HealthConnectionDeps } from "./pack/pack-health-connection.ts";
+// machine-card.ts: the Machines section's card rules. Pure.
+export * from "./pack/machine-card.ts";
+export * from "./pack/pack-devices.ts";
+// machine-commands.ts: the browser client for the hub command channel (Machines and Keys sections).
+export * from "./pack/machine-commands.ts";
+export * from "./pack/keys-model.ts";
+export * from "./pack/keys-seal.ts";
+export * from "./pack/wolves-model.ts";
+export * from "./pack/wolf-prompt-scopes.ts";
+export { buildGraphs, type FlowRow, type PromptGraph } from "./settings/prompt-flows.ts";
+export { updateWarnings, updateFinished, updateOffered, updateOutcome, updateQuestion } from "./pack/pack-health-view.ts";
+export type { HealthActionsView, UpdateUnitView } from "./pack/pack-health-view.ts";

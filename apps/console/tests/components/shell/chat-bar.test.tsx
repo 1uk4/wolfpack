@@ -27,7 +27,6 @@ const { usePathname } = await import("next/navigation");
 const { AppRouterContext: await_ctx } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { KeyboardShortcuts } = await import("../../../components/shell/keyboard-shortcuts.tsx");
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { FakeNav } = await import("../../helpers/fake-nav.tsx");
 const { AttachedThreadProvider, useAttachedThread } = await import("../../../components/chat-bar/attached-thread.tsx");
 const { ChatBar, submitToThread } = await import("../../../components/chat-bar/chat-bar.tsx");
@@ -408,7 +407,7 @@ describe("real keydown through KeyboardShortcuts", () => {
 		await act(async () => {
 			root!.render(
 				<FakeNav start={start}>
-					<SettingsDialogProvider>
+					<>
 						<ServerEventsProvider connect={fakeSource}>
 							<AttachedThreadProvider>
 								<ChatBar />
@@ -416,7 +415,7 @@ describe("real keydown through KeyboardShortcuts", () => {
 								<KeyboardShortcuts />
 							</AttachedThreadProvider>
 						</ServerEventsProvider>
-					</SettingsDialogProvider>
+					</>
 				</FakeNav>,
 			);
 		});
@@ -448,9 +447,9 @@ describe("real keydown through KeyboardShortcuts", () => {
 		await act(async () => {
 			root!.render(
 				<FakeNav start="/kb">
-					<SettingsDialogProvider>
+					<>
 						<KeyboardShortcuts />
-					</SettingsDialogProvider>
+					</>
 				</FakeNav>,
 			);
 		});

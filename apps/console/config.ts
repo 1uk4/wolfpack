@@ -62,30 +62,12 @@ export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json
  * field) needs no migration — old records simply lack the new keys. The
  * version field is a PRIVATE schema counter for breaking shape changes
  * only (field renamed/meaning changed), unrelated to the app release
- * version. Secrets (API keys, login tokens) NEVER live here — auth.json /
- * .env.local keep that role. (The `chat` default-settings section died
+ * version. Secrets (API keys, login tokens) NEVER live here — the Pack key
+ * file / .env.local keep that role. (The `chat` default-settings section died
  * with per-session models, owner 2026-09-28 — sessions own their model
  * from birth, stamped from the strong slot.)
  */
 export const SETTINGS_FILE = path.join(DATA_ROOT, "settings.json");
 
-/**
- * THE AUTH/KEY STORE (auth-keys wave, 2026-09-19): BYOK provider keys in a
- * flat {VAR: value} JSON map — the SAME file the Electron app has always
- * hand-edited (owner decision: option A, zero migration). Desktop main.cjs
- * passes WOLFPACK_AUTH_FILE pointing at userData/auth.json (mode 0600); in dev
- * (no Electron) the default is the repo-root auth.json (gitignored, same
- * pattern as .env.local — a worktree may symlink it to the master copy).
- * The SERVER reads/writes this file directly at call time (no restart to
- * change a key); it reflects the values into process.env at boot with
- * FILL-GAP precedence — real environment variables (incl. .env.local in
- * dev) always win (src/server/settings/keys.ts). Hand-edits still work: the file is
- * re-read from disk on every API access. Secrets NEVER go in settings.json
- * — this file keeps that role, alongside .env.local.
- */
-const AUTH_FILE_ENV = process.env.WOLFPACK_AUTH_FILE || undefined;
-export const AUTH_FILE = AUTH_FILE_ENV
-	? path.resolve(AUTH_FILE_ENV)
-	: DATA_DIR_ENV
-		? path.join(DATA_ROOT, "auth.json")
-		: path.join(ROOT, "auth.json");
+// Keys: the console keeps no key store of its own (work-wolfpack-u6GH2kk). They live in the Pack key file (WOLFPACK_KEY_FILE),
+// read by src/server/settings/keys.ts.

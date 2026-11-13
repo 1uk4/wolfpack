@@ -112,6 +112,9 @@ export function childEnv(cfg, env, dotenv = {}, models) {
 		...sharedToolDirs(env, cfg.home),
 		CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR || path.join(cfg.home, ".claude"),
 		WORKERD_CONFIG_DIR: path.join(cfg.sandboxHome, ".wolfpack/workerd"),
+		// The Pack key file is explicit: workerd writes it (key.set), the dev console reads it. Sandbox only, never a live key file.
+		WORKERD_KEY_FILE: path.join(cfg.sandboxHome, ".wolfpack/workerd/keys.env"),
+		WOLFPACK_KEY_FILE: path.join(cfg.sandboxHome, ".wolfpack/workerd/keys.env"),
 		WOLFPACK_API_URL: `http://127.0.0.1:${cfg.workerdPort}`,
 	};
 }

@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultSocketPath, defaultWolvesRoot, discoverWolves, loadWolfConfig, WolfConfigError } from "./load.js";
-import { applyWolfTierOverrides, resolveWolfModel, TierResolutionError } from "./tiers.js";
-import { STARTER_PACK_MODELS, detectWolfLocation, regenerateWolfModelsFile, resolveModelTable, type ModelTable } from "../models.js";
+import { applyWolfMemoryModel, applyWolfTierOverrides, resolveWolfModel, TierResolutionError } from "./tiers.js";
+import { STARTER_PACK_MODELS, detectWolfLocation, engineSteps, regenerateWolfModelsFile, resolveModelTable, type ModelTable } from "../models.js";
 
 let tmp: string;
 beforeEach(() => {
@@ -234,6 +234,47 @@ describe("applyWolfTierOverrides", () => {
     expect(out.tiers.fast.piModel.endsWith("/m-fast")).toBe(true);
     expect(out.tiers.smart).toEqual(t.tiers.smart);
     expect(JSON.stringify(t)).toBe(before);
+  });
+});
+
+describe("wolf.yaml memory.model", () => {
+  const base = () => resolveModelTable({ pack: STARTER_PACK_MODELS, wolf: undefined, location: "vps" });
+  const cfg = (model?: string) => ({ identity: { name: "dewey" }, memory: { ...(model ? { model } : {}) } }) as never;
+
+  it("is read from wolf.yaml, and absent when not set", () => {
+    expect(loadWolfConfig(wolf("mm", "name: mm\nmemory:\n  model: claude-opus-5-5\n"), { home: "/h" }).config.memory.model).toBe("claude-opus-5-5");
+    expect(loadWolfConfig(wolf("mm2", "name: mm2\n"), { home: "/h" }).config.memory.model).toBeUndefined();
+  });
+
+  it("replaces the smart tier's model and piModel; the fast and main tiers stay", () => {
+    const b = base();
+    const out = applyWolfMemoryModel(b, cfg("claude-opus-5-5"));
+    expect(out.tiers.smart.model).toBe("claude-opus-5-5");
+    expect(out.tiers.smart.piModel).toBe("anthropic/claude-opus-5-5");
+    expect(out.tiers.fast).toEqual(b.tiers.fast);
+    expect(out.tiers.main).toEqual(b.tiers.main);
+  });
+
+  it("the steps on the smart tier use it and the quick steps keep the fast model", () => {
+    const steps = engineSteps(applyWolfMemoryModel(base(), cfg("claude-opus-5-5")));
+    for (const s of ["consolidate", "distill", "workRecord", "workDistill", "workTidy", "produce"] as const) expect(steps[s].model).toBe("claude-opus-5-5");
+    for (const s of ["classify", "workLog", "workCompact"] as const) expect(steps[s].model).toBe("claude-haiku-5-5");
+  });
+
+  it("leaves the table alone, and logs the wolf and model id, when the smart tier is not an Anthropic one", () => {
+    const b = base();
+    b.tiers.smart = { ...b.tiers.smart, provider: "openai", piProvider: "openai", piModel: "openai/gpt-x", model: "gpt-x" };
+    const lines: string[] = [];
+    const out = applyWolfMemoryModel(b, cfg("claude-opus-5-5"), (l) => lines.push(l));
+    expect(out.tiers.smart.model).toBe("gpt-x");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("dewey");
+    expect(lines[0]).toContain("claude-opus-5-5");
+  });
+
+  it("no memory.model: the same table", () => {
+    const b = base();
+    expect(applyWolfMemoryModel(b, cfg())).toBe(b);
   });
 });
 

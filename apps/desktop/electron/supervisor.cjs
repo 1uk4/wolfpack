@@ -3,7 +3,7 @@
  * all children of the Electron main process, all on this Mac, all run with Electron's own Node (ELECTRON_RUN_AS_NODE=1).
  *
  *   const sup = createSupervisor({ stateDir, wolvesDir, runtimeDir, nodeBin, apiKey });
- *   await sup.start();   // first run writes pack state, models.json, the default wolf and the 0600 credential file
+ *   await sup.start();   // first run writes pack state, models.json, the default wolf and the 0600 key file (keys.env)
  *   sup.urls.workerd     // http://127.0.0.1:<port>  (the wolf's /v1 for the console)
  *   await sup.stop();    // SIGTERM every child, wait, SIGKILL the rest
  *
@@ -19,7 +19,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
-const KEY_FILE = "credentials.json"; // { ANTHROPIC_API_KEY }, mode 0600, in the pack state dir
+const { KEYS_FILE: KEY_FILE, ANTHROPIC_ENV, DEEPGRAM_ENV, readKey, writeKey, keyProblem } = require("./key-file.cjs"); // keys.env (ANTHROPIC_API_KEY=…), mode 0600, in the pack state dir; workerd and the console read it too
 // Model names live here (and only here): update them in this block when a model is retired.
 const SONNET = "claude-sonnet-5-5";
 const HAIKU = "claude-haiku-5-5";
@@ -143,8 +143,15 @@ function createSupervisor(opts) {
 	const children = new Map();
 	let stopping = false; // set by stop(), cleared by the next start(): a quit during start must not respawn anything
 	const stoppedError = () => Object.assign(new Error("supervisor stopped"), { stopped: true });
-	let secret = "";
-	let hubHadKey = false; // hubd reads its key only at launch: a key added later reaches it at the next app launch
+	let secrets = []; // keys.env's Anthropic and Deepgram values as of the last (re)start, for log redaction
+	const readSecrets = () => [ANTHROPIC_ENV, DEEPGRAM_ENV].map((n) => readKey(path.join(stateDir, KEY_FILE), n)).filter(Boolean);
+	// hubd reads its key only at launch. changeKey restarts hubd (sup.restart("hubd")); a key saved in Pack → Keys (workerd writes
+	// keys.env) is noticed by the poll below, which restarts hubd the same way. Held in memory only, never logged.
+	let hubHadKey = false;
+	let hubKey = ""; // the Anthropic key hubd was started with
+	let hubPending = 0; // hubd restarts queued or running (counted from the sup.restart call): hubd is going down or booting, so curate() must not signal it
+	let keysMtime = 0;
+	const hubDir = path.join(stateDir, "hub");
 	const listeners = new Set();
 	let wolfUp = false; // cached: the default wolf is online (set after bring-up, refreshed by a slow poll)
 	let lastRunning = false;
@@ -163,7 +170,7 @@ function createSupervisor(opts) {
 		for (const f of [...curateWaiters]) f({ skipped: why });
 		windowRunning = false;
 	};
-	const redact = (s) => [secret, hubToken].reduce((t, v) => (v ? t.split(v).join("[redacted]") : t), s);
+	const redact = (s) => [...secrets, hubToken].reduce((t, v) => (v ? t.split(v).join("[redacted]") : t), s);
 	const sup = { urls: {}, ports: {}, wolfDir: path.join(wolvesDir, wolfName), pids: () => [...children.values()].map((c) => c.pid) };
 
 	function setup() {
@@ -184,24 +191,12 @@ function createSupervisor(opts) {
 		fs.copyFileSync(path.join(runtimeDir, "extensions", "wolfpack-memory", "index.js"), path.join(ext, "index.js"));
 		const keyFile = path.join(stateDir, KEY_FILE);
 		if (opts.apiKey) {
-			try {
-				fs.writeFileSync(keyFile, JSON.stringify({ ANTHROPIC_API_KEY: opts.apiKey }), { mode: 0o600, flag: "wx" });
-			} catch (e) {
-				if (e.code !== "EEXIST") throw e; // an existing file wins: the wizard (or an earlier run) owns it
+			// an existing key wins: the wizard (or an earlier run) owns it
+			if (!readKey(keyFile, ANTHROPIC_ENV)) {
+				writeKey(keyFile, ANTHROPIC_ENV, opts.apiKey); // throws (without the key) when keys.env exists but cannot be read
 			}
 		}
 		return keyFile;
-	}
-
-	function readCredentials(keyFile) {
-		if (!fs.existsSync(keyFile)) return {};
-		try {
-			const v = JSON.parse(fs.readFileSync(keyFile, "utf8"));
-			if (v && typeof v === "object") return v;
-		} catch {
-			/* fall through */
-		}
-		throw new Error(`${keyFile} is damaged (not a JSON object). Delete it and sign in again.`);
 	}
 
 	function launch(name, entry, args, env, cwd) {
@@ -290,10 +285,6 @@ function createSupervisor(opts) {
 	}
 
 	async function bringUp(keyFile) {
-		const creds = readCredentials(keyFile);
-		secret = creds.ANTHROPIC_API_KEY ?? "";
-		hubHadKey = !!secret;
-		if (!secret) log("no API key yet: KB curation is skipped until the app is launched with one");
 		const hubPort = await reuseOrFreePort(sup.ports.hubd, pickFree);
 		const workerdPort = await reuseOrFreePort(sup.ports.workerd, pickFree);
 		sup.ports = { hubd: hubPort, workerd: workerdPort };
@@ -305,8 +296,28 @@ function createSupervisor(opts) {
 		if (!curatorOn) log(modelDir ? `KB curation is off: no model.onnx in ${modelDir}` : "KB curation is off: no embedding model dir (WOLFPACK_APP_EMBED_MODEL_DIR)");
 		// Half the cores for the embedder, so the laptop stays responsive.
 		embedEnv = curatorOn ? { WOLFPACK_EMBED_PROVIDER: "onnx", WOLFPACK_EMBED_MODEL_DIR: modelDir, WOLFPACK_EMBED_THREADS: String(opts.embedThreads ?? Math.max(1, Math.floor(os.cpus().length / 2))) } : {};
-		const hubDir = path.join(stateDir, "hub");
 		const pairCode = mintHubToken(hubDir);
+		await startHubd();
+		hubToken = await redeemHubToken(sup.urls.hubd, pairCode);
+		await startWorkerd();
+		wolfUp = true;
+		changed();
+		startPoll();
+	}
+
+	/** Launch hubd on `sup.ports.hubd` with the Anthropic key as keys.env holds it now (its curator calls Haiku with it), and wait until it is healthy. */
+	async function startHubd() {
+		secrets = readSecrets();
+		const secret = readKey(path.join(stateDir, KEY_FILE), ANTHROPIC_ENV);
+		hubHadKey = !!secret;
+		hubKey = secret;
+		try {
+			keysMtime = fs.statSync(path.join(stateDir, KEY_FILE)).mtimeMs;
+		} catch {
+			keysMtime = 0;
+		}
+		if (!secret) log("no API key yet: KB curation is skipped until a key is added in Pack → Keys (hubd then restarts by itself).");
+		const hubPort = sup.ports.hubd;
 		const hub = launch(
 			"hubd",
 			"hubd.mjs",
@@ -324,18 +335,13 @@ function createSupervisor(opts) {
 			}),
 		);
 		await until(healthy(sup.urls.hubd), "hubd", hub);
-		hubToken = await redeemHubToken(sup.urls.hubd, pairCode);
-		await startWorkerd();
-		wolfUp = true;
-		changed();
-		startPoll();
+		return hub;
 	}
 
 	/** Launch workerd (it supervises wolfd) on `sup.ports.workerd` with the key and hub token as they are now. */
 	async function startWorkerd() {
 		const wolfHubToken = hubToken;
-		// workerd supervises wolfd through the shim. The wolfd env (incl. the key) is workerd's env.
-		// v1: the key stays in wolfd's env, so the wolf's shell tool can read it. It is the user's own key on their own Mac.
+		// workerd supervises wolfd through the shim; it reads keys.env and hands the Anthropic key to api-transport wolves itself.
 		const shim = ensureShim(stateDir);
 		const workerdPort = sup.ports.workerd;
 		const env = base({
@@ -345,7 +351,7 @@ function createSupervisor(opts) {
 			WOLFPACK_MODELS_FILE: path.join(sup.wolfDir, "models.json"),
 			KB_BASE: path.join(stateDir, "kb", "base"),
 			KB_OPS: path.join(stateDir, "kb", "ops"),
-			...(secret ? { ANTHROPIC_API_KEY: secret } : {}),
+			WORKERD_KEY_FILE: path.join(stateDir, KEY_FILE),
 			// The wolf keeps its KB through the app's own hubd on loopback: it mirrors the KB from it and feeds its contributions to it.
 			WOLFPACK_HUB_KB: "1",
 			WOLFPACK_HUB_URL: sup.urls.hubd,
@@ -361,24 +367,64 @@ function createSupervisor(opts) {
 	}
 
 	/**
-	 * Restart the wolf ("wolfd") so it picks up a changed credentials.json: workerd owns wolfd and hands it its own env, so workerd is
+	 * Restart the wolf ("wolfd") so it picks up a changed keys.env: workerd owns wolfd and hands it its own env, so workerd is
 	 * relaunched (same port, hubd untouched; a new port if the old one is taken, which throws PORT_MOVED) with the key read afresh. Anything else is refused.
 	 */
 	let restarting = null;
 	sup.restart = (name) => {
-		if (name !== "wolfd") return Promise.reject(new Error(`cannot restart ${name}`));
-		// One at a time, in order: each call waits for the one before it, then reads credentials.json fresh and reports its own result.
-		const run = (restarting ?? Promise.resolve()).catch(() => {}).then(restartWolf);
+		if (name !== "wolfd" && name !== "hubd") return Promise.reject(new Error(`cannot restart ${name}`));
+		// One at a time, in order: each call waits for the one before it, then reads keys.env fresh and reports its own result.
+		const run = (restarting ?? Promise.resolve()).catch(() => {}).then(name === "hubd" ? restartHub : restartWolf);
 		restarting = run;
+		if (name === "hubd") hubPending++;
 		const clear = () => {
+			if (name === "hubd") hubPending--;
 			if (restarting === run) restarting = null;
 		};
 		run.then(clear, clear);
 		return run;
 	};
 
+	/**
+	 * Relaunch hubd on its own port with the key read afresh from keys.env. The hub token and data are on disk, so nothing is re-paired.
+	 * Refuses when hubd's port is taken meanwhile (workerd and the console hold its URL), leaving hubd down for the caller to report.
+	 */
+	async function restartHub() {
+		if (stopping || (!children.has("hubd") && !children.has("workerd"))) throw new Error("the app is not running"); // hubd itself may be down after an earlier failed restart: then this just starts it
+		const old = children.get("hubd");
+		const pid = old?.pid ?? 0;
+		{
+			old?.kill("SIGTERM");
+			const wait = async (ms) => {
+				const end = Date.now() + ms;
+				while (Date.now() < end && pid && alive(pid)) await new Promise((r) => setTimeout(r, 50));
+			};
+			await wait(opts.termGraceMs ?? 8000);
+			if (alive(pid)) {
+				try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+				await wait(3000); // the old process must be gone before the new one binds the port and before a health check can answer
+			}
+			if (stopping) throw stoppedError();
+			let failure;
+			for (let attempt = 1; attempt <= 2; attempt++) {
+				try {
+					await startHubd();
+					return;
+				} catch (e) {
+					if (stopping) throw stoppedError();
+					failure = e;
+					const left = children.get("hubd");
+					if (left && left.pid !== pid) try { process.kill(left.pid, "SIGKILL"); } catch { /* gone */ }
+					if (left) children.delete("hubd");
+					log(`hubd restart attempt ${attempt} failed: ${String(e.message).split("\n")[0]}`);
+				}
+			}
+			throw failure;
+		}
+	}
+
 	async function restartWolf() {
-		if (stopping || !children.has("hubd")) throw new Error("the app is not running");
+		if (stopping || (!children.has("hubd") && !children.has("workerd"))) throw new Error("the app is not running"); // hubd may be down (a failed restart): the wolf still takes the new key
 		wolfUp = false;
 		changed();
 		const wd = children.get("workerd");
@@ -387,7 +433,7 @@ function createSupervisor(opts) {
 		const end = Date.now() + 8000;
 		while (Date.now() < end && [...pids].some(alive)) await new Promise((r) => setTimeout(r, 100));
 		for (const p of pids) if (alive(p)) try { process.kill(p, "SIGKILL"); } catch { /* gone */ }
-		secret = readCredentials(path.join(stateDir, KEY_FILE)).ANTHROPIC_API_KEY ?? "";
+		secrets = readSecrets();
 		const prev = sup.ports.workerd;
 		let port = await reuseOrFreePort(prev, pickFree);
 		for (let attempt = 1; ; attempt++) {
@@ -421,6 +467,7 @@ function createSupervisor(opts) {
 	function startPoll() {
 		if (poll) return;
 		poll = setInterval(async () => {
+			watchKeys();
 			let up;
 			try {
 				up = ((await (await fetch(`${sup.urls.workerd}/v1/wolves`, { signal: AbortSignal.timeout(5000) })).json()).wolves ?? []).some((w) => w.status === "online");
@@ -430,8 +477,24 @@ function createSupervisor(opts) {
 			if (stopping) return;
 			wolfUp = up;
 			changed();
-		}, 30_000);
+		}, opts.pollMs ?? 30_000);
 		poll.unref?.();
+	}
+
+	/** A key saved in Pack → Keys: when keys.env changed and its Anthropic value differs from hubd's, restart hubd (not the wolf: workerd does that itself). */
+	function watchKeys() {
+		if (stopping || hubPending || !children.has("hubd")) return;
+		let m;
+		try {
+			m = fs.statSync(path.join(stateDir, KEY_FILE)).mtimeMs;
+		} catch {
+			return;
+		}
+		if (m === keysMtime) return;
+		keysMtime = m;
+		if (readKey(path.join(stateDir, KEY_FILE), ANTHROPIC_ENV) === hubKey) return;
+		log("keys.env changed: restarting hubd with the new key");
+		sup.restart("hubd").catch((e) => log(`hubd restart after a key change failed: ${String(e?.message ?? e).split("\n")[0]}`));
 	}
 
 	sup.start = async () => {
@@ -498,8 +561,6 @@ function createSupervisor(opts) {
 			return [];
 		}
 	}
-	/** False when hubd started with no key: it reads its key only at launch, so curation waits for the next app launch. */
-	sup.hubHasKey = () => hubHadKey;
 	/** True while hubd, workerd and the wolf are all up. Cheap: reads cached state only. */
 	sup.status = () => ({ running: !stopping && wolfUp && children.has("hubd") && children.has("workerd") });
 	/**
@@ -510,6 +571,7 @@ function createSupervisor(opts) {
 		new Promise((resolve) => {
 			const hub = children.get("hubd");
 			if (!hub || stopping) return resolve({ skipped: "hubd is not running" });
+			if (hubPending) return resolve({ skipped: "hubd is restarting" });
 			if (!curatorOn) return resolve({ skipped: "no embedding model" });
 			if (!hubHadKey) return resolve({ skipped: "no API key" });
 			if (windowRunning) return resolve({ skipped: "a window is already running" });

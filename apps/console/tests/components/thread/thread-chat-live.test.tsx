@@ -31,7 +31,6 @@ type ThreadDetail = import("@wolfpack/client").ThreadDetail;
 type WatchOptions = import("@wolfpack/client").WatchOptions;
 const { createThreadApi } = await import("../../../src/server/thread/thread-api.ts");
 const { cardsOfThread, threadMessagesToNative } = await import("../../../src/core/index.ts");
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
@@ -120,13 +119,13 @@ async function mount(client: ServerTurnClient) {
 	await act(async () => {
 		root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
-				<SettingsDialogProvider>
+				<>
 					<ServerEventsProvider connect={eventsSource}>
 						<MemoryEventsProvider connect={inertSource}>
 							<ThreadChat wolf="1uk4" slug="home" threadId={FIXTURE_THREAD.id} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />
 						</MemoryEventsProvider>
 					</ServerEventsProvider>
-				</SettingsDialogProvider>
+				</>
 			</AppRouterContext.Provider>,
 		);
 	});

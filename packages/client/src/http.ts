@@ -26,6 +26,8 @@ import {
   type KbCommitResponse,
   DeviceList,
   MintPairingCodeResponse,
+  type CommandKind,
+  type CommandResponse,
 } from "@wolfpack/protocol";
 import {
   BusyError,
@@ -510,6 +512,15 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("hubListDevices", {}, ROUTES.hubListDevices.response.schema)) as DeviceList;
   }
 
+  /**
+   * Hub only: run one command on a machine (POST /v1/machines/:id/commands). The hub answers 409 (not_sent_*) and 504 (timeout) with a
+   * CommandResponse body: those come back as a result, not an error. Any other refusal (400, 401, ...) still throws.
+   */
+  async machineCommand(hostId: string, cmd: { kind: CommandKind; args?: unknown; sealed?: string; id?: string }): Promise<CommandResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "machineCommand needs a hub client", false);
+    return (await this.json("hubMachineCommand", { id: hostId }, ROUTES.hubMachineCommand.response.schema, { kind: cmd.kind, args: cmd.args ?? {}, ...(cmd.sealed !== undefined ? { sealed: cmd.sealed } : {}), ...(cmd.id !== undefined ? { id: cmd.id } : {}) }, undefined, "", {}, [409, 504], MACHINE_COMMAND_TIMEOUT_MS)) as CommandResponse;
+  }
+
   /** Hub only: revoke a device (may be this one); `cascade` also revokes the devices it added. 409 `conflict` when it would remove the last console token. */
   async revokeDevice(id: string, opts: { cascade?: boolean } = {}): Promise<{ revoked: string; self: boolean; cascaded: string[] }> {
     if (!this.hub) throw new ProtocolError("invalid_request", "revokeDevice needs a hub client", false);
@@ -655,7 +666,7 @@ export class HttpConsoleClient implements ConsoleClient {
     return { Authorization: `Bearer ${this.hub.token}` };
   }
 
-  private async request(name: RouteName, params: Record<string, string>, init: RequestInit & { headers?: Record<string, string> } = {}, threadId?: string, query = ""): Promise<Response> {
+  private async request(name: RouteName, params: Record<string, string>, init: RequestInit & { headers?: Record<string, string> } = {}, threadId?: string, query = "", accept: number[] = [], timeoutMs: number = this.requestTimeoutMs): Promise<Response> {
     const route: RouteDef = ROUTES[name];
     const hubRoute = route.scope === "hub";
     if (hubRoute && !this.hub) throw new ProtocolError("engine_error", `${name} needs a hub (HttpClientOptions.hub)`, false);
@@ -665,7 +676,7 @@ export class HttpConsoleClient implements ConsoleClient {
     const bounded = route.response.kind !== "sse";
     const timer = bounded ? new AbortController() : undefined;
     let timedOut = false;
-    const handle = timer ? setTimeout(() => { timedOut = true; timer.abort(); }, this.requestTimeoutMs) : undefined;
+    const handle = timer ? setTimeout(() => { timedOut = true; timer.abort(); }, timeoutMs) : undefined;
     const signal = timer ? (init.signal ? AbortSignal.any([init.signal, timer.signal]) : timer.signal) : init.signal;
     let res: Response;
     try {
@@ -676,12 +687,12 @@ export class HttpConsoleClient implements ConsoleClient {
         headers: { ...init.headers, ...this.hubHeaders(viaHub), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
       });
     } catch (e) {
-      if (timedOut) throw Object.assign(new ProtocolError("engine_error", `wolf did not answer in time (${this.requestTimeoutMs} ms)`, true), { timedOut: true });
+      if (timedOut) throw Object.assign(new ProtocolError("engine_error", `wolf did not answer in time (${timeoutMs} ms)`, true), { timedOut: true });
       throw e;
     } finally {
       if (handle) clearTimeout(handle);
     }
-    if (res.ok) return res;
+    if (res.ok || accept.includes(res.status)) return res;
     if (viaHub && res.status === 401) {
       // A hub 401 is ALWAYS "unauthorized", whatever the body (a proxy or old hub may send none): callers re-pair on this code.
       const err = await this.toError(res, threadId);
@@ -690,14 +701,14 @@ export class HttpConsoleClient implements ConsoleClient {
     throw await this.toError(res, threadId);
   }
 
-  private async json(name: RouteName, params: Record<string, string>, schema: { parse(x: unknown): unknown }, body?: unknown, threadId?: string, query = "", extraHeaders: Record<string, string> = {}): Promise<unknown> {
+  private async json(name: RouteName, params: Record<string, string>, schema: { parse(x: unknown): unknown }, body?: unknown, threadId?: string, query = "", extraHeaders: Record<string, string> = {}, accept: number[] = [], timeoutMs?: number): Promise<unknown> {
     const headers: Record<string, string> = { ...extraHeaders };
     const init: RequestInit & { headers: Record<string, string> } = { headers };
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(body);
     }
-    const res = await this.request(name, params, init, threadId, query);
+    const res = await this.request(name, params, init, threadId, query, accept, timeoutMs);
     let data: unknown;
     try {
       data = await res.json();
@@ -734,6 +745,9 @@ export class HttpConsoleClient implements ConsoleClient {
     return new ProtocolError(code, message, retryable, details);
   }
 }
+
+/** A machine command waits longer than the hub's own per-command limit (COMMAND_TIMEOUT_MS, at most 20 s), so the hub's 504 "outcome unknown" reaches the caller instead of this client aborting first. */
+const MACHINE_COMMAND_TIMEOUT_MS = 30_000;
 
 const abortableSleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve) => {

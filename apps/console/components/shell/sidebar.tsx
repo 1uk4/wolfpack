@@ -3,11 +3,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon } from "lucide-react";
 import { useSubagentModal } from "@/components/thread/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle, ReplyNotifier } from "@/components/shell/needs-you";
 import { UpdateNotice } from "@/components/shell/update-notice";
-import { PackHealthBar, PackHealthHost } from "@/components/pack/pack-health";
+import { PackHealthHost } from "@/components/pack/pack-health";
+import { PackSettingsEntry } from "@/components/pack/pack-panel";
 import { useMultiMachine } from "@/components/shell/single-mac";
 import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
@@ -17,7 +18,6 @@ import { KeyboardShortcuts } from "@/components/shell/keyboard-shortcuts";
 import { shouldOpenInReader, useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { WorkNavEntry } from "@/components/work/work-nav-link";
 import { CommandPalette } from "@/components/shell/command-palette";
-import { SettingsDialogProvider, useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
 import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -538,7 +538,6 @@ export function SessionsSidebar() {
 		closeList();
 		return isChildThread(c) ? openSubagent(c.id, c.meta) : router.push(itemHref(c));
 	};
-	const { open: openSettings } = useSettingsDialog();
 
 	/* New session (owner, 2026-09-13): NO POST — the button opens the
 	   sessionless draft view; the session is created only when the first
@@ -967,20 +966,9 @@ export function SessionsSidebar() {
 						{multiMachine && <UpdateNotice />}
 						<NotifyToggle />
 						{/* Pack health at a glance (work-wolfpack-6imFEq7): works with the hub down; opens the health modal. */}
-						{multiMachine && <PackHealthBar onOpen={closeList} />}
+						{/* One Pack for any number of machines, one included; mod+, opens it too. */}
 						<Hint label="Settings" action="open-settings" side="right">
-							<button
-								type="button"
-								onClick={() => {
-									closeList(); // the dialog must not open behind the full-screen list
-									openSettings();
-								}}
-								data-testid="settings-entry"
-								className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-							>
-								<SettingsIcon className="size-3" />
-								Settings
-							</button>
+							<PackSettingsEntry onOpen={closeList} />
 						</Hint>
 					</div>
 				</div>
@@ -993,7 +981,7 @@ export function SessionsSidebar() {
 export function AppShell({ children }: { children: React.ReactNode }) {
 	const multiMachine = useMultiMachine();
 	return (
-		<SettingsDialogProvider>
+		<>
 			<SessionsSidebar />
 			<main className="min-w-0 flex-1">{children}</main>
 			{/* The floating chat bar: one per window, on every route (draws nothing without its provider). */}
@@ -1001,12 +989,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 			{/* The one work reader: `?item=<id>` opens it over whichever page this is. */}
 			<WorkReaderHost />
 			{/* The one pack-health modal and its live region (work-wolfpack-6imFEq7): outlives the phone list layer. */}
-			{multiMachine && <PackHealthHost />}
+			<PackHealthHost />
 			{/* The single document-level keydown listener (keyboard wave A) —
 			    after the content in the tree, but it's window-level so order only
 			    matters for the events it dispatches, never for DOM priority. */}
 			<KeyboardShortcuts />
 			<CommandPalette />
-		</SettingsDialogProvider>
+		</>
 	);
 }

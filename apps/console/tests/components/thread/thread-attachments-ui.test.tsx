@@ -29,7 +29,6 @@ Object.assign(globalThis, {
 
 const { ATTACHMENT_MAX_BYTES, FIXTURE_THREAD, MockConsoleClient } = await import("@wolfpack/client");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { AttachmentChips, Composer } = await import("../../../components/composer/composer.tsx");
@@ -137,11 +136,11 @@ async function mount(messages: unknown[]) {
 	await act(async () => {
 		root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
-				<SettingsDialogProvider>
+				<>
 					<MemoryEventsProvider connect={inertSource}>
 						<ThreadChat wolf="w" slug="s" threadId="t1" title="T" initialMessages={messages as never} />
 					</MemoryEventsProvider>
-				</SettingsDialogProvider>
+				</>
 			</AppRouterContext.Provider>,
 		);
 	});

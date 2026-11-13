@@ -32,7 +32,6 @@ Object.assign(globalThis, {
 	localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k), clear: () => store.clear() },
 });
 
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
@@ -103,11 +102,11 @@ async function mount(initialMessages: unknown[]) {
 	await act(async () => {
 		root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
-				<SettingsDialogProvider>
+				<>
 					<MemoryEventsProvider connect={inertSource}>
 						<ThreadChat wolf="w" slug="s" threadId="t1" title="T" initialMessages={initialMessages as never} />
 					</MemoryEventsProvider>
-				</SettingsDialogProvider>
+				</>
 			</AppRouterContext.Provider>,
 		);
 	});
@@ -385,11 +384,11 @@ describe("pinned checklist card", () => {
 	const pressEsc = (el: Element) => fire(el, "keydown", { key: "Escape" });
 	const tree = (threadId: string, messages: unknown[], inFlight = false) => (
 		<AppRouterContext.Provider value={{ push() {} } as never}>
-			<SettingsDialogProvider>
+			<>
 				<MemoryEventsProvider connect={inertSource}>
 					<ThreadChat wolf="w" slug="s" threadId={threadId} title="T" initialMessages={messages as never} initiallyInFlight={inFlight} />
 				</MemoryEventsProvider>
-			</SettingsDialogProvider>
+			</>
 		</AppRouterContext.Provider>
 	);
 	let seq = 0;
@@ -704,11 +703,11 @@ describe("pinned decision and graph", () => {
 		root = createRoot(host);
 		await act(async () => root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
-				<SettingsDialogProvider>
+				<>
 					<MemoryEventsProvider connect={inertSource}>
 						<ThreadChat wolf="w" slug="s" threadId={threadId} title="T" initialMessages={threadMessagesToNative(messages) as never} initiallyInFlight={false} />
 					</MemoryEventsProvider>
-				</SettingsDialogProvider>
+				</>
 			</AppRouterContext.Provider>,
 		));
 	}

@@ -101,3 +101,25 @@ export function applyWolfTierOverrides(table: ModelTable, config: Pick<WolfConfi
   }
   return { ...table, tiers };
 }
+
+/** pi providers that serve Anthropic models (API key, or the Claude subscription): the only ones memory.model may name a model of. */
+const ANTHROPIC_PI = new Set(["anthropic", "claude-stateless"]);
+
+/**
+ * The table the wolf's MEMORY engine steps read: wolf.yaml `memory.model` replaces the model of the SMART tier only (the memory's main
+ * steps: consolidate, distill, workRecord...). The fast tier keeps its cheap model, so the quick steps (classify, workLog...) cost the
+ * same; the main tier, which is the chat, is untouched. A smart tier on a non-Anthropic provider is left as it is and one line is logged
+ * (wolf name and model id, never a key). Pure apart from that line: returns a new table; no `memory.model`: the same one.
+ */
+export function applyWolfMemoryModel(table: ModelTable, config: Pick<WolfConfig, "memory" | "identity">, log: (line: string) => void = console.warn): ModelTable {
+  const model = config.memory.model;
+  if (!model) return table;
+  const t = table.tiers.smart;
+  if (!t) return table;
+  if (!ANTHROPIC_PI.has(tierPiProvider(table, t))) {
+    log(`[memory] ${config.identity.name}: memory.model ${model} ignored: the smart tier is not an Anthropic provider`);
+    return table;
+  }
+  const slash = t.piModel.indexOf("/");
+  return { ...table, tiers: { ...table.tiers, smart: { ...t, model, piModel: slash >= 0 ? `${t.piModel.slice(0, slash)}/${model}` : t.piModel } } };
+}

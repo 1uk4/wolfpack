@@ -27,7 +27,6 @@ Object.assign(globalThis, {
 });
 Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {} });
 
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AskCard } = await import("../../../components/ask/ask-card.tsx");
 const { useDictation, InlineMic } = await import("../../../components/composer/dictation.tsx");
 
@@ -73,7 +72,7 @@ const render = (node: React.ReactNode) =>
 			document.body.appendChild(host);
 			root = createRoot(host);
 		}
-		root.render(<SettingsDialogProvider>{node}</SettingsDialogProvider>);
+		root.render(<>{node}</>);
 	});
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 10))));
 

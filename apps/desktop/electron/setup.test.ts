@@ -2,7 +2,7 @@
  * Seams: the main-side first-run setup (electron/setup.cjs), driven from Node with temp dirs and a fake Anthropic server on 127.0.0.1.
  * Needs `node apps/desktop/scripts/build-runtime.mjs` first; WOLFPACK_DESKTOP_TEST_NODE=1 runs the children under this Node (see supervisor.test.ts).
  */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -50,6 +50,15 @@ describe("key check", () => {
     // A key echoed past the 200-character cut must still be caught: the reason is dropped, not shown with the key's tail.
     const echo = async () => new Response(JSON.stringify({ error: { message: `${"x ".repeat(120)}invalid key sk-echoed-secret` } }), { status: 401 });
     expect(await checkKey("sk-echoed-secret", { fetchImpl: echo })).toEqual({ ok: false, error: "That key didn't work" });
+  });
+
+  it("refuses a key keys.env cannot hold before any call goes out, without echoing it", async () => {
+    let fetches = 0;
+    const spy = async () => (fetches++, new Response("{}"));
+    const r = await checkKey('sk-un"safe-key', { fetchImpl: spy });
+    expect(r.ok).toBe(false);
+    expect(r.error).not.toContain("sk-un");
+    expect(fetches).toBe(0);
   });
 
   it("says it could not reach Anthropic when the network fails", async () => {
@@ -158,15 +167,19 @@ describe("first-run setup", () => {
     await expect(
       runSetup({ apiKey: "sk-ok", wolfName: "Blocky", domains: [{ name: "garden", description: "" }] }, { stateDir, wolvesDir, runtimeDir, nodeBin, modelBaseUrl: fakeUrl }),
     ).rejects.toThrow("has a domains list the app can't update");
-    expect(existsSync(join(stateDir, "credentials.json"))).toBe(false);
+    expect(existsSync(join(stateDir, "keys.env"))).toBe(false);
     expect(existsSync(join(stateDir, "hub"))).toBe(false);
   });
 
-  it("starts nothing before setup, then runs the chosen wolf with its domains and a 0600 credential store", async () => {
+  it("starts nothing before setup, then runs the chosen wolf with its domains and a 0600 keys.env", async () => {
     const stateDir = join(root, "state");
     const wolvesDir = join(root, "Wolves");
     expect(needsSetup(stateDir)).toBe(true);
     expect(existsSync(join(stateDir, "hub"))).toBe(false);
+    // An old credentials.json is not ours to touch: same bytes, same mtime afterwards.
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "credentials.json"), '{"old":true}');
+    utimesSync(join(stateDir, "credentials.json"), 1_700_000_000, 1_700_000_000);
 
     const sup = await runSetup(
       { apiKey: "sk-ok", wolfName: "Maya's Wolf", domains: [{ name: "personal", description: "" }, { name: "recipes", description: "Family dinners" }] },
@@ -174,8 +187,12 @@ describe("first-run setup", () => {
     );
     try {
       expect(needsSetup(stateDir)).toBe(false);
-      expect(statSync(join(stateDir, "credentials.json")).mode & 0o777).toBe(0o600);
-      expect(JSON.parse(readFileSync(join(stateDir, "credentials.json"), "utf8"))).toEqual({ ANTHROPIC_API_KEY: "sk-ok" });
+      expect(statSync(join(stateDir, "keys.env")).mode & 0o777).toBe(0o600);
+      expect(readFileSync(join(stateDir, "keys.env"), "utf8")).toBe("ANTHROPIC_API_KEY=sk-ok\n");
+      expect(readFileSync(join(stateDir, "credentials.json"), "utf8")).toBe('{"old":true}');
+      expect(statSync(join(stateDir, "credentials.json")).mtimeMs).toBe(1_700_000_000_000);
+      // The Mac wolf runs on the API transport, so workerd gives it the key from keys.env.
+      expect(JSON.parse(readFileSync(join(wolvesDir, "mayas-wolf", "models.json"), "utf8")).transport).toBe("api");
       const wolves = (await (await fetch(`${sup.urls.workerd}/v1/wolves`)).json()).wolves;
       expect(wolves.map((w: { name: string }) => w.name)).toEqual(["mayas-wolf"]);
       const yaml = readFileSync(join(wolvesDir, "mayas-wolf", "wolf.yaml"), "utf8");
@@ -189,13 +206,12 @@ describe("first-run setup", () => {
     }
   }, 120_000);
 
-  it("finishes setup with the key skipped: complete, and a 0600 credential store with no key in it", async () => {
+  it("finishes setup with the key skipped: complete, and no key file is written", async () => {
     const stateDir = join(root, "state-skip");
     const sup = await runSetup({ apiKey: "", wolfName: "No Key", domains: [] }, { stateDir, wolvesDir: join(root, "Wolves-skip"), runtimeDir, nodeBin, modelBaseUrl: fakeUrl });
     try {
       expect(needsSetup(stateDir)).toBe(false);
-      expect(statSync(join(stateDir, "credentials.json")).mode & 0o777).toBe(0o600);
-      expect(JSON.parse(readFileSync(join(stateDir, "credentials.json"), "utf8"))).toEqual({});
+      expect(existsSync(join(stateDir, "keys.env"))).toBe(false);
     } finally {
       await sup.stop();
     }
@@ -204,7 +220,7 @@ describe("first-run setup", () => {
   it("Skip with a stored key that no longer works completes without re-checking it, and keeps it as it is", async () => {
     const stateDir = join(root, "state-skip-dead");
     mkdirSync(stateDir, { recursive: true });
-    writeFileSync(join(stateDir, "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-dead" }), { mode: 0o600 });
+    writeFileSync(join(stateDir, "keys.env"), "ANTHROPIC_API_KEY=sk-dead\n", { mode: 0o600 });
     let checks = 0;
     const fetchImpl = async () => (checks++, new Response("{}", { status: 401 }));
     // Without skipKey the dead stored key is re-checked and refuses (the old Finish behaviour).
@@ -216,7 +232,7 @@ describe("first-run setup", () => {
     const sup = await runSetup({ apiKey: k.key, wolfName: "Dead Key", domains: [] }, { stateDir, wolvesDir: join(root, "Wolves-skip-dead"), runtimeDir, nodeBin, modelBaseUrl: fakeUrl });
     try {
       expect(needsSetup(stateDir)).toBe(false);
-      expect(JSON.parse(readFileSync(join(stateDir, "credentials.json"), "utf8"))).toEqual({ ANTHROPIC_API_KEY: "sk-dead" });
+      expect(readFileSync(join(stateDir, "keys.env"), "utf8")).toBe("ANTHROPIC_API_KEY=sk-dead\n");
     } finally {
       await sup.stop();
     }

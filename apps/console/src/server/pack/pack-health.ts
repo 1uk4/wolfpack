@@ -51,7 +51,7 @@ import { machineName, normaliseMachine } from "@wolfpack/protocol/health-lag";
 import { join } from "node:path";
 import type { InventoryView, RemoteService } from "./inventory.ts";
 import { hostId, hostLabel, parseHostLabels, type HostInfo } from "../../core/pack/pack-hosts.ts";
-import { probeHealth, type InventoryEntry, DEGRADED_RESPONSE_MS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, type ProbeResult } from "@wolfpack/protocol";
+import { COMMAND_KINDS, probeHealth, type InventoryEntry, DEGRADED_RESPONSE_MS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, type ProbeResult } from "@wolfpack/protocol";
 
 export type LinkKind = "hubd" | "workerd" | "wolfd" | "direct" | "hublink";
 export type HubPresence = "online" | "asleep" | "offline";
@@ -208,6 +208,8 @@ interface HubHost {
 	label?: string;
 	/** The machine the host's worker reported (normalised); absent from an older hub or worker. */
 	machine?: string;
+	/** Known command kinds the host's worker advertised. */
+	commands?: string[];
 	presence: HubPresence;
 	since?: string;
 	wolves: { name: string; status: "online" | "offline" }[];
@@ -223,12 +225,13 @@ function parseHubHosts(raw: unknown): HubHost[] | null {
 		const presence: HubPresence = o.presence === "online" || o.presence === "asleep" ? o.presence : "offline";
 		const label = typeof o.label === "string" && HUB_LABEL_RE.test(o.label.trim()) ? o.label.trim() : ""; // hostname-like only: an older hub may still send free text
 		const machine = normaliseMachine(o.machine) ?? "";
+		const commands = (Array.isArray(o.commands) ? o.commands : []).filter((c): c is string => typeof c === "string" && (COMMAND_KINDS as readonly string[]).includes(c));
 		const since = typeof o.since === "string" && !Number.isNaN(Date.parse(o.since)) ? new Date(Date.parse(o.since)).toISOString() : undefined;
 		const wolves = (Array.isArray(o.wolves) ? o.wolves : []).slice(0, MAX_WOLVES_PER_WORKERD).flatMap((w) => {
 			const x = (w && typeof w === "object" ? w : {}) as Record<string, unknown>;
 			return typeof x.name === "string" && WOLF_RE.test(x.name) ? [{ name: x.name, status: x.status === "online" ? ("online" as const) : ("offline" as const) }] : [];
 		});
-		out.push({ id: o.id, ...(label ? { label } : {}), ...(machine ? { machine } : {}), presence, ...(since ? { since } : {}), wolves });
+		out.push({ id: o.id, ...(label ? { label } : {}), ...(machine ? { machine } : {}), ...(commands.length ? { commands } : {}), presence, ...(since ? { since } : {}), wolves });
 	}
 	return out;
 }
@@ -613,7 +616,7 @@ export function createPackHealth(o: PackHealthOptions): PackHealth {
 		const info = (id: string, isThisConsole: boolean): HostInfo => {
 			const h = hubOfHost.get(id);
 			const label = labels.get(id) ?? (h?.machine ? undefined : h?.label) ?? hostLabel(id, { isThisConsole, platform }, labels);
-			return { id, label, isThisConsole, ...(isThisConsole ? { platform } : {}), ...(h ? { hubId: h.id } : {}) };
+			return { id, label, isThisConsole, ...(isThisConsole ? { platform } : {}), ...(h ? { hubId: h.id } : {}), ...(h?.commands ? { commands: h.commands } : {}) };
 		};
 		const hosts: HostInfo[] = [info(selfHost, true)];
 		for (const id of new Set(hostIds.values())) if (id !== selfHost) hosts.push(info(id, false));

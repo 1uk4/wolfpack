@@ -6,7 +6,7 @@
  * The three tests share one run: start, chat, stop, start again (test 1); inspect it while up (test 2); stop it (test 3).
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { createRequire } from "node:module";
@@ -86,6 +86,16 @@ const alive = (pid: number) => {
     return false;
   }
 };
+
+/** The pid listening on a port (lsof), i.e. which process is hubd right now. */
+function hubPid(port: number): number {
+  return Number(execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8" }).split("\n")[0]);
+}
+
+/** A process's command line and environment as ps shows them (same user). Fake keys only; never log it. */
+function procEnv(pid: number): string {
+  return execFileSync("ps", ["eww", "-p", String(pid)], { encoding: "utf8" });
+}
 
 async function say(url: string, text: string): Promise<string> {
   const c = new HttpConsoleClient({ baseUrl: url });
@@ -180,14 +190,15 @@ describe("app runtime on one Mac", () => {
     expect(thread.messages.map((m: { text: string }) => m.text)).toEqual(["my secret word is PINEAPPLE", "FAKE-REPLY-OK"]);
   }, 180_000);
 
-  it.sequential("keeps everything on this Mac: loopback listeners and peers only, the fake model got the key, credentials are 0600", () => {
+  it.sequential("keeps everything on this Mac: loopback listeners and peers only, the fake model got the key, keys.env is 0600 and credentials.json is never written", () => {
     if (!second) throw new Error("the restart test did not produce a running supervisor");
     const addrs = sockets(secondPids, "LISTEN");
     for (const a of addrs) expect(a).toMatch(loopback);
     expect(addrs).toEqual(expect.arrayContaining([`127.0.0.1:${second.ports.hubd}`, `127.0.0.1:${second.ports.workerd}`]));
     for (const n of established) for (const end of n.split("->")) expect(end).toMatch(loopback);
     expect(seenKeys.at(-1)).toBe("sk-test-fake-key");
-    expect(statSync(join(root, "state", "credentials.json")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(root, "state", "keys.env")).mode & 0o777).toBe(0o600);
+    expect(existsSync(join(root, "state", "credentials.json"))).toBe(false);
     expect(statSync(join(root, "state", "hub-token.json")).mode & 0o777).toBe(0o600);
     expect(typeof JSON.parse(readFileSync(join(root, "state", "hub-token.json"), "utf8")).token).toBe("string");
     expect(readdirSync(join(root, "state")).filter((f) => f.startsWith("hub-token.json.bad-"))).toHaveLength(1);
@@ -216,9 +227,9 @@ describe("app runtime on one Mac", () => {
     await s.start();
     const ports = { ...s.ports };
     const hubPid = s.allPids()[0]; // hubd is launched first
-    writeFileSync(join(root, "state-restart", "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-new-key" }), { mode: 0o600 });
+    writeFileSync(join(root, "state-restart", "keys.env"), "ANTHROPIC_API_KEY=sk-new-key\n", { mode: 0o600 });
     const first = s.restart("wolfd");
-    writeFileSync(join(root, "state-restart", "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-newer-key" }), { mode: 0o600 });
+    writeFileSync(join(root, "state-restart", "keys.env"), "ANTHROPIC_API_KEY=sk-newer-key\n", { mode: 0o600 });
     await Promise.all([first, s.restart("wolfd")]); // calls run one after the other, each reading the key afresh
     expect(s.ports).toEqual(ports);
     expect(s.allPids()[0]).toBe(hubPid);
@@ -226,8 +237,174 @@ describe("app runtime on one Mac", () => {
     expect(s.status().running).toBe(true);
     expect(await say(s.urls.workerd, "hello again")).toContain("FAKE-REPLY-OK");
     expect(seenKeys.at(-1)).toBe("sk-newer-key");
-    await expect(s.restart("hubd")).rejects.toThrow(/cannot restart hubd/);
+    await expect(s.restart("workerd")).rejects.toThrow(/cannot restart workerd/);
   }, 180_000);
+
+  it.sequential("restart(\"hubd\") relaunches hubd on its port with the key that keys.env holds now, where it had none before", async () => {
+    const dir = join(root, "state-hubrestart");
+    const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves6"), runtimeDir, nodeBin: nodePath, modelBaseUrl: fakeUrl });
+    made.push(s);
+    await s.start();
+    const ports = { ...s.ports };
+    const oldPid = hubPid(s.ports.hubd);
+    expect(procEnv(oldPid)).not.toContain("ANTHROPIC_API_KEY="); // started with no key
+    writeFileSync(join(dir, "keys.env"), "ANTHROPIC_API_KEY=sk-hub-second\n", { mode: 0o600 });
+    await s.restart("hubd");
+    expect(s.ports).toEqual(ports);
+    expect(alive(oldPid)).toBe(false);
+    const newPid = hubPid(s.ports.hubd);
+    expect(newPid).not.toBe(oldPid);
+    expect(procEnv(newPid)).toContain("ANTHROPIC_API_KEY=sk-hub-second");
+    expect((await fetch(`${s.urls.hubd}/healthz`)).ok).toBe(true);
+  }, 180_000);
+
+  it.sequential("a stale credentials.json key never wins: the wolf and hubd get the key in keys.env", async () => {
+    const dir = join(root, "state-stale");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "credentials.json"), "ANTHROPIC_API_KEY=sk-stale-old\n");
+    writeFileSync(join(dir, "keys.env"), "ANTHROPIC_API_KEY=sk-from-keys-env\n", { mode: 0o600 });
+    const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves9"), runtimeDir, nodeBin: nodePath, modelBaseUrl: fakeUrl });
+    made.push(s);
+    await s.start();
+    const hubEnv = procEnv(hubPid(s.ports.hubd));
+    expect(hubEnv).toContain("ANTHROPIC_API_KEY=sk-from-keys-env");
+    expect(hubEnv).not.toContain("sk-stale-old");
+    expect(await say(s.urls.workerd, "hello")).toContain("FAKE-REPLY-OK");
+    expect(seenKeys.at(-1)).toBe("sk-from-keys-env");
+  }, 180_000);
+
+  /** Replace hubd's data dir with a file, so a relaunched hubd exits at once (not a bind error); put it back with the returned fn. */
+  const breakHubDir = (dir: string) => {
+    renameSync(join(dir, "hub"), join(dir, "hub.away"));
+    writeFileSync(join(dir, "hub"), "not a directory");
+    return () => {
+      rmSync(join(dir, "hub"), { force: true });
+      renameSync(join(dir, "hub.away"), join(dir, "hub"));
+    };
+  };
+
+  it.sequential("a hubd that fails to relaunch is tried once more", async () => {
+    const dir = join(root, "state-hubretry");
+    let heal: (() => void) | undefined;
+    let failedExits = 0;
+    const log = (l: string) => {
+      if (/^hubd exited \(code=[1-9]/.test(l) && ++failedExits === 1) heal?.(); // the first relaunch died: the data dir is fine for the second
+    };
+    const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves10"), runtimeDir, nodeBin: nodePath, apiKey: "sk-retry-key", modelBaseUrl: fakeUrl, log });
+    made.push(s);
+    await s.start();
+    heal = breakHubDir(dir);
+    await s.restart("hubd");
+    expect(failedExits).toBe(1);
+    expect(s.status().running).toBe(true);
+    expect((await fetch(`${s.urls.hubd}/healthz`)).ok).toBe(true);
+  }, 180_000);
+
+  it.sequential("when hubd cannot come back, restart(\"wolfd\") still gives the wolf the new key and status() says the app is not fully running", async () => {
+    const dir = join(root, "state-hubdown");
+    const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves11"), runtimeDir, nodeBin: nodePath, apiKey: "sk-down-old", modelBaseUrl: fakeUrl });
+    made.push(s);
+    await s.start();
+    const heal = breakHubDir(dir);
+    try {
+      writeFileSync(join(dir, "keys.env"), "ANTHROPIC_API_KEY=sk-down-new\n", { mode: 0o600 });
+      await expect(s.restart("hubd")).rejects.toThrow(/hubd/);
+      expect(s.status().running).toBe(false);
+      await s.restart("wolfd");
+      expect(await say(s.urls.workerd, "hello")).toContain("FAKE-REPLY-OK");
+      expect(seenKeys.at(-1)).toBe("sk-down-new");
+      expect(s.status().running).toBe(false); // hubd is still down
+    } finally {
+      heal();
+    }
+  }, 180_000);
+
+  it.sequential("restart(\"hubd\") returns only once the old hubd is gone, even when it ignores SIGTERM", async () => {
+    const dir = join(root, "state-hubstopped");
+    let failedExits = 0;
+    const log = (l: string) => {
+      if (/^hubd exited \(code=[1-9]/.test(l)) failedExits++;
+    };
+    const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves12"), runtimeDir, nodeBin: nodePath, apiKey: "sk-stop-key", modelBaseUrl: fakeUrl, termGraceMs: 500, log });
+    made.push(s);
+    await s.start();
+    const oldPid = hubPid(s.ports.hubd);
+    process.kill(oldPid, "SIGSTOP"); // SIGTERM stays pending: only SIGKILL ends it
+    await s.restart("hubd");
+    expect(alive(oldPid)).toBe(false);
+    expect(hubPid(s.ports.hubd)).not.toBe(oldPid);
+    expect(failedExits).toBe(0); // the new hubd bound the port first time
+    expect((await fetch(`${s.urls.hubd}/healthz`)).ok).toBe(true);
+  }, 180_000);
+
+  it.sequential("curate() skips while hubd is being restarted instead of signalling it", async () => {
+    const modelDir = mkdtempSync(join(tmpdir(), "app-model-"));
+    writeFileSync(join(modelDir, "model.onnx"), "");
+    const s = createSupervisor({ stateDir: join(root, "state-curate-restart"), wolvesDir: join(root, "Wolves13"), runtimeDir, nodeBin: nodePath, apiKey: "sk-curate-key", modelBaseUrl: fakeUrl, embedModelDir: modelDir });
+    made.push(s);
+    await s.start();
+    const restarting = s.restart("hubd");
+    expect(await s.curate()).toEqual({ skipped: "hubd is restarting" });
+    await restarting;
+    rmSync(modelDir, { recursive: true, force: true });
+  }, 180_000);
+
+  it.sequential("a key written to keys.env behind the app's back (Pack → Keys) restarts hubd with it, and not the wolf", async () => {
+    const dir = join(root, "state-packwrite");
+    const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves14"), runtimeDir, nodeBin: nodePath, apiKey: "sk-pack-old", modelBaseUrl: fakeUrl, pollMs: 300 });
+    made.push(s);
+    await s.start();
+    const oldPid = hubPid(s.ports.hubd);
+    const workerdPid = s.allPids().find((p: number) => p !== oldPid && procEnv(p).includes("WORKERD_KEY_FILE="));
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(join(dir, "keys.env"), "ANTHROPIC_API_KEY=sk-pack-old\n", { mode: 0o600 }); // same key rewritten: no restart
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(hubPid(s.ports.hubd)).toBe(oldPid);
+    writeFileSync(join(dir, "keys.env"), "ANTHROPIC_API_KEY=sk-pack-new\n", { mode: 0o600 });
+    let newPid = oldPid;
+    for (let i = 0; i < 100 && (newPid === oldPid || !s.status().running); i++) {
+      await new Promise((r) => setTimeout(r, 300));
+      try {
+        newPid = hubPid(s.ports.hubd);
+      } catch {
+        /* between the old hubd and the new */
+      }
+    }
+    expect(newPid).not.toBe(oldPid);
+    expect(alive(oldPid)).toBe(false);
+    expect(procEnv(newPid)).toContain("ANTHROPIC_API_KEY=sk-pack-new");
+    expect(alive(workerdPid)).toBe(true); // workerd restarts API wolves itself on a Pack save; the app does not
+    expect(s.allPids()).toContain(workerdPid);
+  }, 180_000);
+
+  it("start() with an unsafe key fails with a plain message that does not contain the key, and starts nothing", async () => {
+    const s = createSupervisor({ stateDir: join(root, "state-badkey"), wolvesDir: join(root, "Wolves7"), runtimeDir, nodeBin: nodePath, apiKey: 'sk-bad"key-zzz', modelBaseUrl: fakeUrl });
+    made.push(s);
+    const err = await s.start().then(() => null, (e: Error) => e);
+    expect(err?.message).toMatch(/not allowed/);
+    expect(err?.message).not.toContain("sk-bad");
+    expect(s.allPids()).toEqual([]);
+    expect(existsSync(join(root, "state-badkey", "keys.env"))).toBe(false);
+  }, 60_000);
+
+  it.skipIf(process.getuid?.() === 0)("start() with a keys.env it cannot read fails with a clear message and leaves the file as it was", async () => {
+    const dir = join(root, "state-unreadable");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "keys.env");
+    writeFileSync(file, "DEEPGRAM_API_KEY=dg-keepme\n", { mode: 0o600 });
+    chmodSync(file, 0o000);
+    const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves8"), runtimeDir, nodeBin: nodePath, apiKey: "sk-fresh-key", modelBaseUrl: fakeUrl });
+    made.push(s);
+    try {
+      const err = await s.start().then(() => null, (e: Error) => e);
+      expect(err?.message).toMatch(/cannot be read/);
+      expect(err?.message).not.toContain("sk-fresh-key");
+      expect(s.allPids()).toEqual([]);
+    } finally {
+      chmodSync(file, 0o600);
+    }
+    expect(readFileSync(file, "utf8")).toBe("DEEPGRAM_API_KEY=dg-keepme\n");
+  }, 60_000);
 
   it.sequential("restart(\"wolfd\") with the old workerd port taken and the first new pick taken too comes up on another port and reports PORT_MOVED", async () => {
     const squatters: Server[] = [];
@@ -264,7 +441,7 @@ describe("app runtime on one Mac", () => {
     }
   }, 180_000);
 
-  it.sequential("starts with no API key: services run with no key in their env, the chat says to add one in Settings, and the key added later reaches the wolf after restart(\"wolfd\")", async () => {
+  it.sequential("starts with no API key: services run with no key in their env, the chat says to add one in Pack → Keys, and the key added later reaches the wolf after restart(\"wolfd\")", async () => {
     const s = createSupervisor({ stateDir: join(root, "state-nokey"), wolvesDir: join(root, "Wolves4"), runtimeDir, nodeBin: nodePath, modelBaseUrl: fakeUrl });
     made.push(s);
     await s.start();
@@ -274,21 +451,20 @@ describe("app runtime on one Mac", () => {
     await c.submit("wolf/home", "hello", { whenBusy: "reject" });
     let error = "";
     for await (const e of c.watch("wolf/home")) if (e.type === "error") error = e.message;
-    expect(error).toBe("No API key yet. Add one in Settings → Data and support, then send again.");
+    expect(error).toBe("No API key yet. Add one in Pack → Keys, then send again.");
     expect(seenKeys.length).toBe(before); // nothing went out to the model
-    writeFileSync(join(root, "state-nokey", "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-added-later" }), { mode: 0o600 });
+    writeFileSync(join(root, "state-nokey", "keys.env"), "ANTHROPIC_API_KEY=sk-added-later\n", { mode: 0o600 });
     await s.restart("wolfd");
     expect(await say(s.urls.workerd, "hello again")).toContain("FAKE-REPLY-OK");
     expect(seenKeys.at(-1)).toBe("sk-added-later");
   }, 180_000);
 
-  it("started with no key, curate() skips with a reason and tells the app hubd has no key (a key added later waits for the next launch)", async () => {
+  it("started with no key, curate() skips with a reason", async () => {
     const dir = mkdtempSync(join(tmpdir(), "app-model-"));
     writeFileSync(join(dir, "model.onnx"), "");
     const s = createSupervisor({ stateDir: join(root, "state-nokey-curate"), wolvesDir: join(root, "Wolves5"), runtimeDir, nodeBin: nodePath, modelBaseUrl: fakeUrl, embedModelDir: dir });
     made.push(s);
     await s.start();
-    expect(s.hubHasKey()).toBe(false);
     expect(await s.curate()).toEqual({ skipped: "no API key" }); // returns at once: no SIGUSR2 window, so nothing waits for hubd's 'window done' line
     rmSync(dir, { recursive: true, force: true });
   }, 120_000);

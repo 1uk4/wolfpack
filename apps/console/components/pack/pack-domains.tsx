@@ -18,10 +18,10 @@ interface Domain {
 }
 type Fetcher = typeof fetch;
 
-const BTN = "rounded-sm px-2.5 py-1 text-xs transition-colors max-md:px-3 max-md:py-2";
+const BTN = "rounded-sm px-2.5 py-1 text-xs transition-colors max-md:min-h-11 max-md:px-3 max-md:py-2";
 const QUIET = cn(BTN, "border text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50");
 const DANGER = cn(BTN, "border border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-50");
-const INPUT = "w-full rounded-sm border bg-background px-2 py-1 text-xs max-md:py-2 max-md:text-base";
+const INPUT = "w-full rounded-sm border bg-background px-2 py-1 text-xs max-md:py-2 max-md:min-h-11 max-md:text-base";
 const NAME_OK = /^[a-z0-9]{1,32}$/;
 const DEFAULT_COLOR = "#3b82f6";
 

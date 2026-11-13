@@ -51,6 +51,30 @@ describe("Devices panel (markup)", () => {
 		assert.match(html, /flex-col/);
 		assert.match(html, /min-h-11/);
 	});
+	it("readOnly keeps the list but renders no Revoke button", () => {
+		const html = view({ readOnly: true });
+		assert.match(html, /Laptop/);
+		assert.doesNotMatch(html, /device-revoke/);
+	});
+	it("with pairing off, the note shows and Add device is absent (Revoke is unaffected)", () => {
+		const html = view({ canPair: false, pairNote: "Pairing is off here." });
+		assert.match(html, /Pairing is off here\./);
+		assert.doesNotMatch(html, /device-add/);
+		assert.equal((html.match(/data-testid="device-revoke"/g) ?? []).length, 2);
+	});
+	it("a minted code is drawn with renderQr, which receives the code's URL", () => {
+		const seen: string[] = [];
+		const html = view({
+			code: { code: "ABC123", expiresAt: "2026-11-02T12:10:00Z", url: "https://hub.example/pair?code=ABC123" },
+			renderQr: (url) => (seen.push(url), <i data-testid="qr-stub" />),
+		});
+		assert.deepEqual(seen, ["https://hub.example/pair?code=ABC123"]);
+		assert.match(html, /qr-stub/);
+	});
+	it("an empty list shows the given empty text, else 'No devices paired.'", () => {
+		assert.match(view({ devices: [], emptyText: "This device isn't in the list yet." }), /This device isn&#x27;t in the list yet\./);
+		assert.match(view({ devices: [] }), /No devices paired\./);
+	});
 	it("lastUsedLabel", () => {
 		assert.equal(lastUsedLabel(null, NOW), "never");
 		assert.equal(lastUsedLabel("2026-11-02T11:59:50Z", NOW), "just now");

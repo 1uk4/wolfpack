@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { Loader2Icon, MicIcon } from "lucide-react";
-import { useSettingsDialog } from "@/components/settings/settings-dialog";
+import { openPackHealth } from "@/components/pack/pack-health-store";
 import { Hint } from "@/components/ui/hint";
 import { useSingleMac } from "@/components/shell/single-mac";
 import { cn } from "@/lib/utils";
@@ -105,15 +105,16 @@ export const METER_TICK_MS = 60;
 /** Rolling history: 48 cells × 60ms ≈ 2.9s of recent loudness. */
 export const METER_CELLS = 48;
 
-/** The Deepgram key's id in the keys store (the env-var name — the Keys
- *  section's openRow state and the PUT /api/keys/:id seam). */
-export const DEEPGRAM_KEY_ID = "DEEPGRAM_API_KEY";
+/** The keyless click: open the Pack at Keys, where the Deepgram key is added. */
+export function openDeepgramKeyInPack(): void {
+	openPackHealth(typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null), "keys");
+}
 
 /** The client-authored KEYLESS line (zero-keys wave, owner 2026-09-25):
- * the token route's raw 503 message is dev-speak ("add it to auth.json
- * (desktop) or .env.local (dev)") — the surface says the short truth
+ * the token route's raw 503 message is a server message ("add a Deepgram key in
+ * Pack → Keys") — the surface says the short truth
  * instead. Exported for pins; the errored idle button's click recognizes
- * it and deep-links Settings → Keys → the Deepgram row. */
+ * it and opens Pack → Keys. */
 export const DICTATION_KEYLESS = "Dictation needs a Deepgram key";
 
 /** Mint a fresh short-lived token (the route holds the real key
@@ -431,7 +432,7 @@ export type Dictation = {
 	 *  before, it flushed exactly like the toggle did. */
 	cancel: () => void;
 	/** Clear the terminal error without starting a run (zero-keys wave):
-	 * the keyless click leaves for Settings and the surface must come
+	 * the keyless click leaves for the Pack and the surface must come
 	 * back clean. */
 	clearError: () => void;
 };
@@ -902,10 +903,9 @@ export function CompactMeter({ dictation }: { dictation: Dictation }) {
  */
 export function DictationBar({ dictation }: { dictation: Dictation }) {
 	const { phase, error, levelRef, toggle, active, clearError } = dictation;
-	const { open: openSettings } = useSettingsDialog();
 	const singleMac = useSingleMac();
 	/** The keyless click (zero-keys wave, owner dictation trio): the errored
-	 *  idle button deep-links Settings → Keys → the Deepgram row and clears
+	 *  idle button opens Pack → Keys and clears
 	 *  the error — the surface is clean when the user returns. Any other
 	 *  error keeps the old behavior (click = retry, which clears). */
 	const keyless = error === DICTATION_KEYLESS;
@@ -928,7 +928,7 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 					onClick={() => {
 						if (keyless) {
 							clearError();
-							openSettings("keys", DEEPGRAM_KEY_ID);
+							openDeepgramKeyInPack();
 						} else {
 							toggle();
 						}
@@ -983,7 +983,7 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
  * The inline mic of a prose field: a small icon button at the field's trailing edge. Click claims the dictation target
  * for this field (`onClaim`, which must make `targetKey` the claimed key) and starts the run; click while this field is
  * listening finishes it (the transcript lands once, as with ⌘D); click while another field listens retargets the run
- * here ("Dictate here"). Esc cancels (the existing chain). A missing Deepgram key sends the click to Settings → Keys, as
+ * here ("Dictate here"). Esc cancels (the existing chain). A missing Deepgram key sends the click to Pack → Keys, as
  * the bar does; other errors are announced (aria-live) on the field that was last claimed.
  *
  * Scope rules: the mic HIDES when no dictation hook is mounted on the page (nothing could start it). It is NOT added to
@@ -991,7 +991,6 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
  */
 export function InlineMic({ targetKey: key, onClaim, className }: { targetKey: string; onClaim: () => void; className?: string }) {
 	const state = useDictationUi();
-	const { open: openSettings } = useSettingsDialog();
 	const errId = `${useId()}-mic-error`;
 	const singleMac = useSingleMac();
 	if (!state.available || singleMac) return null;
@@ -1008,7 +1007,7 @@ export function InlineMic({ targetKey: key, onClaim, className }: { targetKey: s
 		if (anyStopping) return;
 		if (keyless) {
 			hookStatesHolder()?.clear();
-			openSettings("keys", DEEPGRAM_KEY_ID);
+			openDeepgramKeyInPack();
 			return;
 		}
 		if (listening) {

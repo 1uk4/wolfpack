@@ -31,7 +31,6 @@ type ThreadDetail = import("@wolfpack/client").ThreadDetail;
 const { createThreadApi } = await import("../../../src/server/thread/thread-api.ts");
 const { cardsOfThread, threadMessagesToNative } = await import("../../../src/core/index.ts");
 const { AskRecordCard } = await import("../../../components/ask/ask-record.tsx");
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
@@ -208,13 +207,13 @@ describe("ThreadChat renders the record", () => {
 		const detail = await client.getThread(FIXTURE_THREAD.id);
 		await render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
-				<SettingsDialogProvider>
+				<>
 					<ServerEventsProvider connect={eventsSource}>
 						<MemoryEventsProvider connect={inertSource}>
 							<ThreadChat wolf="1uk4" slug="home" threadId={FIXTURE_THREAD.id} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />
 						</MemoryEventsProvider>
 					</ServerEventsProvider>
-				</SettingsDialogProvider>
+				</>
 			</AppRouterContext.Provider>,
 		);
 		assert.equal(document.querySelectorAll('[data-testid="ask-record"]').length, 1);
@@ -256,13 +255,13 @@ describe("superseded note", () => {
 		const detail = await client.getThread(FIXTURE_THREAD.id);
 		await render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
-				<SettingsDialogProvider>
+				<>
 					<ServerEventsProvider connect={eventsSource}>
 						<MemoryEventsProvider connect={inertSource}>
 							<ThreadChat wolf="1uk4" slug="home" threadId={FIXTURE_THREAD.id} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />
 						</MemoryEventsProvider>
 					</ServerEventsProvider>
-				</SettingsDialogProvider>
+				</>
 			</AppRouterContext.Provider>,
 		);
 		assert.match(document.body.textContent!, /never mind, ship it/);

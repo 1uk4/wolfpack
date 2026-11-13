@@ -33,7 +33,6 @@ type CardAnswers = import("@wolfpack/client").CardAnswers;
 type ThreadDetail = import("@wolfpack/client").ThreadDetail;
 const { createThreadApi } = await import("../../../src/server/thread/thread-api.ts");
 const { cardsOfThread, threadMessagesToNative } = await import("../../../src/core/index.ts");
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
@@ -172,7 +171,7 @@ async function mount(client: CardClient, opts: { inFlight?: boolean; poppedOut?:
 	document.body.appendChild(host);
 	root = createRoot(host);
 	const chat = (
-		<SettingsDialogProvider>
+		<>
 			<MemoryEventsProvider connect={inertSource}>
 				<ThreadChat
 					wolf="1uk4"
@@ -184,14 +183,14 @@ async function mount(client: CardClient, opts: { inFlight?: boolean; poppedOut?:
 					initiallyInFlight={opts.inFlight}
 				/>
 			</MemoryEventsProvider>
-		</SettingsDialogProvider>
+		</>
 	);
 	if (opts.poppedOut) store.set(ATTACHED_KEY, JSON.stringify({ wolf: "1uk4", slug: "home", threadId: FIXTURE_THREAD.id }));
 	await act(async () => {
 		root!.render(
 			opts.poppedOut ? (
 				<FakeNav start="/wolf/1uk4/thread/home">
-					<SettingsDialogProvider>
+					<>
 						<ServerEventsProvider connect={() => ({ close() {}, onOpen() {}, onEvent() {} })}>
 							<AttachedThreadProvider>
 								<ChatBar />
@@ -199,7 +198,7 @@ async function mount(client: CardClient, opts: { inFlight?: boolean; poppedOut?:
 								{chat}
 							</AttachedThreadProvider>
 						</ServerEventsProvider>
-					</SettingsDialogProvider>
+					</>
 				</FakeNav>
 			) : (
 				<AppRouterContext.Provider value={{ push() {} } as never}>{chat}</AppRouterContext.Provider>

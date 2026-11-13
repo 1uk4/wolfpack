@@ -181,7 +181,7 @@ describe("pack health: GET /api/health", () => {
 	it("lists the hosts and wolves the hub reports: a local workerd stands in for its host's hub link, the hub's wolves join or enrich it, the rest show hub-only without actions", async () => {
 		const hubHosts = [
 			{ id: "sfo", label: "sfo-01", presence: "online", wolves: [{ name: "ada", status: "online" }, { name: "hal", status: "online" }] },
-			{ id: "lap", label: "Mac", presence: "asleep", since: iso(T0 - 600_000), wolves: [{ name: "lappy", status: "offline" }] },
+			{ id: "lap", label: "Mac", commands: ["wolves.restart", "made.up", 7], presence: "asleep", since: iso(T0 - 600_000), wolves: [{ name: "lappy", status: "offline" }] },
 			{ id: "cron", presence: "offline", since: iso(T0 - 60_000), wolves: [{ name: "job", status: "offline" }] },
 		];
 		let hub: Record<string, unknown> | "refused" = { ok: true, service: "hubd", host: "sfo-01", hosts: hubHosts };
@@ -210,7 +210,7 @@ describe("pack health: GET /api/health", () => {
 		assert.equal(linkOf(snap, "workerd").hubPresence, "online");
 		assert.equal(linkOf(snap, "wolfd@hal").hubStatus, "online");
 		assert.equal(linkOf(snap, "hub-link@lap").since, iso(T0 - 600_000));
-		assert.deepEqual(snap.hosts.find((h) => h.id === "mac"), { id: "mac", label: "Mac", isThisConsole: false, hubId: "lap" });
+		assert.deepEqual(snap.hosts.find((h) => h.id === "mac"), { id: "mac", label: "Mac", isThisConsole: false, hubId: "lap", commands: ["wolves.restart"] }); // only known command kinds pass
 		assert.deepEqual([...health.restartable()].sort(), ["hubd", "wolfd@hal", "workerd"]); // hub-only rows are never a restart target
 		// The hub stops answering: its last list stays, graded unknown and dated; the local checks stay live.
 		hub = "refused";

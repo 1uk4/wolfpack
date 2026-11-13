@@ -41,7 +41,7 @@ beforeEach(() => {
 	mkdirSync(join(state, "logs"), { recursive: true });
 	mkdirSync(join(wolves, "mine"), { recursive: true });
 	writeFileSync(join(wolves, "mine", "wolf.yaml"), "id: mine\n");
-	writeFileSync(join(state, "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-ant-old-key-0000" }), { mode: 0o600 });
+	writeFileSync(join(state, "keys.env"), "ANTHROPIC_API_KEY=sk-ant-old-key-0000\n", { mode: 0o600 });
 	writeFileSync(join(state, "hub-token.json"), JSON.stringify({ token: "hubtok-abc123" }));
 	clip = [];
 	calls = [];
@@ -50,14 +50,22 @@ beforeEach(() => {
 	opened = [];
 });
 
-function make(o: { wolves?: string; confirm?: () => Promise<boolean>; hubHasKey?: boolean } = {}) {
+function make(o: { wolves?: string; confirm?: (m: { detail: string }) => Promise<boolean>; onTrash?: (p: string) => void; stopFails?: boolean; startFails?: boolean; hubFails?: boolean } = {}) {
 	const sup = {
-		...(o.hubHasKey === undefined ? {} : { hubHasKey: () => o.hubHasKey as boolean }),
 		urls: {},
 		status: () => ({ running: true }),
-		stop: async () => void calls.push("stop"),
-		start: async () => void calls.push("start"),
-		restart: async (n: string) => void calls.push(`restart:${n}`),
+		stop: async () => {
+			calls.push("stop");
+			if (o.stopFails) throw new Error("stuck");
+		},
+		start: async () => {
+			calls.push("start");
+			if (o.startFails) throw new Error("no start");
+		},
+		restart: async (n: string) => {
+			if (n === "hubd" && o.hubFails) throw new Error("hubd stuck");
+			calls.push(`restart:${n}`);
+		},
 	};
 	const settings = createAppSettings({
 		stateDir: state,
@@ -71,6 +79,10 @@ function make(o: { wolves?: string; confirm?: () => Promise<boolean>; hubHasKey?
 		shell: {
 			openPath: async (p: string) => (opened.push(p), ""),
 			trashItem: async (p: string) => {
+				if (o.onTrash) {
+					o.onTrash(p);
+					return;
+				}
 				if (trashFails) throw new Error("no trash");
 				mkdirSync(join(root, "Trash"), { recursive: true });
 				// Move, like the real Trash: nothing is deleted.
@@ -129,13 +141,22 @@ describe("diagnostics", () => {
 		expect(Math.max(...text.split("\n").map((l: string) => l.length))).toBeLessThanOrEqual(2001);
 		expect(text).toContain("App version: 1.2.3");
 	});
+
+	it("removes a Deepgram key from keys.env too, and the key as it is now in the file", async () => {
+		writeFileSync(join(state, "keys.env"), "DEEPGRAM_API_KEY=dgsecret-4321\nANTHROPIC_API_KEY=antsecret-8765\n", { mode: 0o600 });
+		writeFileSync(join(state, "logs", "main.log"), "dg dgsecret-4321 and anthropic antsecret-8765 here\n");
+		await make().copyDiagnostics();
+		expect(clip[0]).toContain("here");
+		expect(clip[0]).not.toContain("dgsecret-4321");
+		expect(clip[0]).not.toContain("antsecret-8765");
+	});
 });
 
 describe("reset", () => {
 	it("moves the app data to the Trash, relaunches, and leaves the wolves folder intact", async () => {
 		expect(await make().reset()).toEqual({ ok: true });
 		expect(existsSync(state)).toBe(false);
-		expect(existsSync(join(root, "Trash", "Wolfpack", "credentials.json"))).toBe(true);
+		expect(existsSync(join(root, "Trash", "Wolfpack", "keys.env"))).toBe(true);
 		expect(readFileSync(join(wolves, "mine", "wolf.yaml"), "utf8")).toBe("id: mine\n");
 		expect(calls.indexOf("trash")).toBeGreaterThanOrEqual(0);
 		expect(calls.indexOf("trash")).toBeLessThan(calls.indexOf("relaunch"));
@@ -144,7 +165,7 @@ describe("reset", () => {
 	it("does nothing when the native confirm is cancelled", async () => {
 		confirmAnswer = false;
 		expect(await make().reset()).toEqual({ ok: false, cancelled: true });
-		expect(existsSync(join(state, "credentials.json"))).toBe(true);
+		expect(existsSync(join(state, "keys.env"))).toBe(true);
 		expect(calls).toEqual([]);
 	});
 
@@ -161,7 +182,7 @@ describe("reset", () => {
 		mkdirSync(join(state, "Wolves"), { recursive: true });
 		const r = await make({ wolves: join(state, "Wolves") }).reset();
 		expect(r.ok).toBe(false);
-		expect(existsSync(join(state, "credentials.json"))).toBe(true);
+		expect(existsSync(join(state, "keys.env"))).toBe(true);
 		expect(calls).toEqual([]);
 	});
 
@@ -170,8 +191,99 @@ describe("reset", () => {
 		const r = await make().reset();
 		expect(r.ok).toBe(false);
 		expect(r.error).toContain("Nothing was changed");
-		expect(existsSync(join(state, "credentials.json"))).toBe(true);
+		expect(existsSync(join(state, "keys.env"))).toBe(true);
 		expect(existsSync(join(wolves, "mine", "wolf.yaml"))).toBe(true);
+		expect(calls).toEqual(["stop", "start"]);
+	});
+});
+
+describe("reset app (This device)", () => {
+	const protectedPaths = [
+		"keys.env", "hub-token.json", "auth.json", ".env", "data/kb/entry.md", "workerd/state.json", "logs/main.log",
+		"Local Storage/leveldb/000003.log", "IndexedDB/x", "Preferences", "Cookies",
+	];
+	beforeEach(() => {
+		for (const p of protectedPaths) {
+			mkdirSync(join(state, p, ".."), { recursive: true });
+			writeFileSync(join(state, p), "keep");
+		}
+		for (const d of ["Cache", "GPUCache", "Code Cache"]) {
+			mkdirSync(join(state, d), { recursive: true });
+			writeFileSync(join(state, d, "x"), "ui");
+		}
+	});
+
+	it("moves only cache items to the Trash; keys, sign-in state, data, workerd, wolves and logs stay", async () => {
+		const moved: string[] = [];
+		const s = make({ onTrash: (p: string) => moved.push(p) });
+		expect(await s.resetAppUi()).toEqual({ ok: true });
+		expect(moved.sort()).toEqual(["Cache", "Code Cache", "GPUCache"].map((n) => join(state, n)).sort());
+		for (const p of protectedPaths) expect(readFileSync(join(state, p), "utf8")).toBe("keep");
+		expect(readFileSync(join(wolves, "mine", "wolf.yaml"), "utf8")).toBe("id: mine\n");
+	});
+
+	it("stops the wolf runtime before it relaunches, and the confirm says running replies stop", async () => {
+		let shown = "";
+		const s = make({ onTrash: () => {}, confirm: async (m: { detail: string }) => ((shown = m.detail), true) });
+		await s.resetAppUi();
+		// The order is the safety property: the wolves are stopped before the relaunch.
+		expect(calls).toEqual(["stop", "relaunch", "exit"]);
+		expect(shown).toContain("A reply it is writing right now will stop");
+	});
+
+	it("moves nothing when the confirm is cancelled, and names what it will move and what stays", async () => {
+		let shown = "";
+		const moved: string[] = [];
+		const s = make({ onTrash: (p: string) => moved.push(p), confirm: async (m: { detail: string }) => ((shown = m.detail), false) });
+		expect(await s.resetAppUi()).toEqual({ ok: false, cancelled: true });
+		expect(moved).toEqual([]);
+		expect(calls).toEqual([]);
+		expect(shown).toContain("GPUCache");
+		expect(shown).toContain("keyboard");
+	});
+
+	it("says so and does not confirm or relaunch when there is nothing to move", async () => {
+		for (const d of ["Cache", "GPUCache", "Code Cache"]) rmSync(join(state, d), { recursive: true });
+		let asked = false;
+		const s = make({ confirm: async () => ((asked = true), true) });
+		expect(await s.resetAppUi()).toEqual({ ok: true, note: "Nothing to reset: no cache items were found." });
+		expect(asked).toBe(false);
+		expect(calls).toEqual([]);
+	});
+
+	it("refuses when the wolves folder and app data folder overlap", async () => {
+		const s = make({ wolves: join(state, "Wolves"), onTrash: () => {} });
+		expect((await s.resetAppUi()).ok).toBe(false);
+		expect(calls).toEqual([]);
+	});
+
+	it("when the wolves cannot be stopped, restarts them, trashes nothing and does not relaunch", async () => {
+		const moved: string[] = [];
+		const r = await make({ stopFails: true, onTrash: (p: string) => moved.push(p) }).resetAppUi();
+		expect(r.ok).toBe(false);
+		expect(r.error).toContain("Nothing was changed");
+		expect(moved).toEqual([]);
+		expect(calls).toEqual(["stop", "start"]);
+	});
+
+	it("says the wolves could not be restarted when stop and the restart both fail", async () => {
+		const r = await make({ stopFails: true, startFails: true, onTrash: () => {} }).resetAppUi();
+		expect(r.ok).toBe(false);
+		expect(r.error).toContain("could not be restarted");
+		expect(calls).toEqual(["stop", "start"]);
+	});
+
+	it("when one item fails to move, carries on, reports moved and failed names, restarts the wolf and does not relaunch", async () => {
+		const s = make({
+			onTrash: (p: string) => {
+				if (p.endsWith("GPUCache")) throw new Error("no trash");
+			},
+		});
+		const r = await s.resetAppUi();
+		expect(r.ok).toBe(false);
+		expect([...r.moved].sort()).toEqual(["Cache", "Code Cache"]);
+		expect(r.failed).toEqual(["GPUCache"]);
+		expect(r.error).toContain("GPUCache");
 		expect(calls).toEqual(["stop", "start"]);
 	});
 });
@@ -184,13 +296,20 @@ describe("show folder", () => {
 		expect((await make().showFolder("wolves")).ok).toBe(true);
 		expect(opened).toEqual([wolves]);
 	});
+
+	it("opens the log folder, and reports it with the other folders", async () => {
+		expect(make().folders().logs).toBe(join(state, "logs"));
+		opened.length = 0;
+		expect((await make().showFolder("logs")).ok).toBe(true);
+		expect(opened).toEqual([join(state, "logs")]);
+	});
 });
 
 describe("change key", () => {
-	it("keeps the other fields in credentials.json when the key changes", async () => {
-		writeFileSync(join(state, "credentials.json"), JSON.stringify({ ANTHROPIC_API_KEY: "sk-ant-old-key-0000", EXTRA: "keepme" }), { mode: 0o600 });
+	it("keeps the other lines in keys.env (a Deepgram key) when the key changes", async () => {
+		writeFileSync(join(state, "keys.env"), "DEEPGRAM_API_KEY=dg-keepme\nANTHROPIC_API_KEY=sk-ant-old-key-0000\n", { mode: 0o600 });
 		expect(await make().changeKey("sk-new-good")).toEqual({ ok: true });
-		expect(JSON.parse(readFileSync(join(state, "credentials.json"), "utf8"))).toEqual({ ANTHROPIC_API_KEY: "sk-new-good", EXTRA: "keepme" });
+		expect(readFileSync(join(state, "keys.env"), "utf8")).toBe("DEEPGRAM_API_KEY=dg-keepme\nANTHROPIC_API_KEY=sk-new-good\n");
 	});
 
 	it("does not test the key against Anthropic when the confirm is cancelled", async () => {
@@ -201,23 +320,29 @@ describe("change key", () => {
 		expect(checks).toBe(0);
 	});
 
-	it("leaves credentials.json alone when Anthropic refuses the key", async () => {
-		const before = readFileSync(join(state, "credentials.json"), "utf8");
+	it("leaves keys.env alone when Anthropic refuses the key", async () => {
+		const before = readFileSync(join(state, "keys.env"), "utf8");
 		expect(await make().changeKey("sk-ant-bad")).toEqual({ ok: false, error: "That key didn't work" });
-		expect(readFileSync(join(state, "credentials.json"), "utf8")).toBe(before);
+		expect(readFileSync(join(state, "keys.env"), "utf8")).toBe(before);
 		expect(calls).toEqual([]);
 	});
 
-	it("writes an accepted key at 0600 and restarts only the wolf, never returning the key", async () => {
+	it("writes an accepted key at 0600 and restarts hubd then the wolf, never returning the key", async () => {
 		const r = await make().changeKey("sk-new-good");
 		expect(r).toEqual({ ok: true });
-		expect(JSON.parse(readFileSync(join(state, "credentials.json"), "utf8"))).toEqual({ ANTHROPIC_API_KEY: "sk-new-good" });
-		expect(statSync(join(state, "credentials.json")).mode & 0o777).toBe(0o600);
-		expect(calls).toEqual(["restart:wolfd"]);
+		expect(readFileSync(join(state, "keys.env"), "utf8")).toBe("ANTHROPIC_API_KEY=sk-new-good\n");
+		expect(statSync(join(state, "keys.env")).mode & 0o777).toBe(0o600);
+		expect(calls).toEqual(["restart:hubd", "restart:wolfd"]);
 	});
 
-	it("says curation starts at the next launch when hubd started with no key", async () => {
-		const r = await make({ hubHasKey: false }).changeKey("sk-new-good");
-		expect(r).toEqual({ ok: true, note: "Key saved. Memory tidying (knowledge-base curation) starts next time you open the app." });
+	it("saves a pasted key that has a trailing newline, trimmed", async () => {
+		expect(await make().changeKey("sk-new-good\n")).toEqual({ ok: true });
+		expect(readFileSync(join(state, "keys.env"), "utf8")).toBe("ANTHROPIC_API_KEY=sk-new-good\n");
+	});
+
+	it("says curation starts at the next launch when hubd could not be restarted", async () => {
+		const r = await make({ hubFails: true }).changeKey("sk-new-good");
+		expect(r).toEqual({ ok: true, note: "Key saved. The wolf uses it now; memory curation starts when you reopen Wolfpack." });
+		expect(calls).toEqual(["restart:wolfd"]);
 	});
 });

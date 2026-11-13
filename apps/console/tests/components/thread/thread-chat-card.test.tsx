@@ -31,7 +31,6 @@ type CardAnswers = import("@wolfpack/client").CardAnswers;
 type ThreadDetail = import("@wolfpack/client").ThreadDetail;
 const { createThreadApi } = await import("../../../src/server/thread/thread-api.ts");
 const { cardsOfThread, threadMessagesToNative } = await import("../../../src/core/index.ts");
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
@@ -202,7 +201,7 @@ async function mount(client: CardClient) {
 	await act(async () => {
 		root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
-				<SettingsDialogProvider>
+				<>
 					<ServerEventsProvider connect={eventsSource}>
 					<MemoryEventsProvider connect={inertSource}>
 						<ThreadChat
@@ -215,7 +214,7 @@ async function mount(client: CardClient) {
 						/>
 					</MemoryEventsProvider>
 					</ServerEventsProvider>
-				</SettingsDialogProvider>
+				</>
 			</AppRouterContext.Provider>,
 		);
 	});

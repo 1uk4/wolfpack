@@ -57,6 +57,8 @@ export const WolfSettingsViewSchema = z.object({
   editable: z.array(z.string()),
   /** The model each tier resolved to when this wolfd started. */
   tierModels: z.record(z.string(), z.string()),
+  /** The pi provider each tier resolved to when this wolfd started ("anthropic", "claude-stateless", "openai", ...). Absent on older wolves. */
+  tierProviders: z.record(z.string(), z.string()).optional(),
   env: z.array(EnvVarViewSchema),
   /** The file changed since wolfd started: the running wolf still has the old values. */
   restartNeeded: z.boolean(),

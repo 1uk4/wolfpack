@@ -1,10 +1,12 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { appendFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { hostname } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { WolfConfig } from "@wolfpack/engine";
-import { UNIX_PREFIX, probeSocket } from "./socket.js";
+import { UNIX_PREFIX, getJson, probeSocket } from "./socket.js";
+import { readKeyFileEnv } from "./key-store.js";
+import { wolfTransport } from "./wolf-transport.js";
 import type { WolfEntry, WolfRegistry } from "./registry.js";
 
 export type ChildState = "starting" | "online" | "restarting" | "failed" | "stopped";
@@ -32,11 +34,21 @@ export interface SupervisorOptions {
    */
   transport?: "socket" | "tcp";
   backoff?: Partial<BackoffOptions>;
+  /**
+   * True when each wolf runs as the systemd unit `wolfd@<name>` behind a wrapper (infra/wolves/wolfd-unit.sh). Then a restart must go
+   * through the unit: killing the wrapper leaves the unit running, and the re-run `systemctl start` is a no-op. Default: true when
+   * `command` names wolfd-unit.sh.
+   */
+  wolfdUnits?: boolean;
+  /** @internal Run `systemctl` with this argv (no shell) and return stdout. Default: execFile. Tests inject a fake; nothing else runs systemctl. */
+  systemctl?: (args: string[]) => Promise<string>;
   /** Consecutive failed restarts tolerated before a wolf is marked failed. Default 10. */
   maxRestarts?: number;
   /** SIGTERM → SIGKILL grace on shutdown. Default 5000. */
   graceMs?: number;
   env?: NodeJS.ProcessEnv;
+  /** The Pack key file: its keys are merged over `env` for every wolfd spawn, read fresh each time (so a key.set then restart picks up the new key). */
+  keyFile?: string;
   /** Surfaced lines, already prefixed with `[name]`. Default: process.stderr. */
   log?: (line: string) => void;
 }
@@ -63,6 +75,12 @@ const ADOPT_POLL_MS = 1000;
 export function defaultWolfdCommand(): string[] {
   const pkg = createRequire(import.meta.url).resolve("@wolfpack/harness/package.json");
   return [process.execPath, join(dirname(pkg), "dist", "bin", "wolfd.js")];
+}
+
+function execSystemctl(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("systemctl", args, { timeout: 30_000, windowsHide: true }, (err, stdout) => (err ? reject(new Error(`systemctl ${args[0]} failed`)) : resolve(stdout)));
+  });
 }
 
 class Child {
@@ -97,6 +115,7 @@ export class Supervisor implements WolfRegistry {
   private readonly graceMs: number;
   private readonly command: string[];
   private readonly transport: "socket" | "tcp";
+  private readonly wolfdUnits: boolean;
   private stopping = false;
   private started = false;
   private readonly listeners = new Set<(e: SupervisorChange) => void>();
@@ -107,6 +126,7 @@ export class Supervisor implements WolfRegistry {
     this.graceMs = opts.graceMs ?? 5000;
     this.command = opts.command ?? defaultWolfdCommand();
     this.transport = opts.transport ?? (opts.command ? "tcp" : "socket");
+    this.wolfdUnits = opts.wolfdUnits ?? this.command.some((a) => basename(a) === "wolfd-unit.sh");
     for (const w of opts.wolves) this.children.set(w.identity.name, new Child(w));
   }
 
@@ -289,10 +309,20 @@ export class Supervisor implements WolfRegistry {
     c.adoptTimer.unref();
   }
 
+  /**
+   * The Pack key file's env for one wolf. Only API-key wolves get ANTHROPIC_API_KEY: a subscription wolf (and any wolf whose transport
+   * cannot be determined, see wolfTransport) never receives the metered key.
+   */
+  private packKeysFor(config: WolfConfig): Record<string, string> {
+    const env = readKeyFileEnv(this.opts.keyFile!);
+    if (wolfTransport(config, this.opts.env ?? process.env) !== "api") delete env.ANTHROPIC_API_KEY;
+    return env;
+  }
+
   private launch(c: Child, listenArgs: string[]): void {
     const [cmd, ...lead] = this.command;
     const proc = spawn(cmd, [...lead, "--config", c.config.file, ...listenArgs], {
-      env: { ...(this.opts.env ?? process.env), WOLFPACK_SUPERVISED: "workerd" },
+      env: { ...(this.opts.env ?? process.env), ...(this.opts.keyFile ? this.packKeysFor(c.config) : {}), WOLFPACK_SUPERVISED: "workerd" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     c.proc = proc;
@@ -334,6 +364,62 @@ export class Supervisor implements WolfRegistry {
       c.restarts += 1;
       this.spawnChild(c);
     }, delay);
+  }
+
+  /**
+   * Restart one wolf's wolfd now (no backoff). Unit-wrapped wolves (and wolfds adopted from such a unit) are restarted with
+   * `systemctl restart wolfd@<name>` and count as restarted only if the unit's InvocationID changed; the wrapper is re-run afterwards to
+   * keep supervising. Plain children are stopped and spawned again. An adopted wolfd outside a unit cannot be restarted from here.
+   */
+  async restartWolf(name: string): Promise<{ invocation?: string; unconfirmed?: true }> {
+    const c = this.children.get(name);
+    if (!c) throw new Error(`no such wolf ${name}`);
+    if (this.stopping) throw new Error("workerd is shutting down");
+    if (c.adopted && !this.wolfdUnits) throw new Error("this wolfd was adopted from a previous workerd and has no process handle; restart it from its own unit");
+    await this.stopChild(c);
+    c.failures = 0;
+    if (!this.wolfdUnits) {
+      this.spawnChild(c);
+      return {};
+    }
+    const unit = `wolfd@${name}.service`;
+    const sc = this.opts.systemctl ?? execSystemctl;
+    const invocation = async () => (await sc(["show", "-p", "InvocationID", "--value", unit])).trim();
+    // Between stopChild above and the respawn in `finally` below, this wolf has no supervision: a crash in that gap is not restarted by us.
+    // The window is a couple of systemctl calls long, and the unit itself is restarted by systemd meanwhile.
+    try {
+      const before = await invocation(); // a failing first read throws here, before anything is restarted
+      await sc(["restart", unit]);
+      let after: string;
+      try {
+        after = await invocation();
+      } catch {
+        return { unconfirmed: true }; // the restart went through; only the confirming read failed
+      }
+      if (!after || after === before) throw new Error("the wolf did not restart");
+      return { invocation: after };
+    } finally {
+      if (!this.stopping) {
+        try {
+          this.spawnChild(c); // re-attach the wrapper (its `systemctl start` is a no-op on an active unit)
+        } catch (e) {
+          // Never let a respawn failure replace the error (or result) of the restart itself.
+          this.line(c, `supervisor: could not re-attach after restart: ${String((e as Error)?.message ?? e).split("\n")[0]}`);
+        }
+      }
+    }
+  }
+
+  /** Whether a turn is running in this wolf's wolfd (its /v1/wolves status is busy). False when it cannot be read. */
+  async wolfBusy(name: string): Promise<boolean> {
+    const url = this.children.get(name)?.url;
+    if (!url) return false;
+    try {
+      const b = (await getJson(url, "/v1/wolves", 2000)) as { wolves?: { name?: string; status?: string }[] };
+      return (b.wolves ?? []).some((w) => w.name === name && w.status === "busy");
+    } catch {
+      return false;
+    }
   }
 
   private stopChild(c: Child): Promise<void> {

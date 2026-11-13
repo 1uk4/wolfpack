@@ -135,6 +135,8 @@ export interface WolfServerOptions {
   // ---- /header git tree ----
   /** The model each tier resolves to on this wolf (a hint shown beside the tier picker). */
   tierModels?: Partial<Record<ThreadTier, string>>;
+  /** The pi provider each tier resolved to (the settings view carries it so the console knows what the wolf runs on). */
+  tierProviders?: Partial<Record<ThreadTier, string>>;
   /** Called with faults the pump cannot surface over HTTP. */
   onError?: (error: unknown) => void;
 }
@@ -625,7 +627,7 @@ export class WolfServer {
       const up = this.opts.uptimeMs ? this.opts.uptimeMs() : process.uptime() * 1000;
       return Math.max(0, Math.ceil((min - up) / 1000));
     };
-    const view = () => store.view((this.opts.tierModels ?? {}) as Record<string, string>, !!this.opts.restart, wait());
+    const view = () => store.view((this.opts.tierModels ?? {}) as Record<string, string>, !!this.opts.restart, wait(), this.name, this.opts.tierProviders as Record<string, string> | undefined);
     try {
       if (kind === "get") return this.json(res, 200, view());
       if (kind === "restart") {

@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
-import { effectiveConsolidationInterval, applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
+import { effectiveConsolidationInterval, applyWolfMemoryModel, applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
 import {
   createObjectsExtension,
   openWolfEngine,
@@ -197,8 +197,10 @@ async function startConfigured(
   // A librarian wolf's sweep (kb_sweep_* tools + the timer below), built from the same KB roots the memory extension
   // uses: KB_BASE/KB_OPS from the effective env (a sandbox KB copy), den-local state under the wolf's den.
   const kbRoots = kbRootsFor(config, env);
-  const sweep = config.memory.librarian ? librarianSweepFor(config, env, table, log, opts.sweepTick) : undefined;
-  const loaded = await loadConfiguredExtensions(config, env, table, extra, log, sweep, cardGuard.register);
+  // Memory's engine steps (and the sweep) read the table with wolf.yaml memory.model applied; the chat keeps `table`.
+  const memoryTable = applyWolfMemoryModel(table, config, log);
+  const sweep = config.memory.librarian ? librarianSweepFor(config, env, memoryTable, log, opts.sweepTick) : undefined;
+  const loaded = await loadConfiguredExtensions(config, env, memoryTable, extra, log, sweep, cardGuard.register);
   const askBridge = new AskBridge();
   const ask = adaptToDurable(createAskExtension(askBridge, { diagramCheck: (id) => diagramProblem(config.den, id, env) }), { wolfDen: config.den, wolfName: config.identity.name, onCardTool: cardGuard.register });
   // The card guard ends a whole round that contains a card-raising call (see engine/cards.ts). Tools adapted through
@@ -300,6 +302,7 @@ async function startConfigured(
       },
       den: config.den,
       tierModels: Object.fromEntries((["main", "smart", "fast"] as const).map((t) => [t, resolveWolfModel(config, t, table).modelId])),
+      tierProviders: Object.fromEntries((["main", "smart", "fast"] as const).map((t) => [t, resolveWolfModel(config, t, table).provider])),
       askBridge,
       subagents: {
         bridge: subagentBridge,

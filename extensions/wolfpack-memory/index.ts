@@ -1150,6 +1150,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // `wolfpack launch` handed over, else resolved from the pack config +
   // wolf.yaml (flagged in the status bar). A broken config turns memory's LLM
   // features off with the error shown, rather than crashing pi.
+  // wolf.yaml `memory.model` is NOT applied on this pi (non-wolfd) path yet: it loads its own table. wolfd-only for now (run.ts applyWolfMemoryModel).
   let modelTable: ModelTable | null = null;
   let modelsFromLaunch = false;
   let modelError: string | null = null;

@@ -33,6 +33,7 @@ const path = require("node:path");
 const { createNeedsYouNotifier } = require("./notify.cjs");
 const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs");
 const { createSupervisor } = require("./supervisor.cjs");
+const { KEYS_FILE } = require("./key-file.cjs"); // the console reads/writes the same keys.env workerd does (Pack → Keys)
 const { shouldCurate, parseBatteryPercent } = require("./curator-gate.cjs");
 const { needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup, wolfIdFor } = require("./setup.cjs");
 const { consoleEnv } = require("./console-env.cjs");
@@ -206,6 +207,9 @@ function runWizard(opts) {
 	});
 }
 
+/** The pack state dir (keys.env, setup.json, hub/): one place decides it. */
+const appStateDir = () => process.env.WOLFPACK_APP_HOME || app.getPath("userData");
+
 /** work-wolfpack-u6Z4dRY: back up, migrate, restore on failure (electron/migrate.cjs). On failure: plain-words dialog, then quit; throws {stopped} so no service starts. */
 async function safeUpdate(stateDir, wolvesDir) {
 	const { runUpdate } = require("./migrate.cjs");
@@ -240,7 +244,7 @@ async function startRuntime() {
 	if (!app.isPackaged && !(process.env.WOLFPACK_APP_HOME && process.env.WOLFPACK_APP_WOLVES)) {
 		throw new Error("Dev run: set both WOLFPACK_APP_HOME and WOLFPACK_APP_WOLVES to scratch folders (the defaults are the real app's userData and ~/Wolves).");
 	}
-	const stateDir = process.env.WOLFPACK_APP_HOME || app.getPath("userData");
+	const stateDir = appStateDir();
 	const wolvesDir = process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves");
 	await safeUpdate(stateDir, wolvesDir); // first launch after an update: back up, migrate, or put the data back and quit
 	const runtimeDir = app.isPackaged ? path.join(process.resourcesPath, "runtime") : path.join(__dirname, "..", "runtime");
@@ -820,7 +824,7 @@ async function main() {
 		// The console talks to the app's own workerd only (loopback); no hub URL/token yet (ticket: hub token for work reads).
 		// A quit during startup nulls `supervisor` (before-quit): stop here instead of touching it.
 		if (!supervisor) return;
-		await startServer(new URL(url).port, { WOLFPACK_API_URL: supervisor.urls.workerd, WOLFPACK_WORKERD_DIRECT_URL: supervisor.urls.workerd }, { appRuntime: true });
+		await startServer(new URL(url).port, { WOLFPACK_API_URL: supervisor.urls.workerd, WOLFPACK_WORKERD_DIRECT_URL: supervisor.urls.workerd, WOLFPACK_KEY_FILE: path.join(appStateDir(), KEYS_FILE) }, { appRuntime: true });
 		await waitUntilUp(url).catch((err) => {
 			if (supervisor) throw err;
 		});
@@ -865,7 +869,7 @@ async function main() {
 	});
 	// Console Settings > Data and support (work-wolfpack-B97I0Gv): logic in app-settings.cjs; only the console window's own top frame on the app's own console origin may call.
 	if (appRuntime && supervisor) {
-		const stateDir = process.env.WOLFPACK_APP_HOME || app.getPath("userData");
+		const stateDir = appStateDir();
 		const settings = createAppSettings({
 			stateDir, wolvesDir: process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves"),
 			getSup: () => supervisor, modelBaseUrl: process.env.WOLFPACK_ANTHROPIC_BASE_URL || undefined, version: app.getVersion(),
@@ -891,6 +895,7 @@ async function main() {
 		on("change-key", (k) => settings.changeKey(String(k ?? "")));
 		on("copy-diagnostics", () => settings.copyDiagnostics());
 		on("reset", () => settings.reset());
+		on("reset-app-ui", () => settings.resetAppUi());
 		const sup = supervisor;
 		tray = createTray({
 			app, Tray, Menu, nativeImage, log,

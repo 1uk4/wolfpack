@@ -17,10 +17,7 @@ export {
 	settingsStore,
 } from "../store/settings.ts";
 
-// The auth/keys composition (auth-keys wave, 2026-09-19): the curated
-// key catalog + the env-reflecting store behind GET/PUT/DELETE /api/keys.
-// Importing this module runs the idempotent boot fill-gap — every consumer
-// keeps its plain process.env reads (that seam is the point).
+// Key reads (work-wolfpack-u6GH2kk): the Pack key file first, then the real env. Read-only; nothing is seeded into process.env.
 export * from "./settings/keys.ts";
 export * from "./settings/settings-body.ts";
 export * from "./settings/model-catalog.ts";
@@ -33,6 +30,7 @@ export * from "./kb/memory-api.ts";
 export * from "./kb/kb-activity-api.ts";
 export * from "./thread/needs-you-api.ts";
 export * from "./pack/devices-api.ts";
+export * from "./pack/machines-api.ts";
 export * from "./settings/prompts-api.ts";
 export * from "./settings/settings-overview-api.ts";
 export * from "./settings/wolf-settings-api.ts";
@@ -42,3 +40,5 @@ export * from "./pack/pack-health.ts";
 export * from "./pack/pack-actions.ts";
 export * from "./thread/session-witness.ts";
 export * from "./pack/domains-api.ts";
+export * from "./pack/keys-api.ts";
+export * from "./pack/model-options.ts";

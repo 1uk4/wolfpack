@@ -33,7 +33,6 @@ Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {}
 
 const { MockConsoleClient, FIXTURE_THREAD } = await import("@wolfpack/client");
 const { cardsOfThread, threadMessagesToNative } = await import("../../../src/core/index.ts");
-const { SettingsDialogProvider } = await import("../../../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
@@ -62,7 +61,7 @@ async function mount() {
 	await act(async () => {
 		root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
-				<SettingsDialogProvider>
+				<>
 					<MemoryEventsProvider connect={inertSource}>
 						<ThreadChat
 							wolf="1uk4"
@@ -73,7 +72,7 @@ async function mount() {
 							initialCards={cardsOfThread(detail)}
 						/>
 					</MemoryEventsProvider>
-				</SettingsDialogProvider>
+				</>
 			</AppRouterContext.Provider>,
 		);
 	});

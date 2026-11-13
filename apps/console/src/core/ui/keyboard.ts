@@ -74,7 +74,7 @@ export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	{ id: "new-session", label: "New session", scope: "global", binding: "mod+n" },
 	{ id: "rename-session", label: "Rename session", scope: "chat", binding: "f2" },
 	{ id: "toggle-user-thinking", label: "Toggle all thinking", scope: "chat", binding: "mod+t" },
-	// The floating chat bar (mounted on every route). Both rebindable under Settings → Keyboard → Chat bar.
+	// The floating chat bar (mounted on every route). Both rebindable under Pack → This device → Keyboard → Chat bar.
 	{ id: "focus-chat-bar", label: "Focus the chat bar", scope: "chatbar", binding: "mod+j" },
 	{ id: "chat-bar-switcher", label: "Chat bar · switch thread", scope: "chatbar", binding: "mod+shift+j" },
 	// Mod+F is surface-scoped: graph node search and session text Find share

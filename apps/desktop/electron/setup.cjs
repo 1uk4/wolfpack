@@ -5,7 +5,7 @@
  *   needsSetup(stateDir)                 true until setup.json says complete:true (a crash midway leaves it false)
  *   readSetup(stateDir)                  the stored answers { wolf, wolfName, domains, complete } or null
  *   checkKey(key, { baseUrl })           one GET /v1/models with x-api-key -> { ok:true } | { ok:false, error }
- *   runSetup(answers, supervisorOpts)    validate, write credentials.json (0600) and setup.json (complete:false), start the
+ *   runSetup(answers, supervisorOpts)    validate, write keys.env (0600) and setup.json (complete:false), start the
  *                                        runtime, then mark complete:true; a failed start stops the children and sets the
  *                                        half-made hub aside so a retry can seed again
  *
@@ -14,7 +14,8 @@
  */
 const fs = require("node:fs");
 const path = require("node:path");
-const { createSupervisor, KEY_FILE } = require("./supervisor.cjs");
+const { createSupervisor } = require("./supervisor.cjs");
+const { KEYS_FILE, ANTHROPIC_ENV, readKey, writeKey, keyProblem } = require("./key-file.cjs");
 
 const ANTHROPIC_BASE = "https://api.anthropic.com";
 /** Wolf ids are lower-case letters, digits and hyphens (packages/kb WolfId). */
@@ -61,14 +62,9 @@ function readWolfId(stateDir) {
 
 const needsSetup = (stateDir) => readSetup(stateDir)?.complete !== true;
 
-/** True when credentials.json holds a key (the wizard shows "Key saved"); the key itself never goes to the page. */
+/** The Anthropic key in keys.env, or "" (the wizard shows "Key saved"); the key itself never goes to the page. */
 function storedKey(stateDir) {
-	try {
-		const k = JSON.parse(fs.readFileSync(path.join(stateDir, KEY_FILE), "utf8")).ANTHROPIC_API_KEY;
-		return typeof k === "string" && k ? k : "";
-	} catch {
-		return "";
-	}
+	return readKey(path.join(stateDir, KEYS_FILE), ANTHROPIC_ENV);
 }
 
 /** Temp file in the same folder, then rename: a reader never sees a half-written file. */
@@ -115,6 +111,8 @@ function vetBaseUrl(raw) {
 /** The Anthropic key check. Never throws. A baseUrl that is not https/loopback is ignored (`fallbackBase` stands in; tests point it at a dead port). */
 async function checkKey(key, { baseUrl, fallbackBase = ANTHROPIC_BASE, fetchImpl = fetch } = {}) {
 	if (!key || !String(key).trim()) return { ok: false, error: "Paste your API key first." };
+	const problem = keyProblem(String(key).trim()); // keys.env can't hold these: refuse before anything goes out
+	if (problem) return { ok: false, error: problem };
 	try {
 		const res = await fetchImpl(`${vetBaseUrl(baseUrl) || fallbackBase}/v1/models?limit=1`, {
 			headers: { "x-api-key": String(key).trim(), "anthropic-version": "2023-06-01" },
@@ -244,7 +242,7 @@ function setAsideHalfMadeHub(stateDir, hadRegistry, log) {
 }
 
 /**
- * Write the credential store and the answers, start the runtime for the chosen wolf, then mark setup complete. Nothing is written or
+ * Write the key file (keys.env) and the answers, start the runtime for the chosen wolf, then mark setup complete. Nothing is written or
  * started if validation fails. `opts` is createSupervisor's options minus apiKey / wolfName / domains.
  */
 async function runSetup(answers, opts) {
@@ -262,11 +260,11 @@ async function runSetup(answers, opts) {
 		// Setup made this folder on an earlier attempt: this attempt's domains replace its line.
 		rewrite = fs.readFileSync(wolfYamlPath, "utf8").replace(/^domains:.*$/m, `domains: [${chosen.map((d) => d.name).join(", ")}]`);
 	}
-	// No key is allowed (the wizard's "Skip"): the file then holds no ANTHROPIC_API_KEY and the key is added later in Settings.
+	// No key is allowed (the wizard's "Skip"): the file then holds no ANTHROPIC_API_KEY and the key is added later in Pack → Keys.
 	const key = apiKey || storedKey(opts.stateDir);
 	fs.mkdirSync(opts.stateDir, { recursive: true, mode: 0o700 });
 	fs.chmodSync(opts.stateDir, 0o700);
-	writeAtomic(path.join(opts.stateDir, KEY_FILE), JSON.stringify(key ? { ANTHROPIC_API_KEY: key } : {}), 0o600);
+	if (key) writeKey(path.join(opts.stateDir, KEYS_FILE), ANTHROPIC_ENV, key); // credentials.json is left as it is
 	const record = { wolf: wolfId, wolfName, domains };
 	writeAtomic(path.join(opts.stateDir, SETUP_FILE), JSON.stringify({ ...record, complete: false, folderPreexisted, hubWasFresh }));
 	if (rewrite) writeAtomic(wolfYamlPath, rewrite);

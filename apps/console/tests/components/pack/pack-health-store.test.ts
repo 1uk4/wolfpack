@@ -18,7 +18,7 @@ const g = globalThis as Record<string, unknown>;
 g.EventSource = FakeEventSource;
 g.window = { setTimeout: () => 0, clearTimeout: () => {} }; // inert timers: no stall fallback during the test
 
-const { subscribePackHealth, openPackHealth, closePackHealth } = await import("../../../components/pack/pack-health-store.ts");
+const { subscribePackHealth, openPackHealth, closePackHealth, requestedPackSection } = await import("../../../components/pack/pack-health-store.ts");
 const openStreams = () => FakeEventSource.all.filter((s) => !s.closed).length;
 
 describe("pack health store", () => {
@@ -33,4 +33,15 @@ describe("pack health store", () => {
 		closePackHealth();
 		assert.equal(openStreams(), 0);
 	});
+
+	it("opens on the section it was asked for, and on Machines when asked for none or after a close", () => {
+		openPackHealth(null, "keys");
+		assert.equal(requestedPackSection(), "keys");
+		closePackHealth();
+		assert.equal(requestedPackSection(), "machines");
+		openPackHealth(null);
+		assert.equal(requestedPackSection(), "machines");
+		closePackHealth();
+	});
 });
+

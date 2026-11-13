@@ -9,10 +9,9 @@
  * (the Mac card fills in from the hub in the sfo-01 view; sfo-01's from the hub in the Mac view), `hub-view-host-offline` has a host the
  * hub sees offline, and `hub-unreachable-last-seen` keeps the hub's last list while the hub is down. All ignored in a production build.
  */
-import type { HealthLink, HealthSnapshotView } from "@/src/core/pack/pack-health-view";
-import type { HostInfo } from "@/src/core/pack/pack-hosts";
+import type { HealthLink, HealthSnapshotView, HostInfo } from "@/src/core";
 
-export const HEALTH_FIXTURES = ["ok", "hub-down", "frozen", "recovering", "restarting", "unknown-wolf", "back", "issues", "unreachable", "mac", "two-hosts-mac-view", "hub-view-host-offline", "hub-unreachable-last-seen"] as const;
+export const HEALTH_FIXTURES = ["ok", "hub-down", "frozen", "recovering", "restarting", "unknown-wolf", "back", "issues", "unreachable", "mac", "two-hosts-mac-view", "hub-view-host-offline", "hub-unreachable-last-seen", "workerd-down-unadvertised"] as const;
 export type HealthFixture = (typeof HEALTH_FIXTURES)[number];
 
 const iso = (msAgo: number, now: number) => new Date(now - msAgo).toISOString();
@@ -70,13 +69,16 @@ const macFromHub = (now: number, over: Partial<HealthLink> = {}): HealthLink[] =
 	hubRow("wolfd@1uk4", "luka-air", now, { via: "hub-link@luka-air", ...over }),
 	hubRow("wolfd@ada", "luka-air", now, { via: "hub-link@luka-air", ...over }),
 ];
-const SFO_HOSTS = (extra: HostInfo[] = []): HostInfo[] => [{ id: "sfo-01", label: "sfo-01", isThisConsole: true, platform: "linux", hubId: "sfo-01" }, { id: "luka-air", label: "Mac", isThisConsole: false, hubId: "luka-air" }, ...extra];
+/** What a server's worker advertises (restart wolves and the background service) and what the Mac app advertises (wolves only). */
+const SERVER_COMMANDS = ["wolves.restart", "workerd.restart", "logs.fetch"];
+const MAC_COMMANDS = ["wolves.restart", "logs.fetch"];
+const SFO_HOSTS = (extra: HostInfo[] = []): HostInfo[] => [{ id: "sfo-01", label: "sfo-01", isThisConsole: true, platform: "linux", hubId: "sfo-01", commands: SERVER_COMMANDS }, { id: "luka-air", label: "Mac", isThisConsole: false, hubId: "luka-air", commands: MAC_COMMANDS }, ...extra];
 
 /** The snapshot for a fixture, or null for "unreachable" (the console server itself is not answering). */
 export function fixtureSnapshot(name: HealthFixture, now: number): HealthSnapshotView | null {
 	let links = base(now);
 	const at = (msAgo: number) => iso(msAgo, now);
-	let hosts: HostInfo[] = [{ id: "sfo-01", label: "sfo-01", isThisConsole: true, platform: "linux" }];
+	let hosts: HostInfo[] = [{ id: "sfo-01", label: "sfo-01", isThisConsole: true, platform: "linux", hubId: "sfo-01", commands: SERVER_COMMANDS }];
 	switch (name) {
 		case "ok":
 			links = [...patch(links, "wolfd@hal", { hubStatus: "online" }), ...macFromHub(now)];
@@ -117,6 +119,11 @@ export function fixtureSnapshot(name: HealthFixture, now: number): HealthSnapsho
 			links = patch(links, "workerd-wolves", { status: "down", error: "refused", responseMs: 1, lagMs: null, version: null, uptimeS: null, lastOkAt: at(60_000), history: [{ status: "ok", at: at(3_600_000) }, { status: "down", at: at(55_000) }] });
 			links = patch(links, "wolfd@hal", { status: "unknown", error: "workerd_unavailable", history: [{ status: "ok", at: at(3_600_000) }, { status: "unknown", at: at(55_000) }] });
 			break;
+		case "workerd-down-unadvertised":
+			// Same as unknown-wolf (the background service is down) but the machine advertised no workerd.restart: no Restart button, a hint instead.
+			links = patch(links, "workerd-wolves", { status: "down", error: "refused", responseMs: 1, lagMs: null, version: null, uptimeS: null, lastOkAt: at(60_000), history: [{ status: "ok", at: at(3_600_000) }, { status: "down", at: at(55_000) }] });
+			hosts = [{ id: "sfo-01", label: "sfo-01", isThisConsole: true, platform: "linux", hubId: "sfo-01", commands: ["wolves.restart", "logs.fetch"] }];
+			break;
 		case "back":
 			links = patch(links, "hubd", { uptimeS: 40, history: [{ status: "down", at: at(120_000) }, { status: "restarting", at: at(90_000) }, { status: "recovering", at: at(30_000) }, { status: "ok", at: at(1_000) }], lastRestart: { at: at(90_000), ok: true } });
 			break;
@@ -145,8 +152,8 @@ export function fixtureSnapshot(name: HealthFixture, now: number): HealthSnapsho
 			const merged = mac.map((l) => (l.kind === "workerd" ? { ...l, hubPresence: "online" as const } : l.kind === "wolfd" ? { ...l, hubStatus: "online" as const } : l));
 			merged.push(hubRow("hub-link@sfo-01", "sfo-01", now), hubRow("wolfd@hal", "sfo-01", now, { via: "hub-link@sfo-01" }));
 			const newer: HostInfo[] = [
-				{ id: "luka-air", label: "Mac", isThisConsole: true, platform: "darwin", hubId: "luka-air" },
-				{ id: "sfo-01", label: "sfo-01", isThisConsole: false, hubId: "sfo-01" },
+				{ id: "luka-air", label: "Mac", isThisConsole: true, platform: "darwin", hubId: "luka-air", commands: MAC_COMMANDS },
+				{ id: "sfo-01", label: "sfo-01", isThisConsole: false, hubId: "sfo-01", commands: SERVER_COMMANDS },
 			];
 			return { checkedAt: at(2_000), intervalMs: 5000, links: merged.filter((l) => !(l.id === "wolfd@hal" && l.source !== "hub")), hosts: newer, actions: { systemd: false, rollback: [] } };
 		}
@@ -167,6 +174,55 @@ export function fixtureLogs(service: string, now: number): { lines: string[]; tr
 			return `${t(n * 15_000)} sfo-01 ${unit}[812]: tick ${i} ok`;
 		}),
 	};
+}
+
+/**
+ * `?healthUpdate=<state>` and `?healthAuto=<on|off|unset>` (work-wolfpack-leOBfgn): a fake of /api/health/update and /api/health/subscription for the
+ * console's own machine card, so every update state can be seen without calling a real updater. Use with `?healthFixture=ok&pack=machines`.
+ *   available  two components behind; Update starts a fake run that shows Updating for 8 s, then Updated
+ *   running    an update already running (Updating…, never finishes)
+ *   done       like available, but the run succeeds after 1.5 s
+ *   failed     like available, but the run fails after 1.5 s (exit 4: another update run holds the lock)
+ *   uptodate   nothing behind; Check now says Already up to date; Update (if sent) answers 409
+ * `healthAuto`: on = mode auto, off = mode button, unset = no subscription file ("not set (host default)"). PUT only updates the fake.
+ */
+export const HEALTH_UPDATE_STATES = ["available", "running", "done", "failed", "uptodate"] as const;
+export function fixtureUpdateApi(search: string): typeof fetch | null {
+	if (process.env.NODE_ENV === "production") return null;
+	const p = new URLSearchParams(search);
+	const state = p.get("healthUpdate");
+	const auto = p.get("healthAuto");
+	if (!state && !auto) return null;
+	const mode = state && (HEALTH_UPDATE_STATES as readonly string[]).includes(state) ? state : "uptodate";
+	const behind = [{ component: "hubd", from: "0.1.14", to: "0.1.15" }, { component: "console", from: "0.1.18", to: "0.1.19" }];
+	let units = mode === "uptodate" ? [] : behind;
+	let last: { result: string; exitStatus: number | null; at: string | null } | null = mode === "running" ? { result: "running", exitStatus: null, at: null } : null;
+	let sub = { exists: auto !== "unset", channel: "stable", mode: auto === "unset" ? "unknown" : auto === "on" ? "auto" : "button" };
+	const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "Content-Type": "application/json" } });
+	return (async (input, init) => {
+		const url = String(input);
+		const method = init?.method ?? "GET";
+		if (url.startsWith("/api/health/subscription")) {
+			if (method === "PUT") sub = { exists: true, ...JSON.parse(String(init?.body)) };
+			return json(method === "PUT" ? {} : sub);
+		}
+		if (method === "POST") {
+			if (units.length === 0) return json({ code: "no_update" }, 409);
+			if (last?.result === "running") return json({ code: "running" }, 409);
+			last = { result: "running", exitStatus: null, at: null };
+			const ms = mode === "available" ? 8_000 : 1_500;
+			setTimeout(() => {
+				const at = new Date().toISOString();
+				if (mode === "failed") last = { result: "exit-code", exitStatus: 4, at };
+				else {
+					last = { result: "success", exitStatus: 0, at };
+					units = [];
+				}
+			}, ms);
+			return new Response(null, { status: 202 });
+		}
+		return json({ units, last });
+	}) as typeof fetch;
 }
 
 export interface FixtureSwitches {

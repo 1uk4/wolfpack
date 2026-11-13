@@ -189,6 +189,8 @@ describe("full-transcript observer", () => {
     // the unbound observations went to the pool
     const pool = readFileSync(join(dev, "den/.memory/pool/observations.jsonl"), "utf8");
     expect(pool.trim().split("\n")).toHaveLength(stub.prompts.length);
+    // each line names the thread (conversation) it was observed in; the promote pass groups topics by it
+    for (const line of pool.trim().split("\n")) expect(JSON.parse(line).thread).toBe("1");
   });
 
   it("a general observation in a bound main session keeps the work tag only as origin when generalToDen is on, and is fully tagged when off", async () => {

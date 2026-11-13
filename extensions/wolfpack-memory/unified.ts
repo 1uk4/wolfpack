@@ -315,6 +315,7 @@ async function writeToPool(
   defaultDomain?: string,
   generalToDen = false,
   poolLock = false,
+  thread?: number,
 ): Promise<void> {
   if (observations.length === 0) return;
   const poolDir = join(wolfDen, ".memory", "pool");
@@ -329,6 +330,8 @@ async function writeToPool(
       // Stamped at observe time (as pi's orchestrator does), so consolidation never has to guess a domain.
       ...(defaultDomain ? { domain: obs.domain || defaultDomain } : {}),
       recordedAt: timestamp,
+      // The conversation it was observed in: the promote pass groups a topic's sources by it. Not part of the observation id.
+      ...(thread !== undefined ? { thread: String(thread) } : {}),
       ...(bound ? (() => {
         const ids = { ...(bound.taskId ? { work: bound.taskId } : {}), ...(bound.featureId ? { feature: bound.featureId } : {}) };
         return generalToDen && obs.general === true ? { origin: ids } : ids;
@@ -582,7 +585,7 @@ export default function createMemoryExtension(
       const result = await observe({ engine: getEngine(), chunkText: `[assistant]\n${text}`, mode: "conversation", domainContext: domainContext || undefined, generalFlag: config.generalToDen === true });
       if (result.observations.length > 0) {
         const bound = await subTag(sub);
-        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
+        await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain, config.generalToDen === true, config.subagentMemory === "on", ctx.conversationId);
         mem.observed(result.observations, bound, ctx.conversationId);
       }
       return;
@@ -639,7 +642,7 @@ export default function createMemoryExtension(
         const tag: PoolTag | null = bound ?? (featureOnly ? { featureId: featureOnly } : null);
         // Nothing bound: an observation naming exactly one open work item is tagged with it, line by line.
         const perLine: Array<PoolTag | null> = tag || sub ? result.observations.map(() => tag) : await namedTags(result.observations);
-        await writeToPool(ctx.wolfDen, result.observations, perLine, defaultDomain, config.generalToDen === true, config.subagentMemory === "on");
+        await writeToPool(ctx.wolfDen, result.observations, perLine, defaultDomain, config.generalToDen === true, config.subagentMemory === "on", ctx.conversationId);
         // One event per run of equally tagged lines; a feature-only tag reports workId = the feature.
         for (let k = 0; k < result.observations.length;) {
           const t = perLine[k];

@@ -71,6 +71,8 @@ export interface PoolObservation {
   content: string;
   recordedAt: string;
   domain?: string;
+  /** The conversation (thread) it was observed in. Absent on older lines; never part of the observation id. */
+  thread?: string;
   /** Task bound when this was observed: it feeds that item's Record, not the den. */
   work?: string;
   /** The bound task's parent feature. */

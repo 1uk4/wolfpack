@@ -1,5 +1,5 @@
 /**
- * THE PACK KEYS API (work-wolfpack-6EmU8pu). Behind the console's owner gate, it calls the hub with the console's operator token:
+ * THE PACK KEYS API (work-wolfpack-6EmU8pu). Behind the console's owner gate, it calls the hub with the caller's own device token (WOLFPACK_HUB_TOKEN only as a fallback when the request has no bearer; sfo-01's console has none):
  *   GET  /api/pack/machines/keys             the machines with key presence (masks only) and their public keys
  * Commands (including a sealed key.set) go through the Machines route, POST /api/machines/<hostId>/commands (machines-api.ts).
  *   POST /api/pack/machines/<hostId>/key/ack   accept a machine's changed key
@@ -7,6 +7,7 @@
  */
 import { WORKERD_TTL_MS } from "@wolfpack/protocol";
 import { machineName } from "@wolfpack/protocol/health-lag";
+import { bearerOf } from "../../core/ui/hub-auth.ts";
 import { isRelayMode } from "../thread/relay-mode.ts";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -34,9 +35,10 @@ interface InvEntry {
 export function createKeysApi(d: KeysApiDeps) {
 	const env = d.env ?? process.env;
 	const doFetch = d.fetch ?? fetch;
-	const hub = async (method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response | undefined> => {
+	const hub = async (req: Request, method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response | undefined> => {
 		const base = env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "");
-		const token = env.WOLFPACK_HUB_TOKEN?.trim();
+		// The caller's own (gate-verified) bearer first; the env token only when the request carries none (a dev or local console).
+		const token = bearerOf(req.headers.get("authorization")) ?? (env.WOLFPACK_HUB_TOKEN?.trim() || undefined);
 		if (!base || !token) return undefined;
 		return doFetch(`${base}${path}`, {
 			method,
@@ -45,7 +47,8 @@ export function createKeysApi(d: KeysApiDeps) {
 			signal: AbortSignal.timeout(timeoutMs ?? d.timeoutMs ?? 5000),
 		});
 	};
-	const noHub = () => fail(501, "This console has no hub (WOLFPACK_HUB_URL and WOLFPACK_HUB_TOKEN are not set).", "unsupported");
+	const noHub = () =>
+		fail(501, env.WOLFPACK_HUB_URL?.trim() ? "This request carries no device token and the console has no hub token; sign in on this device first." : "This console has no hub (WOLFPACK_HUB_URL is not set).", "unsupported");
 	const down = () => fail(503, "The hub is not answering.", "hub_unreachable");
 
 	return {
@@ -53,7 +56,7 @@ export function createKeysApi(d: KeysApiDeps) {
 			const g = await d.gate(req);
 			if (g instanceof Response) return g;
 			try {
-				const [inv, keys] = await Promise.all([hub("GET", "/v1/inventory"), hub("GET", "/v1/machines/keys")]);
+				const [inv, keys] = await Promise.all([hub(req, "GET", "/v1/inventory"), hub(req, "GET", "/v1/machines/keys")]);
 				if (!inv || !keys) return noHub();
 				if (!inv.ok) return fail(502, "The hub could not list machines.", "failed");
 				const all = ((await inv.json()) as { entries: InvEntry[] }).entries;
@@ -94,7 +97,7 @@ export function createKeysApi(d: KeysApiDeps) {
 			}
 			try {
 				// The body names the fingerprint the owner looked at; the hub refuses (409) when the key has changed again.
-				const r = await hub("POST", `/v1/machines/${encodeURIComponent(hostId)}/key/ack`, body);
+				const r = await hub(req, "POST", `/v1/machines/${encodeURIComponent(hostId)}/key/ack`, body);
 				if (!r) return noHub();
 				return new Response(await r.text(), { status: r.status, headers: { "content-type": "application/json", ...NO_STORE } });
 			} catch {

@@ -37,7 +37,7 @@ describe("pack domains API", () => {
 		assert.equal(calls.length, 0);
 	});
 
-	it("lists, adds, edits and deletes through the hub with the console's operator token, not the caller's", async () => {
+	it("lists, adds, edits and deletes through the hub with the caller's own device token, not the console's env token", async () => {
 		const { api, calls } = setup({ status: 201, body: { domain: { name: "docs", label: "Docs", created: "2026-11-09" } } });
 		const made = await api.create(req("POST", { name: "docs", label: "Docs", description: "All docs", color: "#aabbcc" }));
 		assert.equal(made.status, 201);
@@ -48,10 +48,10 @@ describe("pack domains API", () => {
 		assert.deepEqual(
 			calls.map((c) => [c.method, c.url, c.auth, c.body]),
 			[
-				["POST", "http://hub.test:3150/v1/registry/domains", "Bearer console-operator-token", { name: "docs", label: "Docs", description: "All docs", color: "#aabbcc" }],
-				["PATCH", "http://hub.test:3150/v1/registry/domains/docs", "Bearer console-operator-token", { label: "Documents", color: "#112233" }],
-				["DELETE", "http://hub.test:3150/v1/registry/domains/docs", "Bearer console-operator-token", undefined],
-				["GET", "http://hub.test:3150/v1/registry/domains", "Bearer console-operator-token", undefined],
+				["POST", "http://hub.test:3150/v1/registry/domains", "Bearer owner", { name: "docs", label: "Docs", description: "All docs", color: "#aabbcc" }],
+				["PATCH", "http://hub.test:3150/v1/registry/domains/docs", "Bearer owner", { label: "Documents", color: "#112233" }],
+				["DELETE", "http://hub.test:3150/v1/registry/domains/docs", "Bearer owner", undefined],
+				["GET", "http://hub.test:3150/v1/registry/domains", "Bearer owner", undefined],
 			],
 		);
 	});
@@ -99,11 +99,24 @@ describe("pack domains API", () => {
 		assert.equal((await json(down)).error, "The hub is not answering, so domains cannot be read or changed right now.");
 	});
 
+	it("works on a console with a hub URL but no hub token, using the caller's bearer", async () => {
+		const seen: (string | null)[] = [];
+		const hubFetch = (async (_u: string, init?: RequestInit) => {
+			seen.push(new Headers(init?.headers).get("authorization"));
+			return Response.json({ domains: [] });
+		}) as unknown as typeof fetch;
+		const gateApi = createHealthApi({ checkToken: async (t: string) => (t === "browser-fake" ? "accepted" : "rejected"), witness: createSessionWitness({ file: undefined }) } as unknown as Parameters<typeof createHealthApi>[0]);
+		const api = createDomainsApi({ gate: (r) => gateApi.gate(r, "domain change"), env: { WOLFPACK_HUB_URL: "http://hub.test:3150" }, fetch: hubFetch });
+		const r = await api.list(req("GET", undefined, "browser-fake"));
+		assert.equal(r.status, 200);
+		assert.deepEqual(seen, ["Bearer browser-fake"]);
+	});
+
 	it("says so when the console has no hub configured", async () => {
 		const gateApi = createHealthApi({ checkToken: async () => "accepted", witness: createSessionWitness({ file: undefined }) } as unknown as Parameters<typeof createHealthApi>[0]);
 		const api = createDomainsApi({ gate: (r) => gateApi.gate(r, "domain change"), env: {}, fetch: (async () => { throw new Error("must not be called"); }) as unknown as typeof fetch });
 		const r = await api.list(req("GET"));
 		assert.equal(r.status, 501);
-		assert.equal((await json(r)).error, "This console has no hub to manage domains on (WOLFPACK_HUB_URL and WOLFPACK_HUB_TOKEN are not set).");
+		assert.equal((await json(r)).error, "This console has no hub to manage domains on (WOLFPACK_HUB_URL is not set).");
 	});
 });

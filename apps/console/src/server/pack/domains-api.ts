@@ -1,7 +1,7 @@
 /**
  * THE PACK PANEL'S DOMAINS API (work-wolfpack-I2AysMu). Each call goes through the console's owner gate (the same one as restart)
- * and then makes a real call to hubd /v1/registry/domains with the console's own operator token (WOLFPACK_HUB_TOKEN), never the
- * caller's device token.
+ * and then makes a real call to hubd /v1/registry/domains with the caller's own (gate-verified) device token. The console's
+ * WOLFPACK_HUB_TOKEN is only a fallback when the request carries no bearer (a dev or local console); sfo-01's console has none.
  *   GET    /api/pack/domains          200 {domains: [{name, label?, description?, color?, created?}]}
  *   POST   /api/pack/domains          {name, label?, description?, color?}   201 {domain}
  *   PATCH  /api/pack/domains/<name>   {label?, description?, color?}         200 {domain}   (the name cannot change)
@@ -10,6 +10,7 @@
  * 404 no such domain | 409 duplicate, or still subscribed (wolves named) | 501 no hub configured | 502 the hub refuses this console
  * or failed | 503 the hub is not answering. Subscriptions are not managed here (wolf settings).
  */
+import { bearerOf } from "../../core/ui/hub-auth.ts";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 const NEW_NAME = /^[a-z0-9]{1,32}$/;
@@ -54,10 +55,11 @@ export function createDomainsApi(d: DomainsApiDeps) {
 	const doFetch = d.fetch ?? fetch;
 
 	/** One hub call. Returns the parsed JSON on 2xx, else the Response to send. */
-	async function hub(method: string, path: string, body: unknown, name?: string): Promise<{ ok: true; json: Record<string, unknown> } | { ok: false; res: Response }> {
+	async function hub(req: Request, method: string, path: string, body: unknown, name?: string): Promise<{ ok: true; json: Record<string, unknown> } | { ok: false; res: Response }> {
 		const base = env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "");
-		const token = env.WOLFPACK_HUB_TOKEN?.trim();
-		if (!base || !token) return { ok: false, res: fail(501, "This console has no hub to manage domains on (WOLFPACK_HUB_URL and WOLFPACK_HUB_TOKEN are not set).", "unsupported") };
+		const token = bearerOf(req.headers.get("authorization")) ?? (env.WOLFPACK_HUB_TOKEN?.trim() || undefined);
+		if (!base) return { ok: false, res: fail(501, "This console has no hub to manage domains on (WOLFPACK_HUB_URL is not set).", "unsupported") };
+		if (!token) return { ok: false, res: fail(501, "This request carries no device token and the console has no hub token; sign in on this device first.", "unsupported") };
 		let r: Response;
 		try {
 			r = await doFetch(`${base}${path}`, {
@@ -106,7 +108,7 @@ export function createDomainsApi(d: DomainsApiDeps) {
 		async list(req: Request): Promise<Response> {
 			const g = await d.gate(req);
 			if (g instanceof Response) return g;
-			return send(await hub("GET", "/v1/registry/domains", undefined));
+			return send(await hub(req, "GET", "/v1/registry/domains", undefined));
 		},
 
 		async create(req: Request): Promise<Response> {
@@ -118,7 +120,7 @@ export function createDomainsApi(d: DomainsApiDeps) {
 			if (typeof name !== "string" || !NEW_NAME.test(name)) return fail(400, "Domain names are lower-case letters and digits only, up to 32 (no hyphens).", "invalid_request");
 			const fields = fieldsOf(body, true);
 			if (typeof fields === "string") return fail(400, fields, "invalid_request");
-			return send(await hub("POST", "/v1/registry/domains", { name, ...fields }, name), 201);
+			return send(await hub(req, "POST", "/v1/registry/domains", { name, ...fields }, name), 201);
 		},
 
 		async update(req: Request, name: string): Promise<Response> {
@@ -130,14 +132,14 @@ export function createDomainsApi(d: DomainsApiDeps) {
 			const fields = fieldsOf(body, false);
 			if (typeof fields === "string") return fail(400, fields, "invalid_request");
 			if (Object.keys(fields).length === 0) return fail(400, "Nothing to change: give a label, description or colour.", "invalid_request");
-			return send(await hub("PATCH", `/v1/registry/domains/${name}`, fields, name));
+			return send(await hub(req, "PATCH", `/v1/registry/domains/${name}`, fields, name));
 		},
 
 		async remove(req: Request, name: string): Promise<Response> {
 			const g = await d.gate(req);
 			if (g instanceof Response) return g;
 			if (!EXISTING_NAME.test(name)) return fail(400, "That is not a valid domain name.", "invalid_request");
-			return send(await hub("DELETE", `/v1/registry/domains/${name}`, undefined, name));
+			return send(await hub(req, "DELETE", `/v1/registry/domains/${name}`, undefined, name));
 		},
 	};
 }

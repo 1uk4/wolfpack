@@ -1,7 +1,8 @@
 /**
  * THE PACK PANEL'S DOMAINS API (work-wolfpack-I2AysMu). Each call goes through the console's owner gate (the same one as restart)
- * and then makes a real call to hubd /v1/registry/domains with the caller's own (gate-verified) device token. The console's
- * WOLFPACK_HUB_TOKEN is only a fallback when the request carries no bearer (a dev or local console); sfo-01's console has none.
+ * and then makes a real call to hubd /v1/registry/domains with the caller's own device token, which the gate has verified; the
+ * console never uses its own hub token here. The gate only checks that the token is valid on the hub (GET /v1/wolves answers
+ * 2xx), not that it is an owner token; hubd's deviceCaller and operator checks are the real limits.
  *   GET    /api/pack/domains          200 {domains: [{name, label?, description?, color?, created?}]}
  *   POST   /api/pack/domains          {name, label?, description?, color?}   201 {domain}
  *   PATCH  /api/pack/domains/<name>   {label?, description?, color?}         200 {domain}   (the name cannot change)
@@ -57,9 +58,9 @@ export function createDomainsApi(d: DomainsApiDeps) {
 	/** One hub call. Returns the parsed JSON on 2xx, else the Response to send. */
 	async function hub(req: Request, method: string, path: string, body: unknown, name?: string): Promise<{ ok: true; json: Record<string, unknown> } | { ok: false; res: Response }> {
 		const base = env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "");
-		const token = bearerOf(req.headers.get("authorization")) ?? (env.WOLFPACK_HUB_TOKEN?.trim() || undefined);
+		const token = bearerOf(req.headers.get("authorization"));
 		if (!base) return { ok: false, res: fail(501, "This console has no hub to manage domains on (WOLFPACK_HUB_URL is not set).", "unsupported") };
-		if (!token) return { ok: false, res: fail(501, "This request carries no device token and the console has no hub token; sign in on this device first.", "unsupported") };
+		if (!token) return { ok: false, res: fail(401, "sign in on this device first (no recently verified device token)", "unauthorized") };
 		let r: Response;
 		try {
 			r = await doFetch(`${base}${path}`, {

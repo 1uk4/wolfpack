@@ -23,6 +23,7 @@ import {
 import {
   observe,
   renderDenContext,
+  renderRetiredContext,
   renderKbAccess,
   reconcileDen,
   serializeBranchEntries,
@@ -39,7 +40,7 @@ import { crawlMode, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
 import { readBoundTask } from "./unified-tasks.js";
 import { durableSubagent, featureResolver, FINAL_ONLY_AGENTS, SUBAGENT_OBSERVE_EVERY_TURNS, SUBAGENT_OBSERVE_TOKENS, type SubagentTag } from "./subagent-tag.js";
 import { WorkClient } from "./work-client.js";
-import { drainInbox, kbLockFile, listParked, readLedger, resolveAliasedEntry, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
+import { drainInbox, kbLockFile, listParked, readEntryMarkdown, readLedger, resolveAliasedEntry, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { dailyPassDue, markDailyPass, type PassTrigger } from "@wolfpack/memory";
 import { runSessionPromotePass } from "@wolfpack/harness/memory";
 import { ledgerFile, vectorsDir, workLedgerFile } from "@wolfpack/kb/shared";
@@ -1367,6 +1368,22 @@ export default function createMemoryExtension(
     sections: [
       section("wolf_memory", (ctx) => {
         const content = renderDenContext(ctx.wolfDen, ctx.wolfName, kbRoots ?? undefined);
+        return content ?? undefined;
+      }),
+      section("wolf_memory_retired", (ctx) => {
+        const roots = kbRoots;
+        if (!roots) return undefined;
+        const log = readLedger(roots);
+        const content = renderRetiredContext(ctx.wolfDen, {
+          resolveEntry: (id) => resolveAliasedEntry(roots, log, id, defaultDomain)?.id ?? null,
+          readEntry: (id) => {
+            const hit = resolveAliasedEntry(roots, log, id, defaultDomain);
+            const md = hit ? readEntryMarkdown(roots, hit.domain, hit.id) : null;
+            if (!md) return null;
+            const field = (k: string) => md.match(new RegExp(`^${k}:\\s*(.+)$`, "m"))?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+            return { title: field("title") || id, summary: field("summary") };
+          },
+        });
         return content ?? undefined;
       }),
       section("kb_access", (ctx) => {

@@ -76,6 +76,27 @@ describe("hubd inventory", () => {
     await until(async () => !(await list()).entries.some((e) => e.kind === "workerd"), "cleared on disconnect");
   });
 
+  it("a worker's console entry is the machine's own one: one per report, only its version fields kept", async () => {
+    const w = await worker("mac-1uk4", "Mac");
+    w.report([
+      { machine: "x", kind: "console", id: "console", version: "0.1.20", channel: "stable", uptimeS: 5, lagMs: 2, busy: true, transport: "api", parent: "evil", keys: [{ slot: "s", present: true }] },
+      { machine: "x", kind: "console", id: "second", version: "6.6.6" },
+    ]);
+    await until(async () => (await list()).entries.some((e) => e.kind === "console"), "console listed");
+    const consoles = (await list()).entries.filter((e) => e.kind === "console");
+    expect(consoles).toHaveLength(1);
+    expect(consoles[0]).toEqual({ machine: "mac", kind: "console", id: "console", version: "0.1.20", channel: "stable", uptimeS: 5, lagMs: 2, ageS: 0 });
+  });
+
+  it("during skew a machine's old console heartbeat and its workerd's console entry list as one console, the workerd's", async () => {
+    expect((await post(operator(), consoleEntry({ machine: "mac", version: "0.1.19" }))).status).toBe(200);
+    const w = await worker("mac-1uk4", "mac");
+    w.report([{ machine: "mac", kind: "console", id: "console", version: "0.1.21" }]);
+    await until(async () => (await list()).entries.some((e) => e.kind === "console" && e.version === "0.1.21"), "workerd console listed");
+    const consoles = (await list()).entries.filter((e) => e.kind === "console");
+    expect(consoles.map((e) => [e.machine, e.version])).toEqual([["mac", "0.1.21"]]);
+  });
+
   it("reports expire after the workerd TTL and console heartbeats after the console TTL (injected clock)", async () => {
     const w = await worker("box", "box");
     w.report([{ machine: "box", kind: "workerd", id: "box", version: "1.0.0" }]);

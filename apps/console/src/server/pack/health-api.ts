@@ -33,7 +33,7 @@ import { bearerOf } from "../../core/ui/hub-auth.ts";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type PackHealth, type Restarter } from "./pack-health.ts";
 import { createReleaseReader, createRollbacker, createUpdater, type ReleaseReader, type Rollbacker, type UpdateUnit, type Updater } from "./pack-actions.ts";
 import { DEFAULT_MAIN_MANIFEST_URL, consoleVersion, createUpdatesHandler } from "./updates-api.ts";
-import { createInventoryClient, readInventory, type InventoryClient, type InventoryRead } from "./inventory.ts";
+import { readInventory, type InventoryRead } from "./inventory.ts";
 import { DEFAULT_MANIFEST_URL, createManifestFetcher, type InventoryEntry } from "@wolfpack/protocol";
 import { createLagMonitor, machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
 import { sessionWitness, type SessionWitness } from "../thread/session-witness.ts";
@@ -265,15 +265,24 @@ const availableUpdates = (env: Record<string, string | undefined>) => {
 };
 const SYSTEMD = process.platform === "linux";
 
+/**
+ * The reader behind GET /api/health/inventory: the viewer's bearer only (the env WOLFPACK_HUB_TOKEN is never used here). The manifest fetchers are
+ * created once and keep their own cache; the manifest lookups share the read's deadline.
+ */
+export function inventoryReader(env: Record<string, string | undefined>, o: { fetch?: typeof fetch; timeoutMs?: number } = {}): (token: string | undefined) => Promise<InventoryRead> {
+	const stable = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || DEFAULT_MANIFEST_URL, ...(o.fetch ? { fetch: o.fetch } : {}) });
+	const main = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MAIN_MANIFEST_URL?.trim() || DEFAULT_MAIN_MANIFEST_URL, ...(o.fetch ? { fetch: o.fetch } : {}) });
+	const hubUrl = env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "") || undefined;
+	return (token) => readInventory({ hubUrl, token, manifest: async (c) => (c === "main" ? main() : stable()), ...(o.fetch ? { fetch: o.fetch } : {}), ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}) });
+}
+
 /** The process-wide monitor (started on first use; probes every WOLFPACK_HEALTH_INTERVAL_MS, default 5000). The API and the client's direct route share it. */
 export function packHealth(env: Record<string, string | undefined> = process.env): PackHealth {
 	const h = globalThis as Holder;
 	if (!h[MONITOR]) {
 		const interval = Number(env.WOLFPACK_HEALTH_INTERVAL_MS);
 		const releases = releaseReader();
-		// The pack inventory (work-wolfpack-ZproKxi): the panel reads it with the viewer's bearer; each machine's workerd reports its console, so the console no longer heartbeats.
-		const stable = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || DEFAULT_MANIFEST_URL });
-		const main = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MAIN_MANIFEST_URL?.trim() || DEFAULT_MAIN_MANIFEST_URL });
+		// The hub inventory is not part of this unauthenticated snapshot: the panel reads it with the viewer's bearer (inventoryReader).
 		const started = Date.now();
 		const lag = createLagMonitor();
 		const self = (): InventoryEntry => {
@@ -281,14 +290,7 @@ export function packHealth(env: Record<string, string | undefined> = process.env
 			const version = consoleVersion();
 			return { machine: machineName(), kind: "console", id: "console", ...(version ? { version } : {}), ...(channel ? { channel } : {}), uptimeS: Math.round((Date.now() - started) / 1000), lagMs: lag.sample().p99Ms };
 		};
-		const inv: InventoryClient = createInventoryClient({
-			hubUrl: env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "") || undefined,
-			token: () => env.WOLFPACK_HUB_TOKEN?.trim() || undefined, // optional fallback only; the Pack panel reads with the viewer's bearer (GET /api/health/inventory)
-			manifest: async (c) => (c === "main" ? main() : stable()),
-		});
-		inv.start();
 		h[MONITOR] = createPackHealth({
-			inventory: () => inv.view(),
 			self,
 			targets: healthTargets(env),
 			...(interval >= 1000 ? { intervalMs: interval } : {}),
@@ -312,11 +314,7 @@ export function healthApi(env: Record<string, string | undefined> = process.env)
 			updater: createUpdater({ available: availableUpdates(env) }),
 			witness: sessionWitness(env),
 			checkToken: hubTokenCheck(hubTarget(env).wolvesUrl),
-			readInventory: (token) => {
-				const main = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MAIN_MANIFEST_URL?.trim() || DEFAULT_MAIN_MANIFEST_URL });
-				const stable = createManifestFetcher({ url: env.WOLFPACK_UPDATE_MANIFEST_URL?.trim() || DEFAULT_MANIFEST_URL });
-				return readInventory({ hubUrl: env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "") || undefined, token, manifest: async (c) => (c === "main" ? main() : stable()) });
-			},
+			readInventory: inventoryReader(env),
 		});
 	}
 	return h[KEY];

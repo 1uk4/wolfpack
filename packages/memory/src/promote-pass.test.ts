@@ -85,6 +85,24 @@ describe("promote pass", () => {
     expect(readTopics(root)[0]).toMatchObject({ id: "a", state: "parked" });
   });
 
+  it("a held topic whose forced rewrite succeeds is promoted again in the same pass, with the held reason passed to the rewrite", async () => {
+    const { den, root } = setup([20]);
+    topic(root, "a");
+    const promoted: string[] = [];
+    const reasons: string[] = [];
+    let answers = 0;
+    const d: PassDeps = {
+      ...deps({}, promoted),
+      outcomeOf: () => (answers++ === 0 ? { kind: "held", reason: "distill: log-like" } : { kind: "create", entryIds: ["kb-a"] }),
+      rewriteHeld: async (_t, reason) => { reasons.push(reason); return true; },
+    };
+    const r = await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...d });
+    expect(reasons).toEqual(["distill: log-like"]);
+    expect(promoted).toEqual(["a", "a"]);
+    expect(r.retired).toEqual([]);
+    expect(readPromoteState(den).topics.a.receipt).toEqual({ outcome: "create", entryIds: ["kb-a"] });
+  });
+
   it("a held topic gets one forced rewrite, then is retired if still held", async () => {
     const { den, root } = setup([20]);
     topic(root, "a");

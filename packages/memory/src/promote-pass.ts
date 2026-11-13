@@ -41,7 +41,7 @@ export interface PassDeps {
   /** The kb package's resolveAliasedEntry, as a function: id → live entry id (following retirement) or null. */
   resolveEntry: (entryId: string) => string | null;
   /** One forced rewrite of a held topic; true when the topic is now fine to promote. */
-  rewriteHeld: (topic: TopicFile) => Promise<boolean>;
+  rewriteHeld: (topic: TopicFile, reason: string) => Promise<boolean>;
 }
 
 export interface PassOptions extends PassDeps {
@@ -127,7 +127,18 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
           result.retired.push(t.id);
         } else {
           updateTopicState(den, t.id, { heldRewriteTried: true });
-          await opts.rewriteHeld(t);
+          const fixed = await opts.rewriteHeld(t, out.reason);
+          if (fixed) {
+            const again = readTopics(root).find((x) => x.id === t.id);
+            if (again) {
+              await opts.promote([again]);
+              const o2 = opts.outcomeOf(again);
+              if (o2.kind === "create" || o2.kind === "merge") {
+                recordRouting(den, t.id, o2.entryIds, now);
+                updateTopicState(den, t.id, { promotedAt: now.toISOString(), receipt: { outcome: o2.kind, entryIds: o2.entryIds } });
+              }
+            }
+          }
         }
         continue;
       }

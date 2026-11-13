@@ -163,6 +163,20 @@ export function DevicesView(p: {
 	);
 }
 
+/** The outcome of one Revoke press: the hub's refusal (if any) and the refreshed list. Pure over `fetchFn` so it is testable without a DOM. */
+export async function revokeAndReload(fetchFn: typeof fetch, id: string, cascadeToo: boolean): Promise<{ error: string | null; devices?: DeviceRow[] }> {
+	let error: string | null = null;
+	const r = await fetchFn(`/api/devices/${encodeURIComponent(id)}${cascadeToo ? "?cascade=1" : ""}`, { method: "DELETE" });
+	if (!r.ok) {
+		const b = (await r.json().catch(() => ({}))) as { error?: string };
+		error = b.error ?? `status ${r.status}`;
+	}
+	const l = await fetchFn("/api/devices");
+	const body = (await l.json().catch(() => ({}))) as { devices?: DeviceRow[]; error?: string };
+	if (!l.ok) return { error: body.error ?? `status ${l.status}` };
+	return { error, devices: body.devices ?? [] }; // the refusal stays: a clean reload must not wipe it
+}
+
 export function DevicesSection({ singleMac, renderQr, pairNote, emptyText }: { singleMac?: boolean; renderQr?: (url: string) => ReactNode; pairNote?: string; emptyText?: string } = {}) {
 	const [devices, setDevices] = useState<DeviceRow[] | undefined>();
 	const [error, setError] = useState<string | null>(null);
@@ -192,13 +206,13 @@ export function DevicesSection({ singleMac, renderQr, pairNote, emptyText }: { s
 		setBusy(true);
 		try {
 			// A self-revoke makes the NEXT /api call a hub 401, which the global fetch wrapper (hub-auth.tsx) turns into sign-out + /pair; the reload below is that call.
-			const r = await fetch(`/api/devices/${encodeURIComponent(id)}${cascadeToo ? "?cascade=1" : ""}`, { method: "DELETE" });
-			if (!r.ok) {
-				const b = (await r.json().catch(() => ({}))) as { error?: string };
-				setError(b.error ?? `status ${r.status}`);
-			}
+			const out = await revokeAndReload(fetch, id, cascadeToo);
 			setConfirming(null);
-			await load();
+			setError(out.error);
+			if (out.devices) {
+				setNow(Date.now());
+				setDevices(out.devices);
+			}
 		} finally {
 			setBusy(false);
 		}

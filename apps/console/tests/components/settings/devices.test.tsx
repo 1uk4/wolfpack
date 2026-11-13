@@ -8,7 +8,7 @@ import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ConsoleClient } from "@wolfpack/client";
-import { DevicesView, addedDescendants, lastUsedLabel, type DeviceRow } from "../../../components/settings/devices-section.tsx";
+import { DevicesView, revokeAndReload, addedDescendants, lastUsedLabel, type DeviceRow } from "../../../components/settings/devices-section.tsx";
 import { createDevicesApi, pairLink } from "../../../src/server/pack/devices-api.ts";
 import { createConsoleClient, makeRequestToken } from "../../../src/server/thread/console-client.ts";
 import { eventsResponse, eventsRoute } from "../../../src/server/thread/events-stream.ts";
@@ -84,6 +84,18 @@ describe("Devices panel (markup)", () => {
 	it("pairLink needs the hub URL", () => {
 		assert.equal(pairLink("a b", "https://h/hub/"), "https://h/hub/pair?code=a%20b");
 		assert.equal(pairLink("x", ""), undefined);
+	});
+});
+
+describe("revokeAndReload", () => {
+	it("keeps the hub's refusal visible after the list reloads fine", async () => {
+		const f = (async (_url: string, init?: RequestInit) => {
+			if (init?.method === "DELETE") return Response.json({ error: "refusing to revoke the last console token", code: "conflict" }, { status: 409 });
+			return Response.json({ devices: [{ id: "tok-a", label: "Mac", kind: "console", createdAt: "x", lastUsedAt: null, self: false }] });
+		}) as unknown as typeof fetch;
+		const out = await revokeAndReload(f, "tok-a", false);
+		assert.equal(out.error, "refusing to revoke the last console token");
+		assert.equal(out.devices?.length, 1);
 	});
 });
 

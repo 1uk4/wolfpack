@@ -144,6 +144,14 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
   return result;
 }
 
+/** Set or clear a topic's `keep_local` flag, keeping every other field. False when the topic does not exist. */
+export function setKeepLocal(root: string, topicId: string, keepLocal: boolean): boolean {
+  const t = readTopics(root).find((x) => x.id === topicId);
+  if (!t) return false;
+  writeTopic(root, { id: t.id, title: t.title, summary: t.summary, updated: t.updated, body: t.body, domain: t.domain, sources: t.sources, lastNote: t.lastNote, state: t.state, keepLocal: keepLocal || undefined });
+  return true;
+}
+
 /** 180 KB across all session topics. */
 export const TOPICS_BYTE_CAP = 180 * 1024;
 /** An oversized topic (characters) must be split by subject. */

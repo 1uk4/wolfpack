@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { recordOwnerMessage } from "./active-hours.js";
-import { enforceByteCap, runPromotePass, type PassDeps, type TopicOutcome } from "./promote-pass.js";
+import { enforceByteCap, runPromotePass, setKeepLocal, type PassDeps, type TopicOutcome } from "./promote-pass.js";
 import { readPromoteState, updateTopicState } from "./promote-state.js";
 import { readRoutingIndex } from "./routing-index.js";
 import { readTopics, writeTopic } from "./session/memory.js";
@@ -110,6 +110,20 @@ describe("promote pass", () => {
     expect(r.evicted).toEqual(["old-plain"]);
     expect(ids(root)).toEqual(["new-confirmed", "pinned"]);
     expect(existsSync(join(root, "evicted", "old-plain.md"))).toBe(true);
+  });
+
+  it("keep-local set on a topic survives a rewrite and stops the daily pass promoting it; clearing it makes it eligible again", async () => {
+    const { den, root } = setup([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    topic(root, "a");
+    expect(setKeepLocal(root, "a", true)).toBe(true);
+    expect(setKeepLocal(root, "missing", true)).toBe(false);
+    expect(readTopics(root)[0]).toMatchObject({ id: "a", keepLocal: true, sources: ["thread:1"] });
+    const promoted: string[] = [];
+    await runPromotePass({ den, root, trigger: { kind: "daily" }, now: NOW, ...deps({}, promoted) });
+    expect(promoted).toEqual([]);
+    setKeepLocal(root, "a", false);
+    await runPromotePass({ den, root, trigger: { kind: "daily" }, now: NOW, ...deps({}, promoted) });
+    expect(promoted).toEqual(["a"]);
   });
 
   it("drops a stale routing link when its entry resolves to nothing", async () => {

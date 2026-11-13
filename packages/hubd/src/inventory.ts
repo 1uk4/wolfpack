@@ -7,7 +7,7 @@ import { normaliseMachine } from "@wolfpack/protocol/health-lag";
  * that first wrote them) and hubd's own entry. Nothing is persisted: a restart starts empty and the next reports fill it.
  */
 export interface Inventory {
-  /** Replace what `hostId` reported. `machine` is the hello machine (overrides each entry's own). Only workerd and wolfd entries are kept. */
+  /** Replace what `hostId` reported. `machine` is the hello machine (overrides each entry's own). Only workerd, wolfd and console (the machine's own, probed by its workerd) entries are kept. */
   setHost(hostId: string, machine: string | undefined, entries: InventoryEntry[]): void;
   clearHost(hostId: string): void;
   /** A console heartbeat. "invalid": no usable machine; "forbidden": another token owns the row; "full": too many console rows. */
@@ -29,7 +29,7 @@ export function createInventory(now: () => number = Date.now): Inventory {
       const kept: InventoryEntry[] = [];
       if (machine) {
         for (const e of entries) {
-          if (e.kind === "workerd" || e.kind === "wolfd") kept.push({ ...e, machine });
+          if (e.kind === "workerd" || e.kind === "wolfd" || e.kind === "console") kept.push({ ...e, machine });
         }
       }
       hosts.set(hostId, { at: now(), entries: kept });

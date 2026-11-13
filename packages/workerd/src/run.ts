@@ -239,6 +239,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     inventory = createInventoryReporter({
       hostId: hubCfg.hostId,
       machine: machineName(),
+      // The console on this machine (its /api/health `self` part is reported as a console entry). WOLFPACK_CONSOLE_URL overrides; the default is the deployed console's loopback port.
+      consoleUrl: (opts.env ?? process.env).WOLFPACK_CONSOLE_URL?.trim() || "http://127.0.0.1:3200",
       ...(WORKERD_VERSION ? { version: WORKERD_VERSION } : {}),
       channel: () => readMachineChannel(),
       children: () => supervisor.status(),

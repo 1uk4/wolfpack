@@ -4,7 +4,7 @@
  * Consolidation never calls this; the triggers do (owner click, graduation, the daily pass).
  */
 import { join } from "node:path";
-import { denTopicStates, runPromotePass, type PassResult, type PassTrigger, type TopicOutcome } from "@wolfpack/memory";
+import { denTopicStates, runPromotePass, type ConsolidateResult, type PassResult, type PassTrigger, type TopicOutcome } from "@wolfpack/memory";
 import type { Engine } from "@wolfpack/engine";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
@@ -26,7 +26,11 @@ export interface PromoteRunConfig {
   now?: Date;
 }
 
-export async function runSessionPromotePass(c: PromoteRunConfig): Promise<PassResult> {
+/** The pass result plus the real promote result (counts, per-topic details) when the pass promoted anything. */
+export type SessionPassResult = PassResult & { promoteResult?: ConsolidateResult };
+
+export async function runSessionPromotePass(c: PromoteRunConfig): Promise<SessionPassResult> {
+  let promoteResult: ConsolidateResult | undefined;
   const loc = durableSessionTopics(c.wolfDen);
   const root = join(loc.memoryRoot, loc.sessionId);
   const outcomeOf = (topic: { id: string }): TopicOutcome => {
@@ -40,13 +44,13 @@ export async function runSessionPromotePass(c: PromoteRunConfig): Promise<PassRe
       default: return { kind: "pending" };
     }
   };
-  return runPromotePass({
+  const pass = await runPromotePass({
     den: c.wolfDen,
     root,
     trigger: c.trigger,
     now: c.now,
     promote: async (topics) => {
-      await promoteSessionTopics({
+      promoteResult = await promoteSessionTopics({
         wolfDen: c.wolfDen, wolfName: c.wolfName, engine: c.engine, kbRoots: c.kbRoots,
         defaultDomain: c.defaultDomain, domains: c.domains, env: c.env,
         onlyIds: topics.map((t) => t.id), onProgress: c.onProgress, onEmit: c.onEmit, onArchive: c.onArchive,
@@ -56,4 +60,5 @@ export async function runSessionPromotePass(c: PromoteRunConfig): Promise<PassRe
     resolveEntry: c.resolveEntry,
     rewriteHeld: async () => false,
   });
+  return { ...pass, ...(promoteResult ? { promoteResult } : {}) };
 }

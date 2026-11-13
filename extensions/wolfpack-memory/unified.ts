@@ -39,7 +39,9 @@ import { crawlMode, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
 import { readBoundTask } from "./unified-tasks.js";
 import { durableSubagent, featureResolver, FINAL_ONLY_AGENTS, SUBAGENT_OBSERVE_EVERY_TURNS, SUBAGENT_OBSERVE_TOKENS, type SubagentTag } from "./subagent-tag.js";
 import { WorkClient } from "./work-client.js";
-import { drainInbox, kbLockFile, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
+import { drainInbox, kbLockFile, listParked, readLedger, resolveAliasedEntry, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
+import { dailyPassDue, markDailyPass, type PassTrigger } from "@wolfpack/memory";
+import { runSessionPromotePass } from "@wolfpack/harness/memory";
 import { ledgerFile, vectorsDir, workLedgerFile } from "@wolfpack/kb/shared";
 import { DEFAULT_CONSOLIDATION_INTERVAL_MS, parseConsolidationInterval, effectiveConsolidationInterval, assertLibrarianSandboxed, assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
 
@@ -805,6 +807,18 @@ export default function createMemoryExtension(
       onArchive: mem.topicArchived,
     });
   }
+  /** The promote pass over the real KB; the alias resolver is the kb package's, passed in as a function. */
+  const runPass = (trigger: PassTrigger) => {
+    if (!kbRoots) throw new Error("promote needs KB_BASE and KB_OPS (no KB roots configured); nothing was changed");
+    const roots = kbRoots;
+    return runSessionPromotePass({
+      wolfDen, wolfName, engine: getEngine(), kbRoots: roots, defaultDomain, domains, env: context.env ?? process.env, trigger,
+      resolveEntry: (id) => resolveAliasedEntry(roots, readLedger(roots), id, defaultDomain)?.id ?? null,
+      onProgress: (msg) => console.log(`[memory] ${msg}`),
+      onEmit: mem.contribution,
+      onArchive: mem.topicArchived,
+    });
+  };
   const consolidateToSessions = (opts: { poolTarget?: number; minObservations: number; ignoreBackoff?: boolean }) => serialized(() => consolidateInner(opts));
 
   /** Consolidate the pool down to poolTarget (drain: the whole pool, as the timer does). Never overlaps itself. */
@@ -815,6 +829,12 @@ export default function createMemoryExtension(
         // minObservations 1: the trigger already decided; the manual-use size floor doesn't apply
         const consResult = await consolidateToSessions({ ...(opts.drain ? {} : { poolTarget }), minObservations: 1 });
         console.log(`[memory] Auto-consolidated into session topics: ${consResult.topicsCreated} created, ${consResult.topicsMerged} updated`);
+        // Promotion is its own pass: at most once per active day, topics whose threads were quiet 8 active hours.
+        if (kbRoots && dailyPassDue(wolfDen)) {
+          markDailyPass(wolfDen);
+          const r = await serialized(() => runPass({ kind: "daily" }));
+          console.log(`[memory] Daily promote pass: ${r.promoted.length} promoted, ${r.retired.length} retired`);
+        }
       } catch (consErr) {
         if (!swallowNoKey(consErr)) console.error("[memory] Auto-consolidation failed:", consErr instanceof Error ? consErr.message : consErr);
       } finally {
@@ -834,6 +854,7 @@ export default function createMemoryExtension(
     promotingJob: () => promoting,
     // A manual Consolidate ignores the retry backoff; the timer/threshold path keeps it.
     consolidate: () => consolidateToSessions({ minObservations: 1, ignoreBackoff: true }),
+    promoteForFeature: async (featureId: string) => { if (kbRoots) await serialized(() => runPass({ kind: "graduation", featureId })); },
     promote() {
       if (promoting) return { status: "already_running", jobId: promoting };
       const jobId = `promote-${Date.now().toString(36)}-${++jobSeq}`;
@@ -846,18 +867,8 @@ export default function createMemoryExtension(
           // inside promoteSessionTopics, as in pi.
           const { consolidated, promoted } = await serialized(async () => {
             const c = (await consolidateInner({ minObservations: 1 })).observationsProcessed;
-            const p = await promoteSessionTopics({
-              wolfDen,
-              wolfName,
-              engine: getEngine(),
-              kbRoots,
-              defaultDomain,
-              domains,
-              env: context.env ?? process.env,
-              onProgress: (msg) => console.log(`[memory] ${msg}`),
-              onEmit: mem.contribution,
-              onArchive: mem.topicArchived,
-            });
+            const pass = await runPass({ kind: "owner" });
+            const p = pass.promoteResult ?? { sessionId: "durable", topicsProcessed: 0, topicsMerged: 0, topicsCreated: 0, topicsSkipped: 0, claimsSubmitted: 0, topicsHeld: 0, trivialSkipped: 0, details: [] };
             return { consolidated: c, promoted: p };
           });
           const outcome = { consolidated, promoted };

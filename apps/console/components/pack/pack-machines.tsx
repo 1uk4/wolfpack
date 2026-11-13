@@ -113,8 +113,8 @@ function ServiceRow({ s, log, note, busy, onRestart, onRefresh }: { s: MachineSe
 			</div>
 			{s.wolves && s.wolves.length > 0 && (
 				<ul data-testid="machine-wolves" className="mt-1 space-y-0.5 pl-4 text-xs">
-					{s.wolves.map((w, i) => (
-						<li key={`${s.kind}:${w.name}:${i}`} data-testid="machine-wolf" data-wolf={w.name} className="flex flex-wrap items-center gap-x-2">
+					{s.wolves.map((w) => (
+						<li key={`${s.kind}:${w.name}`} data-testid="machine-wolf" data-wolf={w.name} className="flex flex-wrap items-center gap-x-2">
 							<span aria-hidden className={cn("size-1.5 rounded-full", TONE[w.tone])} />
 							<span className="text-foreground">{w.name}</span>
 							<span className="text-muted-foreground">{w.status === "ok" ? "running" : w.tone === "red" ? "down" : w.status === "unknown" ? "not reporting" : w.status}</span>

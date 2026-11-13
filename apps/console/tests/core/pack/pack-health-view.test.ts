@@ -72,6 +72,19 @@ describe("service rows per machine (the inventory panel)", () => {
 		assert.deepEqual(wolves.map((w) => [w.name, w.version, w.status]), [["1uk4", "0.1.19-main.5", "degraded"], ["jack", "0.1.19-main.5", "ok"]]);
 	});
 
+	it("folds the console's local workerd probe into the one inventory workerd on its machine (ids differ), one row per wolf", () => {
+		const card = { console: true, hub: null, wolves: [], workerds: [{ link: link("workerd", "ok", { version: "0.1.10-main.5", host: "lukas-macbook-pro" }), wolves: [link("wolfd@1uk4", "ok", { via: "workerd", version: null }), link("wolfd@jack", "degraded", { via: "workerd", version: null })] }] };
+		const m = { machine: "lukas-macbook-pro" };
+		const rows = machineServices(card, [
+			inv("workerd", "mac-1uk4", { ...m, version: "0.1.10-main.5", channel: "main" }),
+			inv("wolfd", "1uk4", { ...m, parent: "mac-1uk4", version: "0.1.19-main.5" }),
+			inv("wolfd", "jack", { ...m, parent: "mac-1uk4", version: "0.1.19-main.5" }),
+		], null).filter((r) => r.kind !== "console");
+		assert.equal(rows.length, 1);
+		assert.deepEqual([rows[0]!.name, rows[0]!.status, rows[0]!.version], ["mac-1uk4", "ok", "0.1.10-main.5"]);
+		assert.deepEqual(rows[0]!.children.map((c) => [c.name, c.status, c.version]), [["1uk4", "ok", "0.1.19-main.5"], ["jack", "degraded", "0.1.19-main.5"]]);
+	});
+
 	it("keeps one row per wolf when the workerd link carries the wolves", () => {
 		const card = { ...remote, workerds: [{ link: link("workerd", "ok"), wolves: [link("wolfd@hal", "ok", { version: null })] }] };
 		const rows = machineServices(card, [inv("workerd", "workerd", { version: "0.1.19" }), inv("wolfd", "hal", { parent: "workerd", version: "0.1.19" })], null);

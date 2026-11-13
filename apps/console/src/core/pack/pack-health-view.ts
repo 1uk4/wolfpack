@@ -251,9 +251,29 @@ export function machineServices(card: Pick<HostCard, "console" | "hub" | "worker
 		return out;
 	};
 	const linked = new Set<string>();
+	// A workerd link pairs with the inventory workerd of the same id; the console's local probe (id "workerd") has a different id from the
+	// inventory's ("mac-1uk4"), so a link left over takes the one unlinked inventory workerd, or the one whose wolves share its wolves' names.
+	const pairs = new Map<(typeof card.workerds)[number], InventoryRowView>();
 	for (const w of card.workerds) {
 		const e = workerE.find((x) => x.id === bare(w.link.id) || x.id === w.link.id);
-		if (e) linked.add(e.id);
+		if (e) {
+			pairs.set(w, e);
+			linked.add(e.id);
+		}
+	}
+	for (const w of card.workerds) {
+		if (pairs.has(w)) continue;
+		const free = workerE.filter((x) => !linked.has(x.id));
+		const names = new Set(w.wolves.map((l) => bare(l.id)));
+		const byWolves = free.filter((x) => inv.some((y) => y.kind === "wolfd" && y.parent === x.id && names.has(y.id)));
+		const e = free.length === 1 ? free[0] : byWolves.length === 1 ? byWolves[0] : undefined;
+		if (e) {
+			pairs.set(w, e);
+			linked.add(e.id);
+		}
+	}
+	for (const w of card.workerds) {
+		const e = pairs.get(w);
 		const row = mk("workerd", e?.id ?? w.link.id, e?.id ?? bare(w.link.id), w.link, e);
 		row.children = wolvesOf(w, e?.id ?? bare(w.link.id));
 		rows.push(row);

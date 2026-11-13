@@ -134,9 +134,11 @@ export function createInventoryReporter(o: InventoryReporterOptions): InventoryR
     const channel = o.channel();
     const base = { machine: o.machine, ...(channel ? { channel } : {}) };
     const kids = o.children();
-    const probed = await Promise.all(kids.map((c) => (c.url && c.state === "online" ? probeWolfd(c.url, timeoutMs) : Promise.resolve(undefined))));
-    const busy = await Promise.all(kids.map((c) => (o.busy && c.state === "online" ? o.busy(c.name).catch(() => false) : Promise.resolve(false))));
-    const con = o.consoleUrl ? await probeConsole(o.consoleUrl, o.machine, timeoutMs) : undefined;
+    const [probed, busy, con] = await Promise.all([
+      Promise.all(kids.map((c) => (c.url && c.state === "online" ? probeWolfd(c.url, timeoutMs) : Promise.resolve(undefined)))),
+      Promise.all(kids.map((c) => (o.busy && c.state === "online" ? o.busy(c.name).catch(() => false) : Promise.resolve(false)))),
+      o.consoleUrl ? probeConsole(o.consoleUrl, o.machine, timeoutMs) : Promise.resolve(undefined),
+    ]);
     const entries: InventoryEntry[] = [
       { ...base, kind: "workerd", id: o.hostId, ...(o.version ? { version: o.version } : {}), uptimeS: Math.round(process.uptime()), ...(o.keys ? { keys: o.keys() } : {}) },
       ...kids.map((c, i): InventoryEntry => ({ ...base, kind: "wolfd", id: c.name, parent: o.hostId, ...probed[i], ...(busy[i] ? { busy: true } : {}), ...(o.transport ? { transport: o.transport(c.name) } : {}) })),

@@ -21,6 +21,9 @@ const homeOf = (env: Env): string => val(env.HOME) ?? homedir();
 
 export const DEFAULT_WORKERD_PORT = 7141;
 export const DEFAULT_HUBD_PORT = 3142;
+export const DEFAULT_CONSOLE_PORT = 3200;
+/** The deployed console's loopback origin; workerd probes it to report the machine's console (WOLFPACK_CONSOLE_URL overrides). */
+export const DEFAULT_CONSOLE_URL = `http://127.0.0.1:${DEFAULT_CONSOLE_PORT}`;
 
 /** Pack state dir. */
 export const packStateDir = (env: Env = process.env): string => val(env.WOLFPACK_HOME) ?? join(homeOf(env), ".wolfpack");

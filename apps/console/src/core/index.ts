@@ -80,6 +80,7 @@ export * from "./kb/entry-view.ts";
 export * from "./work/work-view.ts";
 export * from "./kb/item-document.ts";
 export * from "./kb/memory-panel-model.ts";
+export * from "./kb/topics-model.ts";
 export * from "./ui/panel-host.ts";
 export * from "./work/task-graph.ts";
 export * from "./work/task-graph-layout.ts";

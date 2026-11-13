@@ -2,9 +2,9 @@
  * The Memory panel's Topics section: pure view helpers over a session-topic row (one row per topic).
  * Browser-safe, no IO.
  */
-import type { MemoryTopicRow } from "@wolfpack/protocol";
+import type { MemoryTopicRow, MemoryTopics } from "@wolfpack/protocol";
 
-export type { MemoryTopicRow };
+export type { MemoryTopicRow, MemoryTopics };
 
 export interface TopicChip {
 	label: string;

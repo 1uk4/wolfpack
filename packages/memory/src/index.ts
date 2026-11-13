@@ -215,6 +215,7 @@ export { withPoolLock, type PoolLockOptions } from "./pool-lock.js";
 export { writeFileAtomic } from "./atomic-write.js";
 export { ACTIVE_HOURS_RETENTION_DAYS, activeHoursFile, activeHoursSince, hourKey, readActiveHours, recordOwnerMessage, seedActiveHours } from "./active-hours.js";
 export { readRoutingIndex, recordReject, recordRouting, routingHint, subjectKey, type RoutingIndex, type RoutingSubject } from "./routing-index.js";
+export { QUIET_ACTIVE_HOURS, RETIRED_DIR, isQuiet, retireTopic, runPromotePass, targetHint, topicActivity, type PassDeps, type PassOptions, type PassResult, type PassTrigger, type TopicOutcome } from "./promote-pass.js";
 export { dailyPassDue, markDailyPass, readPromoteState, updateTopicState, type PromoteState, type TopicPromoteState } from "./promote-state.js";
 export { observationHash, observationIds, type ObservationIdFields } from "./observation-id.js";
 export { CHILDREN_CAP, LOG_TAIL, shapeWorkList, shapeWorkRecord, toWorkChild, withoutLog, logTail, type ShapeWorkItem, type ShapedWorkChild, type ShapedWorkListItem, type ShapedWorkRecord } from "./work-shape.js";

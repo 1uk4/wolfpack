@@ -15,6 +15,8 @@ export interface TopicPromoteState {
   retiredAt?: string;
   /** Why the topic stays: parked (unclassified/parked receipt) is shown in the panel. */
   state?: "parked";
+  /** The one forced rewrite of a held topic has been tried: if it is still held, it retires. */
+  heldRewriteTried?: boolean;
 }
 export interface PromoteState {
   version: 1;

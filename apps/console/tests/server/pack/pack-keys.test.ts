@@ -79,6 +79,20 @@ describe("Pack keys API", () => {
 		assert.deepEqual(await reach({ WOLFPACK_API_URL: "http://127.0.0.1:7141" }), { relay: false, machine: "mac" });
 	});
 
+	it("works on a console with a hub URL but no hub token, calling the hub with the caller's bearer", async () => {
+		const seen: (string | null)[] = [];
+		const hubFetch = (async (url: string, init?: RequestInit) => {
+			seen.push(new Headers(init?.headers).get("authorization"));
+			return Response.json(new URL(url).pathname === "/v1/inventory" ? { entries: [] } : { keys: {} });
+		}) as unknown as typeof fetch;
+		const gateApi = createHealthApi({ checkToken: async (t: string) => (t === "browser-fake" ? "accepted" : "rejected"), witness: createSessionWitness({ file: undefined }) } as unknown as Parameters<typeof createHealthApi>[0]);
+		const api = createKeysApi({ gate: (r) => gateApi.gate(r, "key change"), env: { WOLFPACK_HUB_URL: "http://hub.test:3150" }, fetch: hubFetch });
+		const res = await api.machines(req("GET", undefined, "browser-fake"));
+		assert.equal(res.status, 200);
+		assert.equal((await api.ack(req("POST", { fingerprint: "ff00" }, "browser-fake"), "box")).status, 200);
+		assert.deepEqual(seen, ["Bearer browser-fake", "Bearer browser-fake", "Bearer browser-fake"]);
+	});
+
 	it("forwards the fingerprint being accepted to the hub's ack, and passes its 409 through", async () => {
 		const { api, calls } = setup({ "/v1/machines/box/key/ack": { status: 409, body: { code: "conflict" } } });
 		const res = await api.ack(req("POST", { fingerprint: "ff00" }), "box");

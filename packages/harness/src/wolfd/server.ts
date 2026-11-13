@@ -32,6 +32,7 @@ import {
   PROTOCOL_VERSION_HEADER,
   SubmitBodySchema,
   ThreadSettingsPatchSchema,
+  KeepLocalBodySchema,
   CompactBodySchema,
   matchRoute,
   type ThreadSettings,
@@ -56,7 +57,7 @@ import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../me
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@wolfpack/kb/graph";
 import { readDenTopics, recordOwnerMessage } from "@wolfpack/memory";
-import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryNode, readMemoryObservations, readMemoryStatus, readMemoryTree, readMemoryTopic, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
+import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryNode, readMemoryObservations, readMemoryStatus, readMemoryTree, readMemoryTopic, readSessionTopics, setTopicKeepLocal, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
 import type { AskBridge } from "../extensions/ask.js";
@@ -981,6 +982,22 @@ export class WolfServer {
         const { state, reason } = memoryState(this.memoryReadInput());
         if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
         return this.json(res, 200, await readMemoryObservations(this.opts.den!, rawLimit === null ? undefined : Number(rawLimit), this.opts.work ?? {}));
+      }
+      case "getMemorySessionTopics": {
+        this.checkWolf(params.name);
+        const { state, reason } = memoryState(this.memoryReadInput());
+        if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
+        return this.json(res, 200, readSessionTopics(this.opts.den!));
+      }
+      case "putMemoryKeepLocal": {
+        this.checkWolf(params.name);
+        if (!isTopicId(params.id)) throw new HttpError("invalid_request", "malformed topic id");
+        const body = KeepLocalBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {keepLocal: boolean}");
+        const { state, reason } = memoryState(this.memoryReadInput());
+        if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
+        if (!setTopicKeepLocal(this.opts.den!, params.id, body.data.keepLocal)) throw new HttpError("not_found", `topic ${params.id}`);
+        return this.json(res, 200, { id: params.id, keepLocal: body.data.keepLocal });
       }
       case "getMemoryTree": {
         this.checkWolf(params.name);

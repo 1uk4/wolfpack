@@ -22,6 +22,9 @@ import {
   MemoryTopicSchema,
   MemoryObservationsSchema,
   MemoryTreeSchema,
+  MemoryTopicsSchema,
+  KeepLocalBodySchema,
+  KeepLocalResponseSchema,
   MemoryNodeObservationsSchema,
   PendingCardSchema,
   PromoteResponseSchema,
@@ -441,6 +444,10 @@ export const ROUTES = {
   getMemoryObservations: { method: "GET", path: "/v1/wolves/:name/memory/observations", response: { kind: "json", schema: MemoryObservationsSchema }, status: [200], error: err },
   /** Observation counts per feature → task (pending in the pool, archived in the last 7 days). 409 `memory_unavailable` when memory is inert or off. */
   getMemoryTree: { method: "GET", path: "/v1/wolves/:name/memory/tree", response: { kind: "json", schema: MemoryTreeSchema }, status: [200], error: err },
+  /** Every session topic with size, sources, state and keep-local, plus the retired ones and the byte budget. 409 `memory_unavailable` when memory is inert or off. */
+  getMemorySessionTopics: { method: "GET", path: "/v1/wolves/:name/memory/session-topics", response: { kind: "json", schema: MemoryTopicsSchema }, status: [200], error: err },
+  /** Set or clear a session topic's `keep_local` flag (a keep-local topic is never auto-promoted). 404 `not_found` for an unknown topic. */
+  putMemoryKeepLocal: { method: "PUT", path: "/v1/wolves/:name/memory/topics/:id/keep-local", body: KeepLocalBodySchema, response: { kind: "json", schema: KeepLocalResponseSchema }, status: [200], error: err },
   /** The observations behind one tree node (`:workId` a feature's own, a task, or `den`). `?limit=<n>` caps the archived list (default 100). */
   getMemoryNodeObservations: { method: "GET", path: "/v1/wolves/:name/memory/tree/:workId", response: { kind: "json", schema: MemoryNodeObservationsSchema }, status: [200], error: err },
   /**

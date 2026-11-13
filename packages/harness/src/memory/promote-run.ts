@@ -69,11 +69,11 @@ export async function runSessionPromotePass(c: PromoteRunConfig): Promise<Sessio
     root,
     trigger: c.trigger,
     now: c.now,
-    promote: async (topics) => {
+    promote: async (topics, targets) => {
       promoteResult = await promoteSessionTopics({
         wolfDen: c.wolfDen, wolfName: c.wolfName, engine: c.engine, kbRoots: c.kbRoots,
         defaultDomain: c.defaultDomain, domains: c.domains, env: c.env,
-        onlyIds: topics.map((t) => t.id), onProgress: c.onProgress, onEmit: c.onEmit, onArchive: c.onArchive,
+        onlyIds: topics.map((t) => t.id), targets, onProgress: c.onProgress, onEmit: c.onEmit, onArchive: c.onArchive,
       });
     },
     outcomeOf,

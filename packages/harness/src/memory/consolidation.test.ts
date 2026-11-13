@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
-import { replaceRecordSection, writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive, withPoolLock } from "@wolfpack/memory";
+import { recordRouting, replaceRecordSection, writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive, withPoolLock } from "@wolfpack/memory";
 import { consolidatePool, drainWorkObservations, durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
 
 const WOLF = "w1";
@@ -387,6 +387,13 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
       expect(m.writes.map((w) => w.id)).toEqual(["work-t1"]);
       expect(existsSync(join(den, ".memory", "sessions", "durable"))).toBe(false);
       expect(poolLines()).toEqual([]);
+    });
+
+    it("a new topic whose subject the routing index knows records the resolved entry as its hint", async () => {
+      poolWith([o(0)]);
+      recordRouting(den, "t", ["kb-old"]);
+      await consolidatePool({ wolfDen: den, wolfName: WOLF, engine: sessionEngine([]), sessionTopics: durableSessionTopics(den), minObservations: 1, resolveEntry: (id) => (id === "kb-old" ? "kb-new" : null) });
+      expect(readFileSync(join(sessions(), "t.md"), "utf-8")).toContain("routing_hint: kb-new");
     });
 
     it("a tagged observation whose item is gone is discarded, never a session topic", async () => {

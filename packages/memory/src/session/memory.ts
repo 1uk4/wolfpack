@@ -30,6 +30,8 @@ export interface TopicFile {
   keepLocal?: boolean;
   /** `parked`: the KB parked or could not classify it; the panel shows it as needing attention. */
   state?: "parked";
+  /** KB entry id this topic's subject was routed to before (routing index); resolved again at promote time. */
+  routingHint?: string;
   filename: string;
 }
 
@@ -69,6 +71,7 @@ export function readTopics(root: string): TopicFile[] {
       ...(fields.last_note ? { lastNote: String(fields.last_note) } : {}),
       ...(fields.keep_local === true || fields.keep_local === "true" ? { keepLocal: true } : {}),
       ...(fields.state === "parked" ? { state: "parked" as const } : {}),
+      ...(fields.routing_hint ? { routingHint: String(fields.routing_hint) } : {}),
       filename,
     };
   });
@@ -171,6 +174,7 @@ export function writeTopic(
     lastNote?: string;
     keepLocal?: boolean;
     state?: "parked";
+    routingHint?: string;
   }
 ): void {
   mkdirSync(root, { recursive: true });
@@ -185,6 +189,7 @@ export function writeTopic(
     ...(topic.lastNote ? [`last_note: ${topic.lastNote}`] : []),
     ...(topic.keepLocal ? ["keep_local: true"] : []),
     ...(topic.state ? [`state: ${topic.state}`] : []),
+    ...(topic.routingHint ? [`routing_hint: ${topic.routingHint}`] : []),
     "---",
     "",
     topic.body,

@@ -36,7 +36,7 @@ export type TopicOutcome =
 
 export interface PassDeps {
   /** Distill and emit these topics to the KB (never throws for one bad topic). */
-  promote: (topics: TopicFile[]) => Promise<void>;
+  promote: (topics: TopicFile[], targets: Record<string, string>) => Promise<void>;
   outcomeOf: (topic: TopicFile) => TopicOutcome;
   /** The kb package's resolveAliasedEntry, as a function: id → live entry id (following retirement) or null. */
   resolveEntry: (entryId: string) => string | null;
@@ -96,7 +96,15 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
 
   const chosen = readTopics(root).filter((t) => selects(den, t, trigger));
   if (chosen.length) {
-    await opts.promote(chosen);
+    // A routing hint is resolved now; a hint whose entry is gone is dropped from the topic.
+    const targets: Record<string, string> = {};
+    for (const t of chosen) {
+      if (!t.routingHint) continue;
+      const live = opts.resolveEntry(t.routingHint);
+      if (live) targets[t.id] = live;
+      if (live !== t.routingHint) writeTopic(root, { ...t, routingHint: live ?? undefined });
+    }
+    await opts.promote(chosen, targets);
     for (const t of chosen) result.promoted.push(t.id);
   }
 
@@ -131,7 +139,7 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
           if (fixed) {
             const again = readTopics(root).find((x) => x.id === t.id);
             if (again) {
-              await opts.promote([again]);
+              await opts.promote([again], again.routingHint ? { [again.id]: again.routingHint } : {});
               const o2 = opts.outcomeOf(again);
               if (o2.kind === "create" || o2.kind === "merge") {
                 recordRouting(den, t.id, o2.entryIds, now);
@@ -159,7 +167,7 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
 export function setKeepLocal(root: string, topicId: string, keepLocal: boolean): boolean {
   const t = readTopics(root).find((x) => x.id === topicId);
   if (!t) return false;
-  writeTopic(root, { id: t.id, title: t.title, summary: t.summary, updated: t.updated, body: t.body, domain: t.domain, sources: t.sources, lastNote: t.lastNote, state: t.state, keepLocal: keepLocal || undefined });
+  writeTopic(root, { id: t.id, title: t.title, summary: t.summary, updated: t.updated, body: t.body, domain: t.domain, sources: t.sources, lastNote: t.lastNote, state: t.state, keepLocal: keepLocal || undefined, routingHint: t.routingHint });
   return true;
 }
 

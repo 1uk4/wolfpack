@@ -41,6 +41,7 @@ import {
   DEFAULT_MAX_TOPICS,
   readJourney,
   writeTopic,
+  targetHint,
   renderIndex,
   SESSION_CONSOLIDATION_USER_PROMPT,
   fillPromptTemplate,
@@ -125,6 +126,8 @@ export interface ConsolidationConfig {
    * promoteSessionTopics moves them to the den and the KB inbox. Omitted: the legacy pool → den path.
    */
   sessionTopics?: SessionTopicsLocation;
+  /** The kb package's resolveAliasedEntry as a function; a new session topic whose subject the routing index knows records the resolved entry as its hint. */
+  resolveEntry?: (entryId: string) => string | null;
   wolfDen: string;
   wolfName: string;
   /** The wolf's resolved model table (default: loadModelTable(), i.e. the
@@ -859,6 +862,10 @@ async function consolidateToSessionTopics(
       sources: [...new Set([...(prev?.sources ?? []), ...runSources])],
       ...(runLastNote ? { lastNote: prev?.lastNote && prev.lastNote > runLastNote ? prev.lastNote : runLastNote } : prev?.lastNote ? { lastNote: prev.lastNote } : {}),
       ...(prev?.keepLocal ? { keepLocal: true } : {}),
+      ...(() => {
+        const hint = prev?.routingHint ?? (!isUpdate && config.resolveEntry ? targetHint(config.wolfDen, r.id, config.resolveEntry) : null);
+        return hint ? { routingHint: hint } : {};
+      })(),
     });
     safely(() => config.onTopic?.({ id: r.id, domain: r.domain || soleDomain, change: isUpdate ? "merge" : "create", scope: "session", observationCount: observations.length }));
     onProgress?.(`  ${isUpdate ? "updated" : "created"} session topic: ${r.title}`);
@@ -889,6 +896,8 @@ export interface PromoteSessionConfig {
   onArchive?: (a: { id: string; entryId: string | null }) => void;
   /** Promote only these session topics (the promote pass chooses). Omitted: all. */
   onlyIds?: readonly string[];
+  /** Resolved routing hints by topic id: the emit target for that topic. */
+  targets?: Record<string, string>;
 }
 
 /**
@@ -907,6 +916,7 @@ export function promoteSessionTopics(config: PromoteSessionConfig): Promise<Cons
     allowedDomains: config.domains?.length ? config.domains : envDomains(config.env),
     skipClaims: false,
     ...(config.onlyIds ? { onlyIds: config.onlyIds } : {}),
+    ...(config.targets ? { targets: config.targets } : {}),
     onProgress: config.onProgress,
     onEmit: config.onEmit,
     onArchive: config.onArchive,

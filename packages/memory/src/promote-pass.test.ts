@@ -144,6 +144,23 @@ describe("promote pass", () => {
     expect(promoted).toEqual(["a"]);
   });
 
+  it("promotes a topic with its routing hint resolved now, and drops a hint whose entry is gone", async () => {
+    const { den, root } = setup([20]);
+    topic(root, "a", { routingHint: "kb-old" });
+    topic(root, "b", { routingHint: "kb-dead" });
+    topic(root, "c");
+    let seen: Record<string, string> = {};
+    await runPromotePass({
+      den, root, trigger: { kind: "owner" }, now: NOW,
+      ...deps({}),
+      promote: async (_ts, hints) => { seen = { ...hints }; },
+      resolveEntry: (id) => (id === "kb-old" ? "kb-new" : null),
+    });
+    expect(seen).toEqual({ a: "kb-new" });
+    const byId = Object.fromEntries(readTopics(root).map((t) => [t.id, t.routingHint]));
+    expect(byId).toEqual({ a: "kb-new", b: undefined, c: undefined });
+  });
+
   it("drops a stale routing link when its entry resolves to nothing", async () => {
     const { den, root } = setup([20]);
     topic(root, "a");

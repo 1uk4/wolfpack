@@ -58,6 +58,8 @@ export interface ConsolidateOptions {
   skipClaims?: boolean;
   /** Promote only these session topics (the promote pass chooses them). Omitted: all, as before. */
   onlyIds?: readonly string[];
+  /** Resolved routing hints by topic id (from the promote pass): the emit target for that topic. */
+  targets?: Record<string, string>;
   /** Optional progress sink — called with human-readable status lines as the
    *  pipeline advances, so a UI can show what is actually being processed. */
   onProgress?: (msg: string) => void;
@@ -180,6 +182,7 @@ export async function consolidateSession(
     body: string;
     domain?: string;
     change: "create" | "merge";
+    target?: string;
   }> = [];
 
   const now = new Date().toISOString().replace("T", " ").slice(0, 16);
@@ -218,7 +221,7 @@ export async function consolidateSession(
       onProgress?.(`  held back (not promotable): ${t.id} — ${gate.promotableReason}`);
       continue;
     }
-    updatedTopics.push({ ...topic, change });
+    updatedTopics.push({ ...topic, change, ...(options.targets?.[t.id] ? { target: options.targets[t.id] } : {}) });
 
     if (change === "merge") merged++;
     else created++;

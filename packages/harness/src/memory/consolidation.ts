@@ -848,6 +848,8 @@ export interface PromoteSessionConfig {
   onEmit?: (c: { id: string; denTopicId: string; domain: string }) => void;
   /** Called per den topic the promote's reconcile step archived (`entryId` null: rejected). */
   onArchive?: (a: { id: string; entryId: string | null }) => void;
+  /** Promote only these session topics (the promote pass chooses). Omitted: all. */
+  onlyIds?: readonly string[];
 }
 
 /**
@@ -865,6 +867,7 @@ export function promoteSessionTopics(config: PromoteSessionConfig): Promise<Cons
     defaultDomain: config.defaultDomain,
     allowedDomains: config.domains?.length ? config.domains : envDomains(config.env),
     skipClaims: false,
+    ...(config.onlyIds ? { onlyIds: config.onlyIds } : {}),
     onProgress: config.onProgress,
     onEmit: config.onEmit,
     onArchive: config.onArchive,

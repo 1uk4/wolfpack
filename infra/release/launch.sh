@@ -20,32 +20,68 @@ fi
 if [ "$transport" = subscription ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   echo "launch.sh: FATAL transport is subscription but CLAUDE_CODE_OAUTH_TOKEN is not set in $ENV_FILE" >&2; exit 78
 fi
-# Extension bundles: this release carries the bundles it was built with (extensions/<dir>/index.js + extensions/STAMP). wolfd loads
-# $WOLF_HOME/den/extensions/<dir>/index.js, which nothing else refreshes, so install them here, before wolfd starts. Because launch.sh
-# ships per release, a rollback to release.prev runs the old launch.sh and puts the old bundles back. Which dirs: the ones the den
-# already has plus the keys in an inline wolf.yaml `extensions: [a, b]` (key -> wolfpack-<key>), only if the release carries them.
-# The old dir is MOVED to den/extensions.bak-<UTC ts>, never deleted. Any failure is logged and wolfd starts on the old extensions.
+# Extension bundles: this release carries the bundles it was built with (extensions/<dir>/index.js, extensions/KEYS = "key dir" lines,
+# extensions/STAMP = "<version> <content hash>"). wolfd loads $WOLF_HOME/den/extensions/<dir>/index.js, which nothing else refreshes, so
+# install them here, before wolfd starts. launch.sh ships per release, so a rollback to release.prev runs the old one and puts the old
+# bundles back. Which dirs: the ones the den already has plus the keys in wolf.yaml `extensions:` (inline [a, b] or a block list),
+# mapped to dirs through KEYS. Skipped when the den's .release-stamp has the same content hash (the version part is ignored).
+# Nothing is deleted: the old dir is MOVED to den/extensions.bak-<UTC ts>; the newest 3 stay in den/, older ones are moved into
+# den/extensions.bak-old/. A crash between the two moves (den/extensions missing) is healed by restoring the newest backup, and a
+# half-built .extensions.new-* is moved aside to .extensions.stale-*. Any failure is logged and wolfd starts on the existing extensions.
+extension_keys() {
+  awk '
+    /^extensions:/ { v=$0; sub(/^extensions:[ \t]*/, "", v)
+      if (match(v, /\[[^]]*\]/)) { s=substr(v, RSTART+1, RLENGTH-2); n=split(s, a, ","); for (i=1;i<=n;i++) print a[i]; blk=0 } else blk=1; next }
+    blk && /^[ \t]*-([ \t]|$)/ { v=$0; sub(/^[ \t]*-[ \t]*/, "", v); sub(/[ \t]*#.*/, "", v); print v; next }
+    blk && /^[ \t]*(#.*)?$/ { next }
+    { blk=0 }
+  ' "$1" 2>/dev/null | tr -d "\"' \t" | grep -v '^$' || true
+}
 refresh_extensions() {
-  local n src="$REL/extensions" den="$WOLF_HOME/den" ext stamp ts new d k keys="" want=""
+  local src="$REL/extensions" den="$WOLF_HOME/den" ext stamp hash cur ts n new d k b newest keys want=""
   [ -f "$src/STAMP" ] || return 0
-  ext="$den/extensions"; stamp="$(cat "$src/STAMP")"
-  [ "$(cat "$ext/.release-stamp" 2>/dev/null || true)" != "$stamp" ] || return 0
+  ext="$den/extensions"; stamp="$(cat "$src/STAMP")"; hash="${stamp##* }"
+  if [ -d "$den" ]; then
+    if [ ! -d "$ext" ]; then
+      newest="$(find "$den" -maxdepth 1 -type d -name 'extensions.bak-*' ! -name extensions.bak-old | LC_ALL=C sort | tail -1)"
+      if [ -n "$newest" ] && mv "$newest" "$ext"; then echo "launch.sh: den/extensions was missing; restored $(basename "$newest")" >&2; fi
+    fi
+    while IFS= read -r b; do mv "$b" "$den/.extensions.stale-$$-$(basename "$b" | tr -d '.')" 2>/dev/null || true
+    done < <(find "$den" -maxdepth 1 -type d -name '.extensions.new-*')
+  fi
+  cur="$(cat "$ext/.release-stamp" 2>/dev/null || true)"
+  [ "${cur##* }" != "$hash" ] || return 0
   ts="$(date -u +%Y%m%d%H%M%S)"; n=0
-  while [ -e "$den/extensions.bak-$ts" ]; do n=$((n + 1)); ts="$(date -u +%Y%m%d%H%M%S)-$n"; done  # never mv into an existing backup
+  # never mv into an existing backup, nor reuse a name already moved to bak-old (the newest backup must sort last)
+  while [ -e "$den/extensions.bak-$ts" ] || [ -e "$den/extensions.bak-old/extensions.bak-$ts" ]; do n=$((n + 1)); ts="$(date -u +%Y%m%d%H%M%S)-$(printf %02d "$n")"; done
   new="$den/.extensions.new-$ts"
-  [ ! -d "$ext" ] || for d in "$ext"/*/; do want="$want $(basename "$d")"; done
-  keys="$(sed -n 's/^extensions:[[:space:]]*\[\(.*\)\].*/\1/p' "$CONFIG" 2>/dev/null | head -1 | tr -d "\"' " | tr ',' ' ')"
-  for k in $keys; do want="$want wolfpack-$k"; done
+  if [ -d "$ext" ]; then
+    while IFS= read -r d; do want="$want$d"$'\n'; done < <(find "$ext" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
+  fi
+  keys="$(extension_keys "$CONFIG")"
+  if [ -z "$keys" ] && grep -q '^extensions:' "$CONFIG" 2>/dev/null; then echo "launch.sh: wolf.yaml has extensions: but no keys could be read from it" >&2; fi
+  while IFS= read -r k; do
+    [ -n "$k" ] || continue
+    d="$(awk -v k="$k" '$1 == k { print $2; exit }' "$src/KEYS" 2>/dev/null || true)"
+    [ -n "$d" ] || d="$k"
+    want="$want$d"$'\n'
+  done <<< "$keys"
   rm -rf "$new" && mkdir -p "$new" || return 1
   if [ -d "$ext" ]; then cp -R "$ext"/. "$new"/ || { rm -rf "$new"; return 1; }; fi
-  for d in $(printf '%s\n' $want | sort -u); do
+  while IFS= read -r d; do
+    case "$d" in ""|.*|*/*) continue ;; esac
     [ -f "$src/$d/index.js" ] || continue
     rm -rf "${new:?}/$d" && cp -R "$src/$d" "$new/$d" || { rm -rf "$new"; return 1; }
-  done
+  done < <(printf '%s' "$want" | LC_ALL=C sort -u)
   chmod -R u+rwX,go+rX-w "$new" 2>/dev/null || true
   printf '%s' "$stamp" > "$new/.release-stamp" || { rm -rf "$new"; return 1; }
   if [ -d "$ext" ]; then mv "$ext" "$den/extensions.bak-$ts" || { rm -rf "$new"; return 1; }; fi
   mv "$new" "$ext" || { [ ! -d "$den/extensions.bak-$ts" ] || mv "$den/extensions.bak-$ts" "$ext"; return 1; }
+  n=0
+  while IFS= read -r b; do
+    n=$((n + 1))
+    if [ "$n" -gt 3 ]; then mkdir -p "$den/extensions.bak-old" && mv "$b" "$den/extensions.bak-old/" || true; fi
+  done < <(find "$den" -maxdepth 1 -type d -name 'extensions.bak-*' ! -name extensions.bak-old | LC_ALL=C sort -r)
 }
 refresh_extensions || echo "launch.sh: extensions NOT refreshed (could not install this release's bundles into $WOLF_HOME/den/extensions; starting wolfd on the existing ones)" >&2
 

@@ -111,6 +111,18 @@ function ServiceRow({ s, log, note, busy, onRestart, onRefresh }: { s: MachineSe
 					<button type="button" data-testid="machine-restart" data-for={s.kind} disabled={busy} onClick={onRestart} className={cn(BTN, onRefresh ? "" : "ml-auto")}>{busy ? "Restarting…" : "Restart"}</button>
 				)}
 			</div>
+			{s.wolves && s.wolves.length > 0 && (
+				<ul data-testid="machine-wolves" className="mt-1 space-y-0.5 pl-4 text-xs">
+					{s.wolves.map((w) => (
+						<li key={w.name} data-testid="machine-wolf" data-wolf={w.name} className="flex flex-wrap items-center gap-x-2">
+							<span aria-hidden className={cn("size-1.5 rounded-full", TONE[w.tone])} />
+							<span className="text-foreground">{w.name}</span>
+							<span className="text-muted-foreground">{w.status === "ok" ? "running" : w.tone === "red" ? "down" : w.status === "unknown" ? "not reporting" : w.status}</span>
+							<span className="text-muted-foreground">{w.version ? `v${w.version}` : (w.versionNote ?? "version unknown")}</span>
+						</li>
+					))}
+				</ul>
+			)}
 			{s.hint && <p data-testid="machine-restart-hint" className="mt-1 text-muted-foreground">{s.hint}</p>}
 			{note && <p data-testid="machine-service-note" className="mt-1 text-muted-foreground">{note}</p>}
 			{s.down && log !== undefined && (
@@ -358,27 +370,34 @@ export function MachinesSection() {
 		if (fake) setSend(() => fakeSend(fake));
 	}, []);
 	// The hub inventory is read with THIS browser's sign-in (the app's fetch wrapper adds the stored bearer), not a console token.
-	const [inv, setInv] = useState<{ state: "ok" | "unavailable" | "signed-out"; rows?: InventoryRowView[]; hubMachine?: string | null } | null>(null);
+	type Inv = { state: "ok" | "unavailable" | "signed-out"; rows?: InventoryRowView[]; hubMachine?: string | null };
+	const [inv, setInv] = useState<Inv | null>(null);
 	useEffect(() => {
 		if (fakeWanted) return;
-		let stop = false;
+		const ac = new AbortController();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		// One poll at a time: the next is scheduled after the previous settles; unmount aborts the one in flight.
 		const load = async () => {
+			let next: Inv = { state: "unavailable" };
 			try {
-				const r = await fetch("/api/health/inventory", { cache: "no-store" });
-				const b = (await r.json()) as { state?: string; rows?: InventoryRowView[]; hubMachine?: string | null };
-				if (!stop) setInv(r.ok && (b.state === "ok" || b.state === "signed-out") ? (b as never) : { state: "unavailable" });
+				const r = await fetch("/api/health/inventory", { cache: "no-store", signal: ac.signal });
+				const b = (await r.json()) as Inv;
+				if (r.ok && (b.state === "ok" || b.state === "signed-out")) next = b;
 			} catch {
-				if (!stop) setInv({ state: "unavailable" });
+				/* unavailable */
 			}
+			if (ac.signal.aborted) return;
+			setInv(next);
+			timer = setTimeout(() => void load(), 5_000);
 		};
 		void load();
-		const t = setInterval(() => void load(), 5_000);
 		return () => {
-			stop = true;
-			clearInterval(t);
+			ac.abort();
+			clearTimeout(timer);
 		};
 	}, [fakeWanted]);
-	const merged = snapshot && inv ? { ...snapshot, inventory: { state: inv.state, rows: inv.state === "ok" ? (inv.rows ?? []) : [], stale: false, hubMachine: inv.hubMachine ?? null } } : snapshot;
+	// Before the first per-viewer answer the cards show a neutral "loading" note, never snapshot data or "version unknown".
+	const merged = snapshot ? { ...snapshot, inventory: inv ? { state: inv.state, rows: inv.state === "ok" ? (inv.rows ?? []) : [], stale: false, hubMachine: inv.hubMachine ?? null } : { state: "loading" as const, rows: [], stale: false, hubMachine: null } } : snapshot;
 	const cards = merged ? groupByHost(merged).filter((c) => c.checked) : [];
 	const hubIdOf = useCallback((id: string) => snapshot?.hosts?.find((h) => h.id === id)?.hubId, [snapshot]);
 	const fetchLog = useCallback(

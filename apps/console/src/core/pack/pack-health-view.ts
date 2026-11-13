@@ -134,7 +134,7 @@ export function machineServiceCards(
 }
 
 /** How the last read of the hub inventory ended (GET /api/health/inventory, read with the viewer's bearer). */
-export type InventoryState = "ok" | "unavailable" | "signed-out";
+export type InventoryState = "ok" | "unavailable" | "signed-out" | "loading";
 
 /** One inventory row as the panel gets it (src/server/pack/inventory.ts RemoteService). */
 export interface InventoryRowView {

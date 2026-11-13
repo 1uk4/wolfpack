@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, MemoryTree, MemoryNodeObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbActivityResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse, PromptView, HubSettings, WolfSettingsView, RevealResponse, RestartResponse, CommandKind, CommandResponse } from "@wolfpack/protocol";
+import type { Actor, BindThreadResponse, ThreadContext, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, MemoryTopics, KeepLocalResponse, MemoryTree, MemoryNodeObservations, WolfEvent, HubEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkItemResponse, WorkspaceStatus, KbActivityResponse, GraduationJob, GraduationObservations, GraduationStatus, DeviceList, MintPairingCodeResponse, PromptView, HubSettings, WolfSettingsView, RevealResponse, RestartResponse, CommandKind, CommandResponse } from "@wolfpack/protocol";
 export type { Device, DeviceList, MintPairingCodeResponse } from "@wolfpack/protocol";
 
 export type {
@@ -46,7 +46,7 @@ export type { PromptView, HubSettings, WolfSettingsView, RevealResponse, Restart
 export type { ThreadContext, CreateThreadBody, ThreadSettings, ThreadSettingsPatch, ThreadSettingsResponse, ThreadTier } from "@wolfpack/protocol";
 export type { WolfEvent, WolfEventType, HubEvent, HubEventType, CardOutcome } from "@wolfpack/protocol";
 export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, CardBrief, PendingCard, ThreadStatus } from "@wolfpack/protocol";
-export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, MemoryObservation, MemoryObservations, MemoryTree, MemoryNodeObservations, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, WorkItemResponse, GraduationPreview, GraduationContribution, GraduationResult, GraduationJob, GraduationJobKind, GraduationStatus, GraduationObservations, WorkListResponse, WorkListItem, SweepOutcome } from "@wolfpack/protocol";
+export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, MemoryObservation, MemoryObservations, MemoryTopics, MemoryTopicRow, KeepLocalResponse, MemoryTree, MemoryNodeObservations, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, WorkItemResponse, GraduationPreview, GraduationContribution, GraduationResult, GraduationJob, GraduationJobKind, GraduationStatus, GraduationObservations, WorkListResponse, WorkListItem, SweepOutcome } from "@wolfpack/protocol";
 /** Query of the hub KB activity route: `since` 7d|30d|all|ISO (default 30d), `before` cursor, `limit` 1..200 (default 50), `domain`. */
 export interface KbActivityQuery {
   since?: string;
@@ -204,6 +204,10 @@ export interface ConsoleClient {
   /** One den or session topic with its body (`scope` picks the store; default den, then session). Rejects NotFoundError for an unknown topic. */
   /** The wolf's current observation pool, newest first (`limit`: keep the newest n). Rejects with `memory_unavailable` when memory is inert or off. Optional like watchMemory. */
   getMemoryObservations?(wolf: string, opts?: { limit?: number }): Promise<MemoryObservations>;
+  /** Every session topic with size, sources, state and keep-local, plus retired ones and the byte budget. Optional like watchMemory. */
+  getMemorySessionTopics?(wolf: string): Promise<MemoryTopics>;
+  /** Set or clear a session topic's keep-local flag. Rejects NotFoundError for an unknown topic. */
+  putMemoryKeepLocal?(wolf: string, topicId: string, keepLocal: boolean): Promise<KeepLocalResponse>;
   /** Observation counts per feature → task (pending, and archived in the last 7 days). Optional like watchMemory. */
   getMemoryTree?(wolf: string): Promise<MemoryTree>;
   /** The observations behind one tree node (a work id or `den`). */

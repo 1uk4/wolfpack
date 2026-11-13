@@ -42,6 +42,8 @@ import {
   type MemoryStatus,
   type MemoryTopic,
   type MemoryObservations,
+  type MemoryTopics,
+  type KeepLocalResponse,
   type MemoryTree,
   type MemoryNodeObservations,
   type WorkRecordResponse,
@@ -484,6 +486,14 @@ export class HttpConsoleClient implements ConsoleClient {
   async getMemoryObservations(wolf: string, opts: { limit?: number } = {}): Promise<MemoryObservations> {
     const query = opts.limit !== undefined ? `?limit=${encodeURIComponent(String(opts.limit))}` : "";
     return (await this.json("getMemoryObservations", { name: wolf }, ROUTES.getMemoryObservations.response.schema, undefined, wolf, query)) as MemoryObservations;
+  }
+
+  async getMemorySessionTopics(wolf: string): Promise<MemoryTopics> {
+    return (await this.json("getMemorySessionTopics", { name: wolf }, ROUTES.getMemorySessionTopics.response.schema, undefined, wolf)) as MemoryTopics;
+  }
+
+  async putMemoryKeepLocal(wolf: string, topicId: string, keepLocal: boolean): Promise<KeepLocalResponse> {
+    return (await this.json("putMemoryKeepLocal", { name: wolf, id: topicId }, ROUTES.putMemoryKeepLocal.response.schema, { keepLocal }, wolf)) as KeepLocalResponse;
   }
 
   async getMemoryTree(wolf: string): Promise<MemoryTree> {

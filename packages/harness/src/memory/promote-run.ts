@@ -4,8 +4,8 @@
  * Consolidation never calls this; the triggers do (owner click, graduation, the daily pass).
  */
 import { join } from "node:path";
-import { denTopicStates, runPromotePass, type ConsolidateResult, type PassResult, type PassTrigger, type TopicOutcome } from "@wolfpack/memory";
-import type { Engine } from "@wolfpack/engine";
+import { ConsolidationResultSchema, denTopicStates, readTopics, runPromotePass, writeTopic, type ConsolidateResult, type PassResult, type PassTrigger, type TopicFile, type TopicOutcome } from "@wolfpack/memory";
+import { CONSOLIDATE_SYSTEM, type Engine } from "@wolfpack/engine";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
 
@@ -28,6 +28,26 @@ export interface PromoteRunConfig {
 
 /** The pass result plus the real promote result (counts, per-topic details) when the pass promoted anything. */
 export type SessionPassResult = PassResult & { promoteResult?: ConsolidateResult };
+
+/**
+ * One forced rewrite of a held topic: the model gets the distill findings and must rewrite the topic so it states
+ * decisions and facts, not a log. True when the topic file was replaced; false (topic untouched) on any failure.
+ */
+export async function rewriteHeldTopic(engine: Engine, root: string, topic: TopicFile, reason: string): Promise<boolean> {
+  try {
+    const res = await engine.call("consolidate", ConsolidationResultSchema, {
+      system: CONSOLIDATE_SYSTEM,
+      prompt: `The KB held this topic back. Findings: ${reason}\n\nRewrite it once so the findings no longer apply: keep decisions, facts and reasons, drop narration. Return one merge action with the same id.\n\n### ${topic.id} — ${topic.title}\nSummary: ${topic.summary}\n\n${topic.body}`,
+    });
+    const r = res.actions.find((a) => a.action !== "skip" && a.result?.id === topic.id)?.result;
+    if (!r || !r.body.trim()) return false;
+    const updated = new Date().toISOString().replace("T", " ").slice(0, 16);
+    writeTopic(root, { id: topic.id, title: r.title, summary: r.summary, updated, body: r.body, domain: topic.domain, sources: topic.sources, lastNote: topic.lastNote, keepLocal: topic.keepLocal });
+    return readTopics(root).some((t) => t.id === topic.id);
+  } catch {
+    return false;
+  }
+}
 
 export async function runSessionPromotePass(c: PromoteRunConfig): Promise<SessionPassResult> {
   let promoteResult: ConsolidateResult | undefined;
@@ -58,7 +78,7 @@ export async function runSessionPromotePass(c: PromoteRunConfig): Promise<Sessio
     },
     outcomeOf,
     resolveEntry: c.resolveEntry,
-    rewriteHeld: async () => false,
+    rewriteHeld: (t, reason) => rewriteHeldTopic(c.engine, root, t, reason),
   });
   return { ...pass, ...(promoteResult ? { promoteResult } : {}) };
 }

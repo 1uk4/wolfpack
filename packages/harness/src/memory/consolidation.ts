@@ -33,7 +33,7 @@ import {
   buildDomainContext,
   consolidateSession,
   readTopics,
-  evictOldTopics,
+  enforceByteCap,
   retireTopic,
   TOPIC_CHAR_CAP,
   restoreEvicted,
@@ -773,9 +773,7 @@ async function consolidateToSessionTopics(
   const obsLines = observations
     .map((o) => `${o.timestamp}${o.domain ? ` [${o.domain}]` : ""}  ${o.content}`)
     .join("\n");
-  // The cap: the model is never sent more than maxTopics topics. Evicted files stay on disk (promote reads them).
-  const evicted = evictOldTopics(root, config.maxTopics ?? DEFAULT_MAX_TOPICS);
-  if (evicted.length) onProgress?.(`  moved ${evicted.length} least recently updated session topic(s) to evicted/`);
+  // No count-based eviction before the call: the model sees every topic. The 180 KB cap is enforced after the run.
   const existing = readTopics(root);
   const journey = readJourney(root);
   const existingSection =
@@ -797,7 +795,6 @@ async function consolidateToSessionTopics(
   try {
     result = await engine.call("consolidate", ConsolidationResultSchema, { system, prompt });
   } catch (err) {
-    restoreEvicted(root, evicted); // a failed run changes nothing
     throw err;
   }
 
@@ -859,6 +856,8 @@ async function consolidateToSessionTopics(
     if (isUpdate) merged++;
     else created++;
   }
+  const capped = enforceByteCap({ den: config.wolfDen, root });
+  if (capped.retired.length || capped.evicted.length) onProgress?.(`  180 KB cap: ${capped.retired.length} retired, ${capped.evicted.length} moved to evicted/`);
   renderIndex(root);
   onProgress?.(`Done: ${created} session topic(s) created, ${merged} updated, ${skipped} skipped`);
   return { created, merged, skipped };

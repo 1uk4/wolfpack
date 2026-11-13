@@ -34,6 +34,8 @@ import {
   consolidateSession,
   readTopics,
   evictOldTopics,
+  retireTopic,
+  TOPIC_CHAR_CAP,
   restoreEvicted,
   setAsideEvicted,
   DEFAULT_MAX_TOPICS,
@@ -807,7 +809,36 @@ async function consolidateToSessionTopics(
   let created = 0;
   let merged = 0;
   let skipped = 0;
+  // A topic over TOPIC_CHAR_CAP is sent back once, asking for a split by subject. Every part must be under the cap;
+  // otherwise the oversized write is dropped and the original topic stays as it was.
+  const actions: typeof result.actions = [];
   for (const action of result.actions) {
+    const big = action.action !== "skip" && action.result && action.result.body.length > TOPIC_CHAR_CAP ? action.result : undefined;
+    if (!big) {
+      actions.push(action);
+      continue;
+    }
+    let parts: typeof result.actions | undefined;
+    try {
+      const split = await engine.call("consolidate", ConsolidationResultSchema, {
+        system,
+        prompt: `The topic below is ${big.body.length} characters, over the ${TOPIC_CHAR_CAP}-character cap. Please split it by subject into separate topics, each body under ${TOPIC_CHAR_CAP} characters, losing no facts. Return one create action per part, each with its own id.\n\n### ${big.id} — ${big.title}\nSummary: ${big.summary}\n\n${big.body}`,
+      });
+      const ok = split.actions.length > 1 && split.actions.every((a) => a.action !== "skip" && a.result && a.result.body.length <= TOPIC_CHAR_CAP && isSafeSegment(a.result.id));
+      if (ok) parts = split.actions;
+    } catch {
+      parts = undefined;
+    }
+    if (!parts) {
+      skipped++;
+      onProgress?.(`  split of ${big.id} failed; the original stays unchanged`);
+      continue;
+    }
+    const orig = existing.find((t) => t.id === big.id);
+    if (orig && !parts.some((p) => p.result?.id === big.id)) retireTopic(root, orig, new Date());
+    actions.push(...parts);
+  }
+  for (const action of actions) {
     if (action.action === "skip" || !action.result) {
       skipped++;
       continue;

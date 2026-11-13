@@ -402,6 +402,44 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
       expect(readFileSync(join(den, ".memory", "pool", "archive.jsonl"), "utf-8")).toContain("observation 0");
     });
 
+    describe("8,000-character topic cap", () => {
+      const seedTopic = () => {
+        mkdirSync(sessions(), { recursive: true });
+        writeFileSync(join(sessions(), "big.md"), `---\nid: big\ntitle: Big\nsummary: s\nupdated: 2026-10-10 10:00\n---\n\noriginal body\n`);
+      };
+      const act = (id: string, body: string) => ({ sessionTopicId: id, action: "merge", reasoning: "r", result: { id, title: id, summary: "s", body } });
+      const engineFor = (replies: unknown[][], calls: string[]) =>
+        ({
+          call: async (_step: string, schema: { parse: (v: unknown) => unknown }, p: { prompt: string }) => {
+            calls.push(p.prompt);
+            return schema.parse({ actions: replies[Math.min(calls.length - 1, replies.length - 1)] });
+          },
+        }) as unknown as Engine;
+      const run = (engine: Engine) => {
+        poolWith([o(0)]);
+        return consolidatePool({ wolfDen: den, wolfName: WOLF, engine, sessionTopics: durableSessionTopics(den), minObservations: 1 });
+      };
+      const topicFiles = () => readdirSync(sessions()).filter((f) => f.endsWith(".md") && f !== "INDEX.md").sort();
+
+      it("asks once for a split by subject and writes the parts when each is under the cap", async () => {
+        seedTopic();
+        const calls: string[] = [];
+        await run(engineFor([[act("big", "x".repeat(9000))], [act("big-a", "a".repeat(4000)), act("big-b", "b".repeat(4000))]], calls));
+        expect(calls.length).toBe(2);
+        expect(calls[1]).toContain("split");
+        expect(topicFiles()).toEqual(["big-a.md", "big-b.md"]);
+      });
+
+      it("a split that is still oversize leaves the original topic unchanged", async () => {
+        seedTopic();
+        const calls: string[] = [];
+        await run(engineFor([[act("big", "x".repeat(9000))], [act("big-a", "a".repeat(9000)), act("big-b", "b".repeat(100))]], calls));
+        expect(calls.length).toBe(2);
+        expect(topicFiles()).toEqual(["big.md"]);
+        expect(readFileSync(join(sessions(), "big.md"), "utf-8")).toContain("original body");
+      });
+    });
+
     describe("topic cap (memory.consolidation.maxTopics)", () => {
       const topic = (id: string, updated: string, body = `body of ${id}`) =>
         writeFileSync(join(sessions(), `${id}.md`), `---\nid: ${id}\ntitle: ${id}\nsummary: s\nupdated: ${updated}\n---\n\n${body}\n`);

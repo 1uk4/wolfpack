@@ -392,3 +392,26 @@ describe("memory API: graduation", () => {
 		assert.equal((await createMemoryApi(fail("engine_error")).graduatePreview("hal", "w")).status, 502);
 	});
 });
+
+describe("memory API: session topics", () => {
+	it("memorySessionTopics passes the list through; memoryKeepLocal validates the body and maps an unknown topic to 404", async () => {
+		const calls: unknown[][] = [];
+		const list = { topics: [], totalBytes: 0, capBytes: 184320, retired: [] };
+		const api = createMemoryApi(stub({
+			getMemorySessionTopics: async () => list,
+			putMemoryKeepLocal: async (...a: unknown[]) => {
+				calls.push(a);
+				if (a[1] === "gone") throw new NotFoundError("no topic gone");
+				return { id: a[1], keepLocal: a[2] };
+			},
+		}));
+		assert.deepEqual(await body(await api.memorySessionTopics("1uk4")), list);
+		const ok = await api.memoryKeepLocal("1uk4", "a", { keepLocal: true });
+		assert.equal(ok.status, 200);
+		assert.deepEqual(await body(ok), { id: "a", keepLocal: true });
+		assert.deepEqual(calls[0], ["1uk4", "a", true]);
+		for (const bad of [null, {}, { keepLocal: "yes" }]) assert.equal((await api.memoryKeepLocal("1uk4", "a", bad)).status, 400);
+		assert.equal((await api.memoryKeepLocal("1uk4", "gone", { keepLocal: false })).status, 404);
+		assert.equal((await createMemoryApi(stub({})).memorySessionTopics("1uk4")).status, 409);
+	});
+});

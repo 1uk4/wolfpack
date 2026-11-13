@@ -29,6 +29,8 @@ export interface MemoryActions {
   consolidate(): Promise<ConsolidationResult>;
   /** Consolidate, then move session topics to the den and on to contribution files in the inbox. Runs in the background. */
   promote(): PromoteStart;
+  /** A feature graduated: run the promote pass for the topics sourced from it. Optional; never throws into the graduation. */
+  promoteForFeature?(featureId: string): Promise<void>;
 }
 
 // On globalThis, keyed by Symbol.for (as the event buses are): the memory extension and wolfd's server must see one

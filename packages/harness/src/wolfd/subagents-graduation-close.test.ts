@@ -44,7 +44,7 @@ async function boot(root?: string, env?: Record<string, string>) {
 }
 type Mgr = { records: Array<{ id: string; parentThreadId: string }> };
 const mgr = (w: TestWolf) => (w.wolf.server as unknown as { subagents: Mgr }).subagents;
-const byTitle = async (w: TestWolf) => new Map((await w.client.listThreads("testwolf")).map((t) => [t.title ?? t.id, t]));
+const byTitle = async (w: TestWolf) => new Map((await w.client.listThreads("testwolf", { all: true })).map((t) => [t.title ?? t.id, t]));
 
 describe("graduation closes the feature's sub-agent threads", () => {
   it("closes settled children (and nested ones), leaves a running one until it settles", async () => {

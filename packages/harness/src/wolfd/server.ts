@@ -694,7 +694,15 @@ export class WolfServer {
         return this.json(res, 200, { wolves: [this.wolfSummary()] });
       case "listThreads":
         this.checkWolf(params.name);
-        return this.json(res, 200, { threads: await Promise.all([...this.threads.values()].map((t) => this.withWorkspace(t.threadSummary()))) });
+        {
+          // The sidebar draws parents and running subagents only; settled subagents (done/failed/stopped) are most of a long-lived
+          // wolf's threads, so they come only with `?all=1`, and without the per-thread workspace lookup.
+          const all = url.searchParams.get("all") === "1";
+          const summaries = [...this.threads.values()].map((t) => t.threadSummary());
+          const settledChild = (s: ThreadSummary) => s.kind === "subagent" && (s.state === "done" || s.state === "failed" || s.state === "stopped");
+          const listed = all ? summaries : summaries.filter((s) => !settledChild(s));
+          return this.json(res, 200, { threads: await Promise.all(listed.map((s) => (settledChild(s) ? s : this.withWorkspace(s)))) });
+        }
       case "listCards":
         this.checkWolf(params.name);
         return this.json(res, 200, { cards: [...this.threads.values()].flatMap((t) => t.cards.pending()) });

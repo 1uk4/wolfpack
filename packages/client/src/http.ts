@@ -125,8 +125,8 @@ export class HttpConsoleClient implements ConsoleClient {
     return (r as { wolves: WolfSummary[] }).wolves;
   }
 
-  async listThreads(wolf: string): Promise<ThreadSummary[]> {
-    const r = await this.json("listThreads", { name: wolf }, ROUTES.listThreads.response.schema);
+  async listThreads(wolf: string, opts: { all?: boolean } = {}): Promise<ThreadSummary[]> {
+    const r = await this.json("listThreads", { name: wolf }, ROUTES.listThreads.response.schema, undefined, undefined, opts.all ? "?all=1" : "");
     return (r as { threads: ThreadSummary[] }).threads;
   }
 

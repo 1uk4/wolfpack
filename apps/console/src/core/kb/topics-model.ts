@@ -32,6 +32,24 @@ export function topicSecondLine(t: MemoryTopicRow): { chip: TopicChip | null; so
 	return chip || sources.length ? { chip, sources } : null;
 }
 
+export interface TopicFact {
+	key: string;
+	value: string;
+	/** Set on the KB entries fact: each id links to /kb/entry/<id>. */
+	entryIds?: string[];
+}
+
+/** The topic page's frontmatter block: state, reason, sources, updated, size, keep-local, and the KB entries it went into. */
+export function topicFacts(t: MemoryTopicRow): TopicFact[] {
+	const facts: TopicFact[] = [{ key: "state", value: t.state }];
+	if (t.reason) facts.push({ key: "reason", value: t.reason });
+	const sources = sourceLabels(t.sources);
+	if (sources.length) facts.push({ key: "sources", value: sources.join(", ") });
+	facts.push({ key: "updated", value: t.updated }, { key: "size", value: formatTopicSize(t.bytes) }, { key: "keep local", value: t.keepLocal ? "yes" : "no" });
+	if (t.entryIds.length) facts.push({ key: "KB entries", value: t.entryIds.join(", "), entryIds: t.entryIds });
+	return facts;
+}
+
 /** "N topics · X KB of Y KB". */
 export function topicsHeader(m: MemoryTopics): string {
 	const n = m.topics.length;

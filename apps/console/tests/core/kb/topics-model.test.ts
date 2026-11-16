@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatTopicSize, sourceLabels, topicChip, topicSecondLine, topicsHeader, type MemoryTopicRow } from "../../../src/core/kb/topics-model.ts";
+import { formatTopicSize, sourceLabels, topicChip, topicSecondLine, topicsHeader, topicFacts, type MemoryTopicRow } from "../../../src/core/kb/topics-model.ts";
 
 const row = (o: Partial<MemoryTopicRow>): MemoryTopicRow => ({ id: "a", title: "A", bytes: 100, updated: "2026-11-13 10:00", sources: [], state: "active", keepLocal: false, entryIds: [], ...o });
 
@@ -18,6 +18,20 @@ describe("Topics section model", () => {
 		assert.equal(topicSecondLine(row({ sources: ["legacy"] })), null);
 		assert.deepEqual(topicSecondLine(row({ sources: ["thread:abc"] })), { chip: null, sources: ["abc"] });
 		assert.equal(topicSecondLine(row({ state: "held", reason: "r" }))?.chip?.label, "held");
+	});
+
+	it("the topic page frontmatter lists state, reason, sources, updated, size, keep-local and the KB entries as links", () => {
+		const facts = topicFacts(row({ state: "held", reason: "distill: log-like", sources: ["thread:abc"], bytes: 2048, keepLocal: true, entryIds: ["e1", "e2"] }));
+		assert.deepEqual(facts, [
+			{ key: "state", value: "held" },
+			{ key: "reason", value: "distill: log-like" },
+			{ key: "sources", value: "abc" },
+			{ key: "updated", value: "2026-11-13 10:00" },
+			{ key: "size", value: "2.0 KB" },
+			{ key: "keep local", value: "yes" },
+			{ key: "KB entries", value: "e1, e2", entryIds: ["e1", "e2"] },
+		]);
+		assert.deepEqual(topicFacts(row({})).map((f) => f.key), ["state", "updated", "size", "keep local"]);
 	});
 
 	it("the header reads N topics · X KB of Y KB", () => {

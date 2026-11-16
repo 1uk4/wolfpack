@@ -313,7 +313,7 @@ export function actionBlock(args: { status: MemoryStatus | null; promote: Promot
 	return null;
 }
 
-export const BUSY_TEXT = "memory_busy: a promote is running; consolidate is refused until it finishes.";
+export const BUSY_TEXT = "A promote is running; try Consolidate when it finishes.";
 
 // ─── Record ──────────────────────────────────────────────────────────────────
 

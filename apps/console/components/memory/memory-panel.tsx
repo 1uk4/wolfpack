@@ -293,7 +293,6 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 						{pool.tokensText} ·{" "}
 						<span data-testid="memory-observations">{pool.observationsText}</span>
 					</p>
-					{block === "memory_busy" ? <p className="text-xs text-muted-foreground" data-testid="memory-busy">{BUSY_TEXT}</p> : null}
 					{pline ? <p className="text-xs text-muted-foreground" data-testid="memory-promote">{pline}</p> : null}
 					{note ? <p className="text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}
 				</section>

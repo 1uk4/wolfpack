@@ -50,6 +50,7 @@ import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
 import { useWorkReader } from "../work/work-reader.tsx";
 import { Hint } from "@/components/ui/hint";
+import { dataStore } from "@/src/core/data-store";
 
 /** What a click on a map node does: ANY work node (collapsed features included) only opens the reader; the graph's selection,
  *  route, camera and pane are untouched. Anything else (KB entries, the factory...) selects into the side pane. */
@@ -213,8 +214,8 @@ export function GraphView({
 	const [storedLoaded, setStoredLoaded] = useState(false);
 	useEffect(() => {
 		let cancelled = false;
-		fetch("/api/graph/positions")
-			.then((res) => (res.ok ? (res.json() as Promise<unknown>) : null))
+		dataStore
+			.load<unknown>("/api/graph/positions", { maxAgeMs: 60_000 })
 			.then((raw) => {
 				if (cancelled || raw === null) return;
 				storedRef.current = new Map(Object.entries(sanitizePositions(raw)));
@@ -235,7 +236,9 @@ export function GraphView({
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(positions),
-		}).catch((err) => console.error("[graph] positions commit failed", err));
+		})
+			.then(() => dataStore.invalidate("/api/graph/positions"))
+			.catch((err) => console.error("[graph] positions commit failed", err));
 	};
 
 	// Construct the renderer once the canvas exists; destroy when it goes

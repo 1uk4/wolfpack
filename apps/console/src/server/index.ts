@@ -6,6 +6,7 @@
 
 export * from "./thread/events-stream.ts";
 export * from "./kb/graph-positions.ts";
+export * from "./response-cache.ts";
 export * from "./settings/stores.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
 // The settings record + prompt overrides (settings-storage wave, 2026-09-19).

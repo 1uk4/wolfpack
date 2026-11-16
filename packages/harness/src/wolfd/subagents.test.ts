@@ -120,7 +120,7 @@ describe("spawn", () => {
     const [child] = await kids(tw);
     expect(child).toMatchObject({ kind: "subagent", parentThreadId: tw.home, agent: "tester", title: "tester" });
     expect(child.id).not.toBe(tw.home);
-    expect((await tw.client.listThreads("testwolf")).map((t) => t.id)).toContain(child.id);
+    expect((await tw.client.listThreads("testwolf", { all: true })).map((t) => t.id)).toContain(child.id);
 
     await parentSaw(tw, 'Sub-agent "tester" completed');
     const home = await texts(tw, tw.home);
@@ -475,6 +475,30 @@ describe("questions", () => {
     const home = await tw!.client.getThread(tw!.home);
     expect(home.pendingCards?.map((c) => c.threadId)).toEqual([child.id]);
     delete threads.get(tw!.home)!.summary.parentThreadId;
+  });
+});
+
+describe("listChildren default", () => {
+  it("omits a child settled over 24 h ago, keeps a running and a recent settled one; all returns every child", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const agents = scriptedAgents({ gate });
+    tw = await boot(agents);
+    try {
+      await say(tw, "spawn[old]: quick");
+      await parentSaw(tw, 'Sub-agent "old" completed');
+      vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 25 * 3600_000 });
+      await say(tw, "spawn[recent]: quick");
+      await parentSaw(tw, 'Sub-agent "recent" completed');
+      await say(tw, "spawn[live]: SLOW work");
+      await vi.waitFor(async () => expect((await tw!.client.listChildren!(tw!.home, { all: true })).some((c) => c.state === "running")).toBe(true));
+      const states = async (all: boolean) => (await tw!.client.listChildren!(tw!.home, { all })).map((c) => c.state).sort();
+      expect(await states(true)).toEqual(["done", "done", "running"]);
+      expect(await states(false)).toEqual(["done", "running"]);
+    } finally {
+      vi.useRealTimers();
+      open();
+    }
   });
 });
 
@@ -1027,6 +1051,27 @@ describe("owner task lifecycle", () => {
     expect((await tw.client.listThreads("testwolf")).map((t) => t.kind)).toEqual(["home"]);
     expect(released).toHaveLength(1);
     expect(existsSync(wolfdFile(tw, "subagents.json")) ? readReg(tw).children : []).toEqual([]);
+  });
+});
+
+describe("thread list size", () => {
+  it("omits settled subagent threads by default, keeps parents and running children, and `all` brings the settled ones back", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    tw = await boot(scriptedAgents({ gate }));
+    await say(tw, "spawn: SLOW work");
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("running"));
+    const [child] = await kids(tw);
+
+    const running = await tw.client.listThreads("testwolf");
+    expect(running.map((t) => t.id)).toEqual(expect.arrayContaining([tw.home, child.id]));
+
+    open();
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("done"));
+    const settled = await tw.client.listThreads("testwolf");
+    expect(settled.map((t) => t.id)).toEqual([tw.home]);
+    const all = await tw.client.listThreads("testwolf", { all: true });
+    expect(all.map((t) => t.id)).toEqual(expect.arrayContaining([tw.home, child.id]));
   });
 });
 

@@ -93,11 +93,12 @@ export interface WatchOptions {
 
 export interface ConsoleClient {
   listWolves(): Promise<WolfSummary[]>;
-  listThreads(wolf: string): Promise<ThreadSummary[]>;
+  /** Parents and live subagents; `all` adds the settled (done/failed/stopped) subagent threads. */
+  listThreads(wolf: string, opts?: { all?: boolean }): Promise<ThreadSummary[]>;
   /** `limit` pages the transcript (newest page; with `before`, the page older than that cursor); omitted = all messages. */
   getThread(threadId: string, opts?: { limit?: number; before?: string }): Promise<ThreadDetail>;
   /** The subagent threads a thread spawned (any state), oldest first. Rejects NotFoundError for an unknown thread. Optional: the mock has no subagents. */
-  listChildren?(threadId: string): Promise<ThreadSummary[]>;
+  listChildren?(threadId: string, opts?: { all?: boolean }): Promise<ThreadSummary[]>;
   /** A subagent thread's ledger (brief, steers, questions, owner messages, results), oldest first. Rejects NotFoundError for an unknown thread or one that is not a subagent. Optional like listChildren. */
   getLedger?(threadId: string): Promise<LedgerEntry[]>;
   // ---- header git tree ----

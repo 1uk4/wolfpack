@@ -33,6 +33,8 @@ type SessionItem = ChatListItem & { href: string; meta?: string; needsYou?: bool
 
 const itemHref = (c: SessionItem) => c.href;
 import { kbdEventForAction } from "@/src/core";
+import { dataStore, StoreHttpError } from "@/src/core/data-store";
+import { fetchWolfThreads } from "@/components/kb/kb-client";
 
 /**
  * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
@@ -613,20 +615,22 @@ export function SessionsSidebar() {
 		// fetch follows, so the final event of a burst is never lost.
 		try {
 			// The list is the ConsoleClient's: every wolf's threads.
-			const wolvesRes = await fetch("/api/wolves", { cache: "no-store" });
-			// 401 = auth lost, not offline: the fetch wrapper sends the browser to /pair; leave the list as it is.
-			if (wolvesRes.status === 401) return;
-			if (!wolvesRes.ok) throw new Error(`roster ${wolvesRes.status}`);
-			const wolves = (await wolvesRes.json()) as {
-				wolves: { name: string; status?: string }[];
-			};
+			// Through the client store: an event or open always revalidates (maxAgeMs 0, ETag), and the answer lands in the store for the other pages' mounts.
+			let wolves: { wolves: { name: string; status?: string }[] };
+			try {
+				wolves = await dataStore.load<{ wolves: { name: string; status?: string }[] }>("/api/wolves", { maxAgeMs: 0 });
+			} catch (err) {
+				// 401 = auth lost, not offline: the fetch wrapper sends the browser to /pair; leave the list as it is.
+				if (err instanceof StoreHttpError && err.status === 401) return;
+				throw err;
+			}
 			if (!Array.isArray(wolves.wolves)) throw new Error("bad roster");
 			const results = await Promise.all(
 				wolves.wolves.map(async (w) => {
 					try {
-						const res = await fetch(`/api/wolves/${encodeURIComponent(w.name)}/threads`, { cache: "no-store" });
-						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string; workspace?: { branch?: string }; settings?: { color?: string } }[] };
-						return { wolf: w.name, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
+						// An event-driven refresh always revalidates (maxAgeMs 0); the answer lands in the store for the other readers.
+						const r = await fetchWolfThreads<{ threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string; workspace?: { branch?: string }; settings?: { color?: string } }[] }>(w.name, 0);
+						return { wolf: w.name, threads: r.ok && Array.isArray(r.data.threads) ? r.data.threads : undefined };
 					} catch {
 						return { wolf: w.name, threads: undefined }; // this wolf keeps its last rows; the others still update
 					}
@@ -710,9 +714,8 @@ export function SessionsSidebar() {
 			const got = await Promise.all(
 				recovered.map(async (wolf) => {
 					try {
-						const res = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/threads`, { cache: "no-store" });
-						const d = (await res.json()) as { threads?: Parameters<typeof foldWolfThreads>[1][number]["threads"] };
-						return { wolf, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
+						const r = await fetchWolfThreads<{ threads?: Parameters<typeof foldWolfThreads>[1][number]["threads"] }>(wolf, 0);
+						return { wolf, threads: r.ok && Array.isArray(r.data.threads) ? r.data.threads : undefined };
 					} catch {
 						return { wolf, threads: undefined }; // keeps its stale rows; the roster status is untouched
 					}
@@ -758,9 +761,9 @@ export function SessionsSidebar() {
 	useEffect(() => {
 		if (!open) return;
 		void refresh();
-		// Opening + navigation refetch; while open, the events channel owns
-		// freshness (S6) — no interval, nothing standing.
-	}, [open, pathname, refresh]);
+		// Refetch on mount and on closed -> open only. Navigation does NOT refetch (the list is
+		// large); the events channel and resync own freshness (S6), `pathname` only marks the active row.
+	}, [open, refresh]);
 
 	return (
 		<aside

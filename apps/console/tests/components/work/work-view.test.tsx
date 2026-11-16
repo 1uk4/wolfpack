@@ -119,6 +119,27 @@ const fire = (el: HTMLElement, name: string) => act(async () => {
 const rows = () => qa('[data-testid^="work-row-"]').map((r) => r.getAttribute("data-testid")!.slice("work-row-".length));
 
 describe("the Work page", () => {
+	it("a warm mount renders the stored list on the first render, with no loading state, while the revalidating read is still pending", async () => {
+		const client: WorkClient = {
+			async domains() { return [{ name: "wolfpack", label: "Wolfpack" }]; },
+			peek: () => ITEMS,
+			list: () => new Promise(() => {}),
+		};
+		await mount(client);
+		assert.equal(q("work-loading"), null);
+		assert.ok(rows().includes("i1"));
+	});
+	it("the mount read accepts a stored list up to the poll interval old; a focus refresh always revalidates", async () => {
+		const ages: (number | undefined)[] = [];
+		const client: WorkClient = {
+			async domains() { return [{ name: "wolfpack", label: "Wolfpack" }]; },
+			async list(_d, _g, maxAgeMs) { ages.push(maxAgeMs); return { ok: true, data: { items: [] } } as never; },
+		};
+		await open(client);
+		await act(async () => void window.dispatchEvent(new dom.window.Event("focus")));
+		await settle();
+		assert.deepEqual(ages.slice(0, 2), [30_000, 0]);
+	});
 	it("renders the list on its own: no graph, no overlay shell, no layout toggle or resize handle", async () => {
 		await open();
 		assert.ok(q("work-view"));

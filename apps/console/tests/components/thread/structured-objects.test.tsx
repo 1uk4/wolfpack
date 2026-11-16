@@ -696,7 +696,7 @@ describe("pinned decision and graph", () => {
 	const graph = { objectId: "g", type: "graph", rev: 1, textOffset: 0, data: { title: "Plan", nodes: [{ id: "a", label: "A", kind: "step", status: "done" }], edges: [] } };
 	const hist = (...objects: unknown[]): ThreadMessage[] => [history[0]!, { id: "a", role: "assistant", text: "", at: base.at, objects } as never];
 	let seq = 0;
-	async function mount(threadId: string, messages: ThreadMessage[]) {
+	async function mount(threadId: string, messages: ThreadMessage[], initialBound?: string) {
 		if (root) await act(async () => root!.unmount());
 		const host = document.createElement("div");
 		document.body.appendChild(host);
@@ -705,7 +705,7 @@ describe("pinned decision and graph", () => {
 			<AppRouterContext.Provider value={{ push() {} } as never}>
 				<>
 					<MemoryEventsProvider connect={inertSource}>
-						<ThreadChat wolf="w" slug="s" threadId={threadId} title="T" initialMessages={threadMessagesToNative(messages) as never} initiallyInFlight={false} />
+						<ThreadChat wolf="w" slug="s" threadId={threadId} title="T" initialMessages={threadMessagesToNative(messages) as never} initiallyInFlight={false} initialBound={initialBound} />
 					</MemoryEventsProvider>
 				</>
 			</AppRouterContext.Provider>,
@@ -821,7 +821,7 @@ describe("pinned decision and graph", () => {
 	const mountAll = async (bound: boolean) => {
 		const threadId = `po-${++seq}`;
 		if (bound) bindFeature(threadId);
-		await mount(threadId, hist(checklist, decision(1, "pg"), graph));
+		await mount(threadId, hist(checklist, decision(1, "pg"), graph), bound ? "F" : undefined); // the page seeds the bound id; the hook no longer lists threads
 		await act(async () => void (await new Promise((r) => setTimeout(r, 40)))); // the progress fetch settles
 	};
 	const progressToggle = '[data-testid="feature-progress-toggle"]';

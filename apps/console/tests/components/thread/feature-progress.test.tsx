@@ -32,6 +32,7 @@ const { buildFeatureGraph, featureStrip, GRAPH_STATUS_OF, isWorkItemId, isWorkEv
 type WorkRecordResponse = import("../../../src/core/index.ts").WorkRecordResponse;
 const { FeatureProgressPanel, useFeatureProgress } = await import("../../../components/thread/feature-progress.tsx");
 const { resetOpenPanels, setOpenPanel } = await import("../../../components/thread/pin-store.ts");
+const { dataStore } = await import("../../../src/core/data-store.ts");
 const { FIXTURE_THREAD } = await import("@wolfpack/client");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
@@ -101,7 +102,10 @@ const click = (el: Element) => act(async () => void el.dispatchEvent(new dom.win
 const settle = (ms = 40) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
 const realFetch = globalThis.fetch;
 let root: Root | null = null;
-beforeEach(() => resetOpenPanels());
+beforeEach(() => {
+	resetOpenPanels();
+	dataStore.clear(); // the thread list now goes through the client store: a test must not read the previous test's list
+});
 afterEach(async () => {
 	await act(async () => root?.unmount());
 	root = null;
@@ -260,15 +264,17 @@ describe("useFeatureProgress: events refetch", () => {
 			reopen: () => open(),
 		};
 	}
-	function Probe({ threadId }: { threadId: string }) {
-		const { state } = useFeatureProgress("w", threadId, 0);
-		return state.phase === "ready" ? <FeatureProgressPanel threadId={threadId} model={state.model} busy={false} /> : <i data-testid="no-graph" />;
+	function Probe({ threadId, bound }: { threadId: string; bound: string | undefined }) {
+		const { state } = useFeatureProgress("w", threadId, bound, 0);
+		return state.phase === "ready" ? <FeatureProgressPanel threadId={threadId} model={state.model} busy={false} /> : <i data-testid="no-graph" data-phase={state.phase} />;
 	}
 	let stages: Record<string, string> = {};
 	let recordFetches = 0;
+	let requested: string[] = [];
 	const fetchFor = (): typeof fetch =>
 		(async (input: RequestInfo | URL) => {
 			const url = new URL(String(input), "http://t");
+			requested.push(url.pathname);
 			if (url.pathname === "/api/wolves/w/threads") return Response.json({ threads: [{ id: "w/t", boundWorkItem: "b" }] });
 			const rec = url.pathname.match(/\/work\/([^/]+)\/record$/);
 			if (rec) {
@@ -277,9 +283,10 @@ describe("useFeatureProgress: events refetch", () => {
 			}
 			return new Response("{}", { status: 404 });
 		}) as typeof fetch;
-	async function mountProbe(ch: ReturnType<typeof channel>) {
+	async function mountProbe(ch: ReturnType<typeof channel>, bound: string | null = "b") {
 		stages = {};
 		recordFetches = 0;
+		requested = [];
 		globalThis.fetch = fetchFor();
 		store.set("wp.feature-progress.open.v1", JSON.stringify(["w/t"]));
 		const host = document.createElement("div");
@@ -289,7 +296,7 @@ describe("useFeatureProgress: events refetch", () => {
 			root!.render(
 				<ServerEventsProvider connect={ch.connect}>
 					<MemoryEventsProvider connect={() => memSource}>
-						<Probe threadId="w/t" />
+						<Probe threadId="w/t" bound={bound ?? undefined} />
 					</MemoryEventsProvider>
 				</ServerEventsProvider>,
 			),
@@ -306,6 +313,7 @@ describe("useFeatureProgress: events refetch", () => {
 		assert.equal(status("c"), "todo");
 		assert.equal(status("d"), "blocked");
 		assert.equal(q('[data-testid="feature-progress-title"]')!.textContent, "Feat · 1/4 done");
+		assert.deepEqual(requested, ["/api/wolves/w/work/b/record", "/api/wolves/w/work/F/record"], "the graph comes from the given bound id: the work records only");
 		const before = recordFetches;
 		stages = { b: "shipped", c: "shipped", d: "in_build" };
 		await act(async () => {
@@ -320,6 +328,16 @@ describe("useFeatureProgress: events refetch", () => {
 		assert.equal(status("c"), "done");
 		assert.equal(status("d"), "doing");
 		assert.equal(q('[data-testid="feature-progress-title"]')!.textContent, "Feat · 3/4 done");
+		assert.equal(requested.filter((u) => u.endsWith("/threads")).length, 0, "a refetch never lists the wolf's threads");
+	});
+
+	it("without a bound id the phase is none and nothing is fetched, even on events", async () => {
+		const ch = channel();
+		await mountProbe(ch, null);
+		assert.equal(q('[data-testid="no-graph"]')!.getAttribute("data-phase"), "none");
+		await act(async () => void ch.fire("thread-updated", { wolf: "w", thread: { id: "w/t" } }));
+		await settle(450);
+		assert.deepEqual(requested, []);
 	});
 
 	it("a memory event about a work item, a reconnect and window focus each refetch; a den event and another wolf's thread do not", async () => {
@@ -363,9 +381,11 @@ const CHECKLIST = {
 	objects: [{ objectId: "cl", type: "checklist", rev: 1, data: { title: "Plan", items: [{ id: "i0", label: "Step", state: "todo" }] }, textOffset: 0, seq: 1 }],
 };
 
+let chatRequests: string[] = [];
 function serverFetch(boundWorkItem: string | undefined, boundItem?: string): typeof fetch {
 	return (async (input: RequestInfo | URL) => {
 		const url = new URL(String(input), "http://t");
+		chatRequests.push(url.pathname);
 		if (url.pathname === "/api/wolves/1uk4/threads") return Response.json({ threads: [{ id: FIXTURE_THREAD.id, wolf: "1uk4", kind: "feature", title: "T", ...(boundWorkItem ? { boundWorkItem } : {}), ...(boundItem ? { boundItem } : {}) }] });
 		const rec = url.pathname.match(/\/work\/([^/]+)\/record$/);
 		if (rec) return Response.json(rec[1] === "F" ? feature() : task(rec[1]!));
@@ -373,19 +393,20 @@ function serverFetch(boundWorkItem: string | undefined, boundItem?: string): typ
 	}) as typeof fetch;
 }
 
-async function mountChat(over: { initialBound?: string } = {}) {
+async function mountChat(over: { initialBound?: string; connect?: () => { close(): void; onOpen(cb: () => void): void; onEvent(n: string, cb: (d: string) => void): void } } = {}) {
+	chatRequests = [];
 	const { threadMessagesToNative } = await import("../../../src/core/index.ts");
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
-	const frames = () => ({ close() {}, onOpen() {}, onEvent() {} });
+	const frames = over.connect ?? (() => ({ close() {}, onOpen() {}, onEvent() {} }));
 	await act(async () => {
 		root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
 				<>
 					<ServerEventsProvider connect={frames}>
 						<MemoryEventsProvider connect={() => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} })}>
-							<ThreadChat wolf="1uk4" slug="home" threadId={FIXTURE_THREAD.id} title="T" initialMessages={threadMessagesToNative([CHECKLIST])} {...over} />
+							<ThreadChat wolf="1uk4" slug="home" threadId={FIXTURE_THREAD.id} title="T" initialMessages={threadMessagesToNative([CHECKLIST])} initialBound={over.initialBound} />
 						</MemoryEventsProvider>
 					</ServerEventsProvider>
 				</>
@@ -396,6 +417,22 @@ async function mountChat(over: { initialBound?: string } = {}) {
 }
 
 describe("ThreadChat pinned area", () => {
+	it("binds and unbinds while open from the thread-updated event, never listing the wolf's threads", async () => {
+		const on = new Map<string, (d: string) => void>();
+		const connect = () => ({ close() {}, onOpen() {}, onEvent: (n: string, cb: (d: string) => void) => void on.set(n, cb) });
+		const fire = (thread: Record<string, unknown>) => act(async () => void on.get("thread-updated")?.(JSON.stringify({ wolf: "1uk4", thread: { id: FIXTURE_THREAD.id, ...thread } })));
+		globalThis.fetch = serverFetch(undefined);
+		await mountChat({ connect });
+		assert.ok(q('[data-testid="feature-progress"]') === null);
+		await fire({ boundWorkItem: "F" });
+		await settle(450);
+		assert.ok(q('[data-testid="feature-progress"]'), "bound while open: the panel appears");
+		await fire({});
+		await settle(450);
+		assert.ok(q('[data-testid="feature-progress"]') === null, "unbound while open: the panel goes");
+		assert.equal(chatRequests.filter((u) => u.endsWith("/threads")).length, 0);
+	});
+
 	it("an unbound thread keeps the floating checklist and shows no progress panel", async () => {
 		globalThis.fetch = serverFetch(undefined);
 		await mountChat();
@@ -412,6 +449,7 @@ describe("ThreadChat pinned area", () => {
 		await act(async () => root!.unmount());
 		root = null;
 		document.body.innerHTML = "";
+		dataStore.clear(); // the second mount is a different thread list
 		globalThis.fetch = serverFetch("F", "b");
 		await mountChat({ initialBound: "b" });
 		assert.ok(q('[data-testid="feature-progress"]'));

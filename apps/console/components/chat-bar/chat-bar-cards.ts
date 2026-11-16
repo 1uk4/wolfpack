@@ -60,13 +60,16 @@ interface Bundle {
 }
 const fresh = (key: string): Bundle => ({ key, pending: [], reply: null, peekOn: false, superseded: [], error: null });
 
-export function useBarCards(target: AttachedRef, working: boolean, enabled = true): BarCards {
+/** `initial`: the pending cards the page already holds for `target`; when given, the mount does not refetch them (events and resyncs still do). */
+export function useBarCards(target: AttachedRef, working: boolean, enabled = true, initial?: PendingCard[]): BarCards {
 	const key = `${target.wolf}:${target.threadId}`;
-	const [bundle, setBundle] = useState<Bundle>(() => fresh(key));
+	const [bundle, setBundle] = useState<Bundle>(() => (initial ? { ...fresh(key), pending: initial } : fresh(key)));
+	/** The key whose mount fetch is skipped because the page seeded it. */
+	const seededKey = useRef<string | null>(initial ? key : null);
 	/** Update the bundle of the CURRENT target only (a stale key starts from empty). */
 	const keyRef = useRef(key);
 	const gone = useRef(new Set<string>());
-	const pendingRef = useRef<PendingCard[]>([]);
+	const pendingRef = useRef<PendingCard[]>(initial ?? []);
 	const seq = useRef(0);
 	if (keyRef.current !== key) {
 		// The target changed: nothing of the old thread survives, and its in-flight fetch is dropped.
@@ -106,7 +109,10 @@ export function useBarCards(target: AttachedRef, working: boolean, enabled = tru
 		})();
 	}, [base, update, enabled]);
 
-	useEffect(() => refetch(), [refetch]);
+	useEffect(() => {
+		if (seededKey.current === keyRef.current) return;
+		refetch();
+	}, [refetch]);
 	const mine = (wolf: string, id?: string) => wolf === target.wolf && (!id || id === target.threadId);
 	useOptionalServerEvent("thread-updated", (ev) => {
 		if (mine(ev.wolf, ev.thread.id) && ev.thread.status !== "busy") refetch();

@@ -28,6 +28,7 @@ Object.assign(globalThis, {
 const { MessageResponse } = await import("../../../components/ai-elements/message.tsx");
 const { WorkIdChip, WorkItemCard, lookupWorkItem, resetWorkLookupCache, criteriaExcerpt } = await import("../../../components/work/work-id-chip.tsx");
 const { AskCard } = await import("../../../components/ask/ask-card.tsx");
+const { dataStore } = await import("../../../src/core/data-store.ts");
 const { linkifyWorkIds, workIdFromHref } = await import("../../../src/core/index.ts");
 const { KbMarkdown } = await import("../../../components/kb/kb-markdown.tsx");
 type Card = import("@wolfpack/client").Card;
@@ -102,7 +103,10 @@ describe("hover card", () => {
 			return hit ? Response.json(hit[1]) : Response.json({ error: "nope" }, { status: 404 });
 		};
 	};
-	beforeEach(() => resetWorkLookupCache());
+	beforeEach(() => {
+		resetWorkLookupCache();
+		dataStore.clear(); // the thread list goes through the client store: a case must not read the previous case's list
+	});
 	afterEach(async () => {
 		await act(async () => root?.unmount());
 		root = null;
@@ -180,6 +184,7 @@ describe("hover card", () => {
 		const found = await lookupWorkItem(ID);
 		assert.ok(found.kind === "ok" && found.thread?.id === "t9" && found.thread.wolf === "w1");
 		resetWorkLookupCache();
+		dataStore.clear(); // the first half's thread list is cached: the second half needs the real (empty) one
 		respond({ [ID]: record(), "work-wolfpack-07auwWg": parent });
 		await openChip();
 		assert.equal(q('[data-testid="work-card-thread"]')!.textContent, "Start thread");

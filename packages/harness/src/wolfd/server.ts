@@ -694,7 +694,15 @@ export class WolfServer {
         return this.json(res, 200, { wolves: [this.wolfSummary()] });
       case "listThreads":
         this.checkWolf(params.name);
-        return this.json(res, 200, { threads: await Promise.all([...this.threads.values()].map((t) => this.withWorkspace(t.threadSummary()))) });
+        {
+          // The sidebar draws parents and running subagents only; settled subagents (done/failed/stopped) are most of a long-lived
+          // wolf's threads, so they come only with `?all=1`, and without the per-thread workspace lookup.
+          const all = url.searchParams.get("all") === "1";
+          const summaries = [...this.threads.values()].map((t) => t.threadSummary());
+          const settledChild = (s: ThreadSummary) => s.kind === "subagent" && (s.state === "done" || s.state === "failed" || s.state === "stopped");
+          const listed = all ? summaries : summaries.filter((s) => !settledChild(s));
+          return this.json(res, 200, { threads: await Promise.all(listed.map((s) => (settledChild(s) ? s : this.withWorkspace(s)))) });
+        }
       case "listCards":
         this.checkWolf(params.name);
         return this.json(res, 200, { cards: [...this.threads.values()].flatMap((t) => t.cards.pending()) });
@@ -816,7 +824,21 @@ export class WolfServer {
       // --- end feature progress ---
       case "listChildren": {
         const t = this.checkThread(params.id);
-        return this.json(res, 200, { threads: await Promise.all((this.subagents?.children(t.summary.id) ?? []).map((c) => this.withWorkspace(c))) });
+        // Default: live children plus the 20 most recent settled ones finished within 24 h, settled ones without the workspace lookup.
+        // `?all=1` returns every child with workspaces (the subagent modal's done list).
+        const all = url.searchParams.get("all") === "1";
+        const kids = this.subagents?.children(t.summary.id) ?? [];
+        const isSettled = (s: ThreadSummary) => s.state === "done" || s.state === "failed" || s.state === "stopped";
+        if (all) return this.json(res, 200, { threads: await Promise.all(kids.map((c) => this.withWorkspace(c))) });
+        const cutoff = Date.now() - 24 * 3600_000;
+        const finished = (s: ThreadSummary) => (s.finishedAt ? Date.parse(s.finishedAt) : 0);
+        const recent = kids
+          .filter((s) => isSettled(s) && finished(s) >= cutoff)
+          .sort((a, b) => finished(b) - finished(a))
+          .slice(0, 20);
+        const keep = new Set(recent.map((s) => s.id));
+        const listed = kids.filter((s) => !isSettled(s) || keep.has(s.id));
+        return this.json(res, 200, { threads: await Promise.all(listed.map((s) => (isSettled(s) ? s : this.withWorkspace(s)))) });
       }
       case "getLedger": {
         const t = this.checkThread(params.id);

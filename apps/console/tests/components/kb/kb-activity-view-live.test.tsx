@@ -25,6 +25,7 @@ Object.assign(globalThis, {
 const { KbActivityView } = await import("../../../components/kb/kb-activity-view.tsx");
 const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { kbActivityFixture } = await import("../../fixtures/kb-activity.ts");
+const { dataStore } = await import("../../../src/core/data-store.ts");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const TIMING = { debounceMs: 25, pollMs: 5_000 };
@@ -37,6 +38,7 @@ interface Call {
 let calls: Call[] = [];
 const realFetch = globalThis.fetch;
 beforeEach(() => {
+	dataStore.clear(); // each test starts cold: a mount would otherwise reuse the previous test's stored answer
 	calls = [];
 	globalThis.fetch = ((input: string) =>
 		new Promise<Response>((resolve) => {
@@ -99,6 +101,17 @@ const resolve = (c: Call, d: KbActivityResponse) => act(async () => void c.respo
 const showAll = () => document.querySelector('[data-testid="kb-show-all"]')!;
 
 describe("KbActivityView live behaviour", () => {
+	it("a remount with a warm store renders the stored activity and sends no request", async () => {
+		await mount();
+		await resolve(calls[0]!, page(["a"]));
+		await act(async () => root!.unmount());
+		root = null;
+		document.body.innerHTML = "";
+		await mount();
+		await settle(10);
+		assert.equal(calls.length, 1); // only the first mount's request
+		assert.deepEqual(ids(), ["a"]);
+	});
 	it("debounces event-driven refetches into one request", async () => {
 		await mount();
 		await resolve(calls[0]!, page(["a"]));

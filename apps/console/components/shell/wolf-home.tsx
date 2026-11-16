@@ -3,6 +3,8 @@
 /** The start page at "/": the Wolfpack mark, then one big button per wolf (the same /api/wolves roster the sidebar uses). */
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { fetchWolves } from "@/components/kb/kb-client";
+import { dataStore } from "@/src/core/data-store";
 import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 
 export function WolfHomeView({ wolves }: { wolves: readonly { name: string }[] }) {
@@ -25,15 +27,14 @@ export function WolfHomeView({ wolves }: { wolves: readonly { name: string }[] }
 }
 
 export function WolfHome() {
-	const [wolves, setWolves] = useState<{ name: string }[]>([]);
+	// Warm store: the first render already has the roster (no empty flash); a stale one revalidates in the background.
+	const cached = dataStore.read<{ wolves?: { name: string }[] }>("/api/wolves")?.data.wolves;
+	const [wolves, setWolves] = useState<{ name: string }[]>(Array.isArray(cached) ? cached.map((w) => ({ name: w.name })) : []);
 	useEffect(() => {
 		let live = true;
-		void fetch("/api/wolves", { cache: "no-store" })
-			.then((r) => (r.ok ? r.json() : { wolves: [] }))
-			.then((j: { wolves?: { name: string }[] }) => {
-				if (live && Array.isArray(j.wolves)) setWolves(j.wolves.map((w) => ({ name: w.name })));
-			})
-			.catch(() => {});
+		void fetchWolves().then((res) => {
+			if (live && res.ok && Array.isArray(res.data.wolves)) setWolves(res.data.wolves.map((w) => ({ name: w.name })));
+		});
 		return () => {
 			live = false;
 		};

@@ -260,10 +260,14 @@ export function KbActivityView({ timing }: { timing?: KbActivityTiming } = {}) {
 	extrasRef.current = extras;
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+	/** Set by the mount/range effect: that one read may reuse a stored answer younger than a minute. */
+	const mountRead = useRef(false);
 	const refetch = useCallback(() => {
 		const mine = ++seq.current;
 		const myGen = gen.current;
-		void fetchKbActivity({ since, limit: KB_ACTIVITY_OVERVIEW }).then((res) => {
+		const maxAge = mountRead.current ? 60_000 : 0;
+		mountRead.current = false;
+		void fetchKbActivity({ since, limit: KB_ACTIVITY_OVERVIEW }, maxAge).then((res) => {
 			if (mine !== seq.current || myGen !== gen.current) return; // a newer request (or range) owns the screen
 			if (res.ok) {
 				setState((prev) => reconcileActivity(prev, res.data, { since }));
@@ -290,6 +294,7 @@ export function KbActivityView({ timing }: { timing?: KbActivityTiming } = {}) {
 		setState(null);
 		setExtras({});
 		setLoadingDomain(null);
+		mountRead.current = true;
 		refetch();
 		return () => {
 			seq.current++;

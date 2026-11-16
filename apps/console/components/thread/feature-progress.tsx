@@ -11,7 +11,6 @@ import { useOptionalServerEvent, useOptionalServerResync } from "@/components/sh
 import { PANEL_PROGRESS, closePanel, setOpenPanel, togglePanel, useOpenPanel } from "@/components/thread/pin-store";
 import { sessionFindHasForegroundLayer } from "@/components/thread/session-find";
 import { cn } from "@/lib/utils";
-import { fetchWolfThreads } from "@/components/kb/kb-client";
 import { buildFeatureGraph, featureStrip, isWorkEvent, type FeatureGraph, type WorkRecordResponse } from "@/src/core";
 
 type Model = Extract<FeatureGraph, { kind: "graph" }>;
@@ -64,12 +63,6 @@ const PENDING: ProgressState = { phase: "pending" };
 /** Same graph and binding: the refetch changed nothing, so the panel is not re-rendered (and a user's drag is not disturbed). */
 const sameState = (a: ProgressState, b: ProgressState): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
 
-interface ThreadRow {
-	id: string;
-	boundWorkItem?: string;
-	boundItem?: string;
-}
-
 const POLL_MS = 15_000;
 /** Events that may have moved a task coalesce into one refetch this long after the first of them. */
 export const REFETCH_DEBOUNCE_MS = 300;
@@ -80,7 +73,7 @@ async function getRecord(wolf: string, id: string): Promise<WorkRecordResponse |
 }
 
 /**
- * The bound item is the thread's `boundItem ?? boundWorkItem` (live from the thread list); a task's feature is its
+ * The bound item is the thread's `boundItem ?? boundWorkItem`, given by the caller (no thread listing here); a task's feature is its
  * parent. Refetched (debounced) on mount, on `refreshKey` (a turn ended), and on every signal that can change what the
  * graph shows. The wolf emits no work-item event of its own (a stage change, a task created or moved, a link added or
  * removed, graduation: all are Work API writes), so the signals are the ones that travel with them: this wolf's
@@ -88,7 +81,7 @@ async function getRecord(wolf: string, id: string): Promise<WorkRecordResponse |
  * work item (record_written, observation_captured), the event streams' reconnects, window focus, and the 15 s poll.
  * Events that do not name a feature refetch anyway.
  */
-export function useFeatureProgress(wolf: string, threadId: string, refreshKey: number): { state: ProgressState } {
+export function useFeatureProgress(wolf: string, threadId: string, boundId: string | undefined, refreshKey: number): { state: ProgressState } {
 	const [state, setState] = useState<ProgressState>(PENDING);
 	const stateRef = useRef(state);
 	stateRef.current = state;
@@ -97,11 +90,6 @@ export function useFeatureProgress(wolf: string, threadId: string, refreshKey: n
 	const load = useCallback(async () => {
 		const n = ++seq.current;
 		try {
-			const res = await fetchWolfThreads<{ threads?: ThreadRow[] }>(wolf);
-			if (!res.ok || n !== seq.current) return;
-			const list = res.data.threads ?? [];
-			const row = list.find((t) => t.id === threadId);
-			const boundId = row?.boundItem ?? row?.boundWorkItem;
 			if (!boundId) return void (n === seq.current && put({ phase: "none" }));
 			const rec = await getRecord(wolf, boundId);
 			const feature = !rec ? null : rec.kind === "feature" ? rec : rec.partOf ? await getRecord(wolf, rec.partOf) : null;
@@ -111,7 +99,7 @@ export function useFeatureProgress(wolf: string, threadId: string, refreshKey: n
 		} catch {
 			/* keep what is shown; the next trigger refetches */
 		}
-	}, [wolf, threadId, put]);
+	}, [wolf, boundId, put]);
 	const loadRef = useRef(load);
 	loadRef.current = load;
 	// Debounce from the FIRST signal (not trailing-reset): a steady stream of events still refetches every window.

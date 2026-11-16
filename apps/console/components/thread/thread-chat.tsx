@@ -243,6 +243,13 @@ function ThreadChatInner({
 }) {
 	// A graduation closes the thread: the wolf pushes thread-updated {closed}, so the notice shows with no message sent.
 	const [closedLive, setClosedLive] = useState<string | undefined>(undefined);
+	// The bound work item: seeded from the page, then followed from this thread's own thread-updated events (a bind or unbind).
+	const [bound, setBound] = useState<string | undefined>(initialBound);
+	useOptionalServerEvent("thread-updated", (p) => {
+		if (p.wolf !== wolf || p.thread.id !== threadId) return;
+		const t = p.thread as { boundItem?: string; boundWorkItem?: string };
+		setBound(t.boundItem ?? t.boundWorkItem);
+	});
 	useOptionalServerEvent("thread-updated", (p) => {
 		if (p.wolf === wolf && p.thread.id === threadId && p.thread.closed) setClosedLive(p.thread.closedReason ?? FEATURE_GRADUATED);
 	});
@@ -505,9 +512,9 @@ function ThreadChatInner({
 		[messages, status],
 	);
 	// A thread bound to a feature (or one of its tasks) pins the feature's progress panel INSTEAD of the floating checklist.
-	const featureProgress = useFeatureProgress(wolf, threadId, progressTick);
+	const featureProgress = useFeatureProgress(wolf, threadId, bound, progressTick);
 	const progressShown = featureProgress.state.phase === "ready";
-	const checklistReplaced = progressShown || (featureProgress.state.phase === "pending" && initialBound !== undefined);
+	const checklistReplaced = progressShown || (featureProgress.state.phase === "pending" && bound !== undefined);
 	const active = useMemo(() => activeChecklist(messages), [messages]);
 	const dismissedChecklist = useDismissed(active ? activeDismissKey(threadId, active) : undefined);
 	const pinned = dismissedChecklist || checklistReplaced ? undefined : active;

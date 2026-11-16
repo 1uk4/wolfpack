@@ -4,7 +4,7 @@
  * tries them for one item (the librarian, then every other online wolf; only "unavailable" moves on). Tests inject a fake.
  */
 import { findLibrarian, workWolfCandidates, type WorkListResponse } from "@/src/core";
-import { fetchKbGraph, fetchWolves, fetchWorkList, patchWorkItem, type KbResult } from "../kb/kb-client";
+import { fetchKbGraph, fetchWolves, fetchWorkList, patchWorkItem, peekWolves, peekWorkList, type KbResult } from "../kb/kb-client";
 
 export interface WorkDomain {
 	name: string;
@@ -17,6 +17,8 @@ export interface WorkClient {
 	/** The domain's work items; graduated and archived ones only with `graduated`. */
 	/** `maxAgeMs`: a stored answer younger than this is returned without a request (a page mount); default 0 revalidates. */
 	list(domain: string, graduated: boolean, maxAgeMs?: number): Promise<KbResult<WorkListResponse>>;
+	/** The list already held for this domain, read synchronously so a warm page renders it on the first render (absent = always load). */
+	peek?(domain: string): WorkListResponse["items"] | undefined;
 	// Owner controls (absent = no assignee dropdowns). Every console session is an owner session today (its hub bearer is the paired
 	// console token; the hub still gates), so the real client always provides them.
 	/** The wolves the dropdown offers: the hub's wolf list (registered, non-retired; online or not). A failure carries the message. */
@@ -48,6 +50,15 @@ export function createWorkClient(): WorkClient {
 		async domains() {
 			const res = await fetchKbGraph();
 			return res.ok ? res.data.domains.map((d) => ({ name: d.name, label: d.label })) : [];
+		},
+		peek(domain) {
+			const all = peekWolves();
+			if (!all) return undefined;
+			for (const wolf of workWolfCandidates(findLibrarian(all as never)?.name ?? null, all)) {
+				const hit = peekWorkList(wolf, domain, true);
+				if (hit) return hit.items;
+			}
+			return undefined;
 		},
 		async list(domain, graduated, maxAgeMs = 0) {
 			const all = await wolves();

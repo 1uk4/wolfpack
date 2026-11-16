@@ -79,7 +79,10 @@ type Load = { state: "loading" } | { state: "error"; message: string } | { state
 
 /** Fetches the domain's items; refetches on focus, on a poll and on `reload`, keeping the last good list while it does. */
 function useWorkItems(client: WorkClient, domain: string): { load: Load; reload: () => Promise<boolean> } {
-	const [load, setLoad] = useState<Load>({ state: "loading" });
+	const [load, setLoad] = useState<Load>(() => {
+		const warm = client.peek?.(domain);
+		return warm ? { state: "ready", items: warm } : { state: "loading" };
+	});
 	const seq = useRef(0);
 	/** Set by the mount effect: that one read may reuse a stored list younger than the poll interval. */
 	const mountRead = useRef(false);

@@ -127,8 +127,20 @@ export function fetchWorkRecord(wolf: string, id: string): Promise<KbResult<Work
 }
 
 /** The domain's work items through a wolf's Work API client (graduated and archived ones only with `graduated`). */
+const workListUrl = (wolf: string, domain: string, graduated: boolean) => `/api/wolves/${seg(wolf)}/work?domain=${seg(domain)}${graduated ? "&graduated=true" : ""}`;
+
 export function fetchWorkList(wolf: string, domain: string, graduated = false, maxAgeMs = 0): Promise<KbResult<WorkListResponse>> {
-	return cachedRequest(`/api/wolves/${seg(wolf)}/work?domain=${seg(domain)}${graduated ? "&graduated=true" : ""}`, maxAgeMs);
+	return cachedRequest(workListUrl(wolf, domain, graduated), maxAgeMs);
+}
+
+/** The stored list for this wolf and domain, synchronously (undefined when the store has none). */
+export function peekWorkList(wolf: string, domain: string, graduated = false): WorkListResponse | undefined {
+	return dataStore.read<WorkListResponse>(workListUrl(wolf, domain, graduated))?.data;
+}
+
+/** The stored roster, synchronously. */
+export function peekWolves(): { name: string; status: string; librarian?: boolean }[] | undefined {
+	return dataStore.read<{ wolves: { name: string; status: string; librarian?: boolean }[] }>("/api/wolves")?.data.wolves;
 }
 
 /** Open (or reopen) the feature's thread on a wolf: `{id, title, ...}` of the ThreadSummary. */
@@ -141,14 +153,17 @@ export function openFeatureThread(wolf: string, workItemId: string): Promise<KbR
 }
 
 /** The graph; the SERVER picks the source (relay: the hub's KB copy; local: the librarian / a KB mirror wolf). */
-export function fetchKbGraph(opts: KbGraphOptions = {}, maxAgeMs = 0): Promise<KbResult<KbGraph>> {
+export function kbGraphUrl(opts: KbGraphOptions = {}): string {
 	const p = new URLSearchParams();
 	if (opts.domain) p.set("domain", opts.domain);
 	for (const k of ["archivedWork", "denTopics"] as const) {
 		if (opts[k] !== undefined) p.set(k, opts[k] ? "1" : "0");
 	}
-	const q = p.size ? `?${p}` : "";
-	return cachedRequest(`/api/kb/graph${q}`, maxAgeMs);
+	return `/api/kb/graph${p.size ? `?${p}` : ""}`;
+}
+
+export function fetchKbGraph(opts: KbGraphOptions = {}, maxAgeMs = 0): Promise<KbResult<KbGraph>> {
+	return cachedRequest(kbGraphUrl(opts), maxAgeMs);
 }
 
 /** The entry; the SERVER picks the source (relay: the hub's KB copy; local: the librarian / a KB mirror wolf). */

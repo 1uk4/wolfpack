@@ -119,6 +119,16 @@ const fire = (el: HTMLElement, name: string) => act(async () => {
 const rows = () => qa('[data-testid^="work-row-"]').map((r) => r.getAttribute("data-testid")!.slice("work-row-".length));
 
 describe("the Work page", () => {
+	it("a warm mount renders the stored list on the first render, with no loading state, while the revalidating read is still pending", async () => {
+		const client: WorkClient = {
+			async domains() { return [{ name: "wolfpack", label: "Wolfpack" }]; },
+			peek: () => ITEMS,
+			list: () => new Promise(() => {}),
+		};
+		await mount(client);
+		assert.equal(q("work-loading"), null);
+		assert.ok(rows().includes("i1"));
+	});
 	it("the mount read accepts a stored list up to the poll interval old; a focus refresh always revalidates", async () => {
 		const ages: (number | undefined)[] = [];
 		const client: WorkClient = {

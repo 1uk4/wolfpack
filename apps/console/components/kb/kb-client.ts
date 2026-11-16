@@ -98,19 +98,22 @@ export function invalidateThreads(wolf: string) {
 	dataStore.invalidate(`/api/wolves/${seg(wolf)}/threads`);
 }
 
-export function fetchMemoryStatus(wolf: string, thread?: string): Promise<KbResult<MemoryStatus>> {
+/** Memory reads go through the store: opening the panel reuses an answer under 5 s old; live refreshes pass 0 to revalidate. */
+export const MEMORY_MOUNT_MAX_AGE_MS = 5_000;
+
+export function fetchMemoryStatus(wolf: string, thread?: string, maxAgeMs = MEMORY_MOUNT_MAX_AGE_MS): Promise<KbResult<MemoryStatus>> {
 	const q = thread ? `?thread=${seg(thread)}` : "";
-	return request(`/api/wolves/${seg(wolf)}/memory${q}`);
+	return cachedRequest(`/api/wolves/${seg(wolf)}/memory${q}`, maxAgeMs);
 }
 
 /** The wolf's current observation pool, newest first (what the pool count counts). */
-export function fetchMemoryObservations(wolf: string): Promise<KbResult<MemoryObservations>> {
-	return request(`/api/wolves/${seg(wolf)}/memory/observations`);
+export function fetchMemoryObservations(wolf: string, maxAgeMs = MEMORY_MOUNT_MAX_AGE_MS): Promise<KbResult<MemoryObservations>> {
+	return cachedRequest(`/api/wolves/${seg(wolf)}/memory/observations`, maxAgeMs);
 }
 
 /** Every session topic with its state, plus retired ones and the byte budget. */
-export function fetchSessionTopics(wolf: string): Promise<KbResult<import("@wolfpack/protocol").MemoryTopics>> {
-	return request(`/api/wolves/${seg(wolf)}/memory/session-topics`);
+export function fetchSessionTopics(wolf: string, maxAgeMs = MEMORY_MOUNT_MAX_AGE_MS): Promise<KbResult<import("@wolfpack/protocol").MemoryTopics>> {
+	return cachedRequest(`/api/wolves/${seg(wolf)}/memory/session-topics`, maxAgeMs);
 }
 
 /** Set or clear a topic's keep-local flag. */
@@ -119,8 +122,8 @@ export function putKeepLocal(wolf: string, topicId: string, keepLocal: boolean):
 }
 
 /** Observation counts per feature → task (pending, and archived over the last 7 days). */
-export function fetchMemoryTree(wolf: string): Promise<KbResult<MemoryTree>> {
-	return request(`/api/wolves/${seg(wolf)}/memory/tree`);
+export function fetchMemoryTree(wolf: string, maxAgeMs = MEMORY_MOUNT_MAX_AGE_MS): Promise<KbResult<MemoryTree>> {
+	return cachedRequest(`/api/wolves/${seg(wolf)}/memory/tree`, maxAgeMs);
 }
 
 /** The observations behind one tree node: a work id or `den`. */

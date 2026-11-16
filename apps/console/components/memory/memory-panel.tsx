@@ -139,9 +139,10 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	/** When each work id's info was fetched (success or failure), so lookups are not repeated every event. */
 	const infoAt = useRef(new Map<string, number>());
 
-	const refreshStatus = useCallback(async () => {
+	/** `maxAgeMs` undefined = the store's mount age; live refreshes (events, focus, actions) pass 0 to revalidate. */
+	const refreshStatus = useCallback(async (maxAgeMs?: number) => {
 		const req = ++statusReq.current;
-		const r = await fetchMemoryStatus(wolf, threadId);
+		const r = await fetchMemoryStatus(wolf, threadId, maxAgeMs);
 		if (req !== statusReq.current) return;
 		if (r.ok) {
 			setStatus(r.data);
@@ -151,10 +152,10 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		} else setStatusError(r.message);
 	}, [wolf, threadId]);
 
-	const refreshPool = useCallback(async () => {
+	const refreshPool = useCallback(async (maxAgeMs?: number) => {
 		const guard = poolReq.current;
 		const token = guard.start();
-		const [r, t] = await Promise.all([fetchMemoryObservations(wolf), fetchMemoryTree(wolf)]);
+		const [r, t] = await Promise.all([fetchMemoryObservations(wolf, maxAgeMs), fetchMemoryTree(wolf, maxAgeMs)]);
 		if (!guard.isCurrent(token)) return;
 		if (r.ok) {
 			setObsPool(r.data.observations);
@@ -201,8 +202,8 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		timer.current = null;
 		dirty.current = false;
 		// the pool is read whenever the status is (a capture, consolidation, promote or archive all change both)
-		void refreshStatus();
-		void refreshPool();
+		void refreshStatus(0);
+		void refreshPool(0);
 	}, [refreshStatus, refreshPool]);
 	const schedule = useCallback(() => {
 		dirty.current = true;
@@ -268,8 +269,8 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		setConsolidating(false);
 		if (r.ok) setNote(consolidateMessage(r.data));
 		else setNote(r.code === "memory_busy" ? BUSY_TEXT : r.message);
-		void refreshStatus();
-		void refreshPool();
+		void refreshStatus(0);
+		void refreshPool(0);
 	};
 	const startPromote = async () => {
 		setNote(null);

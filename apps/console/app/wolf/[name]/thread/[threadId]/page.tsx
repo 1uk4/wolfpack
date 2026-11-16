@@ -18,10 +18,16 @@ export default async function ThreadPage({ params }: { params: Promise<{ name: s
 	const { name, threadId: slug } = await params;
 	const client = getConsoleClient();
 	try {
-		const threads = await client.listThreads(name);
-		const id = resolveThreadId(name, slug, threads);
+		const [listed, wolves] = await Promise.all([client.listThreads(name), client.listWolves().catch(() => [])]);
+		let threads = listed;
+		let id = resolveThreadId(name, slug, threads);
+		if (!id) {
+			// The default list omits settled subagent threads; an old link may still point at one.
+			threads = await client.listThreads(name, { all: true });
+			id = resolveThreadId(name, slug, threads);
+		}
 		if (!id) notFound();
-		const wolfColor = (await client.listWolves().catch(() => [])).find((w) => w.name === name)?.color;
+		const wolfColor = wolves.find((w) => w.name === name)?.color;
 		const thread = await client.getThread(id, { limit: THREAD_PAGE_SIZE });
 		return (
 			<ThreadChat

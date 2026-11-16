@@ -41,7 +41,7 @@ export function readSessionTopics(den: string): MemoryTopics {
     let bytes = 0;
     try { bytes = statSync(join(dir, t.filename)).size; } catch { /* vanished */ }
     const confirmed = st?.receipt && st.receipt.outcome !== "reject";
-    const kind = retired ? "retired" : t.state === "parked" ? "parked" : st?.heldRewriteTried ? "held" : st?.promotedAt ? "promoted" : "active";
+    const kind = retired ? "retired" : t.state === "parked" ? "parked" : confirmed ? "promoted" : st?.heldRewriteTried ? "held" : st?.promotedAt ? "promoted" : "active";
     return {
       id: t.id, title: t.title, bytes, updated: t.updated,
       sources: t.sources ?? ["legacy"],
@@ -153,12 +153,13 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
     for (const k of [p.feature, p.work]) if (k) oldestRec.set(k, Math.min(oldestRec.get(k) ?? Infinity, Number.isNaN(r) ? -Infinity : r));
   }
   const waitOf = (o: { work?: string; feature?: string; recordedAt?: string }): { cause: "work-api-unavailable" | "consolidation-failed" | "forbidden"; since: number; key?: string; assignee?: string; message?: string } | undefined => {
-    const rec = o.recordedAt ? Date.parse(o.recordedAt) : NaN;
     for (const k of [o.feature, o.work]) {
       const t = k ? waiting.firstPendingAt[k] : undefined;
       if (k && t !== undefined && t >= (oldestRec.get(k) ?? -Infinity)) return { cause: waiting.keys[k]!, since: t, key: k, ...(waiting.assignees[k] ? { assignee: waiting.assignees[k] } : {}), ...(waiting.messages[k] ? { message: waiting.messages[k] } : {}) };
     }
-    return unavailable && (o.work || o.feature) ? { cause: "work-api-unavailable", since: Number.isNaN(rec) ? now : rec } : undefined;
+    // A failed Work API probe does not mark individual observations: they are simply not flushed yet. The response's
+    // top-level `blocked` carries it, so the console shows one section-level warning.
+    return undefined;
   };
   let oldestWait: number | undefined;
   const blocked = unavailable;

@@ -365,7 +365,7 @@ describe("full-transcript observer", () => {
     expect(count(stub.text(), "A_TWO")).toBe(1);
   });
 
-  it("(i) trigger hybrid: the interval tick consolidates + promotes the whole pool (ignoring poolTarget), and stops on close", async () => {
+  it("(i) trigger hybrid: the interval tick consolidates the whole pool (ignoring poolTarget) without promoting, and stops on close", async () => {
     const dev = await devRoot();
     const stub = stubEngine();
     tw = await startTestWolf({
@@ -384,10 +384,11 @@ describe("full-transcript observer", () => {
       },
     });
     await tw.submit(say("USER_ONE"));
-    const topics = join(dev, "den/memory/topics");
+    const topics = join(dev, "den/.memory/sessions/durable"); // session topics: the fold target, not the promoted den topics
     await waitFor(() => existsSync(topics) && readdirSync(topics).some((f) => f.endsWith(".md")));
     expect(stub.steps.filter((x) => x === "consolidate")).toHaveLength(1); // below threshold: only the timer ran
-    expect(readdirSync(join(dev, "ops/inbox/testwolf")).length).toBeGreaterThan(0);
+    const inbox = join(dev, "ops/inbox/testwolf");
+    expect(existsSync(inbox) ? readdirSync(inbox).length : 0).toBe(0); // a tick never promotes every topic
     await tw.stop();
     tw = undefined;
     const n = stub.steps.length;

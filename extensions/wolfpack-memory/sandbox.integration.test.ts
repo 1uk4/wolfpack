@@ -210,7 +210,7 @@ describe("sandbox: KB_BASE and task tools", () => {
         yaml: `sandbox:\n  root: ${dev}\n`,
         hooks: {
           extensions: ({ config, den, env }) => {
-            mem = createMemoryExtension({ engine }, { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env });
+            mem = createMemoryExtension({ engine, workLog: "fold" }, { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env });
             return [];
           },
         },
@@ -292,7 +292,7 @@ describe("sandbox: KB_BASE and task tools", () => {
         extensions: ({ config, den, env }) => {
           const senv = { ...env, KB_BASE: kbBase };
           const ctx = { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env: senv };
-          tasks = createTasksExtension({}, ctx);
+          tasks = createTasksExtension({ workLog: "fold" }, ctx);
           return [adaptToDurable(createMemoryExtension({ engine }, ctx), { wolfDen: den, wolfName: "testwolf" })];
         },
       },

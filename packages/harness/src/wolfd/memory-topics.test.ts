@@ -58,6 +58,20 @@ describe("memory session topics route", () => {
     expect(body.retired.map((t) => [t.id, t.state, t.entryIds])).toEqual([["gone", "retired", ["kb-b"]]]);
   });
 
+  it("shows held only while the rewrite is unconfirmed: a later receipt makes the topic promoted", async () => {
+    const { den, root, url } = await boot();
+    const base = { summary: "s", updated: "2026-11-13 09:00", body: "body" };
+    writeTopic(root, { ...base, id: "still-held", title: "Still held" });
+    writeTopic(root, { ...base, id: "fixed", title: "Fixed" });
+    updateTopicState(den, "still-held", { heldRewriteTried: true });
+    updateTopicState(den, "fixed", { heldRewriteTried: true, promotedAt: "2026-11-13T20:25:59.000Z", receipt: { outcome: "create", entryIds: ["kb-f"] } });
+    const body = MemoryTopicsSchema.parse(await (await fetch(`${url}/v1/wolves/w/memory/session-topics`, { headers: H })).json());
+    const byId = Object.fromEntries(body.topics.map((t) => [t.id, t]));
+    expect(byId["still-held"]).toMatchObject({ state: "held", reason: "distill held it; one rewrite tried" });
+    expect(byId.fixed).toMatchObject({ state: "promoted", entryIds: ["kb-f"] });
+    expect(byId.fixed.reason).toBeUndefined();
+  });
+
   it("sets and clears keep-local on a topic; an unknown topic is 404", async () => {
     const { root, url } = await boot();
     writeTopic(root, { id: "t", title: "T", summary: "s", updated: "2026-11-13 09:00", body: "b", sources: ["thread:1"] });

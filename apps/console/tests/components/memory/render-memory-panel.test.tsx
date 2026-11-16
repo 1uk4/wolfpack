@@ -25,6 +25,18 @@ describe("MemoryPanel SSR", () => {
 	});
 	const treeProps = () => ({ tree: { features: [], other: [], den: { pending: 1 } }, pool: null, error: null, info: {}, open: null, onOpen: () => {} });
 
+	it("shows the Observations | Topics toggle with Observations selected and no topics list by default", () => {
+		const html = renderToStaticMarkup(
+			<MemoryEventsProvider>
+				<MemoryPanel embedded wolf="w" threadId="t" />
+			</MemoryEventsProvider>,
+		);
+		assert.match(html, /data-testid="memory-section-toggle"/);
+		assert.match(html, /aria-pressed="true"[^>]*data-testid="memory-section-observations"/);
+		assert.match(html, /aria-pressed="false"[^>]*data-testid="memory-section-topics"/);
+		assert.doesNotMatch(html, /data-testid="memory-topics"/);
+		assert.match(html, />Observations</);
+	});
 	it("shows memory only: no item viewer, bound plan, Record or bind button", () => {
 		const html = renderToStaticMarkup(
 			<MemoryEventsProvider>

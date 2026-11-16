@@ -35,10 +35,20 @@ const busiest = <T extends { pending: number; archived: number }>(a: T, b: T): n
  * The tree response as rows: features (own + task counts summed) busiest first with their tasks nested busiest first,
  * then the unresolved work items, then the den.
  */
-export function buildMemoryTreeRows(tree: MemoryTree): MemoryTreeRow[] {
+export function buildMemoryTreeRows(tree: MemoryTree, latest: Readonly<Record<string, string>> = {}): MemoryTreeRow[] {
 	// A wolfd or test stub that answers this route with another shape renders as an empty tree, never a crash.
 	if (!isMemoryTree(tree)) return [];
-	const features = tree.features.map((f): Extract<MemoryTreeRow, { kind: "feature" }> => ({
+	// Newest stamp first; rows without a stamp follow, busiest first.
+	const byStamp = <T extends { id: string; pending: number; archived: number }>(stamp: (x: T) => string) => (a: T, b: T): number => {
+		const sa = stamp(a);
+		const sb = stamp(b);
+		if (sa !== sb) return !sa ? 1 : !sb ? -1 : sa < sb ? 1 : -1;
+		return busiest(a, b);
+	};
+	const own = (x: { id: string }) => latest[x.id] ?? "";
+	const featureStamp = (f: { id: string; tasks: { id: string }[] }) => [own(f), ...f.tasks.map(own)].reduce((m, s) => (s > m ? s : m), "");
+	const stampOfFeature = new Map<string, string>();
+	const features = tree.features.map((f): Extract<MemoryTreeRow, { kind: "feature" }> => (stampOfFeature.set(f.id, featureStamp(f)), {
 		kind: "feature",
 		id: f.id,
 		title: f.title,
@@ -46,12 +56,12 @@ export function buildMemoryTreeRows(tree: MemoryTree): MemoryTreeRow[] {
 		pending: f.own.pending + f.tasks.reduce((n, t) => n + t.pending, 0),
 		archived: f.own.archived + f.tasks.reduce((n, t) => n + t.archived, 0),
 		own: f.own,
-		tasks: [...f.tasks].sort(busiest),
+		tasks: [...f.tasks].sort(byStamp(own)),
 	}));
-	features.sort(busiest);
+	features.sort(byStamp((f) => stampOfFeature.get(f.id) ?? ""));
 	return [
 		...features,
-		...[...tree.other].sort(busiest).map((o): MemoryTreeRow => ({ kind: "other", id: o.id, pending: o.pending, archived: o.archived })),
+		...[...tree.other].sort(byStamp(own)).map((o): MemoryTreeRow => ({ kind: "other", id: o.id, pending: o.pending, archived: o.archived })),
 		{ kind: "den", id: "den", pending: tree.den.pending, archived: tree.den.archived ?? 0 },
 	];
 }
@@ -59,6 +69,16 @@ export function buildMemoryTreeRows(tree: MemoryTree): MemoryTreeRow[] {
 export const FEED_CAP = 100;
 export const MEMORY_PANEL_OPEN_KEY = "wolfpack.memory-panel.open.v1";
 export const MEMORY_PANEL_VIEW_KEY = "wolfpack.memory-panel.view.v1";
+export const MEMORY_PANEL_SECTION_KEY = "memory-panel-section";
+
+/** Which section the panel shows under the Pool block. */
+export type PanelSection = "observations" | "topics";
+
+/** SSR-safe: only "topics" is kept; anything else (incl. no stored value) is Observations. */
+export function parseSection(raw: string | null | undefined): PanelSection {
+	return raw === "topics" ? "topics" : "observations";
+}
+export const serializeSection = (section: PanelSection): string => section;
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
@@ -287,7 +307,7 @@ export function promoteLine(s: PromoteState): string | null {
 		case "running":
 			return "Promote running…";
 		case "finished":
-			return `Promoted: ${s.consolidated} consolidated, ${s.contributions} contributed${s.pending ? `, ${s.pending} pending` : ""}`;
+			return `Promote done: ${s.contributions} topic${s.contributions === 1 ? "" : "s"} sent${s.pending ? `, ${s.pending} queued` : ""}`;
 		case "failed":
 			return `Promote failed: ${s.message}`;
 		default:
@@ -303,7 +323,7 @@ export function actionBlock(args: { status: MemoryStatus | null; promote: Promot
 	return null;
 }
 
-export const BUSY_TEXT = "memory_busy: a promote is running; consolidate is refused until it finishes.";
+export const BUSY_TEXT = "A promote is running; try Consolidate when it finishes.";
 
 // ─── Record ──────────────────────────────────────────────────────────────────
 
@@ -448,6 +468,11 @@ export const observationsInGroup = (obs: readonly PoolObservation[], key: string
 /** The note a blocked group shows. */
 export const BLOCKED_LABEL = "waiting for Work API";
 export const BLOCKED_LABELS = { "work-api-unavailable": BLOCKED_LABEL, "consolidation-failed": "consolidation failed, retrying", forbidden: "refused by the hub" } as const;
+
+/** The one section-level line when the observations response is blocked on the Work API (individual groups are not labelled from it). */
+export function workApiWarning(blocked: "work-api-unavailable" | undefined | null): string | null {
+	return blocked === "work-api-unavailable" ? "Work API not reachable right now; notes are kept and will be written when it is back" : null;
+}
 
 /** What a blocked group shows: the cause, and the feature's Record when that (not the group's own item) is what blocks it. */
 export function blockedLabel(g: Pick<ObservationGroup, "key" | "blocked" | "blockedKey" | "assignee" | "blockedMessage">, info: Readonly<Record<string, GroupInfo | undefined>>): string {

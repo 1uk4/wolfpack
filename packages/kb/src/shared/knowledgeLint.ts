@@ -98,14 +98,40 @@ function proseLines(text: string): string[] {
   return out;
 }
 
-/** True when `line` holds a commit-hash-like token in commit context. */
-function hashIn(line: string): string | undefined {
+/** The commit-hash-like tokens of one line that the lint counts (wrapped, or the line is in commit context), with their offsets. */
+function hashMatches(line: string): Array<{ token: string; at: number }> {
+  const out: Array<{ token: string; at: number }> = [];
   for (const m of line.matchAll(HASH_TOKEN)) {
     const at = m.index ?? 0;
     const wrapped = /[`(]/.test(line[at - 1] ?? "") || /(?:^|[(;,]\s*(?:follow-up\s+)?)$/.test(line.slice(0, at)) && /[`);,]/.test(line[at + m[0].length] ?? "");
-    if (wrapped || HASH_CONTEXT.test(line)) return m[0];
+    if (wrapped || HASH_CONTEXT.test(line)) out.push({ token: m[0], at });
   }
-  return undefined;
+  return out;
+}
+
+/** True when `line` holds a commit-hash-like token in commit context. */
+function hashIn(line: string): string | undefined {
+  return hashMatches(line)[0]?.token;
+}
+
+/** The commit hashes the lint would flag in `text` (prose lines, outside code fences). */
+export function findCommitHashes(text: string): string[] {
+  return proseLines(text).flatMap((l) => hashMatches(l).map((h) => h.token));
+}
+
+/** Replace every commit hash the lint would flag with `replacement`; fenced code is left as is. */
+export function scrubCommitHashes(text: string, replacement = "a commit"): string {
+  let fenced = false;
+  return text
+    .split("\n")
+    .map((l) => {
+      if (/^\s*```/.test(l)) { fenced = !fenced; return l; }
+      if (fenced) return l;
+      let out = l;
+      for (const h of hashMatches(l).reverse()) out = out.slice(0, h.at) + replacement + out.slice(h.at + h.token.length);
+      return out;
+    })
+    .join("\n");
 }
 
 export function lintKnowledge(input: LintInput): LintFinding[] {

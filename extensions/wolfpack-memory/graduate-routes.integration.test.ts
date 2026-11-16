@@ -74,7 +74,7 @@ function boot(dev: string) {
         opsRoot = env.KB_OPS!;
         const c = { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env };
         const e = engine();
-        const tasks = createTasksExtension({ autoShip: true, engine: () => e }, c);
+        const tasks = createTasksExtension({ autoShip: true, workLog: "fold", engine: () => e }, c);
         const memory = createMemoryExtension({ ...config.memory, engine: e }, c);
         return [parkExtension, adaptToDurable(memory, { wolfDen: den, wolfName: "testwolf" }), adaptToDurable(tasks, { wolfDen: den, wolfName: "testwolf" })];
       },

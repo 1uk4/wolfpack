@@ -49,8 +49,8 @@ const engine = {
   usage: { summarize: () => ({}) },
 } as unknown as Engine;
 
-const make = (workLog?: "append") =>
-  createTasksExtension({ engine: () => engine, ...(workLog ? { workLog } : {}) }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {}, capabilities: {} } as never);
+const make = (workLog: "fold" | "append" = "fold") =>
+  createTasksExtension({ engine: () => engine, workLog }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {}, capabilities: {} } as never);
 const stage = (ext: ReturnType<typeof make>, id: string, to: string) =>
   ext.tools!.find((t) => t.name === "task_stage")!.execute({ id, to }, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 } as never);
 

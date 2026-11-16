@@ -119,7 +119,7 @@ function statusOf(
 ): DenTopicStatus {
   const rec = readDistillRecord(roots, topic.id);
   const current = rec && contentHash(rec.rawBody.trim()) === contentHash(topic.body.trim()) ? rec : null;
-  if (current?.held) return { kind: "held", reason: `distill: ${current.held}` };
+  if (current?.held) return { kind: "held", reason: `distill: ${current.held}${current.heldDetail ? `\n${current.heldDetail}` : ""}` };
   const parts = current ? current.outputs.map((o) => ({ id: o.id, body: o.body })) : [{ id: topic.id, body: topic.body }];
 
   const states = parts.map((p): DenTopicStatus => {

@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
 import { recordRouting, replaceRecordSection, writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive, withPoolLock } from "@wolfpack/memory";
-import { consolidatePool, drainWorkObservations, durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
+import { consolidatePool as consolidatePoolDefault, drainWorkObservations as drainWorkObservationsDefault, durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
+// `memory.workLog` now defaults to append; the pre-existing tests below exercise the fold path, so they set it explicitly.
+const consolidatePool = (c: Parameters<typeof consolidatePoolDefault>[0]) => consolidatePoolDefault({ workLog: "fold", ...c });
+const drainWorkObservations = (c: Parameters<typeof drainWorkObservationsDefault>[0]) => drainWorkObservationsDefault({ workLog: "fold", ...c });
 
 const WOLF = "w1";
 let root: string;
@@ -664,6 +667,14 @@ describe("work log append mode (pi-durable)", () => {
     return { engine, workStore, appends, steps };
   }
   const cfg = (m: ReturnType<typeof mocks>, extra: object = {}) => ({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, now: () => NOW, ...extra });
+
+  it("without a workLog setting a tagged observation takes the append path, not the fold path", async () => {
+    poolWith([0, 1, 2, 3, 4, 5].map((n) => o(n, { work: "t1", feature: "f1" })));
+    const m = mocks();
+    await consolidatePoolDefault(cfg(m));
+    expect(m.appends.map((a) => a.id)).toEqual(["t1"]);
+    expect(m.steps).not.toContain("workRecord");
+  });
 
   it("fold mode never appends", async () => {
     poolWith([o(0, { work: "t1" })]);

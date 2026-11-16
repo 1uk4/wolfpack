@@ -87,7 +87,7 @@ beforeEach(() => {
   const engine = { call, usage: { summarize: () => ({}) } } as unknown as Engine;
   newest = undefined;
   askCards = true;
-  ext = createTasksExtension({ engine: () => engine, kbRoots: kb }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {}, capabilities: { askCards } } as never);
+  ext = createTasksExtension({ engine: () => engine, kbRoots: kb, workLog: "fold" }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {}, capabilities: { askCards } } as never);
 });
 afterEach(() => {
   vi.unstubAllEnvs();

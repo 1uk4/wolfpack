@@ -168,7 +168,7 @@ export interface ConsolidationConfig {
   engine?: Engine;
   /** Where work Records are written (default: the Work API from WORK_ENDPOINT / WORK_TOKEN, when set). */
   workStore?: WorkRecordStore;
-  /** `memory.workLog`: "fold" (default) rewrites the Record; "append" appends a few log lines per task, batched by `shouldFlushWorkLog`. */
+  /** `memory.workLog`: "append" (default when absent) appends a few log lines per task, batched by `shouldFlushWorkLog`; "fold" rewrites the whole Record. */
   workLog?: "fold" | "append";
   /** `memory.subagentMemory: on`: settle the pool under the cross-process pool lock. Default off: no lock file. */
   poolLock?: boolean;
@@ -259,7 +259,7 @@ async function runWorkStep(a: {
   now?: () => Date;
   onProgress?: (m: string) => void;
 }): Promise<Array<WorkRecordOutcome & { target?: string }>> {
-  if (a.mode !== "append") {
+  if (a.mode === "fold") {
     return consolidateWorkRecords({
       engine: a.engine,
       store: a.store,

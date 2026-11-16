@@ -478,6 +478,30 @@ describe("questions", () => {
   });
 });
 
+describe("listChildren default", () => {
+  it("omits a child settled over 24 h ago, keeps a running and a recent settled one; all returns every child", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const agents = scriptedAgents({ gate });
+    tw = await boot(agents);
+    try {
+      await say(tw, "spawn[old]: quick");
+      await parentSaw(tw, 'Sub-agent "old" completed');
+      vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 25 * 3600_000 });
+      await say(tw, "spawn[recent]: quick");
+      await parentSaw(tw, 'Sub-agent "recent" completed');
+      await say(tw, "spawn[live]: SLOW work");
+      await vi.waitFor(async () => expect((await tw!.client.listChildren!(tw!.home, { all: true })).some((c) => c.state === "running")).toBe(true));
+      const states = async (all: boolean) => (await tw!.client.listChildren!(tw!.home, { all })).map((c) => c.state).sort();
+      expect(await states(true)).toEqual(["done", "done", "running"]);
+      expect(await states(false)).toEqual(["done", "running"]);
+    } finally {
+      vi.useRealTimers();
+      open();
+    }
+  });
+});
+
 describe("stop", () => {
   it("subagent_stop cancels the child's turn; it can be resumed", async () => {
     let open!: () => void;

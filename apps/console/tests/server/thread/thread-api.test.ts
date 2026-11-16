@@ -152,6 +152,18 @@ describe("thread API: reads and commands", () => {
 		assert.deepEqual(asked, [undefined, { all: true }]);
 	});
 
+	it("the children list asks the client for the settled subagents only when `all` is set", async () => {
+		const asked: unknown[] = [];
+		const client = {
+			listThreads: async () => [{ id: "1uk4/home", wolf: "1uk4", kind: "home", title: "Home" }],
+			listChildren: async (_id: string, opts?: unknown) => (asked.push(opts), []),
+		};
+		const api = createThreadApi(() => client as never);
+		await api.children(ref);
+		await api.children(ref, { all: true });
+		assert.deepEqual(asked, [undefined, { all: true }]);
+	});
+
 	it("lists wolves and threads, serves thread detail by slug", async () => {
 		const api = createThreadApi(() => new MockConsoleClient({ delayMs: 0 }));
 		assert.deepEqual(((await (await api.wolves()).json()) as { wolves: { name: string }[] }).wolves.map((w) => w.name), ["1uk4"]);

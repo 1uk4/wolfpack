@@ -137,11 +137,11 @@ export function createThreadApi(source: ClientSource) {
 		},
 
 		/** The subagent threads a thread spawned. A client without subagents has none (an empty list, not an error). */
-		async children(ref: ThreadRef): Promise<Response> {
+		async children(ref: ThreadRef, opts: { all?: boolean } = {}): Promise<Response> {
 			try {
 				const client = source();
 				const id = await resolve(client, ref);
-				return json({ threads: client.listChildren ? await client.listChildren(id) : [] });
+				return json({ threads: client.listChildren ? await client.listChildren(id, opts.all ? { all: true } : undefined) : [] });
 			} catch (err) {
 				return failure(err);
 			}

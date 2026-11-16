@@ -459,6 +459,11 @@ export const observationsInGroup = (obs: readonly PoolObservation[], key: string
 export const BLOCKED_LABEL = "waiting for Work API";
 export const BLOCKED_LABELS = { "work-api-unavailable": BLOCKED_LABEL, "consolidation-failed": "consolidation failed, retrying", forbidden: "refused by the hub" } as const;
 
+/** The one section-level line when the observations response is blocked on the Work API (individual groups are not labelled from it). */
+export function workApiWarning(blocked: "work-api-unavailable" | undefined | null): string | null {
+	return blocked === "work-api-unavailable" ? "Work API not reachable right now; notes are kept and will be written when it is back" : null;
+}
+
 /** What a blocked group shows: the cause, and the feature's Record when that (not the group's own item) is what blocks it. */
 export function blockedLabel(g: Pick<ObservationGroup, "key" | "blocked" | "blockedKey" | "assignee" | "blockedMessage">, info: Readonly<Record<string, GroupInfo | undefined>>): string {
 	if (!g.blocked) return "";

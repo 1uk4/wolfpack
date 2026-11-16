@@ -20,6 +20,7 @@ import {
 	consolidateMessage,
 	reconcilePromote,
 	pendingWarning,
+	workApiWarning,
 	type PoolPending,
 	buildMemoryTreeRows,
 	DEN_GROUP,
@@ -122,6 +123,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	const [obsPool, setObsPool] = useState<PoolObservation[] | null>(null);
 	const [poolError, setPoolError] = useState<string | null>(null);
 	const [poolPending, setPoolPending] = useState<PoolPending | null>(null);
+	const [poolBlocked, setPoolBlocked] = useState<"work-api-unavailable" | undefined>(undefined);
 	const [tree, setTree] = useState<MemoryTree | null>(null);
 	const [treeError, setTreeError] = useState<string | null>(null);
 	const [treeVersion, setTreeVersion] = useState(0);
@@ -157,6 +159,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		if (r.ok) {
 			setObsPool(r.data.observations);
 			setPoolPending(r.data.pending ?? null);
+			setPoolBlocked(r.data.blocked);
 			setPoolError(null);
 		} else setPoolError(r.message);
 		if (t.ok) {
@@ -340,7 +343,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 			{section === "topics" ? (
 				<TopicsSection wolf={wolf} />
 			) : (
-				<ObservationsSection wolf={wolf} observations={{ tree, error: treeError ?? poolError, pool: obsPool, pending: poolPending, info: groupInfo, open: openGroup, onOpen: setOpenGroup, version: treeVersion }} />
+				<ObservationsSection wolf={wolf} observations={{ tree, error: treeError ?? poolError, pool: obsPool, pending: poolPending, blocked: poolBlocked, info: groupInfo, open: openGroup, onOpen: setOpenGroup, version: treeVersion }} />
 			)}
 		</div>
 	);
@@ -439,6 +442,8 @@ export function ObservationsSection({ wolf, observations }: {
 		error: string | null;
 		pool: PoolObservation[] | null;
 		pending?: PoolPending | null;
+		/** The response's pool-level `blocked`: one section warning, never a per-group label. */
+		blocked?: "work-api-unavailable";
 		info: Readonly<Record<string, GroupInfo | undefined>>;
 		open: string | null;
 		onOpen: (id: string | null) => void;
@@ -501,6 +506,7 @@ export function ObservationsSection({ wolf, observations }: {
 	return (
 		<section data-testid="memory-feed" className="min-w-0">
 			<SectionHeading label="Observations" info={SECTION_INFO.observations} />
+			{workApiWarning(observations.blocked) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-work-api-warning">{workApiWarning(observations.blocked)}</p> : null}
 			{pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
 			{tree === null ? (
 				<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{observations.error ? `Observations unavailable: ${observations.error}` : "Loading…"}</p>

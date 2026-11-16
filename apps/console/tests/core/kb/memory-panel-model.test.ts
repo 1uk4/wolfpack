@@ -11,7 +11,7 @@ const obs = (threadId: string | undefined, target: unknown, summary = "s"): Memo
 const st = (state: MemoryStatus["state"]): MemoryStatus => ({ state, reason: "why", pool: null, sessionTopics: [], denTopics: [], lastPromote: null });
 const rec = (o: Partial<WorkRecordResponse>): WorkRecordResponse => ({ id: "a", title: "A", kind: "task", stage: "plan", plan: "", record: "", ...o });
 
-import { pendingWarning, nestGroups, type ObservationGroup } from "../../../src/core/kb/memory-panel-model.ts";
+import { pendingWarning, workApiWarning, nestGroups, type ObservationGroup } from "../../../src/core/kb/memory-panel-model.ts";
 
 describe("nestGroups", () => {
 	const g = (key: string, count: number): ObservationGroup => ({ key, kind: "work", count, latest: "2026-11-01" });
@@ -28,6 +28,13 @@ describe("nestGroups", () => {
 			["orphan", false, 4, 4, []],
 			["f2", true, 1, undefined, ["t3"]],
 		]);
+	});
+});
+
+describe("Work API section warning", () => {
+	it("one section-level line when the response is blocked on the Work API, nothing otherwise", () => {
+		assert.equal(workApiWarning("work-api-unavailable"), "Work API not reachable right now; notes are kept and will be written when it is back");
+		assert.equal(workApiWarning(undefined), null);
 	});
 });
 

@@ -19,6 +19,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KbGraph } from "@/src/core";
 import { fetchKbGraph, type KbGraphOptions } from "../kb/kb-client";
 
+/** A graph this young is shown as is when the page mounts; the 30 s poll and `refetch()` still revalidate. */
+export const GRAPH_MOUNT_MAX_AGE_MS = 30_000;
+
 export type KbGraphStatus = "loading" | "ready" | "unavailable" | "error";
 
 export interface KbGraphState {
@@ -39,7 +42,12 @@ export function useKbGraph(loading: boolean, query: KbGraphOptions): KbGraphStat
 	// The query key the current `graph` was fetched with.
 	const [settledKey, setSettledKey] = useState<string | null>(null);
 	const [tick, setTick] = useState(0);
-	const refetch = useCallback(() => setTick((t) => t + 1), []);
+	// A mount or a query change may reuse a graph younger than GRAPH_MOUNT_MAX_AGE_MS; an explicit refetch never does.
+	const forceRef = useRef(false);
+	const refetch = useCallback(() => {
+		forceRef.current = true;
+		setTick((t) => t + 1);
+	}, []);
 	// A stable key for the query object (callers pass a fresh literal).
 	const queryKey = JSON.stringify([query.domain ?? null, !!query.archivedWork, !!query.denTopics]);
 	const queryRef = useRef(query);
@@ -48,7 +56,9 @@ export function useKbGraph(loading: boolean, query: KbGraphOptions): KbGraphStat
 	useEffect(() => {
 		if (loading) return;
 		let cancelled = false;
-		void fetchKbGraph(queryRef.current).then((res) => {
+		const maxAge = forceRef.current ? 0 : GRAPH_MOUNT_MAX_AGE_MS;
+		forceRef.current = false;
+		void fetchKbGraph(queryRef.current, maxAge).then((res) => {
 			if (cancelled) return;
 			// Failures settle the key too: nothing newer is coming, so
 			// waiters must not wait forever.

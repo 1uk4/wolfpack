@@ -6,6 +6,17 @@
 export type StoreEntry<T = unknown> = { data: T; at: number };
 export type LoadOptions<T> = { maxAgeMs: number; parse?: (json: unknown) => T };
 
+/** A non-OK answer: the status and the parsed JSON body (null when it had none). */
+export class StoreHttpError extends Error {
+	constructor(
+		readonly status: number,
+		readonly body: unknown,
+		readonly headers: Headers,
+	) {
+		super(`HTTP ${status}`);
+	}
+}
+
 export type DataStoreDeps = {
 	fetch?: typeof fetch;
 	now?: () => number;
@@ -42,9 +53,12 @@ export function createDataStore(deps: DataStoreDeps = {}) {
 	function load<T = unknown>(url: string, opts: LoadOptions<T>): Promise<T> {
 		const hit = entries.get(url);
 		if (hit && now() - hit.at < opts.maxAgeMs) return Promise.resolve(hit.data as T);
+		// Only a read that accepts cached data joins a request already in flight; a forced refresh (maxAgeMs 0, e.g. after an event) may not,
+		// because that request could have been sent before the change that triggered the refresh.
 		const pending = inflight.get(url);
-		if (pending) return pending as Promise<T>;
-		const p = (async () => {
+		if (pending && opts.maxAgeMs > 0) return pending as Promise<T>;
+		const slot: { p?: Promise<T> } = {};
+		const p: Promise<T> = (async () => {
 			try {
 				const headers: Record<string, string> = {};
 				if (hit?.etag) headers["If-None-Match"] = hit.etag;
@@ -53,16 +67,17 @@ export function createDataStore(deps: DataStoreDeps = {}) {
 					put(url, { ...hit, at: now() });
 					return hit.data as T;
 				}
-				if (!res.ok) throw new Error(`${url}: ${res.status}`);
+				if (!res.ok) throw new StoreHttpError(res.status, await res.json().catch(() => null), res.headers);
 				const json = (await res.json()) as unknown;
 				const data = opts.parse ? opts.parse(json) : (json as T);
-				put(url, { data, at: now(), etag: res.headers.get("ETag") ?? undefined });
+				put(url, { data, at: now(), etag: res.headers?.get?.("ETag") ?? undefined });
 				notify(url);
 				return data;
 			} finally {
-				inflight.delete(url);
+				if (inflight.get(url) === slot.p) inflight.delete(url);
 			}
 		})();
+		slot.p = p;
 		inflight.set(url, p);
 		return p;
 	}
@@ -81,7 +96,13 @@ export function createDataStore(deps: DataStoreDeps = {}) {
 		for (const [url, e] of entries) if (url.startsWith(prefix)) e.at = Number.NEGATIVE_INFINITY;
 	}
 
-	return { read, load, subscribe, invalidate };
+	/** Drops every stored value (sign-out, tests). */
+	function clear() {
+		entries.clear();
+		inflight.clear();
+	}
+
+	return { read, load, subscribe, invalidate, clear };
 }
 
 export const dataStore = createDataStore();

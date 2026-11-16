@@ -33,11 +33,13 @@ describe("data store", () => {
 		assert.deepEqual(h.store.read("/a")?.data, { n: 1 });
 	});
 
-	it("shares one request between concurrent loads", async () => {
+	it("shares one request between concurrent loads that accept cached data, but a forced refresh gets its own", async () => {
 		const h = harness(() => json({ n: 1 }));
-		const [a, b] = await Promise.all([h.store.load("/a", { maxAgeMs: 0 }), h.store.load("/a", { maxAgeMs: 0 })]);
+		const [a, b] = await Promise.all([h.store.load("/a", { maxAgeMs: 1000 }), h.store.load("/a", { maxAgeMs: 1000 })]);
 		assert.deepEqual(a, b);
 		assert.equal(h.calls.length, 1);
+		await Promise.all([h.store.load("/b", { maxAgeMs: 1000 }), h.store.load("/b", { maxAgeMs: 0 })]);
+		assert.equal(h.calls.length, 3);
 	});
 
 	it("refetches when the cached value is older than maxAgeMs", async () => {
@@ -86,7 +88,7 @@ describe("data store", () => {
 	it("keeps old data and rejects when the fetch fails", async () => {
 		const h = harness((_c, n) => (n === 1 ? json({ n: 1 }) : new Response("no", { status: 500 })));
 		await h.store.load("/a", { maxAgeMs: 0 });
-		await assert.rejects(h.store.load("/a", { maxAgeMs: 0 }));
+		await assert.rejects(h.store.load("/a", { maxAgeMs: 0 }), (e: { status?: number }) => e.status === 500);
 		assert.deepEqual(h.store.read("/a")?.data, { n: 1 });
 	});
 });

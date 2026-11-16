@@ -8,6 +8,7 @@
  * "memory_busy", "promote_unavailable") so callers can tell 409s apart.
  */
 import type { WorkItemResponse } from "@wolfpack/protocol";
+import { dataStore, StoreHttpError } from "@/src/core/data-store";
 import type {
 	ConsolidateResponse,
 	GraduationJob,
@@ -36,6 +37,27 @@ export interface KbGraphOptions {
 
 const seg = encodeURIComponent;
 
+export function invalidateAfterWrite() {
+	dataStore.invalidate("/api/wolves");
+	dataStore.invalidate("/api/kb/");
+}
+
+function failure(status: number, body: unknown): KbResult<never> {
+	const b = body as { error?: string; code?: string; details?: Record<string, string> } | null;
+	const reason: KbFailureReason = status === 409 ? "unavailable" : status === 404 ? "not_found" : "error";
+	return { ok: false, reason, message: b?.error ?? `HTTP ${status}`, ...(b?.code ? { code: b.code } : {}), ...(b?.details ? { details: b.details } : {}) };
+}
+
+/** A GET read through the client store: a value younger than `maxAgeMs` costs no request, concurrent reads share one, and the ETag revalidates. */
+async function cachedRequest<T>(url: string, maxAgeMs: number): Promise<KbResult<T>> {
+	try {
+		return { ok: true, data: await dataStore.load<T>(url, { maxAgeMs }) };
+	} catch (err) {
+		if (err instanceof StoreHttpError) return failure(err.status, err.body);
+		return { ok: false, reason: "error", message: err instanceof Error ? err.message : "network error" };
+	}
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<KbResult<T>> {
 	let res: Response;
 	try {
@@ -44,6 +66,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<KbResult<T>>
 		return { ok: false, reason: "error", message: err instanceof Error ? err.message : "network error" };
 	}
 	if (res.ok) {
+		// A write the console made itself (work edit, graduation, promote, consolidate, thread create): cached lists and graphs may be stale now.
+		if (init?.method && init.method !== "GET") invalidateAfterWrite();
 		try {
 			return { ok: true, data: (await res.json()) as T };
 		} catch {
@@ -58,8 +82,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<KbResult<T>>
 	return { ok: false, reason, message, ...(code ? { code } : {}), ...(details ? { details } : {}) };
 }
 
-export function fetchWolves(): Promise<KbResult<{ wolves: { id: string; name: string; host: string; status: string; librarian?: boolean; kbReadable?: boolean }[] }>> {
-	return request("/api/wolves");
+/** The roster, read through the store: a refresh within `maxAgeMs` (default 10 s) reuses the last answer. */
+export function fetchWolves(maxAgeMs = 10_000): Promise<KbResult<{ wolves: { id: string; name: string; host: string; status: string; librarian?: boolean; kbReadable?: boolean }[] }>> {
+	return cachedRequest("/api/wolves", maxAgeMs);
 }
 
 export function fetchMemoryStatus(wolf: string, thread?: string): Promise<KbResult<MemoryStatus>> {
@@ -102,8 +127,8 @@ export function fetchWorkRecord(wolf: string, id: string): Promise<KbResult<Work
 }
 
 /** The domain's work items through a wolf's Work API client (graduated and archived ones only with `graduated`). */
-export function fetchWorkList(wolf: string, domain: string, graduated = false): Promise<KbResult<WorkListResponse>> {
-	return request(`/api/wolves/${seg(wolf)}/work?domain=${seg(domain)}${graduated ? "&graduated=true" : ""}`);
+export function fetchWorkList(wolf: string, domain: string, graduated = false, maxAgeMs = 0): Promise<KbResult<WorkListResponse>> {
+	return cachedRequest(`/api/wolves/${seg(wolf)}/work?domain=${seg(domain)}${graduated ? "&graduated=true" : ""}`, maxAgeMs);
 }
 
 /** Open (or reopen) the feature's thread on a wolf: `{id, title, ...}` of the ThreadSummary. */
@@ -116,14 +141,14 @@ export function openFeatureThread(wolf: string, workItemId: string): Promise<KbR
 }
 
 /** The graph; the SERVER picks the source (relay: the hub's KB copy; local: the librarian / a KB mirror wolf). */
-export function fetchKbGraph(opts: KbGraphOptions = {}): Promise<KbResult<KbGraph>> {
+export function fetchKbGraph(opts: KbGraphOptions = {}, maxAgeMs = 0): Promise<KbResult<KbGraph>> {
 	const p = new URLSearchParams();
 	if (opts.domain) p.set("domain", opts.domain);
 	for (const k of ["archivedWork", "denTopics"] as const) {
 		if (opts[k] !== undefined) p.set(k, opts[k] ? "1" : "0");
 	}
 	const q = p.size ? `?${p}` : "";
-	return request(`/api/kb/graph${q}`);
+	return cachedRequest(`/api/kb/graph${q}`, maxAgeMs);
 }
 
 /** The entry; the SERVER picks the source (relay: the hub's KB copy; local: the librarian / a KB mirror wolf). */

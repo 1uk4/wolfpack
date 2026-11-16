@@ -758,9 +758,9 @@ export function SessionsSidebar() {
 	useEffect(() => {
 		if (!open) return;
 		void refresh();
-		// Opening + navigation refetch; while open, the events channel owns
-		// freshness (S6) — no interval, nothing standing.
-	}, [open, pathname, refresh]);
+		// Refetch on mount and on closed -> open only. Navigation does NOT refetch (the list is
+		// large); the events channel and resync own freshness (S6), `pathname` only marks the active row.
+	}, [open, refresh]);
 
 	return (
 		<aside

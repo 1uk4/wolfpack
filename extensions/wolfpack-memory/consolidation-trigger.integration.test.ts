@@ -18,6 +18,7 @@ import { ENGINE_CONTEXT as ctx } from "../../packages/harness/src/engine/index.j
 import { createScriptedModel, fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { effectiveConsolidationInterval, parseConsolidationInterval } from "@wolfpack/engine";
 import createMemoryExtension from "./unified.js";
+import { memoryActionsFor } from "./memory-actions.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -190,6 +191,8 @@ interface BootOpts {
   env?: Record<string, string>;
   /** Collects console.log lines. */
   logs?: string[];
+  /** The engine's consolidate step waits for this before running (holds a consolidation in flight). */
+  gate?: Promise<void>;
 }
 
 /** Boot only (no message). `seed` runs before boot. Counts engine consolidate calls and 50ms timers (the intervalMs seam). */
@@ -200,7 +203,7 @@ async function bootOnly(consolidation: Record<string, unknown>, seed: ((den: str
   vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void opts.logs?.push(a.join(" ")));
   let consolidates = 0;
   const base = stubEngine();
-  const engine = { call: (step: string, schema: never, ...rest: never[]) => { if (step === "consolidate") { consolidates++; opts.onConsolidate?.(den, consolidates); } return (base.call as (...a: unknown[]) => unknown)(step, schema, ...rest); } } as unknown as Engine;
+  const engine = { call: (step: string, schema: never, ...rest: never[]) => { if (step === "consolidate") { consolidates++; opts.onConsolidate?.(den, consolidates); if (opts.gate) return opts.gate.then(() => (base.call as (...a: unknown[]) => unknown)(step, schema, ...rest)); } return (base.call as (...a: unknown[]) => unknown)(step, schema, ...rest); } } as unknown as Engine;
   const realSetInterval = globalThis.setInterval;
   let timers = 0;
   vi.spyOn(globalThis, "setInterval").mockImplementation(((fn: never, ms?: number, ...a: never[]) => {
@@ -283,6 +286,45 @@ describe("boot-time consolidation timer", () => {
       expect(count(logs, /Timer-triggered consolidation/)).toBeGreaterThan(0);
       expect(count(logs, /consolidate \+ promote/)).toBe(0);
     }, { env: { KB_BASE: kb, KB_OPS: kb }, logs });
+  });
+
+  it("a threshold trigger while a timer consolidation is running reuses it instead of starting a second", async () => {
+    const logs: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    await bootOnly({ trigger: "hybrid", threshold: 1, poolTarget: 0 }, seedPool, async ({ consolidateCalls, harnessRoot }) => {
+      try {
+        await eventually(() => expect(consolidateCalls()).toBe(1)); // the timer's consolidation is in flight
+        await harnessRoot(); // a message: the observation crosses the threshold while it runs
+        await staysTrue(() => expect(consolidateCalls()).toBe(1), 400);
+        expect(count(logs, THRESHOLD)).toBe(0); // the threshold path found the running one and did not start its own
+      } finally {
+        release();
+      }
+    }, { logs, gate });
+  });
+
+  it("a Promote started while a consolidation runs waits for it instead of overlapping", async () => {
+    const kb = mkdtempSync(join(tmpdir(), "kb-"));
+    dirs.push(kb);
+    writeFileSync(join(kb, "domains.yaml"), "domains:\n  wolfpack: {}\n");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    await bootOnly({ trigger: "timer", poolTarget: 0 }, seedPool, async ({ den, consolidateCalls }) => {
+      let job: ReturnType<NonNullable<ReturnType<typeof memoryActionsFor>>["promote"]>;
+      let settled = false;
+      try {
+        await eventually(() => expect(consolidateCalls()).toBe(1)); // the timer's consolidation is in flight
+        job = memoryActionsFor(den)!.promote();
+        expect(job.status).toBe("started");
+        if (job.status === "started") void job.done.then(() => { settled = true; }, () => { settled = true; });
+        await staysTrue(() => expect(settled).toBe(false), 300); // queued behind the running consolidation
+      } finally {
+        release();
+      }
+      if (job.status === "started") await job.done; // runs once the first finished
+      expect(settled).toBe(true);
+    }, { env: { KB_BASE: kb, KB_OPS: kb }, gate });
   });
 
   it("two extension instances on one den give one timer", async () => {

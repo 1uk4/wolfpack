@@ -77,6 +77,12 @@ describe("/wolf/<name>/thread/<slug>", () => {
 		assert.deepEqual(chatProps?.colorThreads?.map((t) => t.id), ["1uk4/f1", "1uk4/home"]);
 	});
 
+	it("loads only the newest 25 messages for the first paint", async () => {
+		fake({ listed: [thread] });
+		await visit("f1");
+		assert.equal(getThreadOpts?.limit, 25);
+	});
+
 	it("404s when the slug is in neither list", async () => {
 		fake({ listed: [], all: [] });
 		assert.equal(await visit("nope"), "404");

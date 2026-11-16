@@ -4,7 +4,7 @@ import { ThreadSkeleton } from "@/components/thread/thread-skeleton";
 import { cardsOfThread, resolveThreadId, threadLabel, threadMessagesToNative } from "@/src/core";
 import { getConsoleClient, isNotFound } from "@/src/server";
 import { withHistoryAttachments } from "@/components/composer/attachments";
-import { THREAD_PAGE_SIZE } from "@/components/thread/thread-transport";
+import { THREAD_FIRST_PAGE } from "@/components/thread/thread-transport";
 import { ThreadChat } from "@/components/thread/thread-chat";
 import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 
@@ -41,7 +41,7 @@ async function ThreadBody({ params }: Params) {
 		}
 		if (!id) notFound();
 		const wolfColor = wolves.find((w) => w.name === name)?.color;
-		const thread = await client.getThread(id, { limit: THREAD_PAGE_SIZE });
+		const thread = await client.getThread(id, { limit: THREAD_FIRST_PAGE });
 		return (
 			<ThreadChat
 				key={thread.id}

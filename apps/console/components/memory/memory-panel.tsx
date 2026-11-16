@@ -453,7 +453,8 @@ export function ObservationsSection({ wolf, observations }: {
 	};
 }) {
 	const { tree, pool, info, open } = observations;
-	const rows = tree ? buildMemoryTreeRows(tree) : [];
+	const latest = Object.fromEntries((pool ? groupObservations(pool) : []).map((g) => [g.key, g.latest]));
+	const rows = tree ? buildMemoryTreeRows(tree, latest) : [];
 	const archivedStage = (id: string, stage?: string) => (stage ?? info[id]?.stage) === "archived";
 	const blocked = new Map((pool ? groupObservations(pool) : []).filter((g) => g.blocked).map((g) => [g.key, g]));
 	const blockedNote = (id: string) => {

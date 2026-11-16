@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
+import { renderToStaticMarkup } from "react-dom/server";
 import ThreadPage from "../app/wolf/[name]/thread/[threadId]/page.tsx";
 import { setConsoleClient } from "../src/server/index.ts";
 
@@ -56,6 +57,12 @@ describe("/wolf/<name>/thread/<slug>", () => {
 		const events = fake({ listed: [], all: [thread] });
 		assert.equal(await visit("f1"), "rendered");
 		assert.deepEqual(events.filter((e) => e.startsWith("listThreads")), ["listThreads", "listThreads:all"]);
+	});
+
+	it("paints the skeleton frame synchronously while the transcript streams", () => {
+		fake({ listed: [thread] });
+		const el = ThreadPage({ params: new Promise(() => {}) }) as unknown as { props: { fallback: never } };
+		assert.match(renderToStaticMarkup(el.props.fallback), /data-testid="thread-skeleton"/);
 	});
 
 	it("404s when the slug is in neither list", async () => {

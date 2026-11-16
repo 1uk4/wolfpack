@@ -1,4 +1,6 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
+import { ThreadSkeleton } from "@/components/thread/thread-skeleton";
 import { cardsOfThread, resolveThreadId, threadLabel, threadMessagesToNative } from "@/src/core";
 import { getConsoleClient, isNotFound } from "@/src/server";
 import { withHistoryAttachments } from "@/components/composer/attachments";
@@ -14,7 +16,18 @@ export const dynamic = "force-dynamic";
  * id via listThreads. History is seeded from getThread(); a turn already
  * running reattaches through the SSE stream.
  */
-export default async function ThreadPage({ params }: { params: Promise<{ name: string; threadId: string }> }) {
+type Params = { params: Promise<{ name: string; threadId: string }> };
+
+/** Paints the frame at once; the transcript streams in when ThreadBody's awaits finish. */
+export default function ThreadPage({ params }: Params) {
+	return (
+		<Suspense fallback={<ThreadSkeleton />}>
+			<ThreadBody params={params} />
+		</Suspense>
+	);
+}
+
+async function ThreadBody({ params }: Params) {
 	const { name, threadId: slug } = await params;
 	const client = getConsoleClient();
 	try {

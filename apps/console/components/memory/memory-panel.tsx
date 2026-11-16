@@ -27,8 +27,8 @@ import {
 	type MemoryTree,
 	focusRefetchDue,
 	formatTopicSize,
-	sourceLabels,
-	topicChip,
+	topicSecondLine,
+	topicsHeader,
 	type MemoryTopics,
 	latestOnly,
 	parseOpen,
@@ -316,7 +316,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	);
 }
 
-/** One row per session topic: title, size, sources, state chip, a Promote button and a keep-local toggle. */
+/** One line per session topic: title (links to the topic page), size, keep-local checkbox. A second line only for a non-active state or real sources. */
 function TopicsSection({ wolf }: { wolf: string }) {
 	const [topics, setTopics] = useState<MemoryTopics | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -332,14 +332,10 @@ function TopicsSection({ wolf }: { wolf: string }) {
 		if (!r.ok) setError(r.message);
 		await load();
 	};
-	const promote = async (id: string) => {
-		const r = await postPromote(wolf, [id]);
-		if (!r.ok) setError(r.message);
-		await load();
-	};
 	return (
 		<section className="mt-3" data-testid="memory-topics">
 			<h3 className="mb-1 text-xs font-medium uppercase text-muted-foreground">Topics</h3>
+			{topics && topics.topics.length > 0 && <p className="mb-1 text-[11px] text-muted-foreground" data-testid="memory-topics-header">{topicsHeader(topics)}</p>}
 			{topics === null ? (
 				<p className="text-xs text-muted-foreground">{error ? `Topics unavailable: ${error}` : "Loading…"}</p>
 			) : topics.topics.length === 0 ? (
@@ -347,22 +343,20 @@ function TopicsSection({ wolf }: { wolf: string }) {
 			) : (
 				<ul className="flex min-w-0 flex-col gap-1">
 					{topics.topics.map((t) => {
-						const chip = topicChip(t);
+						const second = topicSecondLine(t);
 						return (
 							<li key={t.id} className="flex flex-col gap-0.5 px-1.5 py-1 text-xs" data-testid="memory-topic-row">
 								<div className="flex items-center gap-1.5">
-									<span className="min-w-0 truncate font-medium">{t.title}</span>
+									<a href={`/wolf/${encodeURIComponent(wolf)}/memory/topic/${encodeURIComponent(t.id)}`} className="min-w-0 truncate font-medium underline-offset-2 hover:underline" data-testid="memory-topic-link">{t.title}</a>
 									<span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{formatTopicSize(t.bytes)}</span>
+									<input type="checkbox" aria-label="Keep local" title="Keep local" className="shrink-0" checked={t.keepLocal} onChange={(e) => void toggle(t.id, e.target.checked)} />
 								</div>
-								<div className="flex flex-wrap items-center gap-1.5">
-									<span className={`rounded-full px-1.5 text-[10px] ${chip.tone === "warn" ? "bg-amber-50 text-amber-700" : "bg-muted text-muted-foreground"}`} data-testid="memory-topic-chip">{chip.label}</span>
-									<span className="min-w-0 truncate text-[10px] text-muted-foreground">{sourceLabels(t.sources).join(", ")}</span>
-									<Button variant="ghost" size="sm" className="ml-auto h-5 px-1.5 text-[10px]" onClick={() => void promote(t.id)}>Promote</Button>
-									<label className="flex items-center gap-1 text-[10px] text-muted-foreground">
-										<input type="checkbox" checked={t.keepLocal} onChange={(e) => void toggle(t.id, e.target.checked)} />
-										keep local
-									</label>
-								</div>
+								{second && (
+									<div className="flex min-w-0 items-center gap-1.5">
+										{second.chip && <span title={second.chip.title} className={`shrink-0 rounded-full px-1.5 text-[10px] ${second.chip.tone === "warn" ? "bg-amber-50 text-amber-700" : "bg-muted text-muted-foreground"}`} data-testid="memory-topic-chip">{second.chip.label}</span>}
+										{second.sources.length > 0 && <span className="min-w-0 truncate text-[10px] text-muted-foreground">{second.sources.join(", ")}</span>}
+									</div>
+								)}
 							</li>
 						);
 					})}

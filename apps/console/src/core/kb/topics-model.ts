@@ -9,25 +9,41 @@ export type { MemoryTopicRow, MemoryTopics };
 export interface TopicChip {
 	label: string;
 	tone: "neutral" | "good" | "warn" | "muted";
+	/** The full reason, shown as a tooltip. */
+	title: string | undefined;
 }
 
-/** The state chip: keep-local wins over the state; held carries its reason; parked needs attention. */
-export function topicChip(t: MemoryTopicRow): TopicChip {
-	if (t.keepLocal) return { label: "keep-local", tone: "neutral" };
+/** The state chip: just the state word, the reason as tooltip; none for an active topic. Held and parked are amber. */
+export function topicChip(t: MemoryTopicRow): TopicChip | null {
+	const title = t.reason || undefined;
 	switch (t.state) {
-		case "held": return { label: t.reason ? `held: ${t.reason}` : "held", tone: "warn" };
-		case "parked": return { label: "parked (needs attention)", tone: "warn" };
-		case "promoted": return { label: "promoted", tone: "good" };
-		case "retired": return { label: "retired", tone: "muted" };
-		default: return { label: "active", tone: "neutral" };
+		case "held": return { label: "held", tone: "warn", title };
+		case "parked": return { label: "parked", tone: "warn", title };
+		case "promoted": return { label: "promoted", tone: "good", title };
+		case "retired": return { label: "retired", tone: "muted", title };
+		default: return null;
 	}
+}
+
+/** The row's optional second line: the state chip and the real sources; null when neither applies. */
+export function topicSecondLine(t: MemoryTopicRow): { chip: TopicChip | null; sources: string[] } | null {
+	const chip = topicChip(t);
+	const sources = sourceLabels(t.sources);
+	return chip || sources.length ? { chip, sources } : null;
+}
+
+/** "N topics · X KB of Y KB". */
+export function topicsHeader(m: MemoryTopics): string {
+	const n = m.topics.length;
+	const kb = (b: number) => `${(b / 1024).toFixed(1)} KB`;
+	return `${n} ${n === 1 ? "topic" : "topics"} · ${kb(m.totalBytes)} of ${kb(m.capBytes)}`;
 }
 
 export function formatTopicSize(bytes: number): string {
 	return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
 }
 
-/** Sources for display: the `thread:` prefix dropped; a topic with none is `legacy`. */
+/** Sources for display: the `thread:` prefix dropped; `legacy` (or none) is hidden. */
 export function sourceLabels(sources: string[]): string[] {
-	return sources.length ? sources.map((s) => s.replace(/^thread:/, "")) : ["legacy"];
+	return sources.filter((s) => s !== "legacy").map((s) => s.replace(/^thread:/, ""));
 }

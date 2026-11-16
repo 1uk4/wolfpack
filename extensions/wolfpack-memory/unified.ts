@@ -744,14 +744,10 @@ export default function createMemoryExtension(
           if (consolidating || warnedNoKey) return; // no key: a tick would only log its start line and fail again
           const stats = await getPoolStats(wolfDen);
           if (stats.count === 0 || poolSig(stats) === lastSavedPool) return; // empty, or nothing new since the last save
-          if (!actions.promoteEnabled) {
-            console.log("[memory] Timer-triggered consolidation (session topics only)");
-            await actions.consolidate();
-            return;
-          }
-          console.log("[memory] Timer-triggered consolidate + promote");
-          const job = actions.promote();
-          if (job.status === "started") await job.done;
+          // Fold the whole pool; runConsolidation then runs the daily promote pass when it is due. A tick never
+          // promotes every topic (that is the owner's Promote click).
+          console.log("[memory] Timer-triggered consolidation");
+          await runConsolidation({ drain: true });
         } catch (err) {
           if (!swallowNoKey(err)) console.error("[memory] timer error:", err instanceof Error ? err.message : err);
         }

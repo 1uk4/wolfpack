@@ -186,6 +186,10 @@ interface BootOpts {
   instances?: number;
   /** Stop (lifecycle.stop) the first instance before the engine attaches. */
   stopFirstBeforeAttach?: boolean;
+  /** Extension env (KB_BASE + KB_OPS make promotion available). */
+  env?: Record<string, string>;
+  /** Collects console.log lines. */
+  logs?: string[];
 }
 
 /** Boot only (no message). `seed` runs before boot. Counts engine consolidate calls and 50ms timers (the intervalMs seam). */
@@ -193,7 +197,7 @@ async function bootOnly(consolidation: Record<string, unknown>, seed: ((den: str
   const den = mkdtempSync(join(tmpdir(), "boot-"));
   dirs.push(den);
   if (seed) seed(den);
-  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void opts.logs?.push(a.join(" ")));
   let consolidates = 0;
   const base = stubEngine();
   const engine = { call: (step: string, schema: never, ...rest: never[]) => { if (step === "consolidate") { consolidates++; opts.onConsolidate?.(den, consolidates); } return (base.call as (...a: unknown[]) => unknown)(step, schema, ...rest); } } as unknown as Engine;
@@ -206,7 +210,7 @@ async function bootOnly(consolidation: Record<string, unknown>, seed: ((den: str
   const sm = createScriptedModel([fauxAssistantMessage("REPLY we decided to cache the session lookups for five minutes because of the hot path.")]);
   const registry = createRegistry();
   for (let i = 0; i < (opts.instances ?? 1); i++) {
-    const ext = createMemoryExtension({ live: true, engine, consolidation, intervalMs: 50 } as never, { wolfDen: den, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: {} });
+    const ext = createMemoryExtension({ live: true, engine, consolidation, intervalMs: 50 } as never, { wolfDen: den, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: opts.env ?? {} });
     if (i === 0 && opts.stopFirstBeforeAttach) ext.lifecycle?.stop?.();
     registry.install(adaptToDurable(ext, { wolfDen: den, wolfName: "w" }));
   }
@@ -260,6 +264,25 @@ describe("boot-time consolidation timer", () => {
       await eventually(() => expect(existsSync(join(den, ".memory/sessions/durable/caching.md"))).toBe(true));
       await eventually(() => expect(readFileSync(join(den, ".memory", "pool", "observations.jsonl"), "utf8")).not.toContain("arrived mid-run"));
     }, { onConsolidate: (den) => { if (!appended) { appended = true; appendPool(den, "Observation: arrived mid-run"); } } });
+  });
+
+  it("with promotion available a tick folds the pool and runs the daily pass; it never promotes every topic", async () => {
+    const kb = mkdtempSync(join(tmpdir(), "kb-"));
+    dirs.push(kb);
+    writeFileSync(join(kb, "domains.yaml"), "domains:\n  wolfpack: {}\n");
+    const today = new Date().toISOString().slice(0, 10);
+    const logs: string[] = [];
+    const seed = (den: string) => {
+      seedPool(den);
+      mkdirSync(join(den, "memory"), { recursive: true });
+      writeFileSync(join(den, "memory", "active-hours.json"), JSON.stringify({ version: 1, hours: [`${today}T00`] }));
+    };
+    await bootOnly({ trigger: "timer", poolTarget: 0 }, seed, async ({ den, consolidateCalls }) => {
+      await eventually(() => expect(consolidateCalls()).toBeGreaterThan(0));
+      await eventually(() => expect(JSON.parse(readFileSync(join(den, "memory", "promote-state.json"), "utf8")).lastActiveDayPassed).toBe(today));
+      expect(count(logs, /Timer-triggered consolidation/)).toBeGreaterThan(0);
+      expect(count(logs, /consolidate \+ promote/)).toBe(0);
+    }, { env: { KB_BASE: kb, KB_OPS: kb }, logs });
   });
 
   it("two extension instances on one den give one timer", async () => {

@@ -56,7 +56,7 @@ async function ThreadBody({ params }: Params) {
 				initiallyInFlight={thread.busy}
 				initialCards={cardsOfThread(thread)}
 				parentThreadId={thread.parentThreadId}
-				colorThreads={threads.map((t) => ({ id: t.id, kind: t.kind, parentThreadId: t.parentThreadId, settings: t.settings }))}
+				colorThreads={threads.filter((t) => t.kind !== "subagent").map((t) => ({ id: t.id, kind: t.kind, parentThreadId: t.parentThreadId, settings: t.settings }))}
 				wolfColor={wolfColor}
 				initialBound={thread.boundItem ?? thread.boundWorkItem}
 				closedReason={thread.closed ? (thread.closedReason ?? FEATURE_GRADUATED) : undefined}

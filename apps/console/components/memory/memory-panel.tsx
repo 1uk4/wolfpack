@@ -29,6 +29,10 @@ import {
 	formatTopicSize,
 	topicSecondLine,
 	topicsHeader,
+	MEMORY_PANEL_SECTION_KEY,
+	parseSection,
+	serializeSection,
+	type PanelSection,
 	type MemoryTopics,
 	latestOnly,
 	parseOpen,
@@ -75,6 +79,19 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		setOpen(next);
 		try {
 			localStorage.setItem(MEMORY_PANEL_OPEN_KEY, serializeOpen(next));
+		} catch {}
+	};
+
+	const [section, setSection] = useState<PanelSection>("observations");
+	useEffect(() => {
+		try {
+			setSection(parseSection(localStorage.getItem(MEMORY_PANEL_SECTION_KEY)));
+		} catch {}
+	}, []);
+	const chooseSection = (next: PanelSection) => {
+		setSection(next);
+		try {
+			localStorage.setItem(MEMORY_PANEL_SECTION_KEY, serializeSection(next));
 		} catch {}
 	};
 
@@ -287,8 +304,25 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 				</div>
 			)}
 
-			<TopicsSection wolf={wolf} />
-			<ObservationsSection wolf={wolf} observations={{ tree, error: treeError ?? poolError, pool: obsPool, pending: poolPending, info: groupInfo, open: openGroup, onOpen: setOpenGroup, version: treeVersion }} />
+			<div role="group" aria-label="Memory section" className="mt-3 grid grid-cols-2 gap-0.5 rounded-md bg-muted p-0.5 text-xs" data-testid="memory-section-toggle">
+				{([["observations", "Observations"], ["topics", "Topics"]] as const).map(([key, label]) => (
+					<button
+						key={key}
+						type="button"
+						aria-pressed={section === key}
+						data-testid={`memory-section-${key}`}
+						onClick={() => chooseSection(key)}
+						className={`rounded px-2 py-1 transition-colors max-md:min-h-11 ${section === key ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+					>
+						{label}
+					</button>
+				))}
+			</div>
+			{section === "topics" ? (
+				<TopicsSection wolf={wolf} />
+			) : (
+				<ObservationsSection wolf={wolf} observations={{ tree, error: treeError ?? poolError, pool: obsPool, pending: poolPending, info: groupInfo, open: openGroup, onOpen: setOpenGroup, version: treeVersion }} />
+			)}
 		</div>
 	);
 	if (embedded) return content;

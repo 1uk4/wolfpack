@@ -59,6 +59,16 @@ export function buildMemoryTreeRows(tree: MemoryTree): MemoryTreeRow[] {
 export const FEED_CAP = 100;
 export const MEMORY_PANEL_OPEN_KEY = "wolfpack.memory-panel.open.v1";
 export const MEMORY_PANEL_VIEW_KEY = "wolfpack.memory-panel.view.v1";
+export const MEMORY_PANEL_SECTION_KEY = "memory-panel-section";
+
+/** Which section the panel shows under the Pool block. */
+export type PanelSection = "observations" | "topics";
+
+/** SSR-safe: only "topics" is kept; anything else (incl. no stored value) is Observations. */
+export function parseSection(raw: string | null | undefined): PanelSection {
+	return raw === "topics" ? "topics" : "observations";
+}
+export const serializeSection = (section: PanelSection): string => section;
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);

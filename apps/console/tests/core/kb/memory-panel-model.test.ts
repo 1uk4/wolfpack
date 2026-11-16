@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-	FEED_CAP, PROMOTE_IDLE, latestOnly, focusRefetchDue, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, poolSummary, triggerText,
+	FEED_CAP, PROMOTE_IDLE, latestOnly, focusRefetchDue, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, parseSection, serializeSection, MEMORY_PANEL_SECTION_KEY, poolSummary, triggerText,
 	bindOffered, promoteBusy, promoteLine, recordStale, recordView, serializeOpen, groupObservations, blockedLabel, buildMemoryTreeRows, consolidateMessage, reconcilePromote, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
 } from "../../../src/core/index.ts";
 
@@ -54,6 +54,13 @@ describe("memory panel model", () => {
 		assert.equal(parseOpen(null), true);
 		assert.equal(parseOpen(serializeOpen(false)), false);
 		assert.equal(parseOpen(serializeOpen(true)), true);
+	});
+	it("section toggle persists per browser: defaults to observations, round-trips topics, junk reads as observations", () => {
+		assert.equal(MEMORY_PANEL_SECTION_KEY, "memory-panel-section");
+		assert.equal(parseSection(null), "observations");
+		assert.equal(parseSection("junk"), "observations");
+		assert.equal(parseSection(serializeSection("topics")), "topics");
+		assert.equal(parseSection(serializeSection("observations")), "observations");
 	});
 	it("view key helper: defaults to item, round-trips both, reads the legacy record and the retired graph as item", () => {
 		assert.equal(MEMORY_PANEL_VIEW_KEY, "wolfpack.memory-panel.view.v1");

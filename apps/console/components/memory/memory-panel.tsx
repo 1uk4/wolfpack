@@ -285,7 +285,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 							</Button>
 						</div>
 					</div>
-					<div className="relative h-1.5 rounded bg-muted">
+					<div className="relative h-1.5 rounded bg-muted" title={`Consolidation ${pool.triggerText}`} data-testid="memory-trigger">
 						<div className="h-full rounded bg-foreground/60" style={{ width: `${Math.round(pool.fill * 100)}%` }} />
 						<div className="absolute top-[-2px] h-2.5 w-px bg-foreground" style={{ left: `${Math.round(pool.targetMark * 100)}%` }} title={`pool target ${pool.poolTarget.toLocaleString("en-US")}`} />
 					</div>
@@ -293,7 +293,6 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 						{pool.tokensText} ·{" "}
 						<span data-testid="memory-observations">{pool.observationsText}</span>
 					</p>
-					<p className="text-xs text-muted-foreground" data-testid="memory-trigger">Consolidation {pool.triggerText}</p>
 					{block === "memory_busy" ? <p className="text-xs text-muted-foreground" data-testid="memory-busy">{BUSY_TEXT}</p> : null}
 					{pline ? <p className="text-xs text-muted-foreground" data-testid="memory-promote">{pline}</p> : null}
 					{note ? <p className="text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}

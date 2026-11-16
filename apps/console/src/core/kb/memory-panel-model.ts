@@ -297,7 +297,7 @@ export function promoteLine(s: PromoteState): string | null {
 		case "running":
 			return "Promote running…";
 		case "finished":
-			return `Promoted: ${s.consolidated} consolidated, ${s.contributions} contributed${s.pending ? `, ${s.pending} pending` : ""}`;
+			return `Promote done: ${s.contributions} topic${s.contributions === 1 ? "" : "s"} sent${s.pending ? `, ${s.pending} queued` : ""}`;
 		case "failed":
 			return `Promote failed: ${s.message}`;
 		default:

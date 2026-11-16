@@ -156,7 +156,7 @@ describe("memory panel model", () => {
 		assert.equal(actionBlock({ status: st("live"), promote: s, consolidating: false }), "memory_busy");
 		s = applyPromoteEvent(s, { ...base, type: "promote_finished", jobId: "j", consolidated: 3, contributions: 2, pending: 1 } as MemoryEventFrame);
 		assert.equal(promoteBusy(s), false);
-		assert.match(promoteLine(s) ?? "", /3 consolidated, 2 contributed, 1 pending/);
+		assert.equal(promoteLine(s), "Promote done: 2 topics sent, 1 queued");
 		s = applyPromoteEvent(s, { ...base, type: "promote_failed", jobId: "k", message: "boom" } as MemoryEventFrame);
 		assert.equal(promoteLine(s), "Promote failed: boom");
 		assert.equal(applyPromoteEvent(s, obs("t", { kind: "den" })), s);
@@ -192,7 +192,8 @@ describe("memory panel model", () => {
 		const s = reconcilePromote(PROMOTE_IDLE, running);
 		assert.deepEqual(s, { phase: "running", jobId: "j1" });
 		const done = { ...st("live"), lastPromote: { jobId: "j1", at: "x", result: "finished" as const, consolidated: 3, contributions: 2 } };
-		assert.match(promoteLine(reconcilePromote(s, done)) ?? "", /3 consolidated, 2 contributed/);
+		assert.equal(promoteLine(reconcilePromote(s, done)), "Promote done: 2 topics sent");
+		assert.equal(promoteLine({ phase: "finished", jobId: "j1", consolidated: 3, contributions: 1, pending: 0 }), "Promote done: 1 topic sent");
 		assert.deepEqual(reconcilePromote(PROMOTE_IDLE, st("live")), PROMOTE_IDLE);
 	});
 	it("a tree response of the wrong shape gives no rows instead of throwing", () => {

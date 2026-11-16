@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatTopicSize, sourceLabels, topicChip, topicSecondLine, topicsHeader, topicFacts, SECTION_INFO, type MemoryTopicRow } from "../../../src/core/kb/topics-model.ts";
+import { formatTopicSize, sortedTopics, sourceLabels, topicChip, topicSecondLine, topicsHeader, topicFacts, SECTION_INFO, type MemoryTopicRow } from "../../../src/core/kb/topics-model.ts";
 
 const row = (o: Partial<MemoryTopicRow>): MemoryTopicRow => ({ id: "a", title: "A", bytes: 100, updated: "2026-11-13 10:00", sources: [], state: "active", keepLocal: false, entryIds: [], ...o });
 
 describe("Topics section model", () => {
+	it("orders topics most recently updated first, undated last then by title, retired after the live ones", () => {
+		const ids = sortedTopics([
+			row({ id: "old", updated: "2026-11-10 09:00" }),
+			row({ id: "nodate-b", title: "B", updated: "" }),
+			row({ id: "ret-new", state: "retired", updated: "2026-11-15 09:00" }),
+			row({ id: "new", updated: "2026-11-14 18:30" }),
+			row({ id: "nodate-a", title: "A", updated: undefined as unknown as string }),
+			row({ id: "ret-old", state: "retired", updated: "2026-11-01 09:00" }),
+		]).map((t) => t.id);
+		assert.deepEqual(ids, ["new", "old", "nodate-a", "nodate-b", "ret-new", "ret-old"]);
+	});
+
 	it("the chip is the state word with the reason as tooltip; none for an active topic; amber for held and parked", () => {
 		assert.equal(topicChip(row({})), null);
 		assert.deepEqual(topicChip(row({ state: "promoted" })), { label: "promoted", tone: "good", title: undefined });

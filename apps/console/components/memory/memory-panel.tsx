@@ -30,6 +30,7 @@ import {
 	focusRefetchDue,
 	formatTopicSize,
 	topicSecondLine,
+	sortedTopics,
 	topicsHeader,
 	MEMORY_PANEL_SECTION_KEY,
 	parseSection,
@@ -398,7 +399,7 @@ function TopicsSection({ wolf }: { wolf: string }) {
 				<p className="text-xs text-muted-foreground">No session topics.</p>
 			) : (
 				<ul className="flex min-w-0 flex-col gap-1">
-					{topics.topics.map((t) => {
+					{sortedTopics(topics.topics).map((t) => {
 						const second = topicSecondLine(t);
 						return (
 							<li key={t.id} className="flex flex-col gap-0.5 px-1.5 py-1 text-xs" data-testid="memory-topic-row">

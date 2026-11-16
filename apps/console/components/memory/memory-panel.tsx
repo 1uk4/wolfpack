@@ -382,13 +382,13 @@ function TopicsSection({ wolf }: { wolf: string }) {
 							<li key={t.id} className="flex flex-col gap-0.5 px-1.5 py-1 text-xs" data-testid="memory-topic-row">
 								<div className="flex items-center gap-1.5">
 									<a href={`/wolf/${encodeURIComponent(wolf)}/memory/topic/${encodeURIComponent(t.id)}`} className="min-w-0 truncate font-medium underline-offset-2 hover:underline" data-testid="memory-topic-link">{t.title}</a>
-									<span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{formatTopicSize(t.bytes)}</span>
+									{second?.chip && <span title={second.chip.title} className={`ml-auto shrink-0 rounded-full px-1.5 text-[10px] ${second.chip.tone === "warn" ? "bg-amber-50 text-amber-700" : "bg-muted text-muted-foreground"}`} data-testid="memory-topic-chip">{second.chip.label}</span>}
+									<span className={`shrink-0 text-[10px] text-muted-foreground${second?.chip ? "" : " ml-auto"}`}>{formatTopicSize(t.bytes)}</span>
 									<input type="checkbox" aria-label="Keep local" title="Keep local" className="shrink-0" checked={t.keepLocal} onChange={(e) => void toggle(t.id, e.target.checked)} />
 								</div>
-								{second && (
+								{second && second.sources.length > 0 && (
 									<div className="flex min-w-0 items-center gap-1.5">
-										{second.chip && <span title={second.chip.title} className={`shrink-0 rounded-full px-1.5 text-[10px] ${second.chip.tone === "warn" ? "bg-amber-50 text-amber-700" : "bg-muted text-muted-foreground"}`} data-testid="memory-topic-chip">{second.chip.label}</span>}
-										{second.sources.length > 0 && <span className="min-w-0 truncate text-[10px] text-muted-foreground">{second.sources.join(", ")}</span>}
+										<span className="min-w-0 truncate text-[10px] text-muted-foreground">{second.sources.join(", ")}</span>
 									</div>
 								)}
 							</li>

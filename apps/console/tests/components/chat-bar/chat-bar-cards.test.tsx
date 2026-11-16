@@ -30,6 +30,7 @@ Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {}
 
 const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { FakeNav } = await import("../../helpers/fake-nav.tsx");
+const { dataStore } = await import("../../../src/core/data-store.ts");
 const { AttachedThreadProvider } = await import("../../../components/chat-bar/attached-thread.tsx");
 const { ChatBar } = await import("../../../components/chat-bar/chat-bar.tsx");
 const { useBarCards } = await import("../../../components/chat-bar/chat-bar-cards.ts");
@@ -136,6 +137,7 @@ const switchTo = async (id: string) => {
 };
 
 afterEach(async () => {
+	dataStore.clear(); // the thread list goes through the client store: the next test must not read this one's list
 	mock.timers.reset();
 	await act(async () => root?.unmount());
 	root = null;

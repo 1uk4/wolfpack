@@ -312,6 +312,16 @@ describe("reconcile with distilled contributions", () => {
     await promoteTopics([topic("t", "raw body")], opts(engineOf(bad, bad).engine));
     expect(denTopicStates(den, roots, WOLF)[0].status).toMatchObject({ kind: "held" });
   });
+
+  it("a held topic's reason names the matched token, so the forced rewrite knows what to remove", async () => {
+    const den = join(root, "den");
+    writeDenTopic(den, { id: "t", title: "t", summary: "s", updated: "2026-10-22 10:00", body: "raw body" });
+    const bad = { contributions: [{ ...clean, body: "## Design\nTask AbC1234." }] };
+    await promoteTopics([topic("t", "raw body")], opts(engineOf(bad, bad).engine));
+    const status = denTopicStates(den, roots, WOLF)[0].status;
+    expect(status).toMatchObject({ kind: "held", reason: expect.stringContaining("work-id") });
+    expect((status as { reason: string }).reason).toContain("AbC1234");
+  });
 });
 
 describe("distill sees the nearest existing entries", () => {

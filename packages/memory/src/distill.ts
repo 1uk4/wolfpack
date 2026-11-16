@@ -91,6 +91,8 @@ export interface DistillRecord {
   outputs: DistilledContribution[];
   /** Set when the topic was held back: the lint codes. */
   held?: string;
+  /** The hard findings behind `held`, with the matched tokens (describeFindings). */
+  heldDetail?: string;
 }
 
 // ── state ────────────────────────────────────────────────────────────────────
@@ -153,6 +155,8 @@ export interface DistillResult {
   after: LintFinding[];
   /** Hard finding codes still present: the topic must be held back. */
   heldCodes: string[];
+  /** The hard findings behind heldCodes, rendered with their matched tokens. */
+  heldDetail: string;
   /** Graduation: Totals values (`Key: value`) still missing after the retry. */
   missingTotals: string[];
   /** Graduation: non-blocking problems for the preview (no History line, no initiative entry…). */
@@ -286,7 +290,8 @@ export async function distillTopic(engine: Engine, input: DistillInput): Promise
   }
   const after = outputs.flatMap((o) => lintKnowledge({ title: o.title, summary: o.summary, body: o.feature ? "-" : o.body.replace(/^# [^\n]*\n+/, ""), workIds: grad ? "history" : "none" }));
   const heldCodes = [...new Set(hardFindings(after).map((f) => f.code))];
-  return { outputs, retried, before, after, heldCodes, missingTotals: missing, warnings };
+  const heldDetail = describeFindings(hardFindings(after));
+  return { outputs, retried, before, after, heldCodes, heldDetail, missingTotals: missing, warnings };
 }
 
 const WORK_ID_ANY = /\bwork-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7}\b/g;
@@ -454,10 +459,11 @@ export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOpti
     let outputs: DistilledContribution[] = [];
     let slugs = rec?.slugs ?? [];
     let heldCodes: string[] = [];
+    let heldDetail = "";
     if (force && rec && rec.rawHash === rawHash) {
       // Unchanged raw body: reuse what was distilled (or held) before.
       outputs = rec.outputs;
-      if (rec.held) heldCodes = rec.held.split(",");
+      if (rec.held) { heldCodes = rec.held.split(","); heldDetail = rec.heldDetail ?? ""; }
     } else {
       try {
         const r = await distillTopic(engine, {
@@ -473,6 +479,7 @@ export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOpti
         stats.distilled++;
         outputs = r.outputs;
         heldCodes = r.heldCodes;
+        heldDetail = r.heldDetail;
         if (r.outputs.length > 1) stats.split++;
         onProgress?.(
           `  distilled: ${topic.id} ${topic.body.length}→${r.outputs.map((o) => o.body.length).join("+")} chars` +
@@ -489,7 +496,7 @@ export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOpti
       }
     }
 
-    const record = (held?: string): DistillRecord => ({ rawHash, rawBody: topic.body, at: new Date().toISOString(), slugs, outputs, ...(held ? { held } : {}) });
+    const record = (held?: string): DistillRecord => ({ rawHash, rawBody: topic.body, at: new Date().toISOString(), slugs, outputs, ...(held ? { held, ...(heldDetail ? { heldDetail } : {}) } : {}) });
 
     if (heldCodes.length) {
       stats.held++;

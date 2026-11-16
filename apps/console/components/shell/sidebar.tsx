@@ -34,6 +34,7 @@ type SessionItem = ChatListItem & { href: string; meta?: string; needsYou?: bool
 const itemHref = (c: SessionItem) => c.href;
 import { kbdEventForAction } from "@/src/core";
 import { dataStore, StoreHttpError } from "@/src/core/data-store";
+import { fetchWolfThreads } from "@/components/kb/kb-client";
 
 /**
  * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
@@ -627,9 +628,9 @@ export function SessionsSidebar() {
 			const results = await Promise.all(
 				wolves.wolves.map(async (w) => {
 					try {
-						const res = await fetch(`/api/wolves/${encodeURIComponent(w.name)}/threads`, { cache: "no-store" });
-						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string; workspace?: { branch?: string }; settings?: { color?: string } }[] };
-						return { wolf: w.name, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
+						// An event-driven refresh always revalidates (maxAgeMs 0); the answer lands in the store for the other readers.
+						const r = await fetchWolfThreads<{ threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string; workspace?: { branch?: string }; settings?: { color?: string } }[] }>(w.name, 0);
+						return { wolf: w.name, threads: r.ok && Array.isArray(r.data.threads) ? r.data.threads : undefined };
 					} catch {
 						return { wolf: w.name, threads: undefined }; // this wolf keeps its last rows; the others still update
 					}
@@ -713,9 +714,8 @@ export function SessionsSidebar() {
 			const got = await Promise.all(
 				recovered.map(async (wolf) => {
 					try {
-						const res = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/threads`, { cache: "no-store" });
-						const d = (await res.json()) as { threads?: Parameters<typeof foldWolfThreads>[1][number]["threads"] };
-						return { wolf, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
+						const r = await fetchWolfThreads<{ threads?: Parameters<typeof foldWolfThreads>[1][number]["threads"] }>(wolf, 0);
+						return { wolf, threads: r.ok && Array.isArray(r.data.threads) ? r.data.threads : undefined };
 					} catch {
 						return { wolf, threads: undefined }; // keeps its stale rows; the roster status is untouched
 					}

@@ -87,6 +87,17 @@ export function fetchWolves(maxAgeMs = 10_000): Promise<KbResult<{ wolves: { id:
 	return cachedRequest("/api/wolves", maxAgeMs);
 }
 
+/** A wolf's thread list through the store: readers that open together (sidebar, palette, needs-you…) share one request; `maxAgeMs` 0 forces a revalidate. */
+export const THREADS_MOUNT_MAX_AGE_MS = 5_000;
+export function fetchWolfThreads<T = { threads?: { id: string; title: string; [k: string]: unknown }[] }>(wolf: string, maxAgeMs = THREADS_MOUNT_MAX_AGE_MS): Promise<KbResult<T>> {
+	return cachedRequest<T>(`/api/wolves/${seg(wolf)}/threads`, maxAgeMs);
+}
+
+/** For call sites that create, archive or rename a thread with their own fetch: the next list read goes to the server. */
+export function invalidateThreads(wolf: string) {
+	dataStore.invalidate(`/api/wolves/${seg(wolf)}/threads`);
+}
+
 export function fetchMemoryStatus(wolf: string, thread?: string): Promise<KbResult<MemoryStatus>> {
 	const q = thread ? `?thread=${seg(thread)}` : "";
 	return request(`/api/wolves/${seg(wolf)}/memory${q}`);

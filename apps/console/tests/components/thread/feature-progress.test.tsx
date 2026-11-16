@@ -32,6 +32,7 @@ const { buildFeatureGraph, featureStrip, GRAPH_STATUS_OF, isWorkItemId, isWorkEv
 type WorkRecordResponse = import("../../../src/core/index.ts").WorkRecordResponse;
 const { FeatureProgressPanel, useFeatureProgress } = await import("../../../components/thread/feature-progress.tsx");
 const { resetOpenPanels, setOpenPanel } = await import("../../../components/thread/pin-store.ts");
+const { dataStore } = await import("../../../src/core/data-store.ts");
 const { FIXTURE_THREAD } = await import("@wolfpack/client");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
@@ -101,7 +102,10 @@ const click = (el: Element) => act(async () => void el.dispatchEvent(new dom.win
 const settle = (ms = 40) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
 const realFetch = globalThis.fetch;
 let root: Root | null = null;
-beforeEach(() => resetOpenPanels());
+beforeEach(() => {
+	resetOpenPanels();
+	dataStore.clear(); // the thread list now goes through the client store: a test must not read the previous test's list
+});
 afterEach(async () => {
 	await act(async () => root?.unmount());
 	root = null;
@@ -412,6 +416,7 @@ describe("ThreadChat pinned area", () => {
 		await act(async () => root!.unmount());
 		root = null;
 		document.body.innerHTML = "";
+		dataStore.clear(); // the second mount is a different thread list
 		globalThis.fetch = serverFetch("F", "b");
 		await mountChat({ initialBound: "b" });
 		assert.ok(q('[data-testid="feature-progress"]'));

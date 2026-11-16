@@ -11,6 +11,7 @@ import { useOptionalServerEvent, useOptionalServerResync } from "@/components/sh
 import { PANEL_PROGRESS, closePanel, setOpenPanel, togglePanel, useOpenPanel } from "@/components/thread/pin-store";
 import { sessionFindHasForegroundLayer } from "@/components/thread/session-find";
 import { cn } from "@/lib/utils";
+import { fetchWolfThreads } from "@/components/kb/kb-client";
 import { buildFeatureGraph, featureStrip, isWorkEvent, type FeatureGraph, type WorkRecordResponse } from "@/src/core";
 
 type Model = Extract<FeatureGraph, { kind: "graph" }>;
@@ -96,9 +97,9 @@ export function useFeatureProgress(wolf: string, threadId: string, refreshKey: n
 	const load = useCallback(async () => {
 		const n = ++seq.current;
 		try {
-			const res = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/threads`);
+			const res = await fetchWolfThreads<{ threads?: ThreadRow[] }>(wolf);
 			if (!res.ok || n !== seq.current) return;
-			const list = ((await res.json()) as { threads?: ThreadRow[] }).threads ?? [];
+			const list = res.data.threads ?? [];
 			const row = list.find((t) => t.id === threadId);
 			const boundId = row?.boundItem ?? row?.boundWorkItem;
 			if (!boundId) return void (n === seq.current && put({ phase: "none" }));

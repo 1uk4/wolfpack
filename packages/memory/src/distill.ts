@@ -30,6 +30,7 @@ import {
   hardFindings,
   lintKnowledge,
   safeSegment,
+  scrubCommitHashes,
   stripDetailHeading,
   stripLedeRepeat,
   type KbRoots,
@@ -218,7 +219,8 @@ export async function distillTopic(engine: Engine, input: DistillInput): Promise
       system,
       prompt: buildPrompt(input, failures, missing, noInitiative, noFeature),
     });
-    const all = DistillOutputSchema.parse(raw).contributions;
+    // Commit hashes are scrubbed deterministically, before the lint ever sees them.
+    const all = DistillOutputSchema.parse(raw).contributions.map((c) => ({ ...c, summary: scrubCommitHashes(c.summary), body: scrubCommitHashes(c.body) }));
     return grad ? all : all.slice(0, 4).map((c) => ({ ...c, initiative: undefined, feature: undefined }));
   };
   /** The standing feature's contribution: flagged, or slugged "feature". */

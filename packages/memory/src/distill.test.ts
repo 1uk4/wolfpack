@@ -42,15 +42,27 @@ describe("DistillOutputSchema", () => {
 describe("distillTopic", () => {
   it("retries once with the findings, then strips; clean second answer is emitted", async () => {
     const { call, engine } = engineOf(
-      { contributions: [{ ...clean, body: "## Design\nFixed in commit ee17088. 682 tests passed." }] },
+      { contributions: [{ ...clean, body: "## Design\nFixed in the sweep. 682 tests passed." }] },
       { contributions: [clean] }
     );
     const r = await distillTopic(engine, { id: "t", title: "T", summary: "s", body: "raw", domain: "wolfpack", date: "2026-10-22" });
     expect(call).toHaveBeenCalledTimes(2);
-    expect((call.mock.calls[1] as any)[2].prompt).toContain("commit-hash");
+    expect((call.mock.calls[1] as any)[2].prompt).toContain("test-count");
     expect(r.retried).toBe(true);
     expect(r.heldCodes).toEqual([]);
     expect(r.outputs[0].body).toBe("# Sweep performance\n\n## Design\nOne item per run.\n");
+  });
+
+  it("scrubs commit hashes to 'a commit' before the lint, so hashes alone never cost a retry or a hold", async () => {
+    const hashy = { contributions: [{ ...clean, summary: "Fixed by (ee17088).", body: "## Design\nCommit ee17088 landed after 1a2b3c4d5e. Keep deadbeef as a word-like token? No: fixed in `9f8e7d6`." }] };
+    const { call, engine } = engineOf(hashy);
+    const r = await distillTopic(engine, { id: "t", title: "T", summary: "s", body: "raw", domain: "wolfpack", date: "2026-10-22" });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(r.retried).toBe(false);
+    expect(r.heldCodes).toEqual([]);
+    expect(r.outputs[0].body).toContain("Commit a commit landed after a commit.");
+    expect(r.outputs[0].body).not.toMatch(/ee17088|1a2b3c4d5e|9f8e7d6/);
+    expect(r.outputs[0].summary).toBe("Fixed by (a commit).");
   });
 
   it("reports hard findings still present after the retry", async () => {

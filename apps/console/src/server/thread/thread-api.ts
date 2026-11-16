@@ -128,9 +128,9 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
-		async threads(wolf: string): Promise<Response> {
+		async threads(wolf: string, opts: { all?: boolean } = {}): Promise<Response> {
 			try {
-				return json({ threads: await source().listThreads(wolf) });
+				return json({ threads: await source().listThreads(wolf, opts.all ? { all: true } : undefined) });
 			} catch (err) {
 				return failure(err);
 			}

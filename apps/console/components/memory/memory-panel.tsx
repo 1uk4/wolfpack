@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon, InfoIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { fetchSessionTopics, putKeepLocal, fetchMemoryNode, fetchMemoryObservations, fetchMemoryStatus, fetchMemoryTree, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb/kb-client";
 import { WorkIdChip } from "@/components/work/work-id-chip";
 import { ContextSection } from "@/components/thread/context-section";
@@ -42,11 +43,31 @@ import {
 	refreshPlan,
 	settlePromotePost,
 	serializeOpen,
+	SECTION_INFO,
 	type GroupInfo,
 	type PoolObservation,
 	type MemoryStatus,
 	type PromoteState,
 } from "@/src/core";
+
+/** A section heading with an ⓘ that explains the section on hover or focus. */
+function SectionHeading({ label, info }: { label: string; info: string }) {
+	return (
+		<h3 className="mb-1 flex items-center gap-1 text-xs font-medium uppercase text-muted-foreground">
+			{label}
+			<TooltipProvider>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<button type="button" aria-label={`About ${label}`} className="inline-flex rounded text-muted-foreground/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" data-testid="memory-section-info">
+							<InfoIcon className="size-3" aria-hidden />
+						</button>
+					</TooltipTrigger>
+					<TooltipContent side="left" className="max-w-72 normal-case text-left leading-snug">{info}</TooltipContent>
+				</Tooltip>
+			</TooltipProvider>
+		</h3>
+	);
+}
 
 const REFRESH_DEBOUNCE_MS = 250;
 /** A work item's title/stage is looked up again once it is this old (stages change; a failed lookup retries too). */
@@ -366,7 +387,7 @@ function TopicsSection({ wolf }: { wolf: string }) {
 	};
 	return (
 		<section className="mt-3" data-testid="memory-topics">
-			<h3 className="mb-1 text-xs font-medium uppercase text-muted-foreground">Topics</h3>
+			<SectionHeading label="Topics" info={SECTION_INFO.topics} />
 			{topics && topics.topics.length > 0 && <p className="mb-1 text-[11px] text-muted-foreground" data-testid="memory-topics-header">{topicsHeader(topics)}</p>}
 			{topics === null ? (
 				<p className="text-xs text-muted-foreground">{error ? `Topics unavailable: ${error}` : "Loading…"}</p>
@@ -479,7 +500,7 @@ export function ObservationsSection({ wolf, observations }: {
 
 	return (
 		<section data-testid="memory-feed" className="min-w-0">
-			<h3 className="mb-1 text-xs font-medium uppercase text-muted-foreground">Observations</h3>
+			<SectionHeading label="Observations" info={SECTION_INFO.observations} />
 			{pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
 			{tree === null ? (
 				<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{observations.error ? `Observations unavailable: ${observations.error}` : "Loading…"}</p>

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatTopicSize, sourceLabels, topicChip, topicSecondLine, topicsHeader, topicFacts, type MemoryTopicRow } from "../../../src/core/kb/topics-model.ts";
+import { formatTopicSize, sourceLabels, topicChip, topicSecondLine, topicsHeader, topicFacts, SECTION_INFO, type MemoryTopicRow } from "../../../src/core/kb/topics-model.ts";
 
 const row = (o: Partial<MemoryTopicRow>): MemoryTopicRow => ({ id: "a", title: "A", bytes: 100, updated: "2026-11-13 10:00", sources: [], state: "active", keepLocal: false, entryIds: [], ...o });
 
@@ -45,5 +45,12 @@ describe("Topics section model", () => {
 		assert.deepEqual(sourceLabels(["thread:abc", "work-wolfpack-oxYNd46"]), ["abc", "work-wolfpack-oxYNd46"]);
 		assert.deepEqual(sourceLabels([]), []);
 		assert.deepEqual(sourceLabels(["legacy"]), []);
+	});
+	it("the section info texts explain the pool, topics and the states in plain words", () => {
+		assert.match(SECTION_INFO.observations, /pool/i);
+		assert.match(SECTION_INFO.observations, /consolidat/i);
+		assert.match(SECTION_INFO.topics, /knowledge base/i);
+		assert.match(SECTION_INFO.topics, /retire/i);
+		for (const word of ["promoted", "held", "parked", "keep local"]) assert.match(SECTION_INFO.topics, new RegExp(word, "i"));
 	});
 });

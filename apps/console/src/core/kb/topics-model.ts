@@ -6,6 +6,14 @@ import type { MemoryTopicRow, MemoryTopics } from "@wolfpack/protocol";
 
 export type { MemoryTopicRow, MemoryTopics };
 
+/** The ⓘ explanations next to the Observations and Topics headings. Plain words, no pipeline names. */
+export const SECTION_INFO = {
+	observations:
+		"What the wolf noticed in its threads since the last consolidation: the pool. Each row is a work item or feature with its pending notes. Consolidation folds the pool into topics when it reaches the token mark or on the timer; a Record is written for the bound work item.",
+	topics:
+		"The wolf's short-term memory: notes folded from the pool, one file per subject, kept under a byte budget. A topic is sent to the shared knowledge base by Promote, by its feature graduating, or by the daily pass once its threads have been quiet for 8 active hours. States: no badge = local and still being fed; promoted = in the knowledge base, retires after 8 quiet active hours; held = the knowledge base refused it (one automatic rewrite, then it retires); parked = the hub needs attention. Keep local keeps a topic out of the knowledge base and in the buffer for good.",
+} as const;
+
 export interface TopicChip {
 	label: string;
 	tone: "neutral" | "good" | "warn" | "muted";

@@ -581,7 +581,7 @@ function ThreadChatInner({
 	const ask = useOwnAsk({ wolf, slug, threadId }, busy, dockHeight, dictation, (n) => {
 		if (n.text.trim() !== "") applyText(joinDictation(textRef.current, n.text));
 		if (n.atts.length > 0) setAttachments((prev) => [...prev, ...n.atts]);
-	});
+	}, initialCards.pending);
 	const session = ask.session;
 	/** The composer is the questionnaire note's (Next / Submit), not the chat's. */
 	const noteMode = ask.pending && ask.sheetShown && session.expanded && !ask.composing;

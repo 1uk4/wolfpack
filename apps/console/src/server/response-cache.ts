@@ -59,6 +59,12 @@ export async function cachedResponse(req: Request, key: string, compute: () => P
 	return respond(req, entry);
 }
 
+/** For mutation routes: when `res` is a 2xx, drop the cached reads under each prefix, then return `res` unchanged. */
+export function invalidateAfter(res: Response, prefixes: readonly string[]): Response {
+	if (res.status >= 200 && res.status < 300) for (const p of prefixes) invalidate(p);
+	return res;
+}
+
 /** Drop every entry whose key starts with `prefix` (all credentials). */
 export function invalidate(prefix: string): void {
 	for (const [id, e] of entries) if (e.key.startsWith(prefix)) entries.delete(id);

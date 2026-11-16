@@ -1,4 +1,4 @@
-import { memoryApi } from "@/src/server";
+import { invalidateAfter, memoryApi } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
@@ -12,5 +12,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ name: string }
 	} catch {
 		/* no body */
 	}
-	return memoryApi().promote(name, ids);
+	// Promotion writes den topics into the KB: the cached graph is stale.
+	return invalidateAfter(await memoryApi().promote(name, ids), ["graph"]);
 }

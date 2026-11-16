@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { cachedResponse, invalidate } from "../../src/server/response-cache.ts";
+import { cachedResponse, invalidate, invalidateAfter } from "../../src/server/response-cache.ts";
 
 const req = (headers: Record<string, string> = {}) => new Request("http://x/api/kb/graph", { headers });
 const ok = (body: unknown) => async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
@@ -99,6 +99,24 @@ describe("response cache", () => {
 		const res = await cachedResponse(req(), "k-err", failing, opts);
 		assert.equal(res.status, 401);
 		assert.equal(fails, 2);
+	});
+
+	it("a successful mutation drops the cached reads so the next GET recomputes with a new etag; a failed one keeps them", async () => {
+		let n = 0;
+		const compute = async () => ok({ n: ++n })();
+		const opts = { ttlMs: 60_000, now: () => 0 };
+		const first = await cachedResponse(req(), "work:hal?domain=wolfpack", compute, opts);
+
+		const failed = invalidateAfter(new Response("{}", { status: 400 }), ["work:"]);
+		assert.equal(failed.status, 400);
+		const still = await cachedResponse(req(), "work:hal?domain=wolfpack", compute, opts);
+		assert.equal(still.headers.get("etag"), first.headers.get("etag"));
+
+		const patched = invalidateAfter(new Response("{}", { status: 200 }), ["work:"]);
+		assert.equal(patched.status, 200);
+		const next = await cachedResponse(req({ "if-none-match": first.headers.get("etag")! }), "work:hal?domain=wolfpack", compute, opts);
+		assert.equal(next.status, 200);
+		assert.deepEqual(await next.json(), { n: 2 });
 	});
 
 	it("is bounded: the oldest entries are dropped past the cap", async () => {

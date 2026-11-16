@@ -35,10 +35,20 @@ const busiest = <T extends { pending: number; archived: number }>(a: T, b: T): n
  * The tree response as rows: features (own + task counts summed) busiest first with their tasks nested busiest first,
  * then the unresolved work items, then the den.
  */
-export function buildMemoryTreeRows(tree: MemoryTree): MemoryTreeRow[] {
+export function buildMemoryTreeRows(tree: MemoryTree, latest: Readonly<Record<string, string>> = {}): MemoryTreeRow[] {
 	// A wolfd or test stub that answers this route with another shape renders as an empty tree, never a crash.
 	if (!isMemoryTree(tree)) return [];
-	const features = tree.features.map((f): Extract<MemoryTreeRow, { kind: "feature" }> => ({
+	// Newest stamp first; rows without a stamp follow, busiest first.
+	const byStamp = <T extends { id: string; pending: number; archived: number }>(stamp: (x: T) => string) => (a: T, b: T): number => {
+		const sa = stamp(a);
+		const sb = stamp(b);
+		if (sa !== sb) return !sa ? 1 : !sb ? -1 : sa < sb ? 1 : -1;
+		return busiest(a, b);
+	};
+	const own = (x: { id: string }) => latest[x.id] ?? "";
+	const featureStamp = (f: { id: string; tasks: { id: string }[] }) => [own(f), ...f.tasks.map(own)].reduce((m, s) => (s > m ? s : m), "");
+	const stampOfFeature = new Map<string, string>();
+	const features = tree.features.map((f): Extract<MemoryTreeRow, { kind: "feature" }> => (stampOfFeature.set(f.id, featureStamp(f)), {
 		kind: "feature",
 		id: f.id,
 		title: f.title,
@@ -46,12 +56,12 @@ export function buildMemoryTreeRows(tree: MemoryTree): MemoryTreeRow[] {
 		pending: f.own.pending + f.tasks.reduce((n, t) => n + t.pending, 0),
 		archived: f.own.archived + f.tasks.reduce((n, t) => n + t.archived, 0),
 		own: f.own,
-		tasks: [...f.tasks].sort(busiest),
+		tasks: [...f.tasks].sort(byStamp(own)),
 	}));
-	features.sort(busiest);
+	features.sort(byStamp((f) => stampOfFeature.get(f.id) ?? ""));
 	return [
 		...features,
-		...[...tree.other].sort(busiest).map((o): MemoryTreeRow => ({ kind: "other", id: o.id, pending: o.pending, archived: o.archived })),
+		...[...tree.other].sort(byStamp(own)).map((o): MemoryTreeRow => ({ kind: "other", id: o.id, pending: o.pending, archived: o.archived })),
 		{ kind: "den", id: "den", pending: tree.den.pending, archived: tree.den.archived ?? 0 },
 	];
 }

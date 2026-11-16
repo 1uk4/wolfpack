@@ -14,6 +14,18 @@ export const SECTION_INFO = {
 		"The wolf's short-term memory: notes folded from the pool, one file per subject, kept under a byte budget. A topic is sent to the shared knowledge base by Promote, by its feature graduating, or by the daily pass once its threads have been quiet for 8 active hours. States: no badge = local and still being fed; promoted = in the knowledge base, retires after 8 quiet active hours; held = the knowledge base refused it (one automatic rewrite, then it retires); parked = the hub needs attention. Keep local keeps a topic out of the knowledge base and in the buffer for good.",
 } as const;
 
+/** Live topics by `updated` desc (missing last, then by title), retired topics after the live ones, same rule. */
+export function sortedTopics(topics: MemoryTopicRow[]): MemoryTopicRow[] {
+	const rank = (t: MemoryTopicRow) => (t.state === "retired" ? 1 : 0);
+	return [...topics].sort((a, b) => {
+		if (rank(a) !== rank(b)) return rank(a) - rank(b);
+		const ua = a.updated || "";
+		const ub = b.updated || "";
+		if (ua !== ub) return !ua ? 1 : !ub ? -1 : ua < ub ? 1 : -1;
+		return a.title.localeCompare(b.title);
+	});
+}
+
 export interface TopicChip {
 	label: string;
 	tone: "neutral" | "good" | "warn" | "muted";

@@ -30,6 +30,7 @@ import {
 	focusRefetchDue,
 	formatTopicSize,
 	topicSecondLine,
+	sortedTopics,
 	topicsHeader,
 	MEMORY_PANEL_SECTION_KEY,
 	parseSection,
@@ -399,7 +400,7 @@ function TopicsSection({ wolf }: { wolf: string }) {
 				<p className="text-xs text-muted-foreground">No session topics.</p>
 			) : (
 				<ul className="flex min-w-0 flex-col gap-1">
-					{topics.topics.map((t) => {
+					{sortedTopics(topics.topics).map((t) => {
 						const second = topicSecondLine(t);
 						return (
 							<li key={t.id} className="flex flex-col gap-0.5 px-1.5 py-1 text-xs" data-testid="memory-topic-row">
@@ -453,7 +454,8 @@ export function ObservationsSection({ wolf, observations }: {
 	};
 }) {
 	const { tree, pool, info, open } = observations;
-	const rows = tree ? buildMemoryTreeRows(tree) : [];
+	const latest = Object.fromEntries((pool ? groupObservations(pool) : []).map((g) => [g.key, g.latest]));
+	const rows = tree ? buildMemoryTreeRows(tree, latest) : [];
 	const archivedStage = (id: string, stage?: string) => (stage ?? info[id]?.stage) === "archived";
 	const blocked = new Map((pool ? groupObservations(pool) : []).filter((g) => g.blocked).map((g) => [g.key, g]));
 	const blockedNote = (id: string) => {

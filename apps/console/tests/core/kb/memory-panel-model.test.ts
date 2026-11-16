@@ -232,6 +232,28 @@ describe("memory panel model", () => {
 		assert.equal(busy.kind === "feature" && busy.own.pending, 1);
 		assert.deepEqual(busy.kind === "feature" && busy.tasks.map((t) => t.id), ["work-d-t2", "work-d-t1"]);
 	});
+	it("with pool stamps every level is newest first: a feature takes its newest task's stamp, unstamped rows follow busiest-first", () => {
+		const tree = {
+			features: [
+				{ id: "f-busy-old", title: "Busy old", own: { pending: 9, archived: 0 }, tasks: [{ id: "t-busy", title: "T", pending: 1, archived: 0 }] },
+				{ id: "f-new-task", title: "New via task", own: { pending: 1, archived: 0 }, tasks: [
+					{ id: "t-a", title: "A", pending: 5, archived: 0 },
+					{ id: "t-b", title: "B", pending: 1, archived: 0 },
+				] },
+				{ id: "f-unstamped", title: "No stamp", own: { pending: 2, archived: 0 }, tasks: [] },
+			],
+			other: [
+				{ id: "x-old", pending: 9, archived: 0 },
+				{ id: "x-new", pending: 1, archived: 0 },
+			],
+			den: { pending: 1, archived: 0 },
+		};
+		const latest = { "f-busy-old": "2026-11-10T08:00:00Z", "t-b": "2026-11-15T08:00:00Z", "t-a": "2026-11-12T08:00:00Z", "x-old": "2026-11-01T08:00:00Z", "x-new": "2026-11-14T08:00:00Z" };
+		const rows = buildMemoryTreeRows(tree, latest);
+		assert.deepEqual(rows.map((r) => r.id), ["f-new-task", "f-busy-old", "f-unstamped", "x-new", "x-old", "den"]);
+		const f = rows[0]!;
+		assert.deepEqual(f.kind === "feature" && f.tasks.map((t) => t.id), ["t-b", "t-a"]);
+	});
 	it("record falls back to the parent's when empty", () => {
 		const own = rec({ partOf: "p" });
 		assert.equal(parentToFetch(own), "p");

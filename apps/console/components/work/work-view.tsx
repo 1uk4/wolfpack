@@ -81,10 +81,14 @@ type Load = { state: "loading" } | { state: "error"; message: string } | { state
 function useWorkItems(client: WorkClient, domain: string): { load: Load; reload: () => Promise<boolean> } {
 	const [load, setLoad] = useState<Load>({ state: "loading" });
 	const seq = useRef(0);
+	/** Set by the mount effect: that one read may reuse a stored list younger than the poll interval. */
+	const mountRead = useRef(false);
 	const refresh = useCallback(async (): Promise<boolean> => {
 		const mine = ++seq.current;
+		const maxAge = mountRead.current ? WORK_POLL_MS : 0;
+		mountRead.current = false;
 		// Always with the graduated ones: an initiative is ready when its features all graduated; the table hides them unless the toggle is on.
-		const res = await client.list(domain, true);
+		const res = await client.list(domain, true, maxAge);
 		if (mine !== seq.current) return true; // a newer request (another domain, the toggle) owns the answer
 		if (res.ok) setLoad({ state: "ready", items: res.data.items });
 		else setLoad((cur) => (cur.state === "ready" ? cur : { state: "error", message: res.message }));
@@ -92,6 +96,7 @@ function useWorkItems(client: WorkClient, domain: string): { load: Load; reload:
 	}, [client, domain]);
 	useEffect(() => {
 		setLoad((cur) => (cur.state === "ready" ? cur : { state: "loading" }));
+		mountRead.current = true;
 		void refresh();
 		const onFocus = () => void refresh();
 		window.addEventListener("focus", onFocus);

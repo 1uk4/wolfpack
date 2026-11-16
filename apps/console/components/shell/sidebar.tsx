@@ -33,6 +33,7 @@ type SessionItem = ChatListItem & { href: string; meta?: string; needsYou?: bool
 
 const itemHref = (c: SessionItem) => c.href;
 import { kbdEventForAction } from "@/src/core";
+import { dataStore, StoreHttpError } from "@/src/core/data-store";
 
 /**
  * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
@@ -613,13 +614,15 @@ export function SessionsSidebar() {
 		// fetch follows, so the final event of a burst is never lost.
 		try {
 			// The list is the ConsoleClient's: every wolf's threads.
-			const wolvesRes = await fetch("/api/wolves", { cache: "no-store" });
-			// 401 = auth lost, not offline: the fetch wrapper sends the browser to /pair; leave the list as it is.
-			if (wolvesRes.status === 401) return;
-			if (!wolvesRes.ok) throw new Error(`roster ${wolvesRes.status}`);
-			const wolves = (await wolvesRes.json()) as {
-				wolves: { name: string; status?: string }[];
-			};
+			// Through the client store: an event or open always revalidates (maxAgeMs 0, ETag), and the answer lands in the store for the other pages' mounts.
+			let wolves: { wolves: { name: string; status?: string }[] };
+			try {
+				wolves = await dataStore.load<{ wolves: { name: string; status?: string }[] }>("/api/wolves", { maxAgeMs: 0 });
+			} catch (err) {
+				// 401 = auth lost, not offline: the fetch wrapper sends the browser to /pair; leave the list as it is.
+				if (err instanceof StoreHttpError && err.status === 401) return;
+				throw err;
+			}
 			if (!Array.isArray(wolves.wolves)) throw new Error("bad roster");
 			const results = await Promise.all(
 				wolves.wolves.map(async (w) => {

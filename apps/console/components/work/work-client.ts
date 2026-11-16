@@ -15,7 +15,8 @@ export interface WorkClient {
 	/** The domains to offer in the dropdown (empty when the KB is not reachable). */
 	domains(): Promise<WorkDomain[]>;
 	/** The domain's work items; graduated and archived ones only with `graduated`. */
-	list(domain: string, graduated: boolean): Promise<KbResult<WorkListResponse>>;
+	/** `maxAgeMs`: a stored answer younger than this is returned without a request (a page mount); default 0 revalidates. */
+	list(domain: string, graduated: boolean, maxAgeMs?: number): Promise<KbResult<WorkListResponse>>;
 	// Owner controls (absent = no assignee dropdowns). Every console session is an owner session today (its hub bearer is the paired
 	// console token; the hub still gates), so the real client always provides them.
 	/** The wolves the dropdown offers: the hub's wolf list (registered, non-retired; online or not). A failure carries the message. */
@@ -48,12 +49,12 @@ export function createWorkClient(): WorkClient {
 			const res = await fetchKbGraph();
 			return res.ok ? res.data.domains.map((d) => ({ name: d.name, label: d.label })) : [];
 		},
-		async list(domain, graduated) {
+		async list(domain, graduated, maxAgeMs = 0) {
 			const all = await wolves();
 			const candidates = workWolfCandidates(findLibrarian(all)?.name ?? null, all);
 			let last: KbResult<WorkListResponse> = { ok: false, reason: "unavailable", message: "No wolf is online to serve the Work API." };
 			for (const wolf of candidates) {
-				last = await fetchWorkList(wolf, domain, graduated);
+				last = await fetchWorkList(wolf, domain, graduated, maxAgeMs);
 				if (last.ok || last.reason !== "unavailable") return last;
 			}
 			return last;

@@ -35,7 +35,8 @@ const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs")
 const { createSupervisor } = require("./supervisor.cjs");
 const { KEYS_FILE } = require("./key-file.cjs"); // the console reads/writes the same keys.env workerd does (Pack → Keys)
 const { shouldCurate, parseBatteryPercent } = require("./curator-gate.cjs");
-const { needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup, wolfIdFor } = require("./setup.cjs");
+const { needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup } = require("./setup.cjs");
+const { suggestedWolfName } = require("./wolf-name.cjs");
 const { consoleEnv } = require("./console-env.cjs");
 const { windowAllClosedAction, createTray } = require("./tray.cjs");
 const { createAppSettings } = require("./app-settings.cjs");
@@ -96,19 +97,6 @@ let systemShutdown = false; // set by powerMonitor "shutdown": before-quit must 
 let chatWolf = "wolf"; // the wolf whose chat the window opens on (chosen in the setup wizard)
 let wizardWindow = null; // the first-run setup window, closed once the main window is up
 let wizardFinishing = false; // finish has started: closing the wizard window must not quit the app (set until the chat window exists)
-
-/** Suggested wolf name: the macOS user's first name + "'s wolf". */
-function suggestedWolfName() {
-	let first = "";
-	try {
-		first = String(require("node:child_process").execFileSync("id", ["-F"], { encoding: "utf8" })).trim().split(/\s+/)[0];
-	} catch {
-		/* fall back to the login name */
-	}
-	if (!first) first = require("node:os").userInfo().username;
-	first = first.replace(/[^\p{L}\p{N}]/gu, "");
-	return wolfIdFor(first) ? `${first.charAt(0).toUpperCase()}${first.slice(1)}'s wolf` : "My wolf";
-}
 
 /**
  * First launch (or a relaunch after an unfinished setup): show the setup wizard, prefilled with what was stored; resolve to the running

@@ -86,8 +86,16 @@ for (const bundle of bundles) {
 
 // The app is API-key only: the subscription bridge and the Agent SDK must not be in the packaged runtime.
 if (fs.existsSync(path.join(runtime, "node_modules/@anthropic-ai/claude-agent-sdk"))) bad("runtime ships the Claude Agent SDK (the app is API-key only)");
-// The claude-subscription plug-in is installed into the user's state (<state>/plugins), never shipped inside the app.
-if (fs.existsSync(path.join(runtime, "plugins", "claude-subscription")) || fs.existsSync(path.join(runtime, "claude-subscription"))) bad("runtime ships the claude-subscription plug-in (it lives in the user's state, not in the app)");
+// Provider plug-ins are installed into the user's state (<state>/plugins), never shipped inside the app: no directory under
+// Resources/runtime/plugins, and no package in node_modules whose package.json carries a `wolfpack` plug-in manifest.
+const dirsIn = (d) => { try { return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()); } catch { return []; } };
+const hasManifest = (d) => { try { return !!JSON.parse(fs.readFileSync(path.join(d, "package.json"), "utf8")).wolfpack; } catch { return false; } };
+const shippedPlugins = dirsIn(path.join(runtime, "plugins")).map((e) => `plugins/${e.name}`);
+for (const e of dirsIn(path.join(runtime, "node_modules"))) {
+	const pkgs = e.name.startsWith("@") ? dirsIn(path.join(runtime, "node_modules", e.name)).map((s) => `${e.name}/${s.name}`) : [e.name];
+	for (const p of pkgs) if (hasManifest(path.join(runtime, "node_modules", p))) shippedPlugins.push(`node_modules/${p}`);
+}
+if (shippedPlugins.length) bad(`runtime ships a plug-in package (${shippedPlugins.join(", ")}); plug-ins live in the user's state, not in the app`);
 // BRIDGE_MARKER is a string literal from the bridge's own code (stateless/errors.ts); minifiers keep string literals, and the build stub never contains it.
 const BRIDGE_MARKER = "Claude request failed (fatal, do not retry)";
 const SDK_IMPORT = /(?:from|import)\s*["']@anthropic-ai\/claude-agent-sdk["']/;

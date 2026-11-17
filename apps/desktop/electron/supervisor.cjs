@@ -438,7 +438,7 @@ function createSupervisor(opts) {
 			WOLFPACK_APP_NODE: nodeBin,
 			WOLFPACK_APP_WOLFD: path.join(runtimeDir, "wolfd", "wolfd.mjs"),
 			WOLFPACK_MODELS_FILE: path.join(sup.wolfDir, "models.json"),
-			WOLFPACK_PLUGINS_DIR: path.join(stateDir, "plugins"), // wolfd loads the wolf.yaml `plugins:` from here (attach-claude-subscription.md)
+			WOLFPACK_PLUGINS_DIR: path.join(stateDir, "plugins"), // wolfd loads the wolf.yaml `plugins:` from here
 			KB_BASE: path.join(stateDir, "kb", "base"),
 			KB_OPS: path.join(stateDir, "kb", "ops"),
 			WORKERD_KEY_FILE: path.join(stateDir, KEY_FILE),

@@ -35,19 +35,19 @@ describe("claude-stateless factory", () => {
   it("a factory made for another id keeps its state under that id", () => {
     const root = mkdtempSync(join(tmpdir(), "stateless-id-"));
     const createProvider = vi.fn((_o: any) => fakeStateless() as never);
-    makeStatelessFactory("claude-subscription")({ cwd: root, env: { WOLF_DEN: join(root, "den") }, seams: { "claude-subscription": { createProvider, models: [] } } });
+    makeStatelessFactory("example-provider")({ cwd: root, env: { WOLF_DEN: join(root, "den") }, seams: { "example-provider": { createProvider, models: [] } } });
     const opts = createProvider.mock.calls[0][0];
-    expect(opts.id).toBe("claude-subscription");
-    expect(opts.sessionDir).toBe(join(root, "claude-subscription", "den", "sessions"));
-    expect(opts.debugLogPath).toBe(join(root, "claude-subscription", "den", "debug.log"));
+    expect(opts.id).toBe("example-provider");
+    expect(opts.sessionDir).toBe(join(root, "example-provider", "den", "sessions"));
+    expect(opts.debugLogPath).toBe(join(root, "example-provider", "den", "debug.log"));
   });
 
   it("passes the claude executable path and runtime to every SDK query() call", () => {
     const root = mkdtempSync(join(tmpdir(), "stateless-exe-"));
     const createProvider = vi.fn((_o: any) => fakeStateless() as never);
     const inner = vi.fn((_a: any) => ({}));
-    makeStatelessFactory("claude-subscription", { pathToClaudeCodeExecutable: "/u/bin/claude", executable: "/u/bin/node" })({
-      cwd: root, env: { WOLF_DEN: join(root, "den") }, seams: { "claude-subscription": { createProvider, models: [], queryFn: inner as never } },
+    makeStatelessFactory("example-provider", { pathToClaudeCodeExecutable: "/u/bin/claude", executable: "/u/bin/node" })({
+      cwd: root, env: { WOLF_DEN: join(root, "den") }, seams: { "example-provider": { createProvider, models: [], queryFn: inner as never } },
     });
     createProvider.mock.calls[0][0].queryFn({ prompt: "hi", options: { model: "m" } });
     expect(inner.mock.calls[0][0].options).toMatchObject({ model: "m", pathToClaudeCodeExecutable: "/u/bin/claude", executable: "/u/bin/node" });

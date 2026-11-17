@@ -75,9 +75,14 @@ function serverEntry() {
 if (process.env.WOLFPACK_DEV_URL || undefined) {
 	app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
+// Logged before the lock so a boot that never reaches `ready` leaves a trace (startup-guard.cjs); a lost lock exits
+// outright instead of a quit that may idle before `ready`.
+log(`startup: ${PRODUCT_NAME} ${app.getVersion()} pid ${process.pid}`);
 if (!app.requestSingleInstanceLock()) {
-	app.quit();
+	log("startup: another instance holds the lock; exiting");
+	app.exit(0);
 } else {
+	require("./startup-guard.cjs").readyWatchdog({ whenReady: app.whenReady(), ms: 20000, log, exit: (c) => app.exit(c) });
 	app.on("second-instance", () => {
 		const win = BrowserWindow.getAllWindows()[0];
 		if (win) {

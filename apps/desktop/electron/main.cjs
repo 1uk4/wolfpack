@@ -35,6 +35,7 @@ const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs")
 const { createSupervisor } = require("./supervisor.cjs");
 const { KEYS_FILE } = require("./key-file.cjs"); // the console reads/writes the same keys.env workerd does (Pack → Keys)
 const { shouldCurate, parseBatteryPercent } = require("./curator-gate.cjs");
+const { updateCheckMessage } = require("./update-message.cjs");
 const { needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup } = require("./setup.cjs");
 const { suggestedWolfName } = require("./wolf-name.cjs");
 const { consoleEnv } = require("./console-env.cjs");
@@ -603,20 +604,29 @@ function broadcastUpdateStatus(status) {
 	}
 }
 
-function checkForUpdates({ manual = false } = {}) {
-	if (!autoUpdater) return;
-	autoUpdater
+/**
+ * `manual`: a person asked (menu/tray or the console's Check now). `inline`: the console shows the answer itself, so no
+ * native dialog: an app-modal dialog with no parent window blocks the whole app (renderer included) until it is dismissed.
+ */
+function checkForUpdates({ manual = false, inline = false } = {}) {
+	if (!autoUpdater) return Promise.resolve({ ok: false, error: "Updates are off in this build" });
+	return autoUpdater
 		.checkForUpdates()
 		.then((result) => {
 			// The download itself is silent (autoDownload); the banner fires on
 			// update-downloaded. Manual checks additionally answer directly.
 			if (!manual) return;
 			const version = result?.updateInfo?.version;
-			if (!version) dialog.showMessageBox({ type: "info", message: "You're up to date.", detail: `${PRODUCT_NAME} ${app.getVersion()} is the latest version.` });
+			const newer = version && version !== app.getVersion() ? version : null;
+			if (!inline && !newer) dialog.showMessageBox({ type: "info", message: "You're up to date.", detail: `${PRODUCT_NAME} ${app.getVersion()} is the latest version.` });
+			return { ok: true, ...(newer ? { note: `Downloading v${newer} in the background.` } : {}) };
 		})
 		.catch((err) => {
 			log(`update check failed: ${err?.message ?? err}`);
-			if (manual) dialog.showMessageBox({ type: "warning", message: "Couldn't check for updates.", detail: String(err?.message ?? err) });
+			// One plain line for the person; the raw HttpError (URL, token hint, headers) stays in the log.
+			const error = updateCheckMessage(err, app.getVersion());
+			if (manual && !inline) dialog.showMessageBox({ type: "warning", message: "Couldn't check for updates.", detail: error });
+			return { ok: false, error };
 		});
 }
 
@@ -833,6 +843,7 @@ async function main() {
 	// are log lines — this can never block boot.
 	setupAutoUpdater();
 	ipcMain.on("wolfpack:update-install", () => installUpdateNow());
+	ipcMain.handle("wolfpack:update-check", () => checkForUpdates({ manual: true, inline: true }));
 	// Needs-you notifications: validation + delivery live in notify.cjs (tested without Electron).
 	const notifyNeedsYou = createNeedsYouNotifier({ Notification, appOrigin: new URL(url).origin, log });
 	ipcMain.on("wolfpack:notify", (event, n) => notifyNeedsYou(event, BrowserWindow.fromWebContents(event.sender), n));

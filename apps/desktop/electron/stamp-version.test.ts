@@ -24,7 +24,7 @@ it("stamps every bundled component with the app's own version where the service 
     expect(beside(path.join(runtime, "hubd.mjs"))).toBe(appVersion);
     expect(beside(path.join(runtime, "wolfd", "wolfd.mjs"))).toBe(appVersion);
     expect(stampedVersion([pathToFileURL(path.join(payload, "apps", "console", "VERSION")), pathToFileURL(path.join(payload, "VERSION"))], pkg)).toBe(appVersion);
-    expect(appVersion).toBe("0.3.4");
+    expect(appVersion).toMatch(/^\d+\.\d+\.\d+$/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -1,7 +1,7 @@
 /** Seam: machineCard / restartPlan / restartSummary / logLines (src/core/pack/machine-card.ts): which rows, actions and wording a Machines card shows. */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { logLines, machineCard, restartSummary } from "../../../src/core/pack/machine-card.ts";
+import { appCheckNote, appRestartLabel, logLines, machineCard, restartSummary, versionText } from "../../../src/core/pack/machine-card.ts";
 import type { HealthLink } from "../../../src/core/pack/pack-health-view.ts";
 import type { HostCard } from "../../../src/core/pack/pack-hosts.ts";
 
@@ -62,6 +62,35 @@ describe("machineCard inventory states", () => {
 		assert.equal(machineCard(bare("unavailable", []), null).services[0]!.versionNote, "reports unavailable");
 		assert.equal(machineCard(bare("signed-out", []), null).services[0]!.versionNote, "sign in on this device first");
 		assert.deepEqual(machineCard(bare("unavailable", []), null).channel, { value: null, editable: false, note: "Change it from that machine's console", missing: "reports unavailable" });
+	});
+});
+
+describe("machineCard single-Mac and versions", () => {
+	const c = () => card({ console: true, workerds: [{ link: link("workerd", "workerd"), wolves: [] }] });
+	it("the Console row shows the snapshot's own version even when no channel is known (the single-Mac app never asks for one)", () => {
+		const self = { machine: "mac", kind: "console" as const, id: "console", version: "0.4.0", channel: "main" as const, uptimeS: 61, lagMs: 29 };
+		const v = machineCard(card({ console: true, self, workerds: [{ link: link("workerd", "workerd"), wolves: [] }] }), null, { singleMac: true });
+		assert.equal(v.services.find((s) => s.kind === "console")?.version, "0.4.0");
+	});
+	it("single-Mac this-Mac card carries the app update block, not the pack one", () => {
+		assert.deepEqual(machineCard(c(), "stable", { singleMac: true }).update, { kind: "app", version: "0.1.20" });
+		assert.deepEqual(machineCard(c(), "stable").update, { kind: "pack" });
+		assert.equal(machineCard(card({ console: false, workerds: [{ link: link("workerd", "workerd"), wolves: [] }] }), null, { singleMac: true }).update, undefined);
+	});
+	it("a downloaded app update offers Restart to update", () => {
+		assert.equal(appRestartLabel("0.3.5"), "Restart to update to v0.3.5");
+		assert.equal(appRestartLabel(null), null);
+	});
+	it("the Check now result is one inline line: up to date, downloading, or the error", () => {
+		assert.deepEqual(appCheckNote({ ok: true, note: "Downloading v0.4.1 in the background." }), { text: "Downloading v0.4.1 in the background.", tone: "ok" });
+		assert.deepEqual(appCheckNote({ ok: true }), { text: "You're up to date.", tone: "ok" });
+		assert.deepEqual(appCheckNote({ ok: false, error: "No update is published yet. Wolfpack 0.4.0 is the newest version." }), { text: "No update is published yet. Wolfpack 0.4.0 is the newest version.", tone: "error" });
+		assert.deepEqual(appCheckNote({ ok: false }), { text: "Couldn't check for updates", tone: "error" });
+	});
+	it("an unknown version renders no version text", () => {
+		assert.equal(versionText(null, undefined), "");
+		assert.equal(versionText(null, "reports unavailable"), "reports unavailable");
+		assert.equal(versionText("0.1.20", undefined), "v0.1.20");
 	});
 });
 

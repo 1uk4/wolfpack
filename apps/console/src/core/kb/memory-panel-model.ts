@@ -8,6 +8,8 @@
 
 // Must stay the first import: copies the pre-rename localStorage keys before any read.
 import type { ConsolidateResponse, MemoryEventFrame, MemoryNodeObservations, MemoryPoolStatus, MemoryStatus, MemoryTree, WorkRecordResponse } from "./kb.ts";
+import { providersByCapability } from "@wolfpack/protocol/providers";
+import { cellOf, type KeyMachine } from "../pack/keys-model.ts";
 
 /** One task under a feature in the memory tree. */
 export interface TreeTaskRow { id: string; title: string; stage?: string; pending: number; archived: number }
@@ -313,6 +315,21 @@ export function promoteLine(s: PromoteState): string | null {
 		default:
 			return null;
 	}
+}
+
+export const MEMORY_NEEDS_KEY_NOTE = "Add a key in Pack → Keys to use memory";
+
+/**
+ * Consolidate and Promote are hidden only when the keys response says chat needs a key on every listed machine.
+ * A failed, aborted or empty response (null / { error }) never hides them: a network error must not block the buttons.
+ */
+export function memoryActionsFor(keys: { machines?: readonly KeyMachine[]; error?: string } | null | undefined, opts?: { machine?: string }): { hidden: true; note: string } | { hidden: false } {
+	const all = keys?.machines ?? [];
+	const machines = opts?.machine ? all.filter((m) => m.machine === opts.machine) : all;
+	if (machines.length === 0) return { hidden: false };
+	const slots = providersByCapability("chat").flatMap((p) => p.slots.map((s) => s.id));
+	const needsKey = (m: KeyMachine) => slots.every((slot) => cellOf(m, slot, true, "chat").missing);
+	return machines.every(needsKey) ? { hidden: true, note: MEMORY_NEEDS_KEY_NOTE } : { hidden: false };
 }
 
 /** Why the action buttons are disabled right now (null = enabled). `memory_busy` = a promote is running. */

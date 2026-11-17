@@ -14,6 +14,7 @@ import {
 	MEMORY_PANEL_OPEN_KEY,
 	PROMOTE_IDLE,
 	actionBlock,
+	memoryActionsFor,
 	applyPromoteEvent,
 	bannerOf,
 	blockedLabel,
@@ -21,6 +22,7 @@ import {
 	reconcilePromote,
 	pendingWarning,
 	workApiWarning,
+	type KeyMachine,
 	type PoolPending,
 	buildMemoryTreeRows,
 	DEN_GROUP,
@@ -134,6 +136,17 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	const [promote, setPromote] = useState<PromoteState>(PROMOTE_IDLE);
 	const [consolidating, setConsolidating] = useState(false);
 	const [note, setNote] = useState<string | null>(null);
+	/** The pack keys state, fetched once on mount (never polled). Null until it answers, or when the request fails: the buttons then stay. */
+	const [keys, setKeys] = useState<{ machines?: KeyMachine[] } | null>(null);
+	useEffect(() => {
+		const ac = new AbortController();
+		fetch("/api/pack/machines/keys", { signal: ac.signal })
+			.then(async (r) => (r.ok ? ((await r.json()) as { machines?: KeyMachine[] }) : null))
+			.then((b) => { if (!ac.signal.aborted) setKeys(b); })
+			.catch(() => {});
+		return () => ac.abort();
+	}, []);
+	const actions = memoryActionsFor(keys);
 
 	const statusReq = useRef(0);
 	const poolReq = useRef(latestOnly());
@@ -303,12 +316,18 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 					<div className="mb-1 flex items-center justify-between gap-2">
 						<h3 className="text-xs font-medium uppercase text-muted-foreground">Pool</h3>
 						<div className="flex items-center gap-1" data-testid="memory-actions">
-							<Button size="xs" variant="ghost" disabled={block !== null} onClick={consolidate}>
-								{consolidating ? "Consolidating…" : "Consolidate"}
-							</Button>
-							<Button size="xs" variant="ghost" disabled={block !== null} onClick={startPromote}>
-								Promote
-							</Button>
+							{actions.hidden ? (
+								<span className="text-xs text-muted-foreground" data-testid="memory-needs-key">{actions.note}</span>
+							) : (
+								<>
+									<Button size="xs" variant="ghost" disabled={block !== null} onClick={consolidate}>
+										{consolidating ? "Consolidating…" : "Consolidate"}
+									</Button>
+									<Button size="xs" variant="ghost" disabled={block !== null} onClick={startPromote}>
+										Promote
+									</Button>
+								</>
+							)}
 						</div>
 					</div>
 					<div className="relative h-1.5 rounded bg-muted" title={`Consolidation ${pool.triggerText}`} data-testid="memory-trigger">

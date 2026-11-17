@@ -265,3 +265,18 @@ describe("memory panel model", () => {
 		assert.equal(recordView(rec({ record: "mine" }), null).inheritedFrom, null);
 	});
 });
+
+import { memoryActionsFor } from "../../../src/core/kb/memory-panel-model.ts";
+import type { KeyMachine } from "../../../src/core/pack/keys-model.ts";
+
+describe("memoryActionsFor", () => {
+	const mac = (slots: KeyMachine["slots"]): KeyMachine => ({ hostId: "h1", machine: "mac", online: true, canSetKeys: true, slots });
+	it("memory actions are hidden while the wolf has no key", () => {
+		assert.deepEqual(memoryActionsFor({ machines: [mac([])] }), { hidden: true, note: "Add a key in Pack → Keys to use memory" });
+		assert.deepEqual(memoryActionsFor({ machines: [mac([{ slot: "anthropic", present: true, source: "pack", masked: "sk-…1" }])] }), { hidden: false });
+	});
+	it("a failed keys request keeps the buttons", () => {
+		assert.deepEqual(memoryActionsFor(null), { hidden: false });
+		assert.deepEqual(memoryActionsFor({ error: "x" }), { hidden: false });
+	});
+});

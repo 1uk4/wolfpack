@@ -28,17 +28,13 @@ describe("key-file", () => {
     expect(readdirSync(dir)).toEqual(["keys.env"]); // no temp file left
   });
 
-  it("round-trips the Claude subscription names at mode 0600", () => {
-    writeKey(file, "CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-fake_tok-1");
-    writeKey(file, "CLAUDE_CODE_PATH", "/Users/f/.claude/local/claude");
-    writeKey(file, "CLAUDE_CODE_NODE", "/opt/homebrew/bin/node");
-    expect(readFileSync(file, "utf8")).toBe(
-      "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-fake_tok-1\nCLAUDE_CODE_PATH=/Users/f/.claude/local/claude\nCLAUDE_CODE_NODE=/opt/homebrew/bin/node\n",
-    );
+  it("round-trips names beyond the known slots (plug-in env names) at mode 0600", () => {
+    writeKey(file, "EXAMPLE_TOKEN", "tok-fake_1");
+    writeKey(file, "EXAMPLE_PATH", "/opt/example/bin/tool");
+    expect(readFileSync(file, "utf8")).toBe("EXAMPLE_TOKEN=tok-fake_1\nEXAMPLE_PATH=/opt/example/bin/tool\n");
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(readKey(file, "CLAUDE_CODE_OAUTH_TOKEN")).toBe("sk-ant-oat01-fake_tok-1");
-    expect(readKey(file, "CLAUDE_CODE_PATH")).toBe("/Users/f/.claude/local/claude");
-    expect(readKey(file, "CLAUDE_CODE_NODE")).toBe("/opt/homebrew/bin/node");
+    expect(readKey(file, "EXAMPLE_TOKEN")).toBe("tok-fake_1");
+    expect(readKey(file, "EXAMPLE_PATH")).toBe("/opt/example/bin/tool");
   });
 
   it("replaces one key and keeps the other lines", () => {

@@ -11,10 +11,6 @@ const path = require("node:path");
 const KEYS_FILE = "keys.env";
 const ANTHROPIC_ENV = "ANTHROPIC_API_KEY";
 const DEEPGRAM_ENV = "DEEPGRAM_API_KEY";
-// The claude-subscription plug-in's names (docs/attach-claude-subscription.md); workerd forwards them to wolves.
-const CLAUDE_CODE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
-const CLAUDE_CODE_PATH_ENV = "CLAUDE_CODE_PATH";
-const CLAUDE_CODE_NODE_ENV = "CLAUDE_CODE_NODE";
 
 /** "" when the key is safe to put in the file, else the reason. */
 function keyProblem(key) {
@@ -97,4 +93,4 @@ function writeKey(file, name, key) {
 	}
 }
 
-module.exports = { KEYS_FILE, ANTHROPIC_ENV, DEEPGRAM_ENV, CLAUDE_CODE_OAUTH_TOKEN_ENV, CLAUDE_CODE_PATH_ENV, CLAUDE_CODE_NODE_ENV, keyProblem, readKey, writeKey };
+module.exports = { KEYS_FILE, ANTHROPIC_ENV, DEEPGRAM_ENV, keyProblem, readKey, writeKey };

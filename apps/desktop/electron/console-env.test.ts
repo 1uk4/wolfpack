@@ -4,6 +4,11 @@ import { expect, it } from "vitest";
 
 const { consoleEnv } = createRequire(import.meta.url)("./console-env.cjs");
 
+it("the console probes only the app's own workerd for health", () => {
+  const env = consoleEnv({ WOLFPACK_HEALTH_WORKERDS: "workerd=http://127.0.0.1:3210" }, { WOLFPACK_WORKERD_DIRECT_URL: "http://127.0.0.1:51234" });
+  expect(env.WOLFPACK_HEALTH_WORKERDS).toBe("workerd=http://127.0.0.1:51234");
+});
+
 it("keeps off-Mac settings and secrets from the owner's shell out of the console env", () => {
   const env = consoleEnv(
     { PATH: "/usr/bin", HOME: "/Users/a", LC_ALL: "C", WOLFPACK_HUB_URL: "https://hub.example", WOLFPACK_HUB_TOKEN: "t", ANTHROPIC_API_KEY: "sk-x", GITHUB_TOKEN: "g", HTTPS_PROXY: "http://proxy:3128" },

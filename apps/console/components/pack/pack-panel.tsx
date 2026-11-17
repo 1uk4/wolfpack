@@ -14,7 +14,8 @@ import { usePackHealth } from "@/components/pack/pack-health";
 import { PACK_SECTION_BODIES } from "@/components/pack/pack-section-bodies";
 import { closePackHealth, openPackHealth, requestedPackSection } from "@/components/pack/pack-health-store";
 import { cn } from "@/lib/utils";
-import { PACK_SECTIONS, packEntrySummary, sectionBadges, type PackBadge, type PackSectionId, type Tone } from "@/src/core";
+import { useSingleMac } from "@/components/shell/single-mac";
+import { PACK_SECTIONS, packSectionsFor, packEntrySummary, sectionBadges, type PackBadge, type PackSectionId, type Tone } from "@/src/core";
 
 const DOT: Record<Tone, string> = { red: "bg-red-500", amber: "bg-amber-500", grey: "bg-muted-foreground/50", green: "bg-emerald-500" };
 const TEXT: Record<Tone, string> = { red: "text-red-600 dark:text-red-400", amber: "text-amber-600 dark:text-amber-400", grey: "text-muted-foreground", green: "text-emerald-600 dark:text-emerald-400" };
@@ -53,7 +54,10 @@ export function PackSettingsEntry({ onOpen }: { onOpen?: () => void }) {
 }
 
 export function PackPanel() {
-	const [section, setSection] = useState<PackSectionId>(requestedPackSection);
+	const singleMac = useSingleMac();
+	const [requested, setSection] = useState<PackSectionId>(requestedPackSection);
+	const shown = packSectionsFor(singleMac);
+	const section: PackSectionId = shown.some((s) => s.id === requested) ? requested : "machines"; // a ?pack=devices link in the app opens Machines
 	const h = usePackHealth();
 	const badges = sectionBadges({ snapshot: h.snapshot, reachable: h.reachable, now: h.now });
 	// Sections that fetch their own badge data: PACK_SECTIONS is a constant list, so the hooks run in a fixed order.
@@ -84,7 +88,7 @@ export function PackPanel() {
 		tabs.current?.querySelector<HTMLElement>(`[data-testid="pack-menu-${section}"]`)?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
 	}, [section]);
 	const Body = PACK_SECTION_BODIES[section];
-	const main = PACK_SECTIONS.filter((s) => s.id !== "this-device");
+	const main = shown.filter((s) => s.id !== "this-device");
 	const thisDevice = PACK_SECTIONS.find((s) => s.id === "this-device")!;
 	return (
 		<OverlayShell
@@ -107,7 +111,7 @@ export function PackPanel() {
 				<div ref={tabs} className="flex w-44 shrink-0 flex-col gap-0.5 max-md:w-full max-md:flex-row max-md:items-stretch max-md:overflow-x-auto max-md:border-b max-md:pb-1 max-md:[scrollbar-width:none]" data-testid="pack-tabs">
 					<nav aria-label="Pack sections" className="flex flex-col gap-0.5 max-md:flex-row">
 						{main.map((s) => item(s.id, s.label))}
-						{item(thisDevice.id, thisDevice.label, true)}
+						{!singleMac && item(thisDevice.id, thisDevice.label, true)}
 					</nav>
 				</div>
 				<div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto pb-6">

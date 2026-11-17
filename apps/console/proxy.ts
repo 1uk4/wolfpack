@@ -10,7 +10,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { withCookieBearer } from "@/src/core/ui/hub-auth";
-import { isHiddenInSingleMac, isSingleMac } from "@/src/core/single-mac";
+import { isHiddenInSingleMac, isSingleMac, isUnavailableInSingleMac, singleMacBearer } from "@/src/core/single-mac";
 
 let warned = false;
 /** https as the browser saw it. `env` is injectable for tests. */
@@ -37,6 +37,9 @@ export function proxy(req: NextRequest): NextResponse {
 		if (req.nextUrl.pathname.startsWith("/api/")) return NextResponse.json({ error: "not found" }, { status: 404 });
 		return NextResponse.redirect(new URL("/", req.url));
 	}
+	if (isSingleMac() && isUnavailableInSingleMac(req.nextUrl.pathname)) return NextResponse.json({ error: "not available on this Mac", code: "unsupported" }, { status: 501, headers: { "Cache-Control": "no-store" } });
+	const injected = singleMacBearer({ method: req.method, pathname: req.nextUrl.pathname, headers: req.headers, urlHost: req.nextUrl.host });
+	if (injected) return NextResponse.next({ request: { headers: injected } });
 	const headers = withCookieBearer(req.method, req.headers, isHttps(req));
 	return headers ? NextResponse.next({ request: { headers } }) : NextResponse.next();
 }

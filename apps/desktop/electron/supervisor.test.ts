@@ -162,6 +162,7 @@ describe("app runtime on one Mac", () => {
     const stateDir = join(root, "state-crash");
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, "hub-token.json"), JSON.stringify({ token: "t" })); // skips the pairing step, which would fail first
+    writeFileSync(join(stateDir, "console-hub-token.json"), JSON.stringify({ token: "t" })); // same for the console's token
     let calls = 0;
     const pickPort = async (free: () => Promise<number>) => (calls++, free());
     // An invalid NODE_OPTIONS makes every child exit at once with its own error, not a bind error.
@@ -468,6 +469,123 @@ describe("app runtime on one Mac", () => {
     expect(await s.curate()).toEqual({ skipped: "no API key" }); // returns at once: no SIGUSR2 window, so nothing waits for hubd's 'window done' line
     rmSync(dir, { recursive: true, force: true });
   }, 120_000);
+
+  it.sequential("registers this Mac with its own hubd: workerd/hub.json has the host id and a token different from hub-token.json; a corrupt hub.json is set aside; a second start keeps both", async () => {
+    const dir = join(root, "state-register");
+    const make2 = () => {
+      const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves7"), runtimeDir, nodeBin: nodePath, apiKey: "sk-test-fake-key", modelBaseUrl: fakeUrl });
+      made.push(s);
+      return s;
+    };
+    const hubJson = join(dir, "workerd", "hub.json");
+    const first = make2();
+    await first.start();
+    const cfg = JSON.parse(readFileSync(hubJson, "utf8"));
+    expect(cfg.hostId).toMatch(/^[a-z0-9][a-z0-9-]*$/);
+    expect(cfg.hubUrl).toBe(first.urls.hubd);
+    expect(typeof cfg.token).toBe("string");
+    expect(cfg.token).not.toBe(JSON.parse(readFileSync(join(dir, "hub-token.json"), "utf8")).token);
+    expect(statSync(hubJson).mode & 0o777).toBe(0o600);
+    // the machine is connected to the hub: its hello public key is listed under its host id
+    const bearer = `Bearer ${JSON.parse(readFileSync(join(dir, "hub-token.json"), "utf8")).token}`;
+    let hosts: string[] = [];
+    for (let i = 0; i < 40 && !hosts.includes(cfg.hostId); i++) {
+      hosts = Object.keys(((await (await fetch(`${first.urls.hubd}/v1/machines/keys`, { headers: { authorization: bearer } })).json()) as { keys?: Record<string, unknown> }).keys ?? {});
+      if (!hosts.includes(cfg.hostId)) await new Promise((r) => setTimeout(r, 250));
+    }
+    expect(hosts).toContain(cfg.hostId);
+    // the console's direct path (health probe workerd-direct) answers: workerd serves /direct/v1 only once it has a hub config and a token file in its config dir
+    const direct = await fetch(`${first.urls.workerd}/direct/v1/wolves`, { headers: { "x-wolfpack-direct-token": readFileSync(join(dir, "workerd", "direct-token"), "utf8").trim() } });
+    expect(direct.status).toBe(200);
+    await first.stop();
+
+    const second2 = make2();
+    await second2.start();
+    expect(JSON.parse(readFileSync(hubJson, "utf8")).token).toBe(cfg.token); // kept, not re-paired
+    await second2.stop();
+
+    writeFileSync(hubJson, "{ not json");
+    const third = make2();
+    await third.start();
+    expect(readdirSync(join(dir, "workerd")).filter((f) => f.startsWith("hub.json.bad-"))).toHaveLength(1);
+    expect(JSON.parse(readFileSync(hubJson, "utf8")).hostId).toBe(cfg.hostId);
+    await third.stop();
+  }, 240_000);
+
+  it.sequential("mints a separate console token: its own file, different from the wolf's, accepted by hubd, and a corrupt file is set aside", async () => {
+    const dir = join(root, "state-consoletoken");
+    const mk = () => {
+      const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves8"), runtimeDir, nodeBin: nodePath, apiKey: "sk-test-fake-key", modelBaseUrl: fakeUrl });
+      made.push(s);
+      return s;
+    };
+    const file = join(dir, "console-hub-token.json");
+    const first = mk();
+    await first.start();
+    const stored = JSON.parse(readFileSync(file, "utf8")).token;
+    expect(first.consoleToken).toBe(stored);
+    expect(stored).not.toBe(JSON.parse(readFileSync(join(dir, "hub-token.json"), "utf8")).token);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    const res = await fetch(`${first.urls.hubd}/v1/machines/keys`, { headers: { authorization: `Bearer ${stored}` } });
+    expect(res.status).toBe(200);
+    await first.stop();
+    writeFileSync(file, "{ not json");
+    const second = mk();
+    await second.start();
+    expect(readdirSync(dir).filter((f) => f.startsWith("console-hub-token.json.bad-"))).toHaveLength(1);
+    expect(second.consoleToken).toBe(JSON.parse(readFileSync(file, "utf8")).token);
+    await second.stop();
+  }, 180_000);
+
+  it.sequential("a stored hub token hubd no longer accepts is set aside and the Mac pairs again", async () => {
+    const dir = join(root, "state-hubreset");
+    const mk = () => {
+      const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves15"), runtimeDir, nodeBin: nodePath, apiKey: "sk-test-fake-key", modelBaseUrl: fakeUrl });
+      made.push(s);
+      return s;
+    };
+    const first = mk();
+    await first.start();
+    const before = JSON.parse(readFileSync(join(dir, "workerd", "hub.json"), "utf8"));
+    await first.stop();
+    rmSync(join(dir, "hub", "auth", "tokens.json"), { force: true }); // the hub's data was reset: every stored token is now unknown to it
+    const second = mk();
+    await second.start();
+    const after = JSON.parse(readFileSync(join(dir, "workerd", "hub.json"), "utf8"));
+    expect(after.token).not.toBe(before.token);
+    expect(after.hostId).toBe(before.hostId);
+    expect(readdirSync(join(dir, "workerd")).filter((f) => f.startsWith("hub.json.stale-"))).toHaveLength(1);
+    expect(readdirSync(dir).filter((f) => f.startsWith("hub-token.json.stale-"))).toHaveLength(1);
+    expect(readdirSync(dir).filter((f) => f.startsWith("console-hub-token.json.stale-"))).toHaveLength(1);
+    for (const token of [second.consoleToken, JSON.parse(readFileSync(join(dir, "hub-token.json"), "utf8")).token]) {
+      expect((await fetch(`${second.urls.hubd}/v1/machines/keys`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(200);
+    }
+    // a worker token may not read machine keys (403), but hubd knows it (not 401)
+    expect((await fetch(`${second.urls.hubd}/v1/machines/keys`, { headers: { authorization: `Bearer ${after.token}` } })).status).toBe(403);
+    await second.stop();
+  }, 180_000);
+
+  it.sequential("a Mac renamed after first run keeps reporting under its stored host id", async () => {
+    const dir = join(root, "state-renamed");
+    const mk = (name: string) => {
+      const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves16"), runtimeDir, nodeBin: nodePath, apiKey: "sk-test-fake-key", modelBaseUrl: fakeUrl, hostname: () => name });
+      made.push(s);
+      return s;
+    };
+    const machineOf = (s: ReturnType<typeof createSupervisor>) => {
+      const pid = s.allPids().find((p: number) => procEnv(p).includes("WORKERD_KEY_FILE="));
+      return /WOLFPACK_MACHINE=(\S+)/.exec(procEnv(pid))?.[1];
+    };
+    const first = mk("Old-Name.local");
+    await first.start();
+    expect(machineOf(first)).toBe("old-name");
+    await first.stop();
+    const second = mk("New-Name.local");
+    await second.start();
+    expect(JSON.parse(readFileSync(join(dir, "workerd", "hub.json"), "utf8")).hostId).toBe("old-name");
+    expect(machineOf(second)).toBe("old-name");
+    await second.stop();
+  }, 180_000);
 
   it.sequential("leaves no child process after stop", async () => {
     await second?.stop();

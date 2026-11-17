@@ -809,10 +809,10 @@ async function main() {
 			app.quit();
 			return;
 		}
-		// The console talks to the app's own workerd only (loopback); no hub URL/token yet (ticket: hub token for work reads).
+		// The console talks to the app's own workerd and hubd only (loopback), with its own console-kind hub token (a pack of one Mac).
 		// A quit during startup nulls `supervisor` (before-quit): stop here instead of touching it.
 		if (!supervisor) return;
-		await startServer(new URL(url).port, { WOLFPACK_API_URL: supervisor.urls.workerd, WOLFPACK_WORKERD_DIRECT_URL: supervisor.urls.workerd, WOLFPACK_KEY_FILE: path.join(appStateDir(), KEYS_FILE) }, { appRuntime: true });
+		await startServer(new URL(url).port, { WOLFPACK_API_URL: supervisor.urls.workerd, WOLFPACK_WORKERD_DIRECT_URL: supervisor.urls.workerd, WOLFPACK_KEY_FILE: path.join(appStateDir(), KEYS_FILE), WOLFPACK_HUB_URL: supervisor.urls.hubd, WOLFPACK_HUB_TOKEN: supervisor.consoleToken, WORKERD_CONFIG_DIR: path.join(appStateDir(), "workerd") }, { appRuntime: true });
 		await waitUntilUp(url).catch((err) => {
 			if (supervisor) throw err;
 		});

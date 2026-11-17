@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { PACK_SECTIONS, packEntrySummary, packSectionFromSearch, parsePackSection, sectionBadges } from "../../../src/core/pack/pack-sections.ts";
+import { PACK_SECTIONS, packSectionsFor, packEntrySummary, packSectionFromSearch, parsePackSection, sectionBadges } from "../../../src/core/pack/pack-sections.ts";
 import type { HealthLink, HealthSnapshotView } from "../../../src/core/pack/pack-health-view.ts";
 
 const NOW = Date.parse("2026-11-12T10:00:00Z");
@@ -98,5 +98,10 @@ describe("the Pack section registry", () => {
 		assert.equal(parsePackSection("keys"), "keys");
 		assert.equal(parsePackSection("nope"), "machines");
 		assert.equal(parsePackSection(null), "machines");
+	});
+
+	it("the single-Mac Pack lists Machines, Wolves, Domains and Keys, and no Devices or This device; a normal pack lists all six", () => {
+		assert.deepEqual(packSectionsFor(true).map((s) => s.id), ["machines", "wolves", "domains", "keys"]);
+		assert.deepEqual(packSectionsFor(false).map((s) => s.id), ["machines", "devices", "wolves", "domains", "keys", "this-device"]);
 	});
 });

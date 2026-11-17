@@ -31,6 +31,7 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 export { loadWolfConfig, type WolfConfig };
 export { loadPlugins, pluginsDir, type PluginModule, type PluginContext } from "./plugins.js";
 export { registerProviderFactory } from "./providers/index.js";
+export { makeStatelessFactory, claudeStatelessModels } from "./providers/claude-stateless.js";
 export * from "./engine/index.js";
 export { createWolfIdentityExtension } from "./extensions/wolf-identity.js";
 export { createTelegramClient, type TelegramClient } from "./telegram/index.js";

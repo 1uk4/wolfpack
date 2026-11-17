@@ -50,6 +50,8 @@ const api = {
 		return () => ipcRenderer.removeListener("wolfpack:update-status", listener);
 	},
 	installUpdate: () => ipcRenderer.send("wolfpack:update-install"),
+	// Check now (Pack > Machines, single-Mac): main shows its own "up to date" / "couldn't check" dialog and answers { ok }.
+	checkForUpdates: () => ipcRenderer.invoke("wolfpack:update-check"),
 	notify: (n) => ipcRenderer.send("wolfpack:notify", n),
 	onNavigate: (cb) => {
 		const listener = (_event, href) => cb(href);
@@ -68,6 +70,9 @@ if (api.singleMac && !process.argv.includes("--wolfpack-setup")) {
 		changeKey: (key) => call("change-key", key),
 		copyDiagnostics: () => call("copy-diagnostics"),
 		reset: () => call("reset"),
+		checkForUpdates: () => ipcRenderer.invoke("wolfpack:update-check"),
+		onUpdateStatus: api.onUpdateStatus,
+		installUpdate: api.installUpdate,
 		resetAppUi: () => call("reset-app-ui"), // This device > Reset app: stops the wolves first, then moves Chromium caches only
 	};
 }

@@ -26,6 +26,12 @@ export interface AppBridge {
 	reset(): Promise<Result>;
 	/** This device > Reset app: stops the wolves, moves Chromium cache folders to the Trash and relaunches (older apps lack it). */
 	resetAppUi?(): Promise<Result>;
+	/** Pack > Machines: ask the app's updater now (main shows its own up-to-date / couldn't-check dialog). Older apps lack it. */
+	checkForUpdates?(): Promise<Result>;
+	/** Pushes {status:"downloaded", version} once an update is staged; returns the unsubscribe. */
+	onUpdateStatus?(cb: (s: { status: string; version?: string }) => void): () => void;
+	/** Quit and install the staged update. */
+	installUpdate?(): void;
 }
 
 /** Tests provide a bridge (or null) here; undefined means "read window". */
@@ -45,6 +51,7 @@ function devStub(): AppBridge {
 		copyDiagnostics: async () => ({ ok: true }),
 		reset: async () => ({ ok: false, error: "Reset does nothing in the browser preview." }),
 		resetAppUi: async () => ({ ok: false, error: "Reset does nothing in the browser preview." }),
+		checkForUpdates: async () => ({ ok: true }),
 	};
 }
 

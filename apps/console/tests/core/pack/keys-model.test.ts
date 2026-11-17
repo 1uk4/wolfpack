@@ -16,6 +16,12 @@ describe("Keys grid model", () => {
 		}
 	});
 
+	it("single-Mac keys page lists chat and memory, no dictation (not even in the picker), even when the machine serves a console", () => {
+		const g = buildGrid([m("mac", { servesConsole: true })], { singleMac: true });
+		assert.deepEqual(g.map((x) => x.capability), ["chat", "memory"]);
+		assert.ok(!pickerOptions(g, { singleMac: true }).some((o) => o.capability === "dictation"));
+	});
+
 	it("shows Dictation only when a key exists or a machine serves a console, and flags the gap there", () => {
 		assert.ok(!buildGrid([m("mac")]).some((x) => x.capability === "dictation"));
 		const g = buildGrid([m("mac", { servesConsole: true }), m("sfo-01")]);

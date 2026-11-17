@@ -90,8 +90,10 @@ describe("memory.consolidation.trigger", () => {
   it("manual: neither the threshold nor the timer consolidates", async () => {
     await withWolf({ trigger: "manual", threshold: 1, poolTarget: 0, interval: "4h" }, async ({ den, logs, session }) => {
       // the observer ran (it pooled the exchange), so the zero counts below are not vacuous
+      // (waited for, not asserted once: withWolf only waits for the pool file to exist, and on a loaded runner the
+      // file can exist before its first line is flushed)
       const pool = join(den, ".memory", "pool", "observations.jsonl");
-      expect(existsSync(pool) && readFileSync(pool, "utf8").trim().length > 0).toBe(true);
+      await eventually(() => expect(existsSync(pool) && readFileSync(pool, "utf8").trim().length > 0).toBe(true));
       seedPool(den);
       await staysTrue(() => {
         expect(count(logs(), THRESHOLD)).toBe(0);

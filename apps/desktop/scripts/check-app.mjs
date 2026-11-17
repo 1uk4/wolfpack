@@ -86,6 +86,8 @@ for (const bundle of bundles) {
 
 // The app is API-key only: the subscription bridge and the Agent SDK must not be in the packaged runtime.
 if (fs.existsSync(path.join(runtime, "node_modules/@anthropic-ai/claude-agent-sdk"))) bad("runtime ships the Claude Agent SDK (the app is API-key only)");
+// The claude-subscription plug-in is installed into the user's state (<state>/plugins), never shipped inside the app.
+if (fs.existsSync(path.join(runtime, "plugins", "claude-subscription")) || fs.existsSync(path.join(runtime, "claude-subscription"))) bad("runtime ships the claude-subscription plug-in (it lives in the user's state, not in the app)");
 // BRIDGE_MARKER is a string literal from the bridge's own code (stateless/errors.ts); minifiers keep string literals, and the build stub never contains it.
 const BRIDGE_MARKER = "Claude request failed (fatal, do not retry)";
 const SDK_IMPORT = /(?:from|import)\s*["']@anthropic-ai\/claude-agent-sdk["']/;

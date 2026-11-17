@@ -34,8 +34,15 @@ function wolfHome(root: string, yaml = "identity:\n  name: hal\nextensions: [ me
   return home;
 }
 
-const launch = (rel: string, home: string, cwd?: string) =>
-  spawnSync("bash", [join(rel, "launch.sh")], { env: { PATH: process.env.PATH!, WOLF_HOME: home, HOME: home }, cwd, encoding: "utf8" });
+const launch = (rel: string, home: string, cwd?: string, path = process.env.PATH!) =>
+  spawnSync("bash", [join(rel, "launch.sh")], { env: { PATH: path, WOLF_HOME: home, HOME: home }, cwd, encoding: "utf8" });
+/** A `date` on PATH that answers a fixed second, then the next one: the clock ticking between two reads inside one launch. */
+function tickingDate(root: string, first: string): string {
+  const bin = join(root, "bin");
+  rmSync(join(bin, ".n"), { force: true });
+  put(join(bin, "date"), `#!/bin/sh\nf="${join(bin, ".n")}"; n=$(cat "$f" 2>/dev/null || echo 0); echo $((n + 1)) > "$f"; echo $((${first} + n))\n`, 0o755);
+  return `${bin}:${process.env.PATH!}`;
+}
 const read = (p: string) => readFileSync(p, "utf8");
 const backups = (home: string) => readdirSync(join(home, "den")).filter((n) => n.startsWith("extensions.bak-") && n !== "extensions.bak-old");
 const tmp = () => { const root = mkdtempSync(join(tmpdir(), "launch-ext-")); tmps.push(root); return root; };
@@ -100,6 +107,24 @@ describe("launch.sh installs the release's extension bundles into the den", () =
     const r = launch(release(root, "rel6", "memory 6", "1.6 hash4"), home); // hash4 = the newest backup's content
     expect(r.status, r.stderr).toBe(0);
     expect(read(join(home, "den/extensions/wolfpack-memory/index.js"))).toBe("memory 4"); // the newest backup came back; its hash is current, so no refresh
+  });
+
+  it("backup names stay in launch order when the clock ticks while a colliding name is retried (the restore picks the newest)", () => {
+    // work-wolfpack-SzoWaBZ: launch.sh re-read `date` inside the collision retry, so a tick there produced bak-<T+1>-01 with no
+    // bak-<T+1>; the next launch's bak-<T+1> then sorted BEFORE the older -01 name and a crash-restore brought back the wrong backup.
+    const root = tmp();
+    const home = wolfHome(root);
+    mkdirSync(join(home, "den/extensions.bak-20260101000000"), { recursive: true }); // a backup already carries this second's plain name
+    const r1 = launch(release(root, "relA", "memory A", "1.1 hashA"), home, undefined, tickingDate(root, "20260101000000")); // date: T, then T+1
+    expect(r1.status, r1.stderr).toBe(0);
+    const r2 = launch(release(root, "relB", "memory B", "1.2 hashB"), home, undefined, tickingDate(root, "20260101000001")); // date: T+1
+    expect(r2.status, r2.stderr).toBe(0);
+    const names = backups(home).sort();
+    expect(names[names.length - 1]).toBe(names.find((n) => existsSync(join(home, "den", n, "wolfpack-memory/index.js")) && read(join(home, "den", n, "wolfpack-memory/index.js")) === "memory A")); // memory A is the newest backup and sorts last
+    rmSync(join(home, "den/extensions"), { recursive: true });
+    const r3 = launch(release(root, "relC", "memory C", "1.3 hashA"), home);
+    expect(r3.status, r3.stderr).toBe(0);
+    expect(read(join(home, "den/extensions/wolfpack-memory/index.js"))).toBe("memory A");
   });
 
   it("a rollback (the previous release's launch.sh) restores that release's extensions", () => {

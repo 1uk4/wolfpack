@@ -92,6 +92,15 @@ describe("loadPlugins", () => {
     await expect(loadPlugins({ enabled: ["fixture-env"], dir, env: {} })).rejects.toThrow("Plug-in fixture-env needs FIXTURE_MISSING; set it and restart.");
   });
 
+  it("optionalEnv names are passed when set and never required", async () => {
+    plugin("fixture-opt", { apiVersion: 1, optionalEnv: ["FIXTURE_OPT"], providers: ["fixture-opt"] }, echo());
+    await loadPlugins({ enabled: ["fixture-opt"], dir, env: { FIXTURE_OPT: "yes", OTHER: "no" } });
+    expect((PROVIDER_FACTORIES["fixture-opt"]!({ cwd: "/w", env: {} }) as any).provider.seenEnv).toEqual({ FIXTURE_OPT: "yes" });
+    plugin("fixture-opt2", { apiVersion: 1, optionalEnv: ["FIXTURE_OPT"], providers: ["fixture-opt2"] }, echo());
+    await loadPlugins({ enabled: ["fixture-opt2"], dir, env: {} });
+    expect((PROVIDER_FACTORIES["fixture-opt2"]!({ cwd: "/w", env: {} }) as any).provider.seenEnv).toEqual({});
+  });
+
   it("rejects a provider id that clashes with a built-in", async () => {
     plugin("fixture-clash", { apiVersion: 1, providers: ["claude-stateless"] }, echo());
     await expect(loadPlugins({ enabled: ["fixture-clash"], dir, env: {} })).rejects.toThrow(/claude-stateless.*already registered/);

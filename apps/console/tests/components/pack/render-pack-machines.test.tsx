@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MachineCard } from "../../../components/pack/pack-machines.tsx";
+import { AppBridgeContext, type AppBridge } from "../../../components/settings/app-bridge.ts";
 import { machineCard } from "../../../src/core/pack/machine-card.ts";
 import type { HealthLink } from "../../../src/core/pack/pack-health-view.ts";
 import type { HostCard } from "../../../src/core/pack/pack-hosts.ts";
@@ -15,6 +16,18 @@ const link = (id: string, kind: HealthLink["kind"], over: Partial<HealthLink> = 
 });
 const host = (over: Partial<HostCard> = {}): HostCard => ({ id: "sfo-01", label: "sfo-01", hubId: "sfo-01", checked: true, console: false, facts: null, hub: null, workerds: [], wolves: [], inventory: [], ...over });
 const html = (c: HostCard, own: "stable" | "main" | null, logs = {}) => renderToStaticMarkup(<MachineCard view={machineCard(c, own)} logs={logs} />);
+
+describe("Pack > Machines card, single-Mac", () => {
+	it("this Mac's card says the app updates itself and offers Check now, with no channel row or pack banner", () => {
+		const bridge = { checkForUpdates: async () => ({ ok: true }) } as unknown as AppBridge;
+		const c = host({ id: "mac", label: "This Mac", console: true, workerds: [{ link: link("workerd", "workerd", { version: "0.3.4" }), wolves: [] }] });
+		const out = renderToStaticMarkup(<AppBridgeContext.Provider value={bridge}><MachineCard view={machineCard(c, null, { singleMac: true })} logs={{}} /></AppBridgeContext.Provider>);
+		assert.match(out, /Updates install by themselves: the app downloads them in the background and asks you to restart/);
+		assert.match(out, /data-testid="machine-app-version"[^>]*>Wolfpack v0\.3\.4/);
+		assert.match(out, /data-testid="machine-app-check"[^>]*>Check now/);
+		for (const gone of ["machine-channel", "machine-auto-switch", "machine-update-readonly", "machine-check\""]) assert.ok(!out.includes(`data-testid="${gone.replace('"', "")}${gone.endsWith('"') ? '"' : ""}`), gone);
+	});
+});
 
 describe("Pack > Machines card", () => {
 	it("an online server shows its services with versions and a read-only channel, and no Restart while all run", () => {

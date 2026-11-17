@@ -68,7 +68,7 @@ A provider (and its engine adapter) can plug in from outside the repo. A plug-in
 ```
 
 The entry's default export is `{ apiVersion: 1, createProvider?(ctx), createEngineAdapter?({ env, config }), models?(ctx) }`
-(types `PluginModule` / `PluginContext`, exported from `@wolfpack/harness`). `ctx.env` holds only the names in `requiredEnv`.
+(types `PluginModule` / `PluginContext`, exported from `@wolfpack/harness`). `ctx.env` holds only the names in `requiredEnv` (each must be set, or startup stops) plus those in `optionalEnv` that are set (a missing one is never an error).
 
 Enable it in wolf.yaml: `plugins: [my-provider]` (the folder name). A folder alone never runs code. `loadPlugins()` runs once at
 wolfd startup, before the model table is resolved, and registers through `registerProviderFactory` / `registerAdapter`, the

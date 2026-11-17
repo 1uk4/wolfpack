@@ -7,7 +7,7 @@ const engineMock = vi.hoisted(() => ({ loadQuery: vi.fn() }));
 vi.mock("@wolfpack/engine", async (orig) => ({ ...(await orig<object>()), loadQuery: engineMock.loadQuery }));
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { buildWolfModels, providersInUse } from "../wolfd/models.js";
-import { buildSubscriptionModels, claudeStatelessFactory, claudeStatelessPaths, lazySdkQuery, withFreshSystemPrompt } from "./claude-stateless.js";
+import { buildSubscriptionModels, claudeStatelessFactory, claudeStatelessPaths, lazySdkQuery, makeStatelessFactory, withFreshSystemPrompt } from "./claude-stateless.js";
 
 const fakeStateless = () => {
   const provider = createProvider({ id: "claude-stateless", auth: { check: async () => "t" } as any, models: [], api: { stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } } } as any);
@@ -30,6 +30,27 @@ describe("claude-stateless factory", () => {
       expect(existsSync(join(state, "sessions"))).toBe(true);
       expect(existsSync(den)).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("a factory made for another id keeps its state under that id", () => {
+    const root = mkdtempSync(join(tmpdir(), "stateless-id-"));
+    const createProvider = vi.fn((_o: any) => fakeStateless() as never);
+    makeStatelessFactory("claude-subscription")({ cwd: root, env: { WOLF_DEN: join(root, "den") }, seams: { "claude-subscription": { createProvider, models: [] } } });
+    const opts = createProvider.mock.calls[0][0];
+    expect(opts.id).toBe("claude-subscription");
+    expect(opts.sessionDir).toBe(join(root, "claude-subscription", "den", "sessions"));
+    expect(opts.debugLogPath).toBe(join(root, "claude-subscription", "den", "debug.log"));
+  });
+
+  it("passes the claude executable path and runtime to every SDK query() call", () => {
+    const root = mkdtempSync(join(tmpdir(), "stateless-exe-"));
+    const createProvider = vi.fn((_o: any) => fakeStateless() as never);
+    const inner = vi.fn((_a: any) => ({}));
+    makeStatelessFactory("claude-subscription", { pathToClaudeCodeExecutable: "/u/bin/claude", executable: "/u/bin/node" })({
+      cwd: root, env: { WOLF_DEN: join(root, "den") }, seams: { "claude-subscription": { createProvider, models: [], queryFn: inner as never } },
+    });
+    createProvider.mock.calls[0][0].queryFn({ prompt: "hi", options: { model: "m" } });
+    expect(inner.mock.calls[0][0].options).toMatchObject({ model: "m", pathToClaudeCodeExecutable: "/u/bin/claude", executable: "/u/bin/node" });
   });
 
   it("refuses to start without WOLF_DEN (never falls back to cwd)", () => {

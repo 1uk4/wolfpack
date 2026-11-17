@@ -34,6 +34,8 @@ import { DEFAULT_MAX_TOKENS } from "../config.js";
 export interface ClaudeAgentSdkAdapterOptions {
   /** Absolute path to the `claude` executable. Omit to let the SDK resolve it. */
   pathToClaudeCodeExecutable?: string;
+  /** Runtime that launches `claude` when it is a JS launcher (SDK option `executable`, e.g. a node path). */
+  executable?: string;
   /** Replaces the lazily loaded SDK `query` (tests). */
   query?: QueryFn;
 }
@@ -208,11 +210,13 @@ export function findSdkUrl(specifier: string, anchors: string[] = sdkAnchors()):
 
 export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
   private pathToClaudeCodeExecutable?: string;
+  private executable?: string;
   private injectedQuery?: QueryFn;
 
   constructor(options: ClaudeAgentSdkAdapterOptions = {}) {
     this.injectedQuery = options.query;
     this.pathToClaudeCodeExecutable = options.pathToClaudeCodeExecutable;
+    this.executable = options.executable;
   }
 
   async extract<T>(
@@ -353,6 +357,7 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
         ...(this.pathToClaudeCodeExecutable
           ? { pathToClaudeCodeExecutable: this.pathToClaudeCodeExecutable }
           : {}),
+        ...(this.executable ? { executable: this.executable } : {}),
       },
     });
 

@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { claudeChildEnv, loadQuery, __setSdkImporter } from "./claude-agent-sdk.js";
+import { z } from "zod";
+import { ClaudeAgentSdkAdapter, claudeChildEnv, loadQuery, __setSdkImporter } from "./claude-agent-sdk.js";
+
+describe("ClaudeAgentSdkAdapter", () => {
+  it("spawns the configured claude and the runtime that launches it", async () => {
+    const seen: any[] = [];
+    const query = (args: any) => {
+      seen.push(args.options);
+      return (async function* () {
+        yield { type: "result", subtype: "success", is_error: false, result: '{"ok":true}', usage: {}, total_cost_usd: 0 };
+      })();
+    };
+    const adapter = new ClaudeAgentSdkAdapter({ query: query as never, pathToClaudeCodeExecutable: "/u/bin/claude", executable: "/u/bin/node" });
+    await adapter.extract(z.object({ ok: z.boolean() }), { system: "s", prompt: "p", model: "m" } as never);
+    expect(seen[0]).toMatchObject({ pathToClaudeCodeExecutable: "/u/bin/claude", executable: "/u/bin/node" });
+  });
+});
 
 describe("loadQuery", () => {
   it("shares one import between concurrent callers", async () => {

@@ -38,7 +38,7 @@ extension_keys() {
   ' "$1" 2>/dev/null | tr -d "\"' \t" | grep -v '^$' || true
 }
 refresh_extensions() {
-  local src="$REL/extensions" den="$WOLF_HOME/den" ext stamp hash cur ts n new d k b newest keys want=""
+  local src="$REL/extensions" den="$WOLF_HOME/den" ext stamp hash cur base ts n new d k b newest keys want=""
   [ -f "$src/STAMP" ] || return 0
   ext="$den/extensions"; stamp="$(cat "$src/STAMP")"; hash="${stamp##* }"
   if [ -d "$den" ]; then
@@ -51,9 +51,11 @@ refresh_extensions() {
   fi
   cur="$(cat "$ext/.release-stamp" 2>/dev/null || true)"
   [ "${cur##* }" != "$hash" ] || return 0
-  ts="$(date -u +%Y%m%d%H%M%S)"; n=0
-  # never mv into an existing backup, nor reuse a name already moved to bak-old (the newest backup must sort last)
-  while [ -e "$den/extensions.bak-$ts" ] || [ -e "$den/extensions.bak-old/extensions.bak-$ts" ]; do n=$((n + 1)); ts="$(date -u +%Y%m%d%H%M%S)-$(printf %02d "$n")"; done
+  base="$(date -u +%Y%m%d%H%M%S)"; ts="$base"; n=0
+  # never mv into an existing backup, nor reuse a name already moved to bak-old (the newest backup must sort last). The clock is
+  # read ONCE: re-reading it on a collision could name this backup <T+1>-01 with no <T+1>, and the next launch's <T+1> then sorts
+  # before it, so a crash-restore would bring back the older one.
+  while [ -e "$den/extensions.bak-$ts" ] || [ -e "$den/extensions.bak-old/extensions.bak-$ts" ]; do n=$((n + 1)); ts="$base-$(printf %02d "$n")"; done
   new="$den/.extensions.new-$ts"
   if [ -d "$ext" ]; then
     while IFS= read -r d; do want="$want$d"$'\n'; done < <(find "$ext" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)

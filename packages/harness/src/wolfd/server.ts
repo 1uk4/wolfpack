@@ -151,8 +151,9 @@ export interface ThreadConversations {
   setTier?(conv: EngineConversation, tier: ThreadTier): Promise<void>;
 }
 
-/** Release version: packages/harness/VERSION (`pnpm runtime:update` stamp), else the release tarball root VERSION (src/wolfd and dist/wolfd sit four levels below it), else <package.json>-dev. */
-const WOLFD_VERSION = stampedVersion([new URL("../../VERSION", import.meta.url), new URL("../../../../VERSION", import.meta.url)], new URL("../../package.json", import.meta.url));
+/** Release version: VERSION next to the bundle (the desktop app's <runtime>/wolfd/VERSION), else packages/harness/VERSION (`pnpm runtime:update` stamp), else the release tarball root VERSION (src/wolfd and dist/wolfd sit four levels below it), else <package.json>-dev. */
+export const WOLFD_VERSION_STAMPS = [new URL("./VERSION", import.meta.url), new URL("../../VERSION", import.meta.url), new URL("../../../../VERSION", import.meta.url)];
+const WOLFD_VERSION = stampedVersion(WOLFD_VERSION_STAMPS, new URL("../../package.json", import.meta.url));
 const WOLF_EVENT_BUFFER = 256;
 const MEMORY_KEEPALIVE_MS = 20_000;
 const MEMORY_STREAM_MAX_BUFFER = 1_000_000;

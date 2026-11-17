@@ -101,7 +101,7 @@ export interface ServiceCard {
 const CARD_ORDER = ["console", "hubd", "wolfd", "workerd"] as const;
 
 /** One card per service for the pack panel. Update and Roll back need systemd. */
-export function serviceCards(links: HealthLink[], actions: HealthActionsView | undefined, units: UpdateUnitView[]): ServiceCard[] {
+export function serviceCards(links: HealthLink[], actions: HealthActionsView | undefined, units: UpdateUnitView[], selfVersion: string | null = null): ServiceCard[] {
 	const systemd = !!actions?.systemd;
 	return CARD_ORDER.map((component) => {
 		const rb = actions?.rollback.find((r) => r.service === component);
@@ -110,7 +110,7 @@ export function serviceCards(links: HealthLink[], actions: HealthActionsView | u
 		const worst = ls.map((l) => toneOf(l.status)).reduce<Tone>((a, t) => (RANK[t] > RANK[a] ? t : a), "green");
 		return {
 			component,
-			running: component === "console" ? (rb?.from ?? null) : (ls[0]?.version ?? null),
+			running: component === "console" ? (rb?.from ?? selfVersion) : (ls[0]?.version ?? null),
 			latest: unit?.to ?? null,
 			tone: component === "console" ? "green" : ls.length ? worst : "grey",
 			canUpdate: systemd && !!unit,
@@ -124,13 +124,13 @@ export function serviceCards(links: HealthLink[], actions: HealthActionsView | u
  * has them (built from the links on that machine); other machines show status and version only.
  */
 export function machineServiceCards(
-	m: Pick<HostCard, "console" | "hub" | "workerds" | "wolves">,
+	m: Pick<HostCard, "console" | "hub" | "workerds" | "wolves"> & Partial<Pick<HostCard, "self">>,
 	actions: HealthActionsView | undefined,
 	units: UpdateUnitView[],
 ): ServiceCard[] {
 	if (!m.console) return [];
 	const links = [...(m.hub ? [m.hub] : []), ...m.workerds.flatMap((w) => [w.link, ...w.wolves]), ...m.wolves];
-	return serviceCards(links, actions, units);
+	return serviceCards(links, actions, units, m.self?.version ?? null);
 }
 
 /** How the last read of the hub inventory ended (GET /api/health/inventory, read with the viewer's bearer). */

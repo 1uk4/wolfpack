@@ -45,6 +45,15 @@ describe("service cards (one per service in the pack panel)", () => {
 	});
 });
 
+describe("console card version", () => {
+	it("the Console row shows the console's self-reported version when no rollback unit exists, and the rollback version still wins when one does", () => {
+		const self = { machine: "luka-air", kind: "console" as const, id: "console", version: "0.3.4", channel: "main" as const, uptimeS: 90, lagMs: 3.6 };
+		const m = { console: true, hub: null, workerds: [], wolves: [], self };
+		assert.equal(machineServiceCards(m, undefined, [])[0]!.running, "0.3.4");
+		assert.equal(machineServiceCards(m, { systemd: true, rollback: [{ service: "console", from: "0.1.19", to: "0.1.18" }] }, [])[0]!.running, "0.1.19");
+	});
+});
+
 describe("service rows per machine (the inventory panel)", () => {
 	const inv = (kind: "workerd" | "wolfd" | "hubd", id: string, over: Record<string, unknown> = {}) => ({ machine: "sfo-01", kind, id, ageS: 4, latest: null, ...over }) as Parameters<typeof machineServices>[1][number];
 	const remote = { console: false, hub: null, wolves: [] };

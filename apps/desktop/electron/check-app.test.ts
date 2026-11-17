@@ -6,12 +6,13 @@ import * as path from "node:path";
 import { expect, it } from "vitest";
 
 /** Runs check-app --sign-only on an unsigned fake bundle; `env` overrides the child's environment. */
-function runOnFakeBundle(env: NodeJS.ProcessEnv) {
+function runOnFakeBundle(env: NodeJS.ProcessEnv, inRuntime?: (runtime: string) => void) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "check-app-"));
   try {
     const app = path.join(dir, "Fake.app");
     fs.mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
     fs.mkdirSync(path.join(app, "Contents", "Resources", "runtime"), { recursive: true });
+    inRuntime?.(path.join(app, "Contents", "Resources", "runtime"));
     fs.writeFileSync(path.join(app, "Contents", "MacOS", "Fake"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     return spawnSync(process.execPath, [path.resolve(__dirname, "../scripts/check-app.mjs"), app, "--sign-only"], { encoding: "utf8", env });
   } finally {
@@ -20,6 +21,16 @@ function runOnFakeBundle(env: NodeJS.ProcessEnv) {
 }
 
 const noCrash = /ReferenceError|TypeError|at file:|node:internal/;
+
+it("fails a bundle that carries the claude-subscription plug-in (it lives in the user's state, not in the app)", () => {
+  const r = runOnFakeBundle({ ...process.env }, (runtime) => {
+    fs.mkdirSync(path.join(runtime, "plugins", "claude-subscription"), { recursive: true });
+    fs.writeFileSync(path.join(runtime, "plugins", "claude-subscription", "package.json"), '{"name":"@wolfpack/plugin-claude-subscription"}');
+  });
+  expect(r.status).toBe(1);
+  expect(r.stderr).toMatch(/FAIL runtime ships the claude-subscription plug-in/);
+  expect(r.stderr).not.toMatch(noCrash);
+});
 
 it("--sign-only reports a missing codesign as one FAIL, not a crash (Linux CI has no codesign)", () => {
   const r = runOnFakeBundle({ ...process.env, PATH: path.join(os.tmpdir(), "no-such-bin-dir") });

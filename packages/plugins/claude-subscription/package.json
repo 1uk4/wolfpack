@@ -14,7 +14,7 @@
     "engineProviders": ["claude-subscription"]
   },
   "scripts": {
-    "pack": "node scripts/pack.mjs",
+    "pack:plugin": "node scripts/pack.mjs",
     "test": "vitest run --project default --root ../../.. --config vitest.config.ts packages/plugins/claude-subscription/src"
   },
   "dependencies": {

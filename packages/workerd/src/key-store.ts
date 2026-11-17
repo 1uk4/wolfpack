@@ -15,6 +15,9 @@ import type { KeyHandler, KeyResult } from "./commands.js";
 /** Environment variable each key slot is stored under. */
 export const SLOT_ENV: Readonly<Record<string, string>> = { anthropic: "ANTHROPIC_API_KEY", deepgram: "DEEPGRAM_API_KEY" };
 
+/** Names workerd forwards to wolves as they are, for any transport: the Claude subscription plug-in's token and the paths to Claude Code (and its node). */
+export const PASSTHROUGH_ENV: readonly string[] = ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_PATH", "CLAUDE_CODE_NODE"];
+
 export const SEAL_MAX_AGE_MS = 5 * 60_000;
 const SEEN_MEMORY = 1000;
 const SEEN_PERSIST = 100;
@@ -56,7 +59,7 @@ function readFileEnv(file: string): Map<string, string> {
 export function readKeyFileEnv(file: string): Record<string, string> {
   const all = readFileEnv(file);
   const out: Record<string, string> = {};
-  for (const name of Object.values(SLOT_ENV)) {
+  for (const name of [...Object.values(SLOT_ENV), ...PASSTHROUGH_ENV]) {
     const v = all.get(name);
     if (v) out[name] = v;
   }

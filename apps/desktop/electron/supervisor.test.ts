@@ -587,6 +587,41 @@ describe("app runtime on one Mac", () => {
     await second.stop();
   }, 180_000);
 
+  it.sequential("workerd gets the app's plugins dir", async () => {
+    const dir = join(root, "state-plugins");
+    const s = createSupervisor({ stateDir: dir, wolvesDir: join(root, "Wolves17"), runtimeDir, nodeBin: nodePath, apiKey: "sk-test-fake-key", modelBaseUrl: fakeUrl });
+    made.push(s);
+    await s.start();
+    const pid = s.allPids().find((p: number) => procEnv(p).includes("WORKERD_KEY_FILE="));
+    expect(procEnv(pid)).toContain(`WOLFPACK_PLUGINS_DIR=${join(dir, "plugins")}`);
+    expect(statSync(join(dir, "plugins")).isDirectory()).toBe(true);
+  }, 180_000);
+
+  it.sequential("the curator reads its own models file, so editing the wolf's models.json never touches curation", async () => {
+    const dir = join(root, "state-curator-models");
+    const wolves = join(root, "Wolves18");
+    const mk = () => {
+      const s = createSupervisor({ stateDir: dir, wolvesDir: wolves, runtimeDir, nodeBin: nodePath, apiKey: "sk-test-fake-key", modelBaseUrl: fakeUrl });
+      made.push(s);
+      return s;
+    };
+    const s = mk();
+    await s.start();
+    const curatorFile = join(wolves, "wolf", "models.curator.json");
+    expect(procEnv(hubPid(s.ports.hubd))).toContain(`HUBD_CURATOR_MODELS=${curatorFile}`);
+    expect(JSON.parse(readFileSync(curatorFile, "utf8")).tiers.fast).toMatchObject({ provider: "anthropic", piModel: expect.stringMatching(/^anthropic\//) });
+    await s.stop();
+    // the owner (or Claude Code) moves the wolf to the plug-in; a restart keeps that and leaves the curator's file alone
+    const wolfModels = join(wolves, "wolf", "models.json");
+    const m = JSON.parse(readFileSync(wolfModels, "utf8"));
+    m.tiers.main.provider = "claude-subscription";
+    writeFileSync(wolfModels, JSON.stringify(m));
+    const again = mk();
+    await again.start();
+    expect(JSON.parse(readFileSync(wolfModels, "utf8")).tiers.main.provider).toBe("claude-subscription");
+    expect(JSON.parse(readFileSync(curatorFile, "utf8")).tiers.main.provider).toBe("anthropic");
+  }, 180_000);
+
   it.sequential("leaves no child process after stop", async () => {
     await second?.stop();
     for (const pid of secondPids) expect(alive(pid)).toBe(false);

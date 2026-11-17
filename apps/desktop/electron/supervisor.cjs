@@ -176,10 +176,12 @@ function createSupervisor(opts) {
 
 	function setup() {
 		const wolfDir = sup.wolfDir;
-		for (const d of [stateDir, wolvesDir, path.join(stateDir, "wolves-root"), path.join(stateDir, "kb", "ops"), path.join(stateDir, "kb", "base"), path.join(wolfDir, "workspace"), path.join(wolfDir, "den", "extensions")]) fs.mkdirSync(d, { recursive: true });
+		for (const d of [stateDir, wolvesDir, path.join(stateDir, "wolves-root"), path.join(stateDir, "kb", "ops"), path.join(stateDir, "kb", "base"), path.join(wolfDir, "workspace"), path.join(wolfDir, "den", "extensions"), path.join(stateDir, "plugins")]) fs.mkdirSync(d, { recursive: true });
 		fs.chmodSync(stateDir, 0o700);
 		fs.chmodSync(wolfDir, 0o700);
 		writeIfMissing(path.join(wolfDir, "models.json"), JSON.stringify(modelsJson(), null, 2));
+		// hubd's curator keeps its own api/Haiku tiers: moving the wolf to a plug-in (edits models.json) never touches curation.
+		writeIfMissing(path.join(wolfDir, "models.curator.json"), JSON.stringify(modelsJson(), null, 2));
 		writeIfMissing(path.join(wolfDir, "wolf.yaml"), wolfYaml(wolfName, wolfDir, domains));
 		// hubd's one-time registry seed (read only while the hub has no registry yet): the domains, plus the wolf.yaml above.
 		const seedDir = path.join(stateDir, "seed");
@@ -413,7 +415,7 @@ function createSupervisor(opts) {
 				HUBD_CURATOR: curatorOn ? "1" : "0",
 				HUBD_CURATOR_POLL_MS: "0",
 				HUBD_CURATOR_WINDOW_MAX: String(opts.curateWindowMax ?? DEFAULT_WINDOW_MAX),
-				HUBD_CURATOR_MODELS: path.join(sup.wolfDir, "models.json"),
+				HUBD_CURATOR_MODELS: path.join(sup.wolfDir, "models.curator.json"),
 				...embedEnv,
 				// The curator calls the model provider (Haiku) with the user's key; proxy settings so a user behind one can reach it.
 				...(secret ? { ANTHROPIC_API_KEY: secret } : {}),
@@ -436,6 +438,7 @@ function createSupervisor(opts) {
 			WOLFPACK_APP_NODE: nodeBin,
 			WOLFPACK_APP_WOLFD: path.join(runtimeDir, "wolfd", "wolfd.mjs"),
 			WOLFPACK_MODELS_FILE: path.join(sup.wolfDir, "models.json"),
+			WOLFPACK_PLUGINS_DIR: path.join(stateDir, "plugins"), // wolfd loads the wolf.yaml `plugins:` from here (attach-claude-subscription.md)
 			KB_BASE: path.join(stateDir, "kb", "base"),
 			KB_OPS: path.join(stateDir, "kb", "ops"),
 			WORKERD_KEY_FILE: path.join(stateDir, KEY_FILE),

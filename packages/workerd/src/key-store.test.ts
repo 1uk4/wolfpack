@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { seal, type CheckResult } from "@wolfpack/protocol";
-import { createKeyStore, readKeyPresence } from "./key-store.js";
+import { createKeyStore, readKeyFileEnv, readKeyPresence } from "./key-store.js";
 import { loadOrCreateMachineKey, type MachineKey } from "./machine-key.js";
 
 const ANT = "sk-ant-api03-" + "a".repeat(40);
@@ -149,6 +149,22 @@ describe("key store: hardening", () => {
     expect(r.ok).toBe(true);
     expect(statSync(t.file).mode & 0o777).toBe(0o640);
     expect(existsSync(stale)).toBe(false);
+  });
+});
+
+describe("key store: Claude subscription names", () => {
+  it("forwards the Claude subscription names to the wolf env", () => {
+    const file = join(tmp(), "keys.env");
+    writeFileSync(
+      file,
+      `ANTHROPIC_API_KEY=${ANT}\nCLAUDE_CODE_OAUTH_TOKEN=tok-fake-1\nCLAUDE_CODE_PATH=/opt/claude/bin/claude\nCLAUDE_CODE_NODE=/opt/node/bin/node\nOTHER=x\n`,
+    );
+    expect(readKeyFileEnv(file)).toEqual({
+      ANTHROPIC_API_KEY: ANT,
+      CLAUDE_CODE_OAUTH_TOKEN: "tok-fake-1",
+      CLAUDE_CODE_PATH: "/opt/claude/bin/claude",
+      CLAUDE_CODE_NODE: "/opt/node/bin/node",
+    });
   });
 });
 

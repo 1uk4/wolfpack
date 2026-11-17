@@ -32,4 +32,10 @@ describe("desktop updater feed", () => {
     expect(workflow).toMatch(/gh release create desktop-latest --prerelease/);
     expect(workflow).toMatch(/gh release upload desktop-latest[^\n]*latest-mac\.yml[^\n]*--clobber/);
   });
+
+  it("the release job publishes the claude-subscription plug-in to its rolling release", () => {
+    expect(workflow).toMatch(/pnpm --filter @wolfpack\/plugin-claude-subscription run pack:plugin/);
+    expect(workflow).toMatch(/gh release create plugin-claude-subscription --prerelease/);
+    expect(workflow).toMatch(/gh release upload plugin-claude-subscription[^\n]*claude-subscription-latest\.tgz[^\n]*claude-subscription-latest\.tgz\.sha256[^\n]*--clobber/);
+  });
 });

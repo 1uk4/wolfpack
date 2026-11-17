@@ -27,15 +27,11 @@ Everything runs locally. The Mac app is a complete pack of one machine: the hub,
 
 The app updates itself: it downloads new versions in the background and asks you to restart. **Pack → Machines** shows the version and has a *Check now* button.
 
-### Using a Claude subscription instead of an API key
-
-If you have Claude Code installed and a Claude subscription, the pack can run on it through the `claude-subscription` plug-in. The steps are written for Claude Code to carry out for you: open Claude Code on your Mac and ask it to follow [`apps/desktop/docs/attach-claude-subscription.md`](apps/desktop/docs/attach-claude-subscription.md). Check Anthropic's terms for your subscription before you do.
-
 ## Status, releases and licence
 
 Wolfpack is early. The Mac app is the first thing meant for other people; it is a pack of one machine, and most of the rough edges are in what happens after your first week with it. Issues and ideas are welcome.
 
-Releases go out on two channels. **stable** is what the Mac app installs from. **main** is the pack's own daily build. Each app release publishes a signed `.dmg` and the plug-in tarball under [releases](https://github.com/1uk4/wolfpack/releases).
+Releases go out on two channels. **stable** is what the Mac app installs from. **main** is the pack's own daily build. Each app release publishes a signed `.dmg` under [releases](https://github.com/1uk4/wolfpack/releases).
 
 Licensed under the [GNU AGPL v3](LICENSE). The console and the Mac app shell are derived from the AGPL-licensed [learnharness](https://github.com/amosblomqvist/learnharness); see [docs/provenance](docs/provenance/learnharness.md) and `NOTICE`.
 

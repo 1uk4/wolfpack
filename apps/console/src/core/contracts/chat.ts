@@ -6,7 +6,7 @@
  * master. Pure types + protocol docs + tiny pure helpers. See docs/vision.md.
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { LhMessage } from "../native-messages.ts";
+import type { LhMessage } from "../thread/native-messages.ts";
 
 // ─── Chat records (the session store's on-disk format) ───────────────────────
 
@@ -151,7 +151,7 @@ export interface ChatListItem extends ChatSummary {
 // ─── Card registry (client extension point) ─────────────────────────────────
 
 /**
- * Tool parts render via components/card-registry.tsx, keyed by tool name
+ * Tool parts render via components/thread/card-registry.tsx, keyed by tool name
  * ("research", "demo", "visual", …). Workers add renderers there — chat.tsx
  * is off-limits to artifact work. A renderer receives the raw tool part: an
  * activity card while state is input-available, the

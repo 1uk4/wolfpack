@@ -287,3 +287,30 @@ describe("stalled parent turn and a finished subagent", () => {
     }, { timeout: 8000 });
   });
 });
+
+describe("thread stream keepalive", () => {
+  it("writes a ': ka' comment every 15s on an idle stream and stops when the client closes", async () => {
+    const { rt } = await rig(0);
+    await rt.submit("start", "steer");
+    const writes: string[] = [];
+    let onClose: (() => void) | undefined;
+    const res = {
+      destroyed: false,
+      writableEnded: false,
+      writeHead() {},
+      write: (s: string) => { writes.push(s); return true; },
+      end() {},
+      on: (ev: string, fn: () => void) => { if (ev === "close") onClose = fn; },
+    };
+    rt.stream({ headers: {} } as never, res as never, new URL("http://t/stream"));
+    writes.length = 0;
+    await tick(14_000);
+    expect(writes.filter((w) => w === ": ka\n\n").length).toBe(0);
+    await tick(2_000);
+    expect(writes.filter((w) => w === ": ka\n\n").length).toBe(1);
+    onClose?.();
+    writes.length = 0;
+    await tick(60_000);
+    expect(writes).toEqual([]);
+  });
+});

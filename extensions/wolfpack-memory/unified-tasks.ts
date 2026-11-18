@@ -20,7 +20,7 @@ import {
 } from "@wolfpack/harness/extension";
 import { confirmCard, pagedCard } from "@wolfpack/harness/engine";
 import type { Card } from "@wolfpack/protocol";
-import { drainWorkObservations } from "@wolfpack/harness/memory";
+import { drainWorkObservations, memoryActionsFor } from "@wolfpack/harness/memory";
 import {
   type WorkItem,
   type CreateWorkInput,
@@ -99,7 +99,7 @@ export interface TasksConfig {
   kbRoots?: KbRoots;
   /** Work API store for graduation's pool drain (default: from context.env, else the process env). Test seam. */
   workStore?: WorkRecordStore;
-  /** `memory.workLog` (durable.ts copies it from the memory block): `append` flushes a task's log before ship/unbind and distills it into its feature on ship/archive. Default fold: nothing changes. */
+  /** `memory.workLog` (durable.ts copies it from the memory block): `append` flushes a task's log before ship/unbind and distills it into its feature on ship/archive. Default (absent) is append; `fold` leaves all of this off. */
   workLog?: "fold" | "append";
   /** `memory.subagentMemory` (durable.ts copies it): `on` takes the pool lock for the graduation drain. Default off: no lock. */
   subagentMemory?: "on" | "off";
@@ -654,7 +654,7 @@ export default function createTasksExtension(
   }
 
   /** Graduation folds this wolf's pending pool observations for the item and its tasks into the Record first. */
-  const appendMode = config.workLog === "append";
+  const appendMode = config.workLog !== "fold";
   const workStoreNow = (): WorkRecordStore | undefined => {
     // Unconfigured → no store, so the drain reports "no Work API" instead of a per-call failure.
     // Flags off (fold): as at the base, no context.env means no explicit store. The process-env fallback is append-mode only.
@@ -739,7 +739,7 @@ export default function createTasksExtension(
   const forgetCompletion = (id: string) => completionChecks.get(wolfDen)?.forget(id);
 
   // The same wiring serves wolfd's graduate routes (the console's Graduate button): see graduation.ts.
-  const graduation = createGraduation({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion, ...(appendMode ? { finalPass } : {}) });
+  const graduation = createGraduation({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion, onGraduated: (id) => { void memoryActionsFor(wolfDen)?.promoteForFeature?.(id)?.catch(() => {}); }, ...(appendMode ? { finalPass } : {}) });
   registerGraduationActions(wolfDen, graduation.actions);
 
   /** Unbind everyone else on a just-shipped task. Never throws: the caller reports a failure apart from the ship. */

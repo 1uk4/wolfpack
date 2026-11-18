@@ -37,6 +37,14 @@ describe("buildWolfModels", () => {
     expect(() => { m.forget("s"); m.dispose(); }).not.toThrow();
   });
 
+  it("a stray ANTHROPIC_BASE_URL (Claude Code sets it) does not leave the anthropic-only shortcut; only WOLFPACK_ANTHROPIC_BASE_URL does", () => {
+    const stray = buildWolfModels(table("anthropic"), { cwd: "/w", env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:1" } });
+    expect(stray.models).toBeUndefined();
+    const own = buildWolfModels(table("anthropic"), { cwd: "/w", env: { WOLFPACK_ANTHROPIC_BASE_URL: "http://127.0.0.1:1" } });
+    expect(own.models).toBeDefined();
+    own.dispose();
+  });
+
   it("bridge-only tiers: registry holds claude-stateless only; dispose and forget reach its entry", () => {
     const provider = fakeProvider();
     const create = vi.fn(() => provider);

@@ -7,6 +7,8 @@
 # --dry-run prints every state-changing action ("DRY-RUN: ...") and changes nothing; read-only probes still run.
 # Never touches Hal's unit or .env, Dewey's tree, or any KB copy. The unit starts only once /var/lib/workerd/hub.json exists (workerd pair).
 set -euo pipefail
+# SETUP_ROOT: path prefix for the install tree and unit, so tests can drive `install` in a temp dir (also skips the root check). Unset on hosts.
+R="${SETUP_ROOT:-}"
 
 DRY=0 CMD="" BUNDLE="" PORT=7142 PURGE=0
 ANNOUNCE=()
@@ -18,10 +20,10 @@ DATA_DIR=/var/lib/workerd
 KB_DIR=/var/lib/workerd-kb
 KB_GROUP=wolfpack-kb
 HAL_USER=wolf-ETAy7b
-OPT=/opt/wolfpack-workerd
+OPT="$R"/opt/wolfpack-workerd
 ENV_DIR=/etc/wolfpack
 ENV_FILE=$ENV_DIR/workerd.env
-UNIT=/etc/systemd/system/workerd.service
+UNIT="$R"/etc/systemd/system/workerd.service
 KEEP_RELEASES=5
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -52,7 +54,7 @@ done
 [[ -n $CMD ]] || die "usage: setup.sh [--dry-run] setup|install|rollback|uninstall [options]"
 valid_port "$PORT" || die "bad --port $PORT (1024-65535, never 3141 wolfpack-agent, 3150 hubd, 7141 Mac workerd)"
 ((${#ANNOUNCE[@]})) || ANNOUNCE=(hal)
-((DRY)) || [[ $EUID -eq 0 ]] || die "run as root (or use --dry-run)"
+((DRY)) || [[ -n $R || $EUID -eq 0 ]] || die "run as root (or use --dry-run)"
 
 hal_unit_exists() { systemctl cat "$HAL_UNIT.service" >/dev/null 2>&1; }
 workerd_user_exists() { id "$WU" >/dev/null 2>&1; }
@@ -179,6 +181,11 @@ cmd_install() {
   [[ $out == usage:* ]] || { rm -rf "$rel"; die "bundle failed its smoke test; nothing changed"; }
   if [[ -L $OPT/current ]]; then ln -sfn "$(readlink -f "$OPT/current")" "$OPT/previous.new" && mv -T "$OPT/previous.new" "$OPT/previous"; fi
   ln -sfn "$rel" "$OPT/current.new" && mv -T "$OPT/current.new" "$OPT/current" # rename(2): atomic
+  # Refresh the unit from the bundle (work-wolfpack-jScCkFy); the unit is not in the release dir, so a unit change otherwise never lands.
+  if [[ -f $BUNDLE/workerd.service ]]; then
+    sed "s|@NODE@|$node|" "$BUNDLE/workerd.service" >"$UNIT.tmp" && chmod 644 "$UNIT.tmp" && mv "$UNIT.tmp" "$UNIT"
+    systemctl daemon-reload
+  fi
   if systemctl is-active --quiet workerd; then systemctl restart workerd; echo "restarted workerd"; fi
   local cur prev old
   cur="$(readlink -f "$OPT/current")"; prev="$(readlink -f "$OPT/previous" 2>/dev/null || true)"

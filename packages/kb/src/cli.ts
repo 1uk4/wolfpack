@@ -43,11 +43,11 @@
  *   WOLFPACK_EMBED_URL    — Ollama URL (default: http://127.0.0.1:11434)
  *   WOLFPACK_EMBED_MODEL  — embedding model (default: nomic-embed-text)
  */
-import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { rmSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { loadModelTable, type Engine } from "@wolfpack/engine";
 import { parseLedgerTime } from "@wolfpack/protocol/ledger-time";
+import { wolvesRoot } from "@wolfpack/protocol/runtime-home";
 import type { KbRoots } from "./shared/index.js";
 import {
   vectorsDir,
@@ -83,8 +83,7 @@ import { readCurrent, oldestInbox, formatAge } from "./librarian/progress.js";
 let activeRoots: KbRoots | null = null;
 
 function resolveRoots(): KbRoots {
-  const home = homedir();
-  const denRoot = process.env.WOLF_DEN ?? join(home, "wolves", "den");
+  const denRoot = process.env.WOLF_DEN ?? join(wolvesRoot(), "den");
   // KB_BASE/KB_OPS MUST be explicit. The librarian writes curated entries to
   // KB_BASE and wolves read from the same mirror \u2014 a wrong default here is
   // exactly the drift that silently stranded 29 committed entries (sweep wrote

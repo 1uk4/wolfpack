@@ -14,13 +14,12 @@
  * configured with its tier's model at boot/resume (reconcile) and on a tier change (ThreadConversations.setTier).
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
-import { effectiveConsolidationInterval, applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
+import { effectiveConsolidationInterval, applyWolfMemoryModel, applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
 import {
-  objectsExtension,
+  createObjectsExtension,
   openWolfEngine,
   createCardGuardExtension,
   resolveToolNames,
@@ -32,6 +31,7 @@ import {
   type WolfEngine,
 } from "../engine/index.js";
 import type { ThreadTier } from "@wolfpack/protocol";
+import { runDir } from "@wolfpack/protocol/runtime-home";
 import { resolveAutosquash, resolveWorkspacesRoot } from "@wolfpack/workspaces";
 import { parse as parseYaml } from "yaml";
 import { adaptToDurable } from "../adapters/durable.js";
@@ -39,6 +39,7 @@ import { AskBridge, createAskExtension } from "../extensions/ask.js";
 import { diagramProblem } from "../diagrams.js";
 import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
+import { loadPlugins } from "../plugins.js";
 import { buildWolfModels, storedProviderIds } from "./models.js";
 import { WolfServer } from "./server.js";
 import { SubagentBridge, createSubagentExtension } from "./subagent-tools.js";
@@ -169,6 +170,9 @@ async function startConfigured(
 ): Promise<RunningWolf> {
   if (config.sandbox) assertSandboxed(config.sandbox.root, { den: config.den, ...(sandbox ? { kbOps: sandbox.resolved.kbOps, kbDenLocal: sandbox.resolved.kbDenLocal, kbBase: env.KB_BASE, workEndpoint: sandbox.resolved.workEndpoint } : {}) });
 
+  // Provider plug-ins (wolf.yaml `plugins:`) register before the model table is resolved, so a plug-in provider is a valid tier choice. A failing one stops startup.
+  if (config.plugins?.length) log(`plugins: loaded ${(await loadPlugins({ enabled: config.plugins, env })).join(", ")}`);
+
   // wolf.yaml `models:` is the source of truth for a wolfd wolf's models.json: regenerate it (only if changed) before
   // reading it. A handed-over WOLFPACK_MODELS_FILE wins and is never rewritten; no `models:` block leaves the file alone.
   if (!env.WOLFPACK_MODELS_FILE) {
@@ -193,8 +197,10 @@ async function startConfigured(
   // A librarian wolf's sweep (kb_sweep_* tools + the timer below), built from the same KB roots the memory extension
   // uses: KB_BASE/KB_OPS from the effective env (a sandbox KB copy), den-local state under the wolf's den.
   const kbRoots = kbRootsFor(config, env);
-  const sweep = config.memory.librarian ? librarianSweepFor(config, env, table, log, opts.sweepTick) : undefined;
-  const loaded = await loadConfiguredExtensions(config, env, table, extra, log, sweep, cardGuard.register);
+  // Memory's engine steps (and the sweep) read the table with wolf.yaml memory.model applied; the chat keeps `table`.
+  const memoryTable = applyWolfMemoryModel(table, config, log);
+  const sweep = config.memory.librarian ? librarianSweepFor(config, env, memoryTable, log, opts.sweepTick) : undefined;
+  const loaded = await loadConfiguredExtensions(config, env, memoryTable, extra, log, sweep, cardGuard.register);
   const askBridge = new AskBridge();
   const ask = adaptToDurable(createAskExtension(askBridge, { diagramCheck: (id) => diagramProblem(config.den, id, env) }), { wolfDen: config.den, wolfName: config.identity.name, onCardTool: cardGuard.register });
   // The card guard ends a whole round that contains a card-raising call (see engine/cards.ts). Tools adapted through
@@ -203,12 +209,13 @@ async function startConfigured(
   // The spawn tools (subagent, subagent_message, subagents_list, subagent_stop): offered to home and feature threads only;
   // a child's conversation is configured with an explicit tool list that leaves them out.
   const subagentBridge = new SubagentBridge();
+  const slotRunDir = opts.home ? join(opts.home, ".wolfpack", "run") : runDir(env);
   const subagentExtensions = createSubagentExtension(subagentBridge, { wolfDen: config.den, wolfName: config.identity.name, onCardTool: cardGuard.register });
   // ls/grep/find/guarded_bash are always installed so subagent profiles can list them; the home and feature threads
   // only get them when wolf.yaml `tools:` names "readonly" (the terminal pi does not enable them by default either).
   // A tool another extension already defines keeps that definition.
   const readonlyOptIn = config.capability.tools.includes("readonly");
-  const others = [...toolExtensions.filter((e) => e !== ReadOnlyTools), objectsExtension, ask, cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
+  const others = [...toolExtensions.filter((e) => e !== ReadOnlyTools), createObjectsExtension(config.den), ask, cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
   const taken = new Set(others.flatMap((e) => (e.tools ?? []).map((t) => t.name)));
   const readonlyExt = readOnlyToolsExcluding(taken, (m) => log(`warning: ${m}`));
   const ownReadonly = new Set((readonlyExt?.tools ?? []).map((t) => t.name));
@@ -295,6 +302,7 @@ async function startConfigured(
       },
       den: config.den,
       tierModels: Object.fromEntries((["main", "smart", "fast"] as const).map((t) => [t, resolveWolfModel(config, t, table).modelId])),
+      tierProviders: Object.fromEntries((["main", "smart", "fast"] as const).map((t) => [t, resolveWolfModel(config, t, table).provider])),
       askBridge,
       subagents: {
         bridge: subagentBridge,
@@ -307,7 +315,7 @@ async function startConfigured(
         // Per-host cap and slot directory: shared by every wolfd on the host (env WOLFPACK_SUBAGENT_HOST_MAX / _SLOTS).
         ...(Number(env.WOLFPACK_SUBAGENT_HOST_MAX) >= 1 ? { hostMax: Number(env.WOLFPACK_SUBAGENT_HOST_MAX) } : {}),
         ...(Number(env.WOLFPACK_SUBAGENT_SLOT_POLL_MS) > 0 ? { slotPollMs: Number(env.WOLFPACK_SUBAGENT_SLOT_POLL_MS) } : {}),
-        slotDir: env.WOLFPACK_SUBAGENT_SLOTS || join(opts.home ?? homedir(), ".wolfpack", "run", "subagent-slots"),
+        slotDir: env.WOLFPACK_SUBAGENT_SLOTS || join(slotRunDir, "subagent-slots"),
         getConversation: (id) => engine.conversations.get(id),
         releaseOwner: (taskId) => engine.conversations.releaseOwner(taskId),
         releaseModel: async (conversationId) => {

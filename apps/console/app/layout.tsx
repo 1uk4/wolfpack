@@ -3,17 +3,18 @@ import { Geist_Mono, Inter } from "next/font/google";
 import "katex/dist/katex.min.css";
 import "@xyflow/react/dist/style.css";
 import "./globals.css";
-import { AppShell, SidebarProvider } from "@/components/sidebar";
-import { SubagentModalProvider } from "@/components/subagent-modal";
-import { GraduateToasts } from "@/components/graduate-dialog";
-import { ServerEventsProvider } from "@/components/server-events";
-import { MemoryEventsProvider } from "@/components/memory-events";
+import { AppShell, SidebarProvider } from "@/components/shell/sidebar";
+import { SubagentModalProvider } from "@/components/thread/subagent-modal";
+import { GraduateToasts } from "@/components/kb/graduate-dialog";
+import { ServerEventsProvider } from "@/components/shell/server-events";
+import { MemoryEventsProvider } from "@/components/memory/memory-events";
 import { AppearanceProvider } from "@/components/settings/appearance";
-import { AttachedThreadProvider } from "@/components/attached-thread";
-import { NavTracker } from "@/components/nav-tracker";
-import HubAuth from "@/components/hub-auth";
-import UpdateBanner from "@/components/update-banner";
-import { ViewportVars } from "@/components/viewport-vars";
+import { AttachedThreadProvider } from "@/components/chat-bar/attached-thread";
+import { NavTracker } from "@/components/shell/nav-tracker";
+import HubAuth from "@/components/shell/hub-auth";
+import UpdateBanner from "@/components/shell/update-banner";
+import { SingleMacProvider } from "@/components/shell/single-mac";
+import { ViewportVars } from "@/components/shell/viewport-vars";
 
 // Chrome, prose and titles = Inter; code = Geist Mono.
 const ui = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
@@ -46,6 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 			<body className="min-h-dvh antialiased">
 			{/* The notification channel rides OUTSIDE everything: sidebar, dock,
 				 and pages all subscribe as the polls retire (push S3, 2026-10-02). */}
+			<SingleMacProvider>
 			<HubAuth />
 			<ViewportVars />
 			<NavTracker />
@@ -65,6 +67,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 			</ServerEventsProvider>
 			{/* Auto-update banner (Wave C): fixed card, Electron-only pushes. */}
 			<UpdateBanner />
+			</SingleMacProvider>
 		</body>
 		</html>
 	);

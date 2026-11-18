@@ -10,6 +10,7 @@
  *   tiers:                  # capability: per-tier overrides on the models file
  *     fast: { model: claude-sonnet-5-5, thinking: low }
  *   workspace: ~/Code/x     # capability: home-thread cwd (default: the wolf's dir)
+ *   plugins: [my-provider]  # provider plug-ins loaded from <WOLFPACK_HOME>/plugins/<id>/ (default none)
  *   extensions: [memory]    # extensions loaded from <den>/extensions/<name>/index.js (default none)
  *   serve:                  # all optional
  *     socket: ~/.wolfpack/run/1uk4.sock   # default shown
@@ -63,7 +64,7 @@ export function effectiveConsolidationInterval(interval: string | undefined): st
 }
 
 /** Pi's consolidation defaults (extensions/wolfpack-memory/index.ts), plus the existing trigger and interval. */
-export const DEFAULT_CONSOLIDATION = { threshold: 20000, poolTarget: 10000, trigger: "hybrid", interval: "4h" } as const;
+export const DEFAULT_CONSOLIDATION = { threshold: 20000, poolTarget: 10000, trigger: "hybrid", interval: "4h", maxTopics: 40 } as const;
 
 const TierOverride = z
   .object({ model: z.string().min(1).optional(), thinking: z.string().min(1).optional() })
@@ -91,6 +92,8 @@ export const WolfFileSchema = z.object({
   color: z.string().min(1).optional(),
   workspace: z.string().min(1).optional(),
   extensions: z.array(z.string().min(1)).default([]),
+  /** Provider plug-ins to load from the plugins folder, by folder name. A folder alone never runs. */
+  plugins: z.array(z.string().min(1)).default([]),
   serve: z
     .object({
       socket: z.string().min(1).optional(),
@@ -120,11 +123,14 @@ export const WolfFileSchema = z.object({
       subagentMemory: z.enum(["on", "off"]).optional(),
       workLog: z.enum(["fold", "append"]).optional(),
       defaultDomain: z.string().min(1).optional(),
+      /** The model the wolf's memory engine steps (observe, consolidate, ...) use, in place of the smart and fast tiers' models. */
+      model: z.string().min(1).optional(),
       sweepInterval: z.string().regex(/^\d+(s|m|h|d)$/, 'expected a duration like "30s", "1m", "1h"').optional(),
       consolidation: z
         .object({
           threshold: z.number().int().positive().optional(),
           poolTarget: z.number().int().nonnegative().optional(),
+          maxTopics: z.number().int().positive().optional(),
           trigger: z.enum(["threshold", "timer", "hybrid", "manual"]).optional(),
           interval: z.string().regex(/^\d+(s|m|h|d)$/, 'expected a duration like "30m", "4h", "1d"').optional(),
         })
@@ -146,6 +152,7 @@ export const KNOWN_TOP_LEVEL_KEYS: readonly string[] = [
   "color",
   "workspace",
   "extensions",
+  "plugins",
   "serve",
   "subagents",
   "sandbox",
@@ -208,6 +215,8 @@ export interface WolfConfig {
     subagentMemory?: "on" | "off";
     /** How work observations reach their item: `fold` (default) rewrites the feature Record; `append` adds lines to the task's or feature's own log. */
     workLog?: "fold" | "append";
+    /** Model for the memory engine steps (wolf.yaml `memory.model`); unset = the smart and fast tiers' own models. */
+    model?: string;
     /** Librarian sweep interval (e.g. "1m"); default 1m. */
     sweepInterval?: string;
     /** Domain stamped on observations the observer leaves untagged. One of `identity.domains`; default: the first. */
@@ -218,6 +227,8 @@ export interface WolfConfig {
       threshold: number;
       /** Pool tokens left behind by a consolidation (the newest observations). */
       poolTarget: number;
+      /** Session topics the consolidator sends the model; older ones move to `evicted/` (default 40). */
+      maxTopics: number;
       trigger: "threshold" | "timer" | "hybrid" | "manual";
       interval: string;
     };
@@ -227,6 +238,8 @@ export interface WolfConfig {
    * the harness's; the same list drives createWolfHarness and wolfd.
    */
   extensions: string[];
+  /** Provider plug-ins to load (wolf.yaml `plugins:`), by folder name under the plugins dir. */
+  plugins: string[];
   /** The raw wolf.yaml block of each listed extension that has one (`memory:` etc.), as the loader hands it over. */
   extensionConfig: Record<string, Record<string, unknown>>;
   /** Derived: <dir>/den. */

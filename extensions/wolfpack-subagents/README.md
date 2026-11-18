@@ -85,7 +85,7 @@ Discovered from (priority: project > global > package):
 - **global** — `$PI_CODING_AGENT_DIR/agents/*.md` (wolf-specific agents only)
 - **package** — the shared roster in `packages/agents/agents/` (`worker`, `scout`, `planner`,
   `reviewer`; also used by wolfd), plus the `pi.agents` dirs of every local package in the wolf's
-  `settings.json` (e.g. `wolfpack-visual-tools` → `visualizer`).
+  `settings.json`.
   Repo agents load from the repo; don't copy them into the wolf's agent dir, or
   the copy shadows (and drifts from) the repo file.
 
@@ -125,14 +125,12 @@ bridge this extension exposes:
 
 ```ts
 (globalThis as any).__pi_interactive_subagents?.registerToolExtension(
-  "write_mermaid",
-  "/abs/path/to/tools/mermaid_tools.ts",
+  "my_tool",
+  "/abs/path/to/tools/my_tools.ts",
 );
 ```
 
-`wolfpack-visual-tools` uses exactly this to make `write/edit/render_mermaid`
-and `write/edit/render_svg` available to the `visualizer`
-sub-agent.
+A sub-agent then gets `my_tool` by listing it on its `tools:` line.
 
 ## Layout
 

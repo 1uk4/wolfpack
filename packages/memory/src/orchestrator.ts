@@ -82,7 +82,7 @@ export interface OrchestratorConfig {
   getBoundWork?: () => BoundWork | null | undefined;
   /** `memory.generalToDen`: observations the observer flags `general` skip the work tag (origin only) and go to the den. Default off. */
   generalToDen?: boolean;
-  /** `memory.workLog`: `fold` (default) rewrites the Record from work observations; `append` adds lines to the task's or feature's own log, batched. */
+  /** `memory.workLog`: `append` (default when absent) adds lines to the task's or feature's own log, batched; `fold` rewrites the Record from work observations. */
   workLog?: "fold" | "append";
   /** Clock in epoch ms (tests). */
   now?: () => number;
@@ -161,7 +161,7 @@ export function createOrchestrator(
 ): MemoryOrchestrator {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const memRoot = sessionMemoryRoot(runtime.cwd, runtime.sessionId);
-  const appendMode = cfg.workLog === "append";
+  const appendMode = cfg.workLog !== "fold";
   const nowMs = () => (cfg.now ?? Date.now)();
   /** When this process first saw a tagged observation (by timestamp). Observations restored from the ledger fall back to their own timestamp. */
   const firstSeen = new Map<string, number>();
@@ -466,9 +466,11 @@ export function createOrchestrator(
       system += `\n\nObservations carry domain tags [domain]. When creating or merging topics, set the domain field to match the dominant domain of the observations in that group. NEVER merge observations from different domains into the same topic.\n\n${domainContext}`;
     }
 
+    // No retry: a retry resends the whole (topic-store sized) prompt; the next consolidation run is the retry.
     const result = await engine.call("consolidate", ConsolidationResultSchema, {
       system,
       prompt,
+      maxRetries: 0,
     });
 
     const now = new Date().toISOString().replace("T", " ").slice(0, 16);

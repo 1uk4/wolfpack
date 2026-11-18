@@ -29,7 +29,7 @@ describe("wolf icons", () => {
 
   it("keeps the sidebar mark's path identical to brand/wolf-head.svg", () => {
     const brand = dOf("brand/wolf-head.svg", /<path d="([^"]+)"/);
-    const tsx = dOf("apps/console/components/wolfpack-mark.tsx", /\bd="([^"]+)"/);
+    const tsx = dOf("apps/console/components/shell/wolfpack-mark.tsx", /\bd="([^"]+)"/);
     expect(tsx).toBe(brand);
   });
 });

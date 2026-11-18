@@ -5,6 +5,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { KbRoots } from "@wolfpack/kb/shared";
+import { readPromoteState } from "./promote-state.js";
 import { denTopicStates, describeStatus, type DenTopicState, type DenTopicStatus } from "./den-reconcile.js";
 
 /**
@@ -35,6 +36,36 @@ export function renderDenContext(
       ),
       "Read a topic file when you need its details. Everything else lives in the KB.",
     ].join("\n");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resume context: the KB entries of topics that were retired from the den, so an old thread still finds what its
+ * notes became. `resolveEntry` follows aliases (null = dead link, dropped); `readEntry` gives title and summary.
+ * Both are injected so memory imports no KB internals. Null when there is nothing to list.
+ */
+export function renderRetiredContext(
+  wolfDen: string,
+  deps: { resolveEntry: (id: string) => string | null; readEntry: (id: string) => { title: string; summary: string } | null },
+): string | null {
+  try {
+    const seen = new Set<string>();
+    const lines: string[] = [];
+    for (const st of Object.values(readPromoteState(wolfDen).topics)) {
+      if (!st.retiredAt || !st.receipt || st.receipt.outcome === "reject") continue;
+      for (const raw of st.receipt.entryIds) {
+        const id = deps.resolveEntry(raw);
+        if (!id || seen.has(id)) continue;
+        const e = deps.readEntry(id);
+        if (!e) continue;
+        seen.add(id);
+        lines.push(`- ${e.title} (${id}): ${e.summary}`);
+      }
+    }
+    if (lines.length === 0) return null;
+    return ["Notes this wolf kept locally were moved into the shared KB (read them with kb_access):", ...lines].join("\n");
   } catch {
     return null;
   }

@@ -51,6 +51,8 @@ jobs:
           SMOKE=$(node -p 'require("./scripts/release-components.json")[process.argv[1]].smoke' "$COMP")
           { echo "tag=$TAG"; echo "component=$COMP"; echo "version=$VER"; echo "asset=$ASSET"; echo "smoke=$SMOKE"; echo "prerelease=$PRE"; } >> "$GITHUB_OUTPUT"
       - run: npm ci --no-audit --no-fund
+        env:
+          ONNXRUNTIME_NODE_INSTALL: skip   # onnxruntime-node (optional dep of @wolfpack/kb) would fetch CUDA binaries from NuGet on linux/x64; the release bundles never load it
         if: steps.tag.outputs.component != 'wolfd'   # wolfd is built inside Docker (infra/release/Dockerfile)
       - name: build + stamp + guard + sha256 (${{ steps.tag.outputs.component }} only)
         run: scripts/release-build.sh "${{ steps.tag.outputs.component }}" "${{ steps.tag.outputs.version }}" "$RUNNER_TEMP/rel"

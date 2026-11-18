@@ -56,6 +56,27 @@ describe("retireEntries", () => {
     expect(readFileSync(d("INDEX.md"), "utf-8")).toContain("0 entries");
   });
 
+  it("records survivors: explicit ones win, a 'merged into' reason names one, no replacement is an explicit empty list", () => {
+    seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa"], "kb-fit-bbbbbbb": ["kb-fit-bbbbbbb"], "kb-fit-ccccccc": ["kb-fit-ccccccc"] });
+    retireEntries(roots, ["kb-fit-aaaaaaa"], { reason: "split into parts", survivors: ["kb-fit-sss1111", "kb-fit-sss2222"] });
+    retireEntries(roots, ["kb-fit-bbbbbbb"], { reason: "merged into kb-fit-sss3333" });
+    retireEntries(roots, ["kb-fit-ccccccc"], { reason: "user deleted" });
+    const retired = readLedger(roots).filter((e) => e.t === "entry_retired");
+    expect(retired).toMatchObject([
+      { entryId: "kb-fit-aaaaaaa", survivors: ["kb-fit-sss1111", "kb-fit-sss2222"] },
+      { entryId: "kb-fit-bbbbbbb", survivors: ["kb-fit-sss3333"] },
+      { entryId: "kb-fit-ccccccc", survivors: [] },
+    ]);
+  });
+
+  it("stamps the archived copy with the first structured survivor even when the reason names none", () => {
+    seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa"] });
+    retireEntries(roots, ["kb-fit-aaaaaaa"], { reason: "split into parts", survivors: ["kb-fit-sss1111", "kb-fit-sss2222"] });
+    const dir = d("versions", "kb-fit-aaaaaaa");
+    const copy = readFileSync(join(dir, readdirSync(dir).find((f) => f.endsWith("-retired.md"))!), "utf-8");
+    expect(copy).toContain("retiredInto: kb-fit-sss1111");
+  });
+
   it("refuses an anchored entry unless forced, names the ids, and retires nothing", () => {
     seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa"], "kb-fit-bbbbbbb": ["kb-fit-bbbbbbb"] });
     writeFileSync(d("entries", "kb-fit-aaaaaaa.md"), `---\ntitle: a\nanchor: work-fit-FEAT001\nsummary: s\n---\nbody`);

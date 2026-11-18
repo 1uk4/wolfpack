@@ -1,0 +1,224 @@
+/**
+ * Browser fetch helpers for the memory / KB routes (app/api/wolves/[name]/…).
+ * Every helper resolves — never throws — to a KbResult:
+ *   { ok: true, data } | { ok: false, reason, message, code? }
+ * reason: "unavailable" = HTTP 409 (memory inert/not loaded, KB not served by
+ * this wolf, …), "not_found" = 404, "error" = anything else (incl. network).
+ * `code` is the protocol error code when the server sent one (e.g.
+ * "memory_busy", "promote_unavailable") so callers can tell 409s apart.
+ */
+import type { WorkItemResponse } from "@wolfpack/protocol";
+import { dataStore, StoreHttpError } from "@/src/core/data-store";
+import type {
+	ConsolidateResponse,
+	GraduationJob,
+	GraduationObservations,
+	GraduationStatus,
+	KbEntryDetail,
+	KbGraph,
+	MemoryObservations,
+	MemoryTree,
+	MemoryNodeObservations,
+	MemoryStatus,
+	MemoryTopic,
+	PromoteResponse,
+	WorkRecordResponse,
+	WorkListResponse,
+} from "@/src/core";
+
+export type KbFailureReason = "unavailable" | "not_found" | "error";
+export type KbResult<T> = { ok: true; data: T } | { ok: false; reason: KbFailureReason; message: string; code?: string; details?: Record<string, string> };
+
+export interface KbGraphOptions {
+	domain?: string;
+	archivedWork?: boolean;
+	denTopics?: boolean;
+}
+
+const seg = encodeURIComponent;
+
+export function invalidateAfterWrite() {
+	dataStore.invalidate("/api/wolves");
+	dataStore.invalidate("/api/kb/");
+}
+
+function failure(status: number, body: unknown): KbResult<never> {
+	const b = body as { error?: string; code?: string; details?: Record<string, string> } | null;
+	const reason: KbFailureReason = status === 409 ? "unavailable" : status === 404 ? "not_found" : "error";
+	return { ok: false, reason, message: b?.error ?? `HTTP ${status}`, ...(b?.code ? { code: b.code } : {}), ...(b?.details ? { details: b.details } : {}) };
+}
+
+/** A GET read through the client store: a value younger than `maxAgeMs` costs no request, concurrent reads share one, and the ETag revalidates. */
+async function cachedRequest<T>(url: string, maxAgeMs: number): Promise<KbResult<T>> {
+	try {
+		return { ok: true, data: await dataStore.load<T>(url, { maxAgeMs }) };
+	} catch (err) {
+		if (err instanceof StoreHttpError) return failure(err.status, err.body);
+		return { ok: false, reason: "error", message: err instanceof Error ? err.message : "network error" };
+	}
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<KbResult<T>> {
+	let res: Response;
+	try {
+		res = await fetch(url, { cache: "no-store", ...init });
+	} catch (err) {
+		return { ok: false, reason: "error", message: err instanceof Error ? err.message : "network error" };
+	}
+	if (res.ok) {
+		// A write the console made itself (work edit, graduation, promote, consolidate, thread create): cached lists and graphs may be stale now.
+		if (init?.method && init.method !== "GET") invalidateAfterWrite();
+		try {
+			return { ok: true, data: (await res.json()) as T };
+		} catch {
+			return { ok: false, reason: "error", message: "response is not JSON" };
+		}
+	}
+	const body = (await res.json().catch(() => null)) as { error?: string; code?: string; details?: Record<string, string> } | null;
+	const message = body?.error ?? `HTTP ${res.status}`;
+	const code = body?.code;
+	const reason: KbFailureReason = res.status === 409 ? "unavailable" : res.status === 404 ? "not_found" : "error";
+	const details = body?.details;
+	return { ok: false, reason, message, ...(code ? { code } : {}), ...(details ? { details } : {}) };
+}
+
+/** The roster, read through the store: a refresh within `maxAgeMs` (default 10 s) reuses the last answer. */
+export function fetchWolves(maxAgeMs = 10_000): Promise<KbResult<{ wolves: { id: string; name: string; host: string; status: string; librarian?: boolean; kbReadable?: boolean }[] }>> {
+	return cachedRequest("/api/wolves", maxAgeMs);
+}
+
+/** A wolf's thread list through the store: readers that open together (sidebar, palette, needs-you…) share one request; `maxAgeMs` 0 forces a revalidate. */
+export const THREADS_MOUNT_MAX_AGE_MS = 5_000;
+export function fetchWolfThreads<T = { threads?: { id: string; title: string; [k: string]: unknown }[] }>(wolf: string, maxAgeMs = THREADS_MOUNT_MAX_AGE_MS): Promise<KbResult<T>> {
+	return cachedRequest<T>(`/api/wolves/${seg(wolf)}/threads`, maxAgeMs);
+}
+
+/** For call sites that create, archive or rename a thread with their own fetch: the next list read goes to the server. */
+export function invalidateThreads(wolf: string) {
+	dataStore.invalidate(`/api/wolves/${seg(wolf)}/threads`);
+}
+
+/** Memory reads go through the store: opening the panel reuses an answer under 5 s old; live refreshes pass 0 to revalidate. */
+export const MEMORY_MOUNT_MAX_AGE_MS = 5_000;
+
+export function fetchMemoryStatus(wolf: string, thread?: string, maxAgeMs = MEMORY_MOUNT_MAX_AGE_MS): Promise<KbResult<MemoryStatus>> {
+	const q = thread ? `?thread=${seg(thread)}` : "";
+	return cachedRequest(`/api/wolves/${seg(wolf)}/memory${q}`, maxAgeMs);
+}
+
+/** The wolf's current observation pool, newest first (what the pool count counts). */
+export function fetchMemoryObservations(wolf: string, maxAgeMs = MEMORY_MOUNT_MAX_AGE_MS): Promise<KbResult<MemoryObservations>> {
+	return cachedRequest(`/api/wolves/${seg(wolf)}/memory/observations`, maxAgeMs);
+}
+
+/** Every session topic with its state, plus retired ones and the byte budget. */
+export function fetchSessionTopics(wolf: string, maxAgeMs = MEMORY_MOUNT_MAX_AGE_MS): Promise<KbResult<import("@wolfpack/protocol").MemoryTopics>> {
+	return cachedRequest(`/api/wolves/${seg(wolf)}/memory/session-topics`, maxAgeMs);
+}
+
+/** Set or clear a topic's keep-local flag. */
+export function putKeepLocal(wolf: string, topicId: string, keepLocal: boolean): Promise<KbResult<{ id: string; keepLocal: boolean }>> {
+	return request(`/api/wolves/${seg(wolf)}/memory/session-topics/${seg(topicId)}/keep-local`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keepLocal }) });
+}
+
+/** Observation counts per feature → task (pending, and archived over the last 7 days). */
+export function fetchMemoryTree(wolf: string, maxAgeMs = MEMORY_MOUNT_MAX_AGE_MS): Promise<KbResult<MemoryTree>> {
+	return cachedRequest(`/api/wolves/${seg(wolf)}/memory/tree`, maxAgeMs);
+}
+
+/** The observations behind one tree node: a work id or `den`. */
+export function fetchMemoryNode(wolf: string, workId: string): Promise<KbResult<MemoryNodeObservations>> {
+	return request(`/api/wolves/${seg(wolf)}/memory/tree/${seg(workId)}`);
+}
+
+export function fetchMemoryTopic(wolf: string, id: string, scope?: "den" | "session"): Promise<KbResult<MemoryTopic>> {
+	const q = scope ? `?scope=${scope}` : "";
+	return request(`/api/wolves/${seg(wolf)}/memory/topics/${seg(id)}${q}`);
+}
+
+export function fetchWorkRecord(wolf: string, id: string): Promise<KbResult<WorkRecordResponse>> {
+	return request(`/api/wolves/${seg(wolf)}/work/${seg(id)}/record`);
+}
+
+/** The domain's work items through a wolf's Work API client (graduated and archived ones only with `graduated`). */
+const workListUrl = (wolf: string, domain: string, graduated: boolean) => `/api/wolves/${seg(wolf)}/work?domain=${seg(domain)}${graduated ? "&graduated=true" : ""}`;
+
+export function fetchWorkList(wolf: string, domain: string, graduated = false, maxAgeMs = 0): Promise<KbResult<WorkListResponse>> {
+	return cachedRequest(workListUrl(wolf, domain, graduated), maxAgeMs);
+}
+
+/** The stored list for this wolf and domain, synchronously (undefined when the store has none). */
+export function peekWorkList(wolf: string, domain: string, graduated = false): WorkListResponse | undefined {
+	return dataStore.read<WorkListResponse>(workListUrl(wolf, domain, graduated))?.data;
+}
+
+/** The stored roster, synchronously. */
+export function peekWolves(): { name: string; status: string; librarian?: boolean }[] | undefined {
+	return dataStore.read<{ wolves: { name: string; status: string; librarian?: boolean }[] }>("/api/wolves")?.data.wolves;
+}
+
+/** Open (or reopen) the feature's thread on a wolf: `{id, title, ...}` of the ThreadSummary. */
+export function openFeatureThread(wolf: string, workItemId: string): Promise<KbResult<{ id: string; title: string }>> {
+	return request(`/api/wolves/${seg(wolf)}/threads`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ kind: "feature", workItemId }),
+	});
+}
+
+/** The graph; the SERVER picks the source (relay: the hub's KB copy; local: the librarian / a KB mirror wolf). */
+export function kbGraphUrl(opts: KbGraphOptions = {}): string {
+	const p = new URLSearchParams();
+	if (opts.domain) p.set("domain", opts.domain);
+	for (const k of ["archivedWork", "denTopics"] as const) {
+		if (opts[k] !== undefined) p.set(k, opts[k] ? "1" : "0");
+	}
+	return `/api/kb/graph${p.size ? `?${p}` : ""}`;
+}
+
+export function fetchKbGraph(opts: KbGraphOptions = {}, maxAgeMs = 0): Promise<KbResult<KbGraph>> {
+	return cachedRequest(kbGraphUrl(opts), maxAgeMs);
+}
+
+/** The entry; the SERVER picks the source (relay: the hub's KB copy; local: the librarian / a KB mirror wolf). */
+export function fetchKbEntry(id: string): Promise<KbResult<KbEntryDetail>> {
+	return request(`/api/kb/entries/${seg(id)}`);
+}
+
+export function postConsolidate(wolf: string): Promise<KbResult<ConsolidateResponse>> {
+	return request(`/api/wolves/${seg(wolf)}/memory/consolidate`, { method: "POST" });
+}
+
+/** Promote every topic, or only `ids` (one row's Promote button). */
+export function postPromote(wolf: string, ids?: string[]): Promise<KbResult<PromoteResponse>> {
+	return request(`/api/wolves/${seg(wolf)}/memory/promote`, ids?.length ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) } : { method: "POST" });
+}
+
+/** Graduation step 1 on a wolf: start the background preview job (answers the running job at once; nothing is sent). */
+export function postGraduatePreview(wolf: string, workId: string): Promise<KbResult<GraduationJob>> {
+	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/preview`, { method: "POST" });
+}
+
+/** Graduation step 2: start the background confirm job that sends the previewed graduation to the librarian's inbox. */
+export function postGraduateConfirm(wolf: string, workId: string, token: string): Promise<KbResult<GraduationJob>> {
+	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/confirm`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ token }),
+	});
+}
+
+/** Where the feature's graduation job stands on this wolf (none, running, preview_ready, graduated, error). */
+export function fetchGraduateStatus(wolf: string, workId: string): Promise<KbResult<GraduationStatus>> {
+	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/status`);
+}
+
+/** Owner work op through the hub (console route PATCH /api/work/:id): `{assignee}` now, `{moveTo}` for moves. */
+export function patchWorkItem(id: string, op: { assignee: string } | { moveTo: string | null }): Promise<KbResult<WorkItemResponse>> {
+	return request(`/api/work/${seg(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(op) });
+}
+
+/** The pending observations in the wolf's pool a graduation of the feature would fold, per task. */
+export function fetchGraduateObservations(wolf: string, workId: string): Promise<KbResult<GraduationObservations>> {
+	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/observations`);
+}

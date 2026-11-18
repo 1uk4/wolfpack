@@ -17,7 +17,7 @@ Current state only. Anything not yet built is under **Planned** and says so. Rat
 
 Next.js App Router app, served in the browser and wrapped by `apps/desktop` (Electron spawns the console's standalone server on 127.0.0.1). It runs entirely on `MockConsoleClient`: one wolf, one home thread, one scripted streaming turn including a tool call. No daemon, hub or real wolf is involved.
 
-Routes: `/` (home placeholder), `/wolf/[name]` and `/wolf/[name]/thread/[threadId]` (chat). `/work/*` is reserved. The thread URL segment is a slug derived by `threadSlug` in `src/core/thread-adapter.ts`, not the client's raw thread id.
+Routes: `/` (home placeholder), `/wolf/[name]/thread/[threadId]` (chat; `/wolf/[name]` only redirects to that wolf's Home thread, creating it through the idempotent `createThread({kind:"home"})` when missing). `/work/*` is reserved. The thread URL segment is a slug derived by `threadSlug` in `src/core/thread/thread-adapter.ts`, not the client's raw thread id.
 
 The inherited shell (sidebar, composer, settings, keyboard system, tool-card registry, event bus, jobs) is present. The graph canvas and plan DAG components are kept but inert (unrouted).
 
@@ -34,7 +34,7 @@ The inherited shell (sidebar, composer, settings, keyboard system, tool-card reg
 
 ### Server routes and SSE
 
-Next route files under `apps/console/app/api/wolves/[name]/threads/...` are one-line wrappers over handlers in `src/server/thread-api.ts`, which take a `ConsoleClient`. Commands are POSTs (submit, abort); the stream is SSE: one frame per event (`id: <event id>`, `data: <json>`), ending with `data: [DONE]`.
+Next route files under `apps/console/app/api/wolves/[name]/threads/...` are one-line wrappers over handlers in `src/server/thread/thread-api.ts`, which take a `ConsoleClient`. Commands are POSTs (submit, abort); the stream is SSE: one frame per event (`id: <event id>`, `data: <json>`), ending with `data: [DONE]`.
 
 **Resume:** a reconnect sends `Last-Event-ID` (or `?from=`); the server replays events with id > that value, then follows live. A non-numeric value is ignored (full replay of the current/last turn).
 
@@ -42,14 +42,14 @@ Errors cross the Next bundle boundary by name (`NotFoundError` → 404, `BusyErr
 
 ### Thread adapter → session-core
 
-`src/core/thread-adapter.ts` is pure (no React, no IO). It maps `ThreadEvent`s onto the wire events that `session-core`'s `SessionModel.applyWireEvent` folds into the chat view: one assistant message per model step, a tool call's end closes the step. It tolerates resuming mid-turn, and replaying a whole turn reproduces the uninterrupted result. The adapter is the only module that knows both dialects.
+`src/core/thread/thread-adapter.ts` is pure (no React, no IO). It maps `ThreadEvent`s onto the wire events that `session-core`'s `SessionModel.applyWireEvent` folds into the chat view: one assistant message per model step, a tool call's end closes the step. It tolerates resuming mid-turn, and replaying a whole turn reproduces the uninterrupted result. The adapter is the only module that knows both dialects.
 
 Note: threads use the wolf thread transport (`/api/wolves/<wolf>/threads/<slug>/...`). The console no longer has `POST /api/chat` or its own compaction; wolfd compacts wolf threads.
 
 ### Import boundaries
 
 - `apps/*` depend on `packages/client`; `packages/*` never import from `apps/*`.
-- Within `apps/console` (enforced by eslint): the browser shell imports only the core barrel `@/src/core`; `app/` imports only the barrels `@/src/core` and `@/src/server`; core never imports IO layers (agent/server/store); the agent layer never imports server or store adapters. The composition root is `src/server/stores.ts`.
+- Within `apps/console` (enforced by eslint): the browser shell imports only the core barrel `@/src/core`; `app/` imports only the barrels `@/src/core` and `@/src/server`; core never imports IO layers (agent/server/store); the agent layer never imports server or store adapters. The composition root is `src/server/settings/stores.ts`.
 - Only `packages/harness` will import pi-durable (**planned**; nothing imports it yet). The console and `packages/client` must never depend on it.
 
 ### Legacy (on `main`, to be retired at cutover)

@@ -1,0 +1,27 @@
+"use client";
+
+/**
+ * Installs the hub sign-in fetch wrapper (src/core/ui/hub-auth.ts) on `window.fetch` at MODULE LOAD, not in an effect: children's effects
+ * run before a parent's, so an effect would let the first /api requests go out without the token. Idempotent (HMR-safe).
+ */
+import { syncHubCookie, withHubAuth } from "@/src/core/ui/hub-auth";
+import { leaveOnUnauthorized } from "@/components/shell/single-mac";
+
+const MARK = Symbol.for("wolfpack.console.hub-auth");
+
+function install(): void {
+	const w = window as unknown as { [MARK]?: true };
+	if (w[MARK]) return;
+	w[MARK] = true;
+	syncHubCookie(window.localStorage); // refresh the cookie mirror (Max-Age) / upgrade browsers paired before it existed
+	window.fetch = withHubAuth(window.fetch.bind(window), {
+		storage: window.localStorage,
+		origin: window.location.origin,
+		onUnauthorized: leaveOnUnauthorized,
+	});
+}
+if (typeof window !== "undefined") install();
+
+export default function HubAuth(): null {
+	return null;
+}

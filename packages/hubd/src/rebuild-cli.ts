@@ -1,6 +1,7 @@
 /** `hubd rebuild preview|apply|restore|list`: calls the running hub's operator-only rebuild routes on localhost. Mints a short-lived console token in the data dir (the way `hubd pair` does) and revokes it afterwards. */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { hubdPort } from "@wolfpack/protocol/runtime-home";
 import { createTokenStore } from "./auth.js";
 
 export interface RebuildCliArgs {
@@ -102,11 +103,11 @@ export async function runRebuildCli(a: RebuildCliArgs, log: (m: string) => void 
         const r = (await call("GET", "/v1/admin/kb/rebuild/plans")) as { jobs: Array<{ jobId: string; state: string; planId?: string; error?: string }> };
         const j = r.jobs.find((x) => x.jobId === jobId);
         if (j?.state === "failed") throw new Error(`preview failed: ${j.error}`);
-        if (j?.state === "done") return void log(`plan ${j.planId}  (proposal: <data-dir>/rebuild-plans/${j.planId}.md)\n${engineSummary(a.dataDir, j.planId!)}apply with: hubd rebuild apply ${j.planId} --data-dir ${a.dataDir}${a.port !== 3142 ? ` --port ${a.port}` : ""}`);
+        if (j?.state === "done") return void log(`plan ${j.planId}  (proposal: <data-dir>/rebuild-plans/${j.planId}.md)\n${engineSummary(a.dataDir, j.planId!)}apply with: hubd rebuild apply ${j.planId} --data-dir ${a.dataDir}${a.port !== hubdPort(process.env, 3142) ? ` --port ${a.port}` : ""}`);
       }
     } else if (a.sub === "apply") {
       const r = (await call("POST", "/v1/admin/kb/rebuild/apply", { planId: a.plan, ...(a.expectFlags ? { expectFlags: a.flags } : {}) })) as { domain: string; stamp: string; entriesWritten: number; sections: number };
-      log(`applied ${a.plan}: ${r.entriesWritten} entry file(s) rewritten, ${r.sections} section(s) in ${r.domain}\nrestore with: hubd rebuild restore ${r.domain} ${r.stamp} --data-dir ${a.dataDir}${a.port !== 3142 ? ` --port ${a.port}` : ""}`);
+      log(`applied ${a.plan}: ${r.entriesWritten} entry file(s) rewritten, ${r.sections} section(s) in ${r.domain}\nrestore with: hubd rebuild restore ${r.domain} ${r.stamp} --data-dir ${a.dataDir}${a.port !== hubdPort(process.env, 3142) ? ` --port ${a.port}` : ""}`);
     } else {
       const r = (await call("POST", "/v1/admin/kb/rebuild/restore", { domain: a.domain, stamp: a.stamp })) as { entriesRestored: number; sections: number };
       log(`restored ${a.domain} from ${a.stamp}: ${r.entriesRestored} entry file(s) rewritten, ${r.sections} section(s)`);

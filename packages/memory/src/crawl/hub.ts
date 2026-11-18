@@ -11,7 +11,8 @@
  */
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir } from "node:os";
+import { wolvesRoot } from "@wolfpack/protocol/runtime-home";
 import { join } from "node:path";
 import { safeSegment } from "@wolfpack/kb/shared";
 import { SECRET_REFUSAL_REASON } from "@wolfpack/protocol";
@@ -185,7 +186,7 @@ export function persistDedup(stagedDen: string, realDen: string, ids: string[]):
  */
 export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<EmitCrawlOptions, "dryRun"> = {}): Promise<EmitCrawlResult & { warnings?: string[] }> {
   const wolf = opts.wolf ?? process.env.WOLF_NAME ?? "scribe";
-  const denLocal = opts.roots?.denLocal ?? join(process.env.WOLF_DEN ?? join(homedir(), "wolves", "den"), "kb");
+  const denLocal = opts.roots?.denLocal ?? join(process.env.WOLF_DEN ?? join(wolvesRoot(), "den"), "kb");
   const staging = mkdtempSync(join(tmpdir(), "crawl-hub-"));
   const stagedDen = join(staging, "den-kb");
   try {

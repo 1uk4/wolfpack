@@ -12,6 +12,7 @@
 import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { workerdConfigDir } from "@wolfpack/protocol/runtime-home";
 
 const expandHome = (p: string): string => (p === "~" ? homedir() : p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
 
@@ -22,7 +23,7 @@ export function workerdMirrorDir(env: NodeJS.ProcessEnv = process.env): string {
     if (!isAbsolute(p)) throw new Error(`WORKERD_KB_MIRROR must be an absolute path (got ${JSON.stringify(env.WORKERD_KB_MIRROR)})`);
     return p;
   }
-  return join(expandHome(env.WORKERD_CONFIG_DIR || join(homedir(), ".wolfpack", "workerd")), "kb-mirror");
+  return join(expandHome(env.WORKERD_CONFIG_DIR || workerdConfigDir(env)), "kb-mirror");
 }
 
 let warned = false;

@@ -36,8 +36,8 @@ export const cardFieldBase = z.object({
   /** Extra context shown under the label. */
   description: z.string().optional(),
   /**
-   * The `ask` tool: id of a diagram the wolf rendered and persisted (render_mermaid / render_svg with `save_as` and
-   * `persist: true`). Served by `GET /v1/threads/:id/diagrams/:diagramId`. An id only: never a path or URL, the console must not build one.
+   * The `ask` tool: id of a diagram the wolf rendered and persisted (by a diagram tool, as
+   * a PNG in the viz dir). Served by `GET /v1/threads/:id/diagrams/:diagramId`. An id only: never a path or URL, the console must not build one.
    */
   diagram: z.string().regex(DIAGRAM_ID_RE, "a diagram is the file name of a published render (viz-<slug>-<ms>.png), never a path or URL").optional(),
   /** Conditional visibility (stepped/dependent cards); absent = always shown. */
@@ -68,7 +68,7 @@ export interface AnyAnswer {
  * One answer kind of an interaction card. To add a kind: write a module like `confirm.ts`, then list it in
  * `BUILTIN_KINDS` (index.ts) or call `registerCardKind` at startup. The wolfd side (validate / isEmpty / answerText)
  * lives in `packages/harness/src/wolfd/card-kinds/` (one module per kind, keyed by `kind`); the console renderer in
- * `apps/console/components/card-fields/`.
+ * `apps/console/components/ask/card-fields/`.
  */
 export interface CardKind {
   kind: string;

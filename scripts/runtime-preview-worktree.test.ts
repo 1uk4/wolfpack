@@ -251,9 +251,9 @@ describe("worktree preview: the wolves run straight from a built worktree", () =
 		expect(h.helper).toEqual(["running 0"]);
 		expect(readState()).toMatchObject({ mode: "worktree", worktree: wtA, previewRef: "feat/a", console: { mode: "dev", dir: wtA }, phase: "switching" });
 		expect(h.lc.some((a) => a[0] === "bootstrap" && a[2].endsWith("com.wolfpack.preview-console.plist"))).toBe(true);
-		// keys survive a switch: the console reads one auth file under ~/.wolfpack/preview, not the served worktree's
+		// keys survive a switch: the console reads one key file under ~/.wolfpack/preview, not the served worktree's
 		expect(fs.readFileSync(path.join(home, "Library", "LaunchAgents", "com.wolfpack.preview-console.plist"), "utf8")).toContain(
-			`<key>WOLFPACK_AUTH_FILE</key><string>${path.join(home, ".wolfpack", "preview", "auth.json")}</string>`,
+			`<key>WOLFPACK_KEY_FILE</key><string>${path.join(home, ".wolfpack", "preview", "keys.env")}</string>`,
 		);
 		expect(g(rt, "rev-parse", "--abbrev-ref", "HEAD")).toBe("stable"); // the runtime checkout is not touched
 	});
@@ -1239,7 +1239,7 @@ describe("agent slots through `wolfpack preview slot`", () => {
 			for (const o of [{ fileToken: null }, { mintStatus: 403 }]) {
 				const r = await pair(["3231", "--print-url"], o);
 				expect({ code: r.code, out: r.out, opened: r.opened }).toEqual({ code: 1, out: [], opened: [] });
-				expect(r.err.join("\n")).toMatch(/Settings.*add device/);
+				expect(r.err.join("\n")).toMatch(/Pack → Devices → add device/);
 				expect(r.err.join("\n")).toContain("wolfpack preview token");
 				expect(r.err.join("\n")).not.toContain("FILE-TOKEN-0123456789");
 			}
@@ -1257,7 +1257,7 @@ describe("agent slots through `wolfpack preview slot`", () => {
 		const none = await get("wt-a");
 		// Key parts only, not the whole wording: the console route, the hubd pair command for a browser token, and the command to run here.
 		for (const text of [none.err, JSON.parse(none.out[0]).tokenSetup.join("\n")]) {
-			expect(text).toMatch(/Settings.*add device/);
+			expect(text).toMatch(/Pack → Devices → add device/);
 			expect(text).toMatch(/hubd pair --kind browser --label "preview [^"]+"/);
 			expect(text).not.toContain("--kind console");
 			expect(text).toContain("wolfpack preview token");

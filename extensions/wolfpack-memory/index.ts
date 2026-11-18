@@ -164,8 +164,8 @@ function renderBar(pct: number, width: number): string {
 let excludeSubagentTraffic = false;
 /** `memory.generalToDen: true` in wolf.yaml (default off). Set at load. */
 let generalToDenOn = false;
-/** `memory.workLog: append` in wolf.yaml (default fold): work observations are appended to their item's log. Set at load. */
-let workLogMode: "fold" | "append" = "fold";
+/** `memory.workLog` in wolf.yaml (default append; `fold` rewrites the Record): work observations are appended to their item's log. Set at load. */
+let workLogMode: "fold" | "append" = "append";
 
 class PiRuntime implements AgentRuntime {
   readonly name = "pi";
@@ -1150,6 +1150,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // `wolfpack launch` handed over, else resolved from the pack config +
   // wolf.yaml (flagged in the status bar). A broken config turns memory's LLM
   // features off with the error shown, rather than crashing pi.
+  // wolf.yaml `memory.model` is NOT applied on this pi (non-wolfd) path yet: it loads its own table. wolfd-only for now (run.ts applyWolfMemoryModel).
   let modelTable: ModelTable | null = null;
   let modelsFromLaunch = false;
   let modelError: string | null = null;
@@ -1686,7 +1687,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
   // Read wolf's subscribed domains from wolf.yaml
   let wolfDomains: string[] = [];
-  let workLogAppend = false;
+  let workLogAppend = workLogMode === "append";
   try {
     const wolfYamlPath = path.join(wolfDen, "..", "wolf.yaml");
     if (fs.existsSync(wolfYamlPath)) {
@@ -1696,12 +1697,12 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         const mem = loadWolfConfig(wolfYamlPath).config.memory;
         excludeSubagentTraffic = mem.subagentMemory === "on";
         generalToDenOn = mem.generalToDen === true;
-        workLogMode = mem.workLog === "append" ? "append" : "fold";
+        workLogMode = mem.workLog === "fold" ? "fold" : "append";
       } catch {
         // A file the strict loader rejects must not silently turn these off: fall back to reading the three keys.
         excludeSubagentTraffic = /^\s+subagentMemory:\s*["']?on\b/m.test(raw);
         generalToDenOn = /^\s+generalToDen:\s*true\b/m.test(raw);
-        workLogMode = /^\s+workLog:\s*["']?append\b/m.test(raw) ? "append" : "fold";
+        workLogMode = /^\s+workLog:\s*["']?fold\b/m.test(raw) ? "fold" : "append";
       }
       workLogAppend = workLogMode === "append";
       const match = raw.match(/domains:\s*\n((?:\s+-\s+\S+\n?)*)/)

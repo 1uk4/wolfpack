@@ -8,9 +8,9 @@
  *   <topic>.md     — consolidator-authored topic files
  *   .runs/         — transient worker IPC (not part of the public interface)
  */
-import { existsSync, readFileSync, readdirSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { parseFrontmatter, atomicWrite } from "@wolfpack/engine";
+import { parseFrontmatter, atomicWrite, DEFAULT_CONSOLIDATION } from "@wolfpack/engine";
 
 export interface TopicFile {
   id: string;
@@ -22,6 +22,16 @@ export interface TopicFile {
   /** Work tags (frontmatter). A topic carrying one is work knowledge and never promotes. */
   work?: string;
   feature?: string;
+  /** Threads (`thread:<id>`) and work ids whose notes fed this topic. Absent on topics from before the promote pass. */
+  sources?: string[];
+  /** ISO time of the newest note folded in: the topic's activity clock. */
+  lastNote?: string;
+  /** Never auto-promoted (frontmatter `keep_local: true`). */
+  keepLocal?: boolean;
+  /** `parked`: the KB parked or could not classify it; the panel shows it as needing attention. */
+  state?: "parked";
+  /** KB entry id this topic's subject was routed to before (routing index); resolved again at promote time. */
+  routingHint?: string;
   filename: string;
 }
 
@@ -57,9 +67,85 @@ export function readTopics(root: string): TopicFile[] {
       domain: fields.domain ? String(fields.domain) : undefined,
       ...(fields.work ? { work: String(fields.work) } : {}),
       ...(fields.feature ? { feature: String(fields.feature) } : {}),
+      ...(Array.isArray(fields.sources) && fields.sources.length ? { sources: fields.sources.map(String) } : {}),
+      ...(fields.last_note ? { lastNote: String(fields.last_note) } : {}),
+      ...(fields.keep_local === true || fields.keep_local === "true" ? { keepLocal: true } : {}),
+      ...(fields.state === "parked" ? { state: "parked" as const } : {}),
+      ...(fields.routing_hint ? { routingHint: String(fields.routing_hint) } : {}),
       filename,
     };
   });
+}
+
+/** Default cap on a session's topic count (`memory.consolidation.maxTopics`). */
+export const DEFAULT_MAX_TOPICS: number = DEFAULT_CONSOLIDATION.maxTopics;
+const EVICTED_DIR = "evicted";
+
+/** Topics moved aside by evictOldTopics; promote reads them so eviction never loses knowledge. */
+export function readEvictedTopics(root: string): TopicFile[] {
+  return readTopics(join(root, EVICTED_DIR));
+}
+
+/**
+ * Keep at most `max` topics in the session root: the least recently updated (frontmatter `updated`, else file mtime)
+ * move to `<root>/evicted/`. Never deletes. Returns the ids moved.
+ */
+export function evictOldTopics(root: string, max: number = DEFAULT_MAX_TOPICS): string[] {
+  const topics = readTopics(root);
+  if (topics.length <= max) return [];
+  // `updated` is written as UTC `YYYY-MM-DD HH:MM`; a zone-less stamp is read as UTC. Missing/garbled: file mtime.
+  const stamp = (t: TopicFile): number => {
+    const s = t.updated.trim().replace(" ", "T");
+    const parsed = s ? Date.parse(/(Z|[+-]\d\d:?\d\d)$/.test(s) ? s : `${s}Z`) : NaN;
+    if (!Number.isNaN(parsed)) return parsed;
+    try { return statSync(join(root, t.filename)).mtimeMs; } catch { return 0; } // file vanished: sorts as oldest
+  };
+  const oldest = topics
+    .map((t) => ({ t, at: stamp(t) }))
+    .sort((a, b) => a.at - b.at || (a.t.filename < b.t.filename ? -1 : a.t.filename > b.t.filename ? 1 : 0))
+    .slice(0, topics.length - max);
+  const dest = join(root, EVICTED_DIR);
+  mkdirSync(dest, { recursive: true });
+  for (const { t } of oldest) {
+    // An older evicted file with the same name keeps its body under a dated name.
+    if (existsSync(join(dest, t.filename))) preserveEvicted(dest, t.filename);
+    renameSync(join(root, t.filename), join(dest, t.filename));
+  }
+  return oldest.map(({ t }) => t.id);
+}
+
+/** Undo evictOldTopics for the given ids (a failed run changes nothing). */
+export function restoreEvicted(root: string, ids: readonly string[]): void {
+  const want = new Set(ids);
+  for (const t of readEvictedTopics(root)) {
+    if (!want.has(t.id) || existsSync(join(root, t.filename))) continue;
+    renameSync(join(root, EVICTED_DIR, t.filename), join(root, t.filename));
+  }
+}
+
+/**
+ * Before a run writes topic `id`: an evicted file with that id is renamed `<id>-evicted-<stamp>` (file name and
+ * frontmatter id), so the new topic cannot hide or overwrite its body and promote still sees both.
+ */
+export function setAsideEvicted(root: string, id: string): void {
+  const dest = join(root, EVICTED_DIR);
+  if (existsSync(join(dest, `${id}.md`))) preserveEvicted(dest, `${id}.md`);
+}
+
+/** Set the id inside the frontmatter block only (insert if absent); the body is never touched. */
+function withFrontmatterId(raw: string, id: string): string {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(raw);
+  if (!m) return `---\nid: ${id}\n---\n\n${raw}`;
+  const fm = /^id:.*$/m.test(m[1]) ? m[1].replace(/^id:.*$/m, `id: ${id}`) : `id: ${id}\n${m[1]}`;
+  return `---\n${fm}\n---${raw.slice(m[0].length)}`;
+}
+
+function preserveEvicted(dest: string, filename: string): void {
+  const base = filename.replace(/\.md$/, "");
+  const newId = `${base}-evicted-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+  const raw = readFileSync(join(dest, filename), "utf-8");
+  atomicWrite(join(dest, `${newId}.md`), withFrontmatterId(raw, newId));
+  unlinkSync(join(dest, filename));
 }
 
 /**
@@ -84,6 +170,11 @@ export function writeTopic(
     updated: string;
     body: string;
     domain?: string;
+    sources?: string[];
+    lastNote?: string;
+    keepLocal?: boolean;
+    state?: "parked";
+    routingHint?: string;
   }
 ): void {
   mkdirSync(root, { recursive: true });
@@ -94,6 +185,11 @@ export function writeTopic(
     `summary: ${topic.summary}`,
     `updated: ${topic.updated}`,
     ...(topic.domain ? [`domain: ${topic.domain}`] : []),
+    ...(topic.sources?.length ? ["sources:", ...topic.sources.map((s) => `  - ${s}`)] : []),
+    ...(topic.lastNote ? [`last_note: ${topic.lastNote}`] : []),
+    ...(topic.keepLocal ? ["keep_local: true"] : []),
+    ...(topic.state ? [`state: ${topic.state}`] : []),
+    ...(topic.routingHint ? [`routing_hint: ${topic.routingHint}`] : []),
     "---",
     "",
     topic.body,

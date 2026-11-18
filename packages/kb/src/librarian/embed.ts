@@ -23,6 +23,7 @@ import { performance } from "node:perf_hooks";
 import type { Timings } from "./timings.js";
 import { listEntryFiles, readEntryCached } from "./entry-cache.js";
 import { InfraError } from "./backoff.js";
+import { createOnnxEmbedFn } from "./embed-onnx.js";
 import { groupOf } from "./anchors.js";
 import {
   type KbRoots,
@@ -43,13 +44,27 @@ export interface EmbedConfig {
   baseUrl: string;
   /** Embedding model (pulled during provisioning). */
   model: string;
+  /** "ollama" (default) or "onnx": run the model in-process via onnxruntime-node (needs modelDir; no network). */
+  provider?: "ollama" | "onnx";
+  /** onnx only: directory holding tokenizer.json, tokenizer_config.json and the .onnx file (scripts/fetch-embed-model.mjs). */
+  modelDir?: string;
+  /** onnx only: onnxruntime intra-op threads (WOLFPACK_EMBED_THREADS). Unset = onnxruntime's own default. */
+  threads?: number;
 }
 
-/** Resolve config from env with lean local defaults. */
+/**
+ * Resolve config from env with lean local defaults. WOLFPACK_EMBED_PROVIDER=onnx + WOLFPACK_EMBED_MODEL_DIR selects the in-process embedder;
+ * WOLFPACK_EMBED_THREADS (a positive integer) sets its onnxruntime intra-op threads, unset leaves onnxruntime's default.
+ */
 export function resolveEmbedConfig(): EmbedConfig {
+  const threads = Number(process.env.WOLFPACK_EMBED_THREADS);
+  const provider = process.env.WOLFPACK_EMBED_PROVIDER === "onnx" ? "onnx" : "ollama";
   return {
     baseUrl: process.env.WOLFPACK_EMBED_URL ?? EMBED.baseUrl,
     model: process.env.WOLFPACK_EMBED_MODEL ?? EMBED.model,
+    provider,
+    ...(process.env.WOLFPACK_EMBED_MODEL_DIR ? { modelDir: process.env.WOLFPACK_EMBED_MODEL_DIR } : {}),
+    ...(Number.isInteger(threads) && threads > 0 ? { threads } : {}),
   };
 }
 
@@ -176,6 +191,9 @@ export function createEmbedder(
   roots: KbRoots,
   config: EmbedConfig = resolveEmbedConfig()
 ): CachedEmbedder {
+  const onnx = config.provider === "onnx";
+  // ONNX vectors differ slightly from Ollama GGUF ones: never mix them in one cache.
+  const cacheModel = onnx ? `${config.model}+onnx` : config.model;
   const dir = vectorsDir(roots);
   const metaPath = join(dir, "meta.json");
   const cachePath = join(dir, "cache.jsonl");
@@ -188,7 +206,7 @@ export function createEmbedder(
     ? (JSON.parse(readFileSync(metaPath, "utf-8")) as CacheMeta)
     : null;
 
-  if (meta && (meta.model !== config.model || meta.inputVersion !== EMBED_INPUT_VERSION)) {
+  if (meta && (meta.model !== cacheModel || meta.inputVersion !== EMBED_INPUT_VERSION)) {
     if (existsSync(cachePath)) rmSync(cachePath);
     loadedCaches.delete(cachePath);
     meta = null;
@@ -198,7 +216,7 @@ export function createEmbedder(
   const st = statCache(cachePath);
   if (!st) {
     loaded = undefined;
-  } else if (!loaded || loaded.model !== config.model || loaded.mtimeMs !== st.mtimeMs || loaded.size !== st.size) {
+  } else if (!loaded || loaded.model !== cacheModel || loaded.mtimeMs !== st.mtimeMs || loaded.size !== st.size) {
     const vectors = new Map<string, Vector>();
     let lines = 0;
     for (const line of readFileSync(cachePath, "utf-8").split("\n")) {
@@ -207,9 +225,9 @@ export function createEmbedder(
       vectors.set(hash, vec);
       lines++;
     }
-    loaded = { ...st, model: config.model, vectors, lines };
+    loaded = { ...st, model: cacheModel, vectors, lines };
   }
-  const state: LoadedCache = loaded ?? { mtimeMs: 0, size: 0, model: config.model, vectors: new Map(), lines: 0 };
+  const state: LoadedCache = loaded ?? { mtimeMs: 0, size: 0, model: cacheModel, vectors: new Map(), lines: 0 };
   loadedCaches.set(cachePath, state);
   const cache = state.vectors;
 
@@ -217,6 +235,20 @@ export function createEmbedder(
   function refreshStamp(): void {
     const now = statCache(cachePath);
     if (now) Object.assign(state, now);
+  }
+
+  // Built once; a failure (missing files or packages) is kept too, so each embed doesn't retry the import.
+  // A new embedder (new config) tries again.
+  let onnxFn: Promise<(text: string) => Promise<number[]>> | undefined;
+  async function callOnnx(text: string): Promise<Vector> {
+    if (!config.modelDir) throw new InfraError("WOLFPACK_EMBED_PROVIDER=onnx needs WOLFPACK_EMBED_MODEL_DIR (run scripts/fetch-embed-model.mjs <dir>)");
+    onnxFn ??= createOnnxEmbedFn({ modelDir: config.modelDir, ...(config.threads ? { threads: config.threads } : {}) });
+    try {
+      const fn = await onnxFn;
+      return normalize(await fn(text));
+    } catch (err) {
+      throw err instanceof InfraError ? err : new InfraError(`ONNX embedder failed: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    }
   }
 
   async function callOllama(text: string): Promise<Vector> {
@@ -252,14 +284,14 @@ export function createEmbedder(
       const cached = cache.get(hash);
       if (cached) return cached;
 
-      const vec = await callOllama(text);
+      const vec = await (onnx ? callOnnx(text) : callOllama(text));
       cache.set(hash, vec);
 
       // Persist incrementally (append the vector) + keep meta current.
       appendFileSync(cachePath, JSON.stringify({ hash, vec }) + "\n");
       state.lines++;
       refreshStamp();
-      meta = { model: config.model, inputVersion: EMBED_INPUT_VERSION, dim: vec.length, updated: now() };
+      meta = { model: cacheModel, inputVersion: EMBED_INPUT_VERSION, dim: vec.length, updated: now() };
       atomicWrite(metaPath, JSON.stringify(meta, null, 2));
       return vec;
     },

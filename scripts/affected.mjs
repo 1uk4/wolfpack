@@ -108,6 +108,8 @@ export function computeAffected(changed, workspaces, scriptsDist = []) {
     scriptsTests,
     consoleTests,
     tracer: tracerPk.some((p) => hit.has(p)) || has(/^infra\/tracer\//),
+    /** the app supervisor test runs real hubd/workerd/wolfd bundles (apps/desktop/electron); it needs the runtime build step */
+    desktopTests: has(/^apps\/desktop\//) || tracerPk.some((p) => hit.has(p)) || hit.has("@wolfpack/memory") || hit.has("@wolfpack/protocol"),
     release: has(/^infra\/release\//) || has(/^scripts\/[^/]*release[^/]*$/) || has(/^package-lock\.json$/),
   };
 }

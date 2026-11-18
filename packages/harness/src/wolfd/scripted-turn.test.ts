@@ -224,6 +224,50 @@ describe("scripted model turns", () => {
     expect(objects.map((o) => [o.objectId, o.rev, o.seq])).toEqual([["A", 2, 3], ["B", 1, 2]]);
   });
 
+  it("pin and `pinned`: events carry the pin state with a pinRev, an unknown objectId is a tool error, and the fold survives a reload", async () => {
+    const cl = (objectId: string, extra: object = {}) => fauxToolCall("show_checklist", { objectId, items: [{ id: "a", label: "A", state: "todo" }], ...extra } as never);
+    const pin = (objectId: string, pinned: boolean) => fauxToolCall("pin", { objectId, pinned } as never);
+    tw = await startTestWolf({
+      script: [
+        fauxAssistantMessage([cl("A")], { stopReason: "toolUse" }),
+        fauxAssistantMessage([cl("B", { pinned: false })], { stopReason: "toolUse" }),
+        fauxAssistantMessage([pin("B", true)], { stopReason: "toolUse" }),
+        fauxAssistantMessage([pin("nope", true)], { stopReason: "toolUse" }),
+        fauxAssistantMessage([pin("A", false)], { stopReason: "toolUse" }),
+        fauxAssistantMessage("done"),
+      ],
+    });
+    const events = await tw.submit("track it");
+    const objEvents = events.filter((e) => e.type === "object-upsert" || e.type === "object-pin");
+    expect(objEvents.map((e) => [e.type, e.objectId, e.pinned, e.pinRev])).toEqual([
+      ["object-upsert", "A", undefined, undefined],
+      ["object-upsert", "B", false, 1],
+      ["object-pin", "B", true, 2],
+      ["object-pin", "A", false, 1],
+    ]);
+    const ends = events.filter((e) => e.type === "tool-end");
+    expect(ends.map((e) => e.isError)).toEqual([false, false, false, true, false]);
+    expect(ends[3]!.result).toContain('No object "nope"');
+    const objects = (await tw.client.getThread(tw.home)).messages.flatMap((m) => m.objects ?? []);
+    expect(objects.map((o) => [o.objectId, o.rev, o.pinned, o.pinRev, o.seq])).toEqual([["A", 1, false, 1, 4], ["B", 1, true, 2, 3]]);
+  });
+
+  it("a revision that omits `pinned` after `pinned: false` keeps the object unpinned, live and in reloaded history", async () => {
+    const cl = (extra: object = {}) => fauxToolCall("show_checklist", { objectId: "A", items: [{ id: "a", label: "A", state: "todo" }], ...extra } as never);
+    tw = await startTestWolf({
+      script: [
+        fauxAssistantMessage([cl({ pinned: false })], { stopReason: "toolUse" }),
+        fauxAssistantMessage([cl()], { stopReason: "toolUse" }),
+        fauxAssistantMessage("done"),
+      ],
+    });
+    const events = await tw.submit("track it");
+    const ups = events.filter((e) => e.type === "object-upsert");
+    expect(ups.map((e) => [e.rev, e.pinned, e.pinRev])).toEqual([[1, false, 1], [2, undefined, undefined]]);
+    const objects = (await tw.client.getThread(tw.home)).messages.flatMap((m) => m.objects ?? []);
+    expect(objects.map((o) => [o.objectId, o.rev, o.pinned, o.pinRev])).toEqual([["A", 2, false, 1]]);
+  });
+
   it("show_graph revised: statuses update, history holds one object at the latest rev", async () => {
     const nodes = (s: string[]) => ["design", "build", "ship"].map((id, i) => ({ id, label: id, kind: "step", status: s[i] }));
     const edges = [{ from: "build", to: "design" }, { from: "ship", to: "build" }];

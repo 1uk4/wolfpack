@@ -71,8 +71,10 @@ import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
 import { createLinkContributions, type LinkContributions } from "./link-contributions.js";
 import { createLink, type Link, type LinkTimers } from "./link.js";
-import { INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES, InventoryReportBodySchema, LINK_PATH, wolfForRoute } from "@wolfpack/protocol";
+import { CommandRequestSchema, INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES, InventoryReportBodySchema, LINK_PATH, MachineKeyAckBodySchema, wolfForRoute } from "@wolfpack/protocol";
 import { createInventory, type Inventory } from "./inventory.js";
+import { createCommandHub, type CommandHub } from "./commands.js";
+import { createMachineKeys, type MachineKeys } from "./machine-keys.js";
 import { createRelay, type Relay } from "./relay.js";
 import { DOMAIN_RE, listWorkItems, readWorkRecordFor } from "./work-reads.js";
 import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
@@ -135,6 +137,8 @@ export interface HubOptions {
   kbRetention?: KbRetention;
   /** @internal TEST-ONLY: failure injection in link contribution handling. */
   linkFaults?: { beforeSeenAdd?: () => void };
+  /** @internal TEST-ONLY: one command-channel timeout for every kind, ms. */
+  commandTimeoutMs?: number;
   /** @internal TEST-ONLY: shrink the worker-link heartbeat / dead / hello timers. */
   linkTimers?: Partial<LinkTimers>;
   /** Librarian inbox root the hub delivers contributions into (`<root>/<wolf>/`). Default `<dataDir>/kb/ops/contributions`; on sfo-01 Dewey's `.../librarian/inbox`. Set by the `hubd` CLI from env HUBD_INBOX_ROOT (no flag). */
@@ -318,6 +322,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let linkRef: Link | undefined; // set once the link exists; revisions recorded before that have no one to notify
   let curator: Curator | undefined;
   const inventory: Inventory = createInventory(opts.now);
+  const machineKeys: MachineKeys = createMachineKeys(opts.dataDir);
   let health: HubHealth | undefined; // started inside the start try below, stopped there if startup fails
   let rebuild: RebuildService | undefined; // set with the curator below
   let kbActivity: KbActivity | undefined; // set with the curator below (its on/off state is part of the answer)
@@ -400,6 +405,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   };
   const receiptsRoot = opts.receiptsRoot ?? join(roots.opsRoot, "receipts");
   let relay!: Relay;
+  let commandHub!: CommandHub;
   let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
   const host = opts.host ?? "127.0.0.1";
   try {
@@ -515,7 +521,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       seenMax: opts.linkSeenMax,
       faults: opts.linkFaults,
     });
-    link = createLink({ authenticate, registry, timers: opts.linkTimers, onReport: (h, m, entries) => inventory.setHost(h, m, entries.slice(0, INVENTORY_MAX_ENTRIES)), onHostGone: (h) => inventory.clearHost(h), onRelayFrame: (h, e, f) => relay.onFrame(h, e, f), onDown: (h, e) => relay.onDown(h, e), contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
+    link = createLink({ authenticate, registry, timers: opts.linkTimers, onHello: (h, hello) => { if (hello.pubkey) void machineKeys.observe(h, hello.pubkey).catch((e) => console.error(`hubd: recording machine key for ${h} failed: ${(e as Error).message}`)); }, onReport: (h, m, entries) => inventory.setHost(h, m, entries.slice(0, INVENTORY_MAX_ENTRIES)), onHostGone: (h) => inventory.clearHost(h), onRelayFrame: (h, e, f) => relay.onFrame(h, e, f), onDown: (h, e) => { relay.onDown(h, e); commandHub.onDown(h, e); }, onCommandResult: (h, e, f) => commandHub.onResult(h, e, f), contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
     linkRef = link;
     link.onPresence((h, p) => p === "online" && linkContrib.onHostOnline(h));
     packSummary = createPackSummary({
@@ -523,12 +529,14 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       wolves: () => registry.list("wolves") as { name: string; host?: string; status?: string }[],
       presence: (h) => link.presence(h),
       machine: (h) => link.machine(h),
+      commands: (h) => link.commands(h),
       // A host's label is its newest worker token's label (operator `--label`, else the hostname workerd sent when pairing).
       labels: () => new Map(tokens.list().filter((t) => t.kind === "worker" && t.hostId && t.label).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((t) => [t.hostId!, t.label] as const)),
       now: opts.now,
     });
     link.onPresence((h) => packSummary?.presenceChanged(h));
     registry.onChange(() => packSummary?.registryChanged());
+    commandHub = createCommandHub({ presence: (h) => link.presence(h), advertised: (h) => link.commands(h), epoch: (h) => link.epoch(h), send: (h, f) => link.sendToHost(h, f), timeoutMs: opts.commandTimeoutMs });
     relay = createRelay({ link, registry, bodyTimeoutMs: opts.bodyTimeoutMs });
     revokeListeners.add((id) => link.closeByToken(id));
     async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: RegRoute, params: Record<string, string>): Promise<void> {
@@ -890,6 +898,27 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           deviceCaller(identity);
           return send(res, 200, { entries: inventory.list(health!.self()), hubMachine: health!.self().machine });
         }
+        case "hubMachineKeys": {
+          deviceCaller(identity);
+          return send(res, 200, { keys: machineKeys.all() });
+        }
+        case "hubMachineKeyAck": {
+          const caller = deviceCaller(identity);
+          const body = parseBody(MachineKeyAckBodySchema, await readJson(req, { maxBytes: 1024, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          const acked = machineKeys.ack(params.id!, body.fingerprint);
+          if (acked === "unknown") throw new HubError("not_found", "no key recorded for this machine");
+          if (acked === "mismatch") throw new HubError("conflict", "that is not this machine's current key fingerprint; reload and check it again");
+          // Audit trail: host, fingerprint and token id only, never key material.
+          console.error(`hubd: machine key accepted host=${params.id} fingerprint=${body.fingerprint} token=${caller.tokenId}`);
+          return send(res, 200, { ok: true });
+        }
+        case "hubMachineCommand": {
+          // Console/browser tokens only; the token was verified against tokens.json on this request (a revoked device is 401 above). Body (sealed key bytes) is never logged or stored.
+          deviceCaller(identity);
+          const body = parseBody(CommandRequestSchema, await readJson(req, { maxBytes: 128 * 1024, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          const out = await commandHub.run(params.id!, body);
+          return send(res, out.status, out.body);
+        }
         case "hubInventoryReport": {
           // A heartbeat, not a ledger event: no actor, no ledger. Console/browser tokens only; the row is bound to the token.
           const caller = deviceCaller(identity);
@@ -1078,6 +1107,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         tokensFlush();
         bus.closeAll();
         linkContrib?.stop();
+        commandHub.close();
         link.closeAll();
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
         server.close(() => {

@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { InventoryEntry } from "@wolfpack/protocol";
+import { InventoryEntrySchema, type InventoryEntry } from "@wolfpack/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { createInventoryReporter } from "./wolfd-probe.js";
 
@@ -21,7 +21,7 @@ function stub(listen: number | string): Promise<Server> {
 }
 const child = (name: string, url: string | null) => ({ name, state: "online" as const, pid: 1, url, adopted: false, restarts: 0, failures: 0, nextRestartInMs: null, logFile: "" });
 
-function reporter(children: ReturnType<typeof child>[], over: { enabled?: boolean } = {}) {
+function reporter(children: ReturnType<typeof child>[], over: { consoleUrl?: string; enabled?: boolean; keys?: () => InventoryEntry["keys"]; busy?: (name: string) => Promise<boolean>; transport?: (name: string) => "api" | "subscription" } = {}) {
   const sent: InventoryEntry[][] = [];
   const r = createInventoryReporter({
     hostId: "sfo-01-wolves",
@@ -31,6 +31,10 @@ function reporter(children: ReturnType<typeof child>[], over: { enabled?: boolea
     children: () => children,
     send: (entries) => (sent.push(entries), true),
     enabled: () => over.enabled ?? true,
+    ...(over.consoleUrl ? { consoleUrl: over.consoleUrl } : {}),
+    ...(over.keys ? { keys: over.keys } : {}),
+    ...(over.busy ? { busy: over.busy } : {}),
+    ...(over.transport ? { transport: over.transport } : {}),
     probeTimeoutMs: 300,
     intervalMs: 3_600_000,
   });
@@ -60,6 +64,35 @@ describe("workerd inventory reporter", () => {
     expect(wolfd("nourl").version).toBeUndefined();
   });
 
+  it("reports per-slot key presence on the workerd entry only, and the entry schema accepts it", async () => {
+    const keys = [{ slot: "anthropic", present: true, masked: "••••abcd", source: "pack" as const, shadowsEnv: true }, { slot: "deepgram", present: false }];
+    const { r, sent } = reporter([child("nourl", null)], { keys: () => keys });
+    await r.report();
+    const e = sent.at(-1)!;
+    expect(e[0]!.keys).toEqual(keys);
+    expect(e[1]!.keys).toBeUndefined();
+    expect(InventoryEntrySchema.safeParse(e[0]).success).toBe(true);
+  });
+
+  it("marks each wolfd that is mid-reply as busy, so the Pack can warn before a restart", async () => {
+    const { r, sent } = reporter([child("talking", null), child("idle", null)], { busy: async (n) => n === "talking" });
+    await r.report();
+    const e = sent.at(-1)!;
+    expect(e.find((x) => x.id === "talking")!.busy).toBe(true);
+    expect(e.find((x) => x.id === "idle")!.busy).toBeUndefined();
+    expect(InventoryEntrySchema.safeParse(e.find((x) => x.id === "talking")).success).toBe(true);
+  });
+
+  it("reports each wolfd's transport so the Pack knows which wolves take the Anthropic key", async () => {
+    const { r, sent } = reporter([child("bridge", null), child("metered", null)], { transport: (n) => (n === "metered" ? "api" : "subscription") });
+    await r.report();
+    const e = sent.at(-1)!;
+    expect(e.find((x) => x.id === "bridge")!.transport).toBe("subscription");
+    expect(e.find((x) => x.id === "metered")!.transport).toBe("api");
+    expect(e[0]!.transport).toBeUndefined();
+    expect(InventoryEntrySchema.safeParse(e.find((x) => x.id === "metered")).success).toBe(true);
+  });
+
   it("gives up on a wolfd that drips its response past the overall deadline, ignores an oversized body, and a non-http url", async () => {
     const drip = createServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -78,6 +111,26 @@ describe("workerd inventory reporter", () => {
     expect(Date.now() - t0).toBeLessThan(1_500);
     const e = sent.at(-1)!;
     for (const id of ["drip", "big", "ftp"]) expect(e.find((x) => x.id === id)!.version).toBeUndefined();
+  });
+
+  it("reports the machine's own console from its /api/health self part, and nothing when the console does not answer", async () => {
+    const con = createServer((req, res) => {
+      if (req.url === "/api/health") res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ self: { machine: "ignored", kind: "console", id: "console", version: "0.1.20", channel: "stable", uptimeS: 77, lagMs: 3 }, links: [] }));
+      else res.writeHead(404).end();
+    });
+    cleanup.push(() => con.close());
+    await new Promise<void>((r) => con.listen(0, () => r()));
+    const up = reporter([], { consoleUrl: `http://127.0.0.1:${(con.address() as { port: number }).port}` });
+    await up.r.report();
+    const c = up.sent.at(-1)!.find((x) => x.kind === "console")!;
+    expect(c).toEqual({ machine: "sfo-01", kind: "console", id: "console", version: "0.1.20", channel: "stable", uptimeS: 77, lagMs: 3 });
+    expect(InventoryEntrySchema.safeParse(c).success).toBe(true);
+    const down = reporter([], { consoleUrl: "http://127.0.0.1:1" });
+    await down.r.report();
+    expect(down.sent.at(-1)!.some((x) => x.kind === "console")).toBe(false);
+    const unset = reporter([]);
+    await unset.r.report();
+    expect(unset.sent.at(-1)!.some((x) => x.kind === "console")).toBe(false);
   });
 
   it("sends nothing until the hub's welcome advertised inventory", async () => {

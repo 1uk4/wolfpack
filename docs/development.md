@@ -57,7 +57,7 @@ Live proof (this Mac only, never in CI): `pnpm run test:live` runs one chat turn
 
 - **Console suite:** `apps/console/scripts/test.sh` runs `tsx --test` over `tests/*.test.{ts,tsx}`. Deterministic, no LLM, no network. It excludes known-failing files (TODO in the script).
 - **Packages:** vitest (`packages/*/src/**/*.test.ts`).
-- **The ConsoleClient mock seam:** `packages/client` owns the `ConsoleClient` interface and `MockConsoleClient` with a fixed fixture (one wolf, one home thread, one scripted turn with a tool call). View-model tests (thread-adapter, session-core) and the thread API handlers (`src/server/thread-api.ts`) are tested against the mock. Test behaviour through this seam, not component internals. The mock is a permanent fixture, not throwaway data.
+- **The ConsoleClient mock seam:** `packages/client` owns the `ConsoleClient` interface and `MockConsoleClient` with a fixed fixture (one wolf, one home thread, one scripted turn with a tool call). View-model tests (thread-adapter, session-core) and the thread API handlers (`src/server/thread/thread-api.ts`) are tested against the mock. Test behaviour through this seam, not component internals. The mock is a permanent fixture, not throwaway data.
 - No browser e2e yet; Electron has a smoke script under `apps/desktop/scripts`.
 
 ## Docs rules

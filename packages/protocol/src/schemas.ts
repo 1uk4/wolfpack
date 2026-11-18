@@ -516,6 +516,10 @@ export const ThreadObjectSchema = z.object({
   seq: z.number().int().positive().optional(),
   /** History only: length of the message's `text` when the object first appeared (interleaves it with the text). */
   textOffset: z.number().int().nonnegative().optional(),
+  /** Additive. The agent's explicit pin state; absent = never set explicitly (auto-pin: the newest of its type is shown). */
+  pinned: z.boolean().optional(),
+  /** Additive. Count of the agent's explicit pin actions on this object (a `pinned` on a show call, or a `pin` call); the ordering token a client compares a local dismissal against. */
+  pinRev: z.number().int().positive().optional(),
 });
 export type ThreadObject = z.infer<typeof ThreadObjectSchema>;
 
@@ -533,8 +537,12 @@ export const DecisionDataSchema = z.object({
   rationale: z.string().describe("Why the chosen option won"),
 });
 
+/** The `pinned` option shared by the show tools. Omitting it keeps the current pin state; a new object auto-pins (the newest of its type). */
+const SHOW_PINNED = z.boolean().optional().describe("Pin the card in the chat strip (true) or keep it out (false). Omit to keep the current pin state; a new object auto-pins (the newest of its type is shown)");
+
 /** Parameters of the `show_decision` tool: the decision plus the wolf-chosen id (reuse it to revise). */
 export const ShowDecisionParamsSchema = DecisionDataSchema.extend({
+  pinned: SHOW_PINNED,
   objectId: z.string().min(1).describe("Stable id for this decision; call again with the same id to revise it (resend the whole decision)"),
 }).refine((d) => parseObjectData("decision", d) !== undefined, { message: "chosen must be the id of one of the options" });
 export type ShowDecisionParams = z.infer<typeof ShowDecisionParamsSchema>;
@@ -554,6 +562,7 @@ export const ChecklistDataSchema = z.object({
 
 /** Parameters of the `show_checklist` tool: the checklist plus the wolf-chosen id (reuse it to revise). */
 export const ShowChecklistParamsSchema = ChecklistDataSchema.extend({
+  pinned: SHOW_PINNED,
   objectId: z.string().min(1).describe("Stable id for this checklist; call again with the same id to revise it (resend the whole checklist)"),
 }).refine((d) => parseObjectData("checklist", d) !== undefined, { message: "item ids must be unique" });
 export type ShowChecklistParams = z.infer<typeof ShowChecklistParamsSchema>;
@@ -578,12 +587,25 @@ export const GraphDataSchema = z.object({
 
 /** Parameters of the `show_graph` tool: the graph plus the wolf-chosen id (reuse it to revise). */
 export const ShowGraphParamsSchema = GraphDataSchema.extend({
+  pinned: SHOW_PINNED,
   objectId: z.string().min(1).describe("Stable id for this graph; call again with the same id to revise it (resend the whole graph)"),
 }).superRefine((d, ctx) => {
   const problem = graphProblem(d.nodes, d.edges);
   if (problem) ctx.addIssue({ code: "custom", message: problem });
 });
 export type ShowGraphParams = z.infer<typeof ShowGraphParamsSchema>;
+
+/** Parameters of the `pin` tool: pin or unpin an object already shown in this thread, without resending it. */
+export const PinParamsSchema = z.object({
+  objectId: z.string().min(1).describe("The objectId of a checklist, decision or graph already shown in this thread"),
+  pinned: z.boolean().describe("true to show it in the chat strip, false to take it out"),
+});
+export type PinParams = z.infer<typeof PinParamsSchema>;
+/** JSON Schema of the `pin` tool's parameters, for the tool registration. */
+export function pinToolJsonSchema(): Record<string, unknown> {
+  const { $schema: _omit, ...rest } = z.toJSONSchema(PinParamsSchema, { io: "input" }) as Record<string, unknown>;
+  return rest;
+}
 
 /**
  * Object tools by tool name: the object type each shows and its parameter schema (zod, plus the JSON Schema a tool
@@ -764,6 +786,17 @@ export const ObjectUpsertEventSchema = base.extend({
   data: z.unknown(),
   /** Length of the turn's merged assistant text when the object appeared; same anchor as `ThreadObject.textOffset`. Absent for a mid-turn joiner. */
   textOffset: z.number().int().nonnegative().optional(),
+  /** Additive: explicit pin state and its token, as on `ThreadObject` (absent when the call did not set `pinned`). */
+  pinned: z.boolean().optional(),
+  pinRev: z.number().int().positive().optional(),
+});
+/** The agent pinned or unpinned an object (the `pin` tool). Fold onto the object: `pinned`/`pinRev` replace the earlier ones when `pinRev` is higher. */
+export const ObjectPinEventSchema = base.extend({
+  type: z.literal("object-pin"),
+  turnId,
+  objectId: z.string().min(1),
+  pinned: z.boolean(),
+  pinRev: z.number().int().positive(),
 });
 /**
  * Baseline thread state. A consumer that receives one discards everything it
@@ -798,6 +831,7 @@ export const ThreadEventSchema = z.discriminatedUnion("type", [
   TurnEndEventSchema,
   ErrorEventSchema,
   ObjectUpsertEventSchema,
+  ObjectPinEventSchema,
   CardPendingEventSchema,
   CardSettledEventSchema,
   SnapshotEventSchema,
@@ -1230,6 +1264,9 @@ export type ConsolidateResponse = z.infer<typeof ConsolidateResponseSchema>;
  * `promote_finished` / `promote_failed` MemoryEvents carrying the same `jobId`. `already_running` (HTTP 409) names
  * the job in flight and starts nothing (HTTP 202 as well: every non-2xx is an ErrorEnvelope).
  */
+/** Optional `POST .../memory/promote` body: promote only these session topics. No body or no ids: every topic. */
+export const PromoteBodySchema = z.object({ ids: z.array(z.string().min(1)).max(200).optional() });
+export type PromoteBody = z.infer<typeof PromoteBodySchema>;
 export const PromoteResponseSchema = z.object({
   jobId: z.string(),
   status: z.enum(["started", "already_running"]),
@@ -1365,10 +1402,42 @@ export const MemoryTreeSchema = z.object({
   })),
   /** Tagged work whose item could not be fetched or has no feature. */
   other: z.array(z.object({ id: z.string(), pending: nn, archived: nn })),
-  /** Untagged observations still in the pool. */
-  den: z.object({ pending: nn }),
+  /** Untagged observations: still in the pool (pending) and promoted in the last 7 days (archived; absent from an older wolfd). */
+  den: z.object({ pending: nn, archived: nn.optional() }),
 });
 export type MemoryTree = z.infer<typeof MemoryTreeSchema>;
+
+/** One session topic as the Memory panel's Topics section lists it. */
+export const MemoryTopicRowSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  bytes: nn,
+  updated: z.string(),
+  /** Threads (`thread:<id>`) and work ids whose notes fed the topic; `legacy` for a topic from before sources were tracked. */
+  sources: z.array(z.string()),
+  /** active: local and still being fed; promoted: sent to the KB, confirmed or not yet retired; held: failed distill (see `reason`); parked: the KB needs attention; retired: moved to retired/. */
+  state: z.enum(["active", "promoted", "held", "parked", "retired"]),
+  reason: z.string().optional(),
+  keepLocal: z.boolean(),
+  /** The KB entries a create/merge receipt confirmed, primary first. */
+  entryIds: z.array(z.string()),
+});
+export type MemoryTopicRow = z.infer<typeof MemoryTopicRowSchema>;
+
+/** `GET /v1/wolves/:name/memory/session-topics`: every live session topic plus the retired ones, and the byte budget. */
+export const MemoryTopicsSchema = z.object({
+  topics: z.array(MemoryTopicRowSchema),
+  totalBytes: nn,
+  capBytes: nn,
+  /** Topics moved to retired/ (their KB entries are reloaded when an old thread resumes). */
+  retired: z.array(MemoryTopicRowSchema),
+});
+export type MemoryTopics = z.infer<typeof MemoryTopicsSchema>;
+
+/** `PUT /v1/wolves/:name/memory/topics/:id/keep-local` body and answer. */
+export const KeepLocalBodySchema = z.object({ keepLocal: z.boolean() });
+export const KeepLocalResponseSchema = z.object({ id: z.string(), keepLocal: z.boolean() });
+export type KeepLocalResponse = z.infer<typeof KeepLocalResponseSchema>;
 
 /** `GET /v1/wolves/:name/memory/tree/:workId`: the observations funnelling into one node. */
 export const MemoryNodeObservationsSchema = z.object({

@@ -22,17 +22,19 @@ afterEach(() => {
 });
 
 describe("observations route: blocked on the Work API", () => {
-  it("flags the pool and the tagged observations when no Work API is configured", async () => {
+  it("flags the pool, not the individual observations, when no Work API is configured", async () => {
     const r = await readMemoryObservations(den, undefined, {});
     expect(r.blocked).toBe("work-api-unavailable");
-    expect(r.observations.find((o) => o.work)?.blocked).toBe("work-api-unavailable");
-    expect(r.observations.find((o) => !o.work)?.blocked).toBeUndefined();
+    expect(r.observations.every((o) => o.blocked === undefined)).toBe(true);
+    expect(r.pending).toBeUndefined();
   });
 
-  it("flags them when the Work API is unreachable", async () => {
+  it("a failed probe flags the pool only; an observation with a work-state entry keeps its own cause", async () => {
+    writeFileSync(join(den, ".memory", "pool", "work-state.json"), JSON.stringify({ "work-wolfpack-AAAAAAA": { firstPendingAt: T0 + 1_000, tries: 2, nextAttemptAt: 0, cause: "consolidation-failed" } }));
     vi.stubGlobal("fetch", async () => { throw new Error("ECONNREFUSED"); });
-    const r = await readMemoryObservations(den, undefined, { endpoint: "http://x", token: "t" });
+    const r = await readMemoryObservations(den, undefined, { endpoint: "http://x", token: "t" }, T0 + 2_000);
     expect(r.blocked).toBe("work-api-unavailable");
+    expect(r.observations.find((o) => o.work)?.blocked).toBe("consolidation-failed");
   });
 
   it("flags nothing when the Work API answers (even not found)", async () => {
@@ -92,10 +94,12 @@ describe("observations route: blocked on the Work API", () => {
     expect(r.pending?.count).toBe(3);
   });
 
-  it("ages the warning by the blocked observations, not the oldest state entry", async () => {
+  it("a failed probe with only an orphan state entry leaves the observation plainly pending, with no pending notice", async () => {
     writeFileSync(join(den, ".memory", "pool", "work-state.json"), JSON.stringify({ "work-wolfpack-AAAAAAA": { firstPendingAt: T0 - 5 * 24 * 3_600_000, tries: 2, nextAttemptAt: 0, cause: "work-api-unavailable" } }));
     vi.stubGlobal("fetch", async () => { throw new Error("down"); });
     const r = await readMemoryObservations(den, undefined, { endpoint: "http://x", token: "t" }, T0 + 2 * 3_600_000);
-    expect(r.pending).toEqual({ count: 1, oldestAgeMs: 2 * 3_600_000 });
+    expect(r.blocked).toBe("work-api-unavailable");
+    expect(r.observations.find((o) => o.work)?.blocked).toBeUndefined();
+    expect(r.pending).toBeUndefined();
   });
 });

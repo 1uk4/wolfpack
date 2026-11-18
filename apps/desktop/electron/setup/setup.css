@@ -1,0 +1,30 @@
+:root{--background:#0f141a;--foreground:#e6ebf0;--card:#161c24;--primary:#2dd4bf;--muted-foreground:#8a96a3;--accent:#1f2730;--border:#313b47;--danger:#f87171}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--background);color:var(--foreground);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.drag{position:fixed;inset:0 0 auto 0;height:40px;-webkit-app-region:drag}
+main{max-width:420px;margin:0 auto;padding:12vh 24px 40px}
+.dots{display:flex;gap:6px;list-style:none;padding:0;margin:0 0 28px}
+.dots li{width:28px;height:3px;border-radius:2px;background:var(--border)}
+.dots li.on{background:var(--primary)}
+h1{font-size:26px;margin:0 0 6px;font-weight:600;letter-spacing:-.01em}
+.hint{color:var(--muted-foreground);margin:0 0 22px}
+label{display:block;font-size:13px;color:var(--muted-foreground);margin-bottom:6px}
+input[type=text],input[type=password]{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--foreground);font:inherit;outline:none}
+input[type=text]:focus,input[type=password]:focus{border-color:var(--primary)}
+input[aria-invalid=true]{border-color:var(--danger)}
+a{color:var(--primary)}
+.links{margin:10px 0 18px;font-size:13px}
+button{font:inherit;padding:9px 18px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--foreground);cursor:pointer}
+button:hover:not(:disabled){background:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
+button.primary{background:var(--primary);border-color:var(--primary);color:#06201c;font-weight:600}
+button.primary:hover:not(:disabled){background:var(--primary);filter:brightness(1.08)}
+button.secondary{width:100%}
+.actions{display:flex;justify-content:space-between;margin-top:26px}
+.error{color:var(--danger);min-height:1.4em;margin:12px 0 0;font-size:13px}
+.domains{list-style:none;padding:0;margin:0 0 14px;display:flex;flex-direction:column;gap:10px}
+.check{display:flex;align-items:center;gap:10px;color:var(--foreground);font-size:15px;margin:0}
+.domain-new{display:grid;gap:6px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--card)}
+.domain-new .row{display:flex;gap:8px;align-items:center}
+.domain-new .remove{padding:4px 10px}
+[hidden]{display:none!important}

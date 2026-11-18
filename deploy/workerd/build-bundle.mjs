@@ -25,7 +25,7 @@ await esbuild.build({
 	target: "node22",
 	// CJS deps (ws, yaml, qrcode-terminal) need require() inside an ESM bundle.
 	banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
-	external: ["bufferutil", "utf-8-validate"], // optional native ws addons; ws falls back to plain JS
+	external: ["bufferutil", "utf-8-validate", "onnxruntime-node", "@huggingface/tokenizers"], // optional: ws native addons (ws falls back to plain JS) and the ONNX embedder packages (loaded at runtime only if installed)
 	logLevel: "info",
 });
 copyFileSync(path.join(here, "RUNBOOK.md"), path.join(out, "RUNBOOK.md"));

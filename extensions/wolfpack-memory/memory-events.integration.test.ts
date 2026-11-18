@@ -76,7 +76,7 @@ async function startWolf(memoryYaml: string, opts: { failDistill?: boolean } = {
     hooks: {
       extensions: ({ config, den, env }) => [
         adaptToDurable(
-          createMemoryExtension({ ...config.memory, engine: stubEngine(opts) }, { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env: { ...env, KB_BASE: kbBase } }),
+          createMemoryExtension({ ...config.memory, workLog: "fold", engine: stubEngine(opts) }, { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env: { ...env, KB_BASE: kbBase } }),
           { wolfDen: den, wolfName: "testwolf" },
         ),
       ],

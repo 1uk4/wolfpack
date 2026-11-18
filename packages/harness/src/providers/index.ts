@@ -10,10 +10,17 @@ export type { ProviderContext, ProviderFactory, ProviderHandle } from "./types.j
 export { guardProviderStreams } from "./guard.js";
 export { lookupOnlyProvider } from "./lookup.js";
 
-export const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
-  anthropic: anthropicFactory,
-  [CLAUDE_STATELESS_ID]: claudeStatelessFactory,
-};
+/** The one provider registry: the built-ins below register into it, and so do plug-ins (plugins.ts). */
+export const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {};
+
+/** Register a provider factory under a pi provider id. A clash with a built-in or another plug-in is an error. */
+export function registerProviderFactory(id: string, factory: ProviderFactory, lookupModels?: (typeof LOOKUP_MODELS)[string]): void {
+  if (Object.hasOwn(PROVIDER_FACTORIES, id)) throw new Error(`model provider "${id}" is already registered`);
+  PROVIDER_FACTORIES[id] = factory;
+  if (lookupModels) LOOKUP_MODELS[id] = lookupModels;
+}
+
+export const hasProviderFactory = (id: string): boolean => Object.hasOwn(PROVIDER_FACTORIES, id);
 
 /** Providers that run on the host's Agent SDK `query` (not bundleable): id → the seams to hand their factory. */
 export const SDK_PROVIDER_SEAMS: Record<string, (query: unknown, env: NodeJS.ProcessEnv) => object> = {
@@ -32,3 +39,6 @@ export const LOOKUP_MODELS: Record<string, (ctx: { cwd: string; env: NodeJS.Proc
   [LEGACY_CLAUDE_BRIDGE_ID]: legacyBridgeLookupModels,
   [CLAUDE_STATELESS_ID]: claudeStatelessModels,
 };
+
+registerProviderFactory("anthropic", anthropicFactory);
+registerProviderFactory(CLAUDE_STATELESS_ID, claudeStatelessFactory);

@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createEmbedder, currentEntryHashes, embedInput, entrySummary, EMBED_INPUT_VERSION } from "./embed.js";
+import { createEmbedder, currentEntryHashes, embedInput, entrySummary, resolveEmbedConfig, EMBED_INPUT_VERSION } from "./embed.js";
+import { InfraError } from "./backoff.js";
 import { contentHash, vectorsDir, type KbRoots } from "../shared/index.js";
 
 describe("vector cache", () => {
@@ -21,6 +22,7 @@ describe("vector cache", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     rmSync(base, { recursive: true, force: true });
   });
 
@@ -122,6 +124,42 @@ describe("vector cache", () => {
     writeFileSync(metaPath, JSON.stringify({ ...meta, inputVersion: EMBED_INPUT_VERSION, model: "other" }));
     fetchMock.mockClear();
     await createEmbedder(roots).embed("a", "a");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("defaults to Ollama on localhost:11434 with the plain model name as the cache key", async () => {
+    vi.stubEnv("WOLFPACK_EMBED_PROVIDER", undefined);
+    vi.stubEnv("WOLFPACK_EMBED_URL", undefined);
+    vi.stubEnv("WOLFPACK_EMBED_MODEL", undefined);
+    vi.stubEnv("WOLFPACK_EMBED_MODEL_DIR", undefined);
+    vi.stubEnv("WOLFPACK_EMBED_THREADS", undefined);
+    expect(resolveEmbedConfig()).toEqual({ baseUrl: "http://localhost:11434", model: "nomic-embed-text", provider: "ollama" });
+    await createEmbedder(roots, resolveEmbedConfig()).embed("a", "a");
+    expect(JSON.parse(readFileSync(join(vectorsDir(roots), "meta.json"), "utf-8")).model).toBe("nomic-embed-text");
+  });
+
+  it("fails with an InfraError naming the missing model file when the onnx model dir is empty, and keeps failing without touching Ollama", async () => {
+    const modelDir = join(base, "no-model");
+    const e = createEmbedder(roots, { baseUrl: "http://127.0.0.1:9", model: "nomic-embed-text", provider: "onnx", modelDir });
+    const err = await e.embed("a", "a").catch((x: unknown) => x);
+    expect(err).toBeInstanceOf(InfraError);
+    expect((err as Error).message).toContain(join(modelDir, "model.onnx"));
+    await expect(e.embed("b", "b")).rejects.toBeInstanceOf(InfraError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("switching provider discards the other provider's vectors instead of mixing them", async () => {
+    const cfg = { baseUrl: "http://127.0.0.1:9", model: "nomic-embed-text" };
+    await createEmbedder(roots, { ...cfg, provider: "ollama" }).embed("a", "a");
+    expect(lines().map((l) => l.hash)).toEqual(["a"]);
+
+    // onnx (model dir missing, so it cannot embed) still wipes the Ollama vectors on creation.
+    createEmbedder(roots, { ...cfg, provider: "onnx", modelDir: join(base, "none") });
+    expect(() => lines()).toThrow(); // cache file removed
+
+    // Back on Ollama: "a" is embedded again, not served from the old cache.
+    fetchMock.mockClear();
+    await createEmbedder(roots, { ...cfg, provider: "ollama" }).embed("a", "a");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

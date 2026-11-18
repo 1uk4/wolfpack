@@ -1,0 +1,418 @@
+/**
+ * The memory/KB API handlers (what the /api/wolves/[name]/… route files
+ * wrap), driven against a stub ConsoleClient: pass-through, query mapping,
+ * ProtocolError code → HTTP status, and the SSE bridge.
+ */
+
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { NotFoundError, ProtocolError, type ConsoleClient, type MemoryEvent } from "@wolfpack/client";
+import { FIRST_PULL_MS, createMemoryApi } from "../../../src/server/kb/memory-api.ts";
+
+function stub(partial: Record<string, unknown>): () => ConsoleClient {
+	return () => partial as unknown as ConsoleClient;
+}
+
+const body = async (res: Response) => (await res.json()) as Record<string, unknown>;
+
+describe("memory API: pass-through", () => {
+	it("memoryStatus forwards the thread option", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(
+			stub({
+				getMemoryStatus: async (...a: unknown[]) => {
+					calls.push(a);
+					return { state: "on" };
+				},
+			}),
+		);
+		const res = await api.memoryStatus("1uk4", "t1");
+		assert.equal(res.status, 200);
+		assert.deepEqual(await body(res), { state: "on" });
+		assert.deepEqual(calls[0], ["1uk4", { thread: "t1" }]);
+		await api.memoryStatus("1uk4");
+		assert.deepEqual(calls[1], ["1uk4", {}]);
+	});
+
+	it("memoryTopic passes a valid scope", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ getMemoryTopic: async (...a: unknown[]) => (calls.push(a), { id: "x" }) }));
+		await api.memoryTopic("w", "x", "den");
+		await api.memoryTopic("w", "x");
+		assert.deepEqual(calls[0], ["w", "x", { scope: "den" }]);
+		assert.deepEqual(calls[1], ["w", "x", {}]);
+	});
+
+	it("memoryObservations passes a valid limit, rejects a bad one", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ getMemoryObservations: async (...a: unknown[]) => (calls.push(a), { observations: [], total: 0 }) }));
+		await api.memoryObservations("w", "5");
+		await api.memoryObservations("w");
+		assert.deepEqual(calls, [["w", { limit: 5 }], ["w", {}]]);
+		const bad = await api.memoryObservations("w", "0");
+		assert.equal(bad.status, 400);
+		assert.equal((await body(bad)).code, "invalid_request");
+		assert.equal((await createMemoryApi(stub({})).memoryObservations("w")).status, 409);
+	});
+
+	it("workRecord, consolidate, promote, kbEntry call the client", async () => {
+		const api = createMemoryApi(
+			stub({
+				getWorkRecord: async (w: string, id: string) => ({ w, id }),
+				consolidateMemory: async (w: string) => ({ consolidated: w }),
+				promoteMemory: async (w: string, o?: { ids?: string[] }) => ({ jobId: `${w}:${o?.ids?.join(",") ?? "all"}` }),
+				getKbEntry: async (w: string, id: string) => ({ w, id }),
+			}),
+		);
+		assert.deepEqual(await body(await api.workRecord("a", "wk")), { w: "a", id: "wk" });
+		assert.deepEqual(await body(await api.consolidate("a")), { consolidated: "a" });
+		assert.deepEqual(await body(await api.promote("a")), { jobId: "a:all" });
+		assert.deepEqual(await body(await api.promote("a", ["t1", "t2"])), { jobId: "a:t1,t2" });
+		assert.deepEqual(await body(await api.kbEntry("lib", "e1")), { w: "lib", id: "e1" });
+	});
+
+	it("workList passes the domain and graduated flag, and needs a domain", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ listWork: async (...a: unknown[]) => (calls.push(a), { items: [] }) }));
+		assert.deepEqual(await body(await api.workList("a", "wolfpack", true)), { items: [] });
+		assert.deepEqual(calls[0], ["a", { domain: "wolfpack", graduated: true }]);
+		assert.equal((await api.workList("a", null, false)).status, 400);
+		assert.equal((await createMemoryApi(stub({})).workList("a", "d", false)).status, 409);
+	});
+
+	it("workOp passes assign and move to the hub, refuses any other op, and returns the hub's message on failure", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ listWolves: async () => [{ name: "hal" }, { name: "luka" }], patchWork: async (...a: unknown[]) => (calls.push(a), { item: { id: a[0] } }) }));
+		assert.equal((await api.workOp("work-x-1", { assignee: "hal" })).status, 200);
+		assert.equal((await api.workOp("work-x-1", { moveTo: null })).status, 200);
+		assert.deepEqual(calls, [["work-x-1", { assignee: "hal" }], ["work-x-1", { moveTo: null }]]);
+		for (const bad of [{ title: "x" }, { body: "## Plan" }, { assignee: "hal", note: "x" }, { assignee: "" }, { ops: [] }, JSON.parse('{"__proto__":{"assignee":"hal"}}'), { moveTo: "" }, { moveTo: 5 }, null, ["assignee"]]) {
+			assert.equal((await api.workOp("work-x-1", bad)).status, 400, JSON.stringify(bad));
+		}
+		assert.equal(calls.length, 2, "refused ops never reach the hub");
+		const forbidden = createMemoryApi(stub({ listWolves: async () => [{ name: "hal" }], patchWork: async () => { throw new ProtocolError("forbidden", "only the owner can change it", false); } }));
+		const res = await forbidden.workOp("work-x-1", { assignee: "hal" });
+		assert.equal(res.status, 403);
+		assert.deepEqual(await body(res), { error: "only the owner can change it", code: "forbidden" });
+	});
+
+	it("workOp returns the hub's reassigned list on a move, so the page can say the task was handed over", async () => {
+		const reassigned = [{ id: "work-x-1", from: "hal", to: "luka" }];
+		const api = createMemoryApi(stub({ patchWork: async () => ({ item: { id: "work-x-1" }, reassigned }) }));
+		const res = await api.workOp("work-x-1", { moveTo: "work-x-2" });
+		assert.equal(res.status, 200);
+		assert.deepEqual((await body(res)).reassigned, reassigned);
+	});
+
+	it("workOp refuses an assignee that is not in the hub's wolf list, and fails closed when the list is missing, without calling the hub", async () => {
+		const calls: unknown[][] = [];
+		const patchWork = async (...a: unknown[]) => (calls.push(a), { item: { id: a[0] } });
+		const res = await createMemoryApi(stub({ listWolves: async () => [{ name: "hal" }], patchWork })).workOp("work-x-1", { assignee: "nope-not-a-wolf" });
+		assert.equal(res.status, 400);
+		assert.match(String((await body(res)).error), /nope-not-a-wolf/);
+		const failed = await createMemoryApi(stub({ listWolves: async () => { throw new Error("fetch failed"); }, patchWork })).workOp("work-x-1", { assignee: "hal" });
+		assert.equal(failed.status, 502);
+		const empty = await createMemoryApi(stub({ listWolves: async () => [], patchWork })).workOp("work-x-1", { assignee: "hal" });
+		assert.equal(empty.status, 502);
+		assert.equal(calls.length, 0, "no refused assign reaches the hub");
+	});
+
+	it("workOp rejects a malformed id (dot segments) before any call, and answers 502 'hub unreachable' when the hub cannot be reached", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ listWolves: async () => [{ name: "hal" }], patchWork: async (...a: unknown[]) => (calls.push(a), { item: {} }) }));
+		for (const id of ["..", ".", "work-x", "work-x-1/../y", ""]) assert.equal((await api.workOp(id, { moveTo: null })).status, 400, id);
+		assert.equal(calls.length, 0);
+		const down = createMemoryApi(stub({ patchWork: async () => { throw new TypeError("fetch failed"); } }));
+		const res = await down.workOp("work-x-1", { moveTo: null });
+		assert.equal(res.status, 502);
+		assert.deepEqual(await body(res), { error: "hub unreachable", code: "engine_error" });
+	});
+
+	it("kbGraph maps query params to options", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ getKbGraph: async (...a: unknown[]) => (calls.push(a), { nodes: [] }) }));
+		await api.kbGraph("lib", new URLSearchParams("domain=wolfpack&archivedWork=1&denTopics=true"));
+		assert.deepEqual(calls[0], ["lib", { domain: "wolfpack", archivedWork: true, denTopics: true }]);
+		await api.kbGraph("lib", new URLSearchParams());
+		assert.deepEqual(calls[1], ["lib", {}]);
+	});
+});
+
+describe("memory API: kbGraphAuto source selection", () => {
+	it("relay mode reads the graph from the hub, no KB wolf needed", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(
+			stub({
+				kbFromHub: true,
+				listWolves: async () => [],
+				getHubKbGraph: async (...a: unknown[]) => (calls.push(a), { nodes: [{ id: "dom:a" }] }),
+				getKbGraph: async () => assert.fail("must not use a wolf"),
+			}),
+		);
+		const res = await api.kbGraphAuto(new URLSearchParams("domain=a&archivedWork=1&denTopics=1"));
+		assert.equal(res.status, 200);
+		assert.deepEqual(calls[0], [{ domain: "a", archivedWork: true }]);
+		assert.equal(((await res.json()) as { hubCopy?: boolean }).hubCopy, true);
+	});
+
+	it("local mode is unchanged: the librarian / a kbReadable wolf serves it; none = 409", async () => {
+		const calls: unknown[][] = [];
+		const wolves = [{ name: "mir", status: "online", kbReadable: true }, { name: "lib", status: "online", librarian: true }];
+		const api = createMemoryApi(
+			stub({
+				listWolves: async () => wolves,
+				getKbGraph: async (...a: unknown[]) => (calls.push(a), { nodes: [] }),
+				getHubKbGraph: async () => assert.fail("must not use the hub"),
+			}),
+		);
+		assert.equal((await api.kbGraphAuto(new URLSearchParams("denTopics=1"))).status, 200);
+		assert.deepEqual(calls[0], ["lib", { denTopics: true }]);
+		const none = createMemoryApi(stub({ listWolves: async () => [{ name: "x", status: "online" }], getKbGraph: async () => ({}) }));
+		const r = await none.kbGraphAuto(new URLSearchParams());
+		assert.equal(r.status, 409);
+		assert.equal((await body(r)).code, "kb_unavailable");
+	});
+});
+
+describe("memory API: kbEntryAuto source selection", () => {
+	it("relay mode reads the entry from the hub", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ kbFromHub: true, listWolves: async () => [], getHubKbEntry: async (...a: unknown[]) => (calls.push(a), { id: "e1" }), getKbEntry: async () => assert.fail("no wolf") }));
+		assert.equal((await api.kbEntryAuto("e1")).status, 200);
+		assert.deepEqual(calls[0], ["e1"]);
+	});
+	it("local mode is unchanged: the librarian serves it; none = 409", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ listWolves: async () => [{ name: "lib", status: "online", librarian: true }], getKbEntry: async (...a: unknown[]) => (calls.push(a), { id: "e1" }), getHubKbEntry: async () => assert.fail("no hub") }));
+		assert.equal((await api.kbEntryAuto("e1")).status, 200);
+		assert.deepEqual(calls[0], ["lib", "e1"]);
+		const none = createMemoryApi(stub({ listWolves: async () => [], getKbEntry: async () => ({}) }));
+		assert.equal((await none.kbEntryAuto("e1")).status, 409);
+	});
+});
+
+describe("memory API: error mapping", () => {
+	const failing = (err: Error) => {
+		const reject = async () => {
+			throw err;
+		};
+		return createMemoryApi(
+			stub({
+				getMemoryStatus: reject,
+				consolidateMemory: reject,
+				promoteMemory: reject,
+				getKbGraph: reject,
+				getKbEntry: reject,
+			}),
+		);
+	};
+
+	it("kb_unavailable → 409 with the code", async () => {
+		const res = await failing(new ProtocolError("kb_unavailable", "not the librarian", false)).kbGraph("w", new URLSearchParams());
+		assert.equal(res.status, 409);
+		assert.deepEqual(await body(res), { error: "not the librarian", code: "kb_unavailable" });
+	});
+
+	it("memory_unavailable / memory_busy / promote_unavailable → 409", async () => {
+		for (const [code, call] of [
+			["memory_unavailable", (a: ReturnType<typeof failing>) => a.memoryStatus("w")],
+			["memory_busy", (a: ReturnType<typeof failing>) => a.consolidate("w")],
+			["promote_unavailable", (a: ReturnType<typeof failing>) => a.promote("w")],
+		] as const) {
+			const res = await call(failing(new ProtocolError(code, "m", code === "memory_busy")));
+			assert.equal(res.status, 409, code);
+			assert.equal((await body(res)).code, code);
+		}
+	});
+
+	it("other codes keep their protocol status; NotFoundError → 404; unknown → 500", async () => {
+		assert.equal((await failing(new ProtocolError("invalid_request", "bad", false)).kbEntry("w", "x")).status, 400);
+		assert.equal((await failing(new ProtocolError("engine_error", "boom", true)).kbEntry("w", "x")).status, 502);
+		const nf = await failing(new NotFoundError("entry x")).kbEntry("w", "x");
+		assert.equal(nf.status, 404);
+		assert.equal((await body(nf)).code, "not_found");
+		assert.equal((await failing(new Error("kaput")).kbEntry("w", "x")).status, 500);
+	});
+
+	it("a client without the optional method answers 409 unavailable", async () => {
+		const api = createMemoryApi(stub({}));
+		const kb = await api.kbGraph("w", new URLSearchParams());
+		assert.equal(kb.status, 409);
+		assert.equal((await body(kb)).code, "kb_unavailable");
+		const mem = await api.memoryStatus("w");
+		assert.equal(mem.status, 409);
+		assert.equal((await body(mem)).code, "memory_unavailable");
+		assert.equal((await api.events("w", new Request("http://t/e"))).status, 409);
+	});
+});
+
+describe("memory API: topic scope", () => {
+	it("an invalid scope is a 400", async () => {
+		const api = createMemoryApi(stub({ getMemoryTopic: async () => ({}) }));
+		const res = await api.memoryTopic("w", "x", "bogus");
+		assert.equal(res.status, 400);
+		assert.equal((await body(res)).code, "invalid_request");
+	});
+});
+
+describe("memory API: events SSE", () => {
+	const ev = (n: number): MemoryEvent => ({
+		type: "promote_started",
+		wolf: "w",
+		timestamp: "2026-10-26T00:00:00.000Z",
+		domain: "d",
+		target: { kind: "den" },
+		jobId: `j${n}`,
+	});
+
+	it("bridges watchMemory to data: frames and ends when the stream ends", async () => {
+		const api = createMemoryApi(
+			stub({
+				async *watchMemory(wolf: string) {
+					assert.equal(wolf, "w");
+					yield ev(1);
+					yield ev(2);
+				},
+			}),
+		);
+		const res = await api.events("w", new Request("http://t/e"));
+		assert.equal(res.headers.get("content-type"), "text/event-stream; charset=utf-8");
+		const text = await res.text();
+		const frames = text.split("\n\n").filter((f) => f.startsWith("data: "));
+		assert.deepEqual(
+			frames.map((f) => (JSON.parse(f.slice(6)) as { jobId: string }).jobId),
+			["j1", "j2"],
+		);
+	});
+
+	it("watchMemory failing immediately → mapped non-200 (409 memory_unavailable)", async () => {
+		const api = createMemoryApi(
+			stub({
+				async *watchMemory() {
+					throw new ProtocolError("memory_unavailable", "inert", false);
+				},
+			}),
+		);
+		const res = await api.events("w", new Request("http://t/e"));
+		assert.equal(res.status, 409);
+		assert.equal((await body(res)).code, "memory_unavailable");
+	});
+
+	it("a mid-stream error ends with a terminal event: error frame", async () => {
+		const api = createMemoryApi(
+			stub({
+				async *watchMemory() {
+					yield ev(1);
+					await new Promise((r) => setTimeout(r, FIRST_PULL_MS + 50));
+					throw new ProtocolError("engine_error", "lost", true);
+				},
+			}),
+		);
+		const text = await (await api.events("w", new Request("http://t/e"))).text();
+		assert.match(text, /data: \{.*"jobId":"j1"/);
+		assert.match(text, /event: error\ndata: \{"code":"engine_error","message":"lost"\}\n\n$/);
+	});
+
+	it("an already-aborted request opens no watch", async () => {
+		let watched = false;
+		const api = createMemoryApi(stub({ async *watchMemory() { watched = true; } }));
+		const ac = new AbortController();
+		ac.abort();
+		const res = await api.events("w", new Request("http://t/e", { signal: ac.signal }));
+		assert.equal(res.status, 204);
+		assert.equal(watched, false);
+	});
+
+	it("aborts the watch when the consumer cancels", async () => {
+		let aborted = false;
+		const api = createMemoryApi(
+			stub({
+				async *watchMemory(_w: string, opts: { signal: AbortSignal }) {
+					opts.signal.addEventListener("abort", () => (aborted = true));
+					yield ev(1);
+					await new Promise(() => {});
+				},
+			}),
+		);
+		const res = await api.events("w", new Request("http://t/e"));
+		const reader = res.body!.getReader();
+		await reader.read(); // ": open"
+		await reader.read(); // first event
+		await reader.cancel();
+		assert.equal(aborted, true);
+	});
+});
+
+describe("memory API: graduation", () => {
+	it("graduatePreview and graduateConfirm call the client and pass the token", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(
+			stub({
+				startGraduationPreview: async (...a: unknown[]) => (calls.push(["preview", ...a]), { token: "abc123abc123" }),
+				startGraduationConfirm: async (...a: unknown[]) => (calls.push(["confirm", ...a]), { graduated: true }),
+			}),
+		);
+		assert.deepEqual(await body(await api.graduatePreview("hal", "work-x-1")), { token: "abc123abc123" });
+		assert.deepEqual(await body(await api.graduateConfirm("hal", "work-x-1", { token: "abc123abc123" })), { graduated: true });
+		assert.deepEqual(calls, [["preview", "hal", "work-x-1"], ["confirm", "hal", "work-x-1", "abc123abc123"]]);
+	});
+
+	it("graduateStatus and graduateObservations call the client", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(
+			stub({
+				graduationStatus: async (...a: unknown[]) => (calls.push(["status", ...a]), { state: "none" }),
+				graduationObservations: async (...a: unknown[]) => (calls.push(["count", ...a]), { total: 0, byWork: [] }),
+			}),
+		);
+		assert.deepEqual(await body(await api.graduateStatus("hal", "work-x-1")), { state: "none" });
+		assert.deepEqual(await body(await api.graduateObservations("hal", "work-x-1")), { total: 0, byWork: [] });
+		assert.deepEqual(calls, [["status", "hal", "work-x-1"], ["count", "hal", "work-x-1"]]);
+		assert.equal((await createMemoryApi(stub({})).graduateStatus("hal", "w")).status, 409);
+		assert.equal((await createMemoryApi(stub({})).graduateObservations("hal", "w")).status, 409);
+	});
+
+	it("confirm needs a token and a client that graduates", async () => {
+		const api = createMemoryApi(stub({ startGraduationConfirm: async () => ({}) }));
+		for (const bad of [null, {}, { token: "" }, { token: 4 }]) {
+			const res = await api.graduateConfirm("hal", "work-x-1", bad);
+			assert.equal(res.status, 400);
+			assert.equal((await body(res)).code, "invalid_request");
+		}
+		assert.equal((await createMemoryApi(stub({})).graduatePreview("hal", "w")).status, 409);
+		assert.equal((await createMemoryApi(stub({})).graduateConfirm("hal", "w", { token: "t" })).status, 409);
+	});
+
+	it("maps the refusals to 409 with their code and an engine failure to 502", async () => {
+		const fail = (code: string) => stub({ startGraduationPreview: async () => { throw new ProtocolError(code as never, `no: ${code}`, false); } });
+		for (const code of ["not_ready", "preview_stale", "memory_unavailable"]) {
+			const res = await createMemoryApi(fail(code)).graduatePreview("hal", "w");
+			assert.equal(res.status, 409);
+			assert.deepEqual(await body(res), { error: `no: ${code}`, code });
+		}
+		assert.equal((await createMemoryApi(fail("engine_error")).graduatePreview("hal", "w")).status, 502);
+	});
+});
+
+describe("memory API: session topics", () => {
+	it("memorySessionTopics passes the list through; memoryKeepLocal validates the body and maps an unknown topic to 404", async () => {
+		const calls: unknown[][] = [];
+		const list = { topics: [], totalBytes: 0, capBytes: 184320, retired: [] };
+		const api = createMemoryApi(stub({
+			getMemorySessionTopics: async () => list,
+			putMemoryKeepLocal: async (...a: unknown[]) => {
+				calls.push(a);
+				if (a[1] === "gone") throw new NotFoundError("no topic gone");
+				return { id: a[1], keepLocal: a[2] };
+			},
+		}));
+		assert.deepEqual(await body(await api.memorySessionTopics("1uk4")), list);
+		const ok = await api.memoryKeepLocal("1uk4", "a", { keepLocal: true });
+		assert.equal(ok.status, 200);
+		assert.deepEqual(await body(ok), { id: "a", keepLocal: true });
+		assert.deepEqual(calls[0], ["1uk4", "a", true]);
+		for (const bad of [null, {}, { keepLocal: "yes" }]) assert.equal((await api.memoryKeepLocal("1uk4", "a", bad)).status, 400);
+		assert.equal((await api.memoryKeepLocal("1uk4", "gone", { keepLocal: false })).status, 404);
+		assert.equal((await createMemoryApi(stub({})).memorySessionTopics("1uk4")).status, 409);
+	});
+});

@@ -1,4 +1,6 @@
-/** /prompts opens the Settings modal on its tab (AppShell's SettingsDialogProvider reads the URL); the page itself draws nothing. */
-export default function Page() {
-	return null;
+import { redirect } from "next/navigation";
+
+/** /prompts used to open the Settings dialog on Prompts; prompts are viewed in the Pack's Wolves section now (work-wolfpack-u6GH2kk). */
+export default function Page(): never {
+	redirect("/?pack=wolves");
 }

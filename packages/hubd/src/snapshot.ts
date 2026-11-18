@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { packStateDir, wolvesRoot } from "@wolfpack/protocol/runtime-home";
 import { dirname, join, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { hubRoots } from "./layout.js";
@@ -32,7 +33,7 @@ export interface RemoteHost {
 export type PullRunner = (cmd: string, args: string[]) => Promise<{ code: number; stderr: string }>;
 
 /** Reads ONLY name/address/ssh user+port from the wolfpack config. Never touches (or returns) apiKey or other secrets. Parse errors are generic (a YAML code frame could echo secrets). */
-export function resolveHost(name: string, configPath = join(homedir(), ".wolfpack", "config.yaml")): RemoteHost {
+export function resolveHost(name: string, configPath = join(packStateDir(), "config.yaml")): RemoteHost {
   let doc: { hosts?: Record<string, { address?: unknown; ssh?: { user?: unknown; port?: unknown } }> } | undefined;
   try {
     doc = parseYaml(readFileSync(configPath, "utf8")) as typeof doc;
@@ -90,8 +91,11 @@ function resolveReal(dir: string): { abs: string; real: string } {
  */
 export function assertNotLiveMirror(dir: string, home = homedir()): string {
   const { abs, real } = resolveReal(dir);
-  const wolvesRaw = join(home, "wolves");
-  const wolvesRoots = new Set([wolvesRaw, existsSync(wolvesRaw) ? realpathSync.native(wolvesRaw) : wolvesRaw]);
+  const wolvesRoots = new Set<string>();
+  for (const raw of new Set([join(home, "wolves"), wolvesRoot({ ...process.env, HOME: home })])) {
+    wolvesRoots.add(raw);
+    wolvesRoots.add(existsSync(raw) ? realpathSync.native(raw) : raw);
+  }
   for (const p of new Set([abs, real])) {
     for (const wolves of wolvesRoots) {
       if (!isWithin(p, wolves)) continue;
@@ -113,8 +117,8 @@ export function assertSafeDevDataDir(dir: string, home = homedir()): string {
   return assertNotLiveMirror(dir, home);
 }
 
-export function defaultDevDataDir(now = new Date(), home = homedir()): string {
-  return join(home, ".wolfpack", "hubd-dev", now.toISOString().replace(/[:.]/g, "-"));
+export function defaultDevDataDir(now = new Date(), home?: string): string {
+  return join(home ? join(home, ".wolfpack") : packStateDir(), "hubd-dev", now.toISOString().replace(/[:.]/g, "-"));
 }
 
 export interface SnapshotManifest {

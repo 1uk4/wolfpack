@@ -45,6 +45,16 @@ export function durableSubagent(wolfDen: string, conversationId: number): Subage
   }
 }
 
+/** Every child in wolfd's registry that serves a task: its thread name and task id (empty when unreadable). */
+export function knownChildren(wolfDen: string): Array<{ name: string; taskId?: string }> {
+  try {
+    const reg = JSON.parse(readFileSync(join(wolfDen, "wolfd", "subagents.json"), "utf8")) as { children?: Array<Record<string, unknown>> };
+    return (reg.children ?? []).flatMap((c) => (typeof c.name === "string" ? [{ name: c.name, ...(typeof c.taskId === "string" ? { taskId: c.taskId } : {}) }] : []));
+  } catch {
+    return [];
+  }
+}
+
 /** The task's `partOf`, looked up once per task id (a failed lookup is remembered too: the feature stays unset). */
 export function featureResolver(client: () => Pick<WorkClient, "get">): (taskId: string) => Promise<string | undefined> {
   const cache = new Map<string, Promise<string | undefined>>();

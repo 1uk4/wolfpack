@@ -45,7 +45,7 @@ export const MAIN_MANIFEST_URL = `https://github.com/${REPO}/releases/download/m
  * Status readers call the updater stale when `lastCheck` is older than this: two timer intervals. Both timers run every 30 min
  * (wolfpack-auto-update.timer OnUnitActiveSec=30min plus up to 5 min RandomizedDelaySec; the Mac plist StartInterval 1800), so
  * 2 x 35 min. A run that finds the lock held writes nothing, so a stuck `<lock>.takeover` shows up here.
- * The console keeps its own copy (apps/console/src/server/updates-api.ts STALE_AFTER_MS): this file is copied to hosts on its own.
+ * The console keeps its own copy (apps/console/src/server/pack/updates-api.ts STALE_AFTER_MS): this file is copied to hosts on its own.
  */
 export const STALE_AFTER_MS = 2 * 35 * 60_000;
 

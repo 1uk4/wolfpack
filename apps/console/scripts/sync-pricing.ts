@@ -1,5 +1,5 @@
 /**
- * Regenerate src/core/prices.ts tables from pi-ai's shipped per-provider
+ * Regenerate src/core/settings/prices.ts tables from pi-ai's shipped per-provider
  * catalogs (providers/data/*.json).
  *
  * Usage: npx tsx scripts/sync-pricing.ts
@@ -95,7 +95,7 @@ function main(): void {
  *  (reads pi-ai's shipped catalogs — the same source the engine and the
  *  picker use). Forgetting the re-run is exactly how models go unpriced
  *  (deepseek-v4.1-flash, 2026-09-29) — the drift-guard test
- *  (tests/prices-sync.test.ts) fails the gates until you do. */
+ *  (tests/core/settings/prices-sync.test.ts) fails the gates until you do. */
 export const PRICES: Record<string, ModelPrice> = {
 ${rows.map((r) => r.price).join("\n")}
 };

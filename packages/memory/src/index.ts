@@ -70,6 +70,11 @@ export {
   readJourney,
   writeTopic,
   renderIndex,
+  evictOldTopics,
+  restoreEvicted,
+  setAsideEvicted,
+  readEvictedTopics,
+  DEFAULT_MAX_TOPICS,
   listSessionIds,
   type TopicFile,
 } from "./session/index.js";
@@ -120,7 +125,7 @@ export { fillPromptTemplate } from "./config/prompts/template.js";
 
 
 // Prompt context — shared rendering for system prompt injection
-export { renderDenContext, renderKbAccess } from "./prompt-context.js";
+export { renderDenContext, renderRetiredContext, renderKbAccess } from "./prompt-context.js";
 
 // Den reconcile — archive den topics the KB has absorbed (receipt-driven)
 export {
@@ -208,6 +213,11 @@ export {
 } from "./work-pending.js";
 export { withPoolLock, type PoolLockOptions } from "./pool-lock.js";
 export { writeFileAtomic } from "./atomic-write.js";
+export { ACTIVE_HOURS_RETENTION_DAYS, activeHoursFile, activeHoursSince, hourKey, readActiveHours, recordOwnerMessage, seedActiveHours } from "./active-hours.js";
+export { readRoutingIndex, recordReject, recordRouting, routingHint, subjectKey, type RoutingIndex, type RoutingSubject } from "./routing-index.js";
+export { reconcileAbsorbed } from "./absorbed.js";
+export { QUIET_ACTIVE_HOURS, RETIRED_DIR, TOPICS_BYTE_CAP, TOPIC_CHAR_CAP, enforceByteCap, setKeepLocal, isQuiet, retireTopic, runPromotePass, targetHint, topicActivity, type PassDeps, type PassOptions, type PassResult, type PassTrigger, type TopicOutcome } from "./promote-pass.js";
+export { dailyPassDue, markDailyPass, readPromoteState, updateTopicState, type PromoteState, type TopicPromoteState } from "./promote-state.js";
 export { observationHash, observationIds, type ObservationIdFields } from "./observation-id.js";
 export { CHILDREN_CAP, LOG_TAIL, shapeWorkList, shapeWorkRecord, toWorkChild, withoutLog, logTail, type ShapeWorkItem, type ShapedWorkChild, type ShapedWorkListItem, type ShapedWorkRecord } from "./work-shape.js";
 export { parseRecordLines, stripSources, lineRef, numberRecordLines, formatSources, SOURCE_CAP, type RecordLine, type SourceRef } from "./record-sources.js";

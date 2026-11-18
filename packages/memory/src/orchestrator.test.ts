@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
-import { createOrchestrator } from "./orchestrator.js";
+import { createOrchestrator as createOrchestratorDefault } from "./orchestrator.js";
+// `workLog` now defaults to append; these tests cover the fold path, so they set it explicitly.
+const createOrchestrator = (e: Parameters<typeof createOrchestratorDefault>[0], r: Parameters<typeof createOrchestratorDefault>[1], c: Parameters<typeof createOrchestratorDefault>[2] = {}) => createOrchestratorDefault(e, r, { workLog: "fold", ...c });
 import type { AgentRuntime, ConversationChunk, LedgerEntry } from "./runtime.js";
 import { readTopics } from "./session/memory.js";
 import { stripSources } from "./record-sources.js";

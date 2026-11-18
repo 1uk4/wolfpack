@@ -31,7 +31,7 @@
  */
 import type { Actor, ThreadEvent } from "@wolfpack/protocol";
 import type { AgentEvent, SnapshotEvent } from "@earendil-works/pi-durable";
-import { objectFromCall } from "./objects.js";
+import { objectFromCall, pinFromCall } from "./objects.js";
 
 export type EngineEvent = AgentEvent;
 export type EngineSnapshot = SnapshotEvent;
@@ -98,6 +98,8 @@ interface MapperState {
   objectCalls: Map<string, { name: string; args: unknown }>;
   /** Revs issued so far per objectId. */
   objectRevs: Map<string, number>;
+  /** Explicit pin actions issued so far per objectId (a pinned on a show call, or a pin call): the pinRev. */
+  pinRevs: Map<string, number>;
   /** Length of the turn's merged assistant text (closed messages joined by a blank line); undefined when joined mid-turn. */
   turnTextLen: number | undefined;
 }
@@ -139,7 +141,7 @@ const turnIdFor = (input: number | undefined) => `turn-${input ?? "unknown"}`;
 
 /** Seed from an attach snapshot so a mid-run joiner's deltas map to the right turn. */
 export function createEventMapper(seed?: EngineSnapshot): EventMapper {
-  const s: MapperState = { hint: "complete", text: "", thinking: "", blocks: new Map(), tools: new Map(), objectCalls: new Map(), objectRevs: new Map(), turnTextLen: undefined };
+  const s: MapperState = { hint: "complete", text: "", thinking: "", blocks: new Map(), tools: new Map(), objectCalls: new Map(), objectRevs: new Map(), pinRevs: new Map(), turnTextLen: undefined };
   const debugStream = process.env.WOLFPACK_DEBUG_STREAM === "1";
 
   /** Re-seed the block map from a (partial) message's content. */
@@ -204,6 +206,7 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
   const seedObjects = (snap: EngineSnapshot) => {
     s.objectCalls = new Map();
     s.objectRevs = new Map();
+    s.pinRevs = new Map();
     const ok = new Set<string>(); // calls whose result landed without an error
     const done = new Set<string>();
     for (const e of snap.entries) {
@@ -218,10 +221,13 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
       if (!Array.isArray(content)) continue;
       for (const b of content as Array<{ type: string; id?: string; name?: string; arguments?: unknown }>) {
         if (b.type !== "toolCall" || !b.id) continue;
-        const o = objectFromCall(b.name, b.arguments);
-        if (!o) continue;
-        if (ok.has(b.id)) s.objectRevs.set(o.objectId, (s.objectRevs.get(o.objectId) ?? 0) + 1);
-        else if (!done.has(b.id)) s.objectCalls.set(b.id, { name: b.name!, args: b.arguments });
+        const pin = pinFromCall(b.name, b.arguments);
+        const o = pin ? undefined : objectFromCall(b.name, b.arguments);
+        if (!o && !pin) continue;
+        if (ok.has(b.id)) {
+          if (o) s.objectRevs.set(o.objectId, (s.objectRevs.get(o.objectId) ?? 0) + 1);
+          if (pin || o?.pinned !== undefined) { const id = (pin ?? o)!.objectId; s.pinRevs.set(id, (s.pinRevs.get(id) ?? 0) + 1); }
+        } else if (!done.has(b.id)) s.objectCalls.set(b.id, { name: b.name!, args: b.arguments });
       }
     }
   };
@@ -349,7 +355,12 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
         if (msg?.stopReason === "aborted") s.hint = "aborted";
         else if (msg?.stopReason === "error") {
           s.hint = "error";
-          out.push({ type: "error", turnId: s.turnId, message: msg.errorMessage ?? "model error" });
+          // pi-ai's own text when no key is set (either phrasing, maybe wrapped). The desktop app (WOLFPACK_SINGLE_MAC=1) lets setup finish without one, so it names the exact place.
+          const noKey = /(Provider is not configured|No API key for provider): anthropic/.test(msg.errorMessage ?? "");
+          const noKeyText = process.env.WOLFPACK_SINGLE_MAC === "1"
+            ? "No API key yet. Add one in Pack → Keys, then send again."
+            : "No Anthropic API key is set for this wolf. Add one in Pack → Keys, then send again.";
+          out.push({ type: "error", turnId: s.turnId, message: noKey ? noKeyText : (msg.errorMessage ?? "model error") });
         }
         return;
       }
@@ -380,8 +391,17 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
         // The object first: the console places it by arrival, so it lands in the message of the call that shows it.
         const call = s.objectCalls.get(e.toolCallId);
         s.objectCalls.delete(e.toolCallId);
-        const obj = msg && msg.isError !== true && call ? objectFromCall(call.name, call.args) : undefined;
+        const okCall = msg && msg.isError !== true && call;
+        const pin = okCall ? pinFromCall(call.name, call.args) : undefined;
+        if (pin) {
+          const pinRev = (s.pinRevs.get(pin.objectId) ?? 0) + 1;
+          s.pinRevs.set(pin.objectId, pinRev);
+          out.push({ type: "object-pin", turnId: s.turnId, objectId: pin.objectId, pinned: pin.pinned, pinRev });
+        }
+        const obj = okCall ? objectFromCall(call.name, call.args) : undefined;
         if (obj) {
+          const pinRev = obj.pinned !== undefined ? (s.pinRevs.get(obj.objectId) ?? 0) + 1 : undefined;
+          if (pinRev !== undefined) s.pinRevs.set(obj.objectId, pinRev);
           const rev = (s.objectRevs.get(obj.objectId) ?? 0) + 1;
           s.objectRevs.set(obj.objectId, rev);
           out.push({
@@ -391,6 +411,7 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
             objectType: obj.type,
             rev,
             data: obj.data,
+            ...(obj.pinned !== undefined ? { pinned: obj.pinned, pinRev } : {}),
             ...(s.turnTextLen !== undefined ? { textOffset: s.turnTextLen } : {}),
           });
         }

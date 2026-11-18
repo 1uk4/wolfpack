@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { describe, it } from "node:test";
@@ -22,13 +22,13 @@ function windowOptions(platform: string) {
 		once() {}
 	}
 	const electron = {
-		app: { setName() {}, getPath: () => "/nonexistent/wolfpack-test-userdata", requestSingleInstanceLock: () => false, quit() {} },
+		// getVersion and exit: the startup line logs the version before the lock, and a lost lock exits (work-wolfpack-SzoWaBZ)
+		app: { setName() {}, getPath: () => "/nonexistent/wolfpack-test-userdata", getVersion: () => "0.0.0-test", requestSingleInstanceLock: () => false, quit() {}, exit() {} },
 		BrowserWindow: FakeWindow,
 		session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
 	};
 	const context = {
-		require: (id: string) =>
-			id === "electron" ? electron : id === "./notify.cjs" ? require("../../desktop/electron/notify.cjs") : id === "./remote.cjs" ? require("../../desktop/electron/remote.cjs") : id === "./userdata-migrate.cjs" ? require("../../desktop/electron/userdata-migrate.cjs") : require(id),
+		require: (id: string) => (id === "electron" ? electron : id.startsWith(".") ? require(join(dirname(mainFile), id)) : require(id)),
 		process: { platform, argv: [], env: {}, on() {} },
 		__dirname: dirname(mainFile),
 	};
@@ -64,7 +64,7 @@ describe("desktop window chrome", () => {
 	it("preload exposes OS identity without exposing Node/Electron to the renderer", () => {
 		const exposed = new Map<string, Record<string, unknown>>();
 		const context = {
-			process: { platform: "win32" },
+			process: { platform: "win32", argv: [] },
 			require: () => ({
 				contextBridge: {
 					exposeInMainWorld(name: string, api: Record<string, unknown>) {
@@ -79,7 +79,7 @@ describe("desktop window chrome", () => {
 		const bridge = exposed.get("wolfpack") as Record<string, unknown>;
 		assert.equal(bridge.platform, "win32");
 		assert.deepEqual(Object.keys(bridge).sort(), [
-			"expandWindow", "getZoom", "installUpdate", "notify", "onNavigate", "onUpdateStatus", "onZoom", "platform",
+			"checkForUpdates", "expandWindow", "getZoom", "installUpdate", "notify", "onNavigate", "onUpdateStatus", "onZoom", "platform", "singleMac",
 		]);
 	});
 });
@@ -106,7 +106,9 @@ describe("desktop packaging policy", () => {
 			{ target: "AppImage", arch: ["x64"] }, { target: "deb", arch: ["x64"] },
 		]);
 		assert.equal(config.linux.syncDesktopName, true);
-		assert.equal(config.publish[0].releaseType, "draft");
+		// The feed is the rolling desktop-latest release through the generic provider; the release job creates the draft.
+		assert.equal(config.publish[0].provider, "generic");
+		assert.equal(config.publish[0].url, "https://github.com/1uk4/wolfpack/releases/download/desktop-latest");
 	});
 
 	it("deb has public maintainer metadata and a matching desktop identity", () => {

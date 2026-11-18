@@ -31,7 +31,7 @@ function parseConsoleUrl(raw) {
 	if (u.username || u.password) return { ok: false, reason: "credentials in URL are not allowed" };
 	if (u.protocol === "http:") {
 		if (!isLoopback(u.hostname) && !isTailnetIp(u.hostname)) {
-			return { ok: false, reason: "http is only allowed for loopback or 100.64/10 tailnet IPs; use https" };
+			return { ok: false, reason: "Use an https:// address. Plain http:// only works for this Mac (127.0.0.1) or a private 100.64.x.x address." };
 		}
 	} else if (u.protocol !== "https:") {
 		return { ok: false, reason: "only https is allowed" };

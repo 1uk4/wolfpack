@@ -13,14 +13,14 @@
 # WHY A SWITCH, NOT AN ENV SCRUB: a script cannot merely unset shell
 # *_API_KEY vars — Next injects .env.local (the dev secrets) into the
 # server env at boot, so a "fresh" instance would silently federate the
-# real keys. WOLFPACK_IGNORE_ENV_KEYS=1 (the keys seam, src/server/keys.ts)
-# deletes every managed key var from the process after Next's env load:
+# real keys. WOLFPACK_IGNORE_ENV_KEYS=1 (the keys seam, src/server/settings/keys.ts)
+# deletes every key var from the process once at server boot, after Next's env load:
 # pi-ai reads provider keys from process.env NATIVELY at every request,
 # so deletion hides keys from the whole app, model engines included.
 #
 #   WOLFPACK_DATA_DIR     → .fresh-data/ (wiped each launch unless --keep)
-#   WOLFPACK_AUTH_FILE    → .fresh-data/auth.json (NEVER the repo-root auth.json
-#                     — that file may symlink the real keys)
+#   WOLFPACK_KEY_FILE     → .fresh-data/keys.env (the Pack key file; starts absent,
+#                     so the instance has no keys until you add them)
 #   WOLFPACK_IGNORE_ENV_KEYS=1
 #
 # Safe to rerun. The data dir is disposable scratch — never copy it back.
@@ -85,14 +85,14 @@ fi
 mkdir -p "$DATA_DIR"
 
 export WOLFPACK_DATA_DIR="$DATA_DIR"
-export WOLFPACK_AUTH_FILE="$DATA_DIR/auth.json"
+export WOLFPACK_KEY_FILE="$DATA_DIR/keys.env"
 export WOLFPACK_IGNORE_ENV_KEYS=1
 export PORT
 
 echo "── fresh-user instance ─────────────────────────────────"
 echo "  URL      : http://localhost:$PORT"
 echo "  data dir : $DATA_DIR ($( [ "$KEEP" = "true" ] && echo 'kept across runs' || echo 'wiped next launch unless --keep' ))"
-echo "  keys     : env keys hidden (WOLFPACK_IGNORE_ENV_KEYS=1), auth.json empty"
+echo "  keys     : env keys hidden (WOLFPACK_IGNORE_ENV_KEYS=1), Pack key file $DATA_DIR/keys.env (absent = none)"
 echo "─────────────────────────────────────────────────────────"
 
 cd "$ROOT"

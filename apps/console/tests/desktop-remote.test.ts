@@ -18,6 +18,10 @@ describe("parseConsoleUrl", () => {
 	it("allows http only for loopback and tailnet IPs", () => {
 		for (const u of ["http://127.0.0.1:3210", "http://localhost:3000", "http://100.101.2.3", "http://[::1]:1"]) assert.equal(parseConsoleUrl(u).ok, true, u);
 		for (const u of ["http://example.com", "http://100.10.0.1", "http://192.168.1.2"]) assert.equal(parseConsoleUrl(u).ok, false, u);
+		assert.equal(
+			(parseConsoleUrl("http://example.com") as { reason?: string }).reason,
+			"Use an https:// address. Plain http:// only works for this Mac (127.0.0.1) or a private 100.64.x.x address.",
+		);
 	});
 	it("rejects credentials, other schemes, junk", () => {
 		for (const u of ["https://a:b@h.ts.net", "https://u@h.ts.net", "ftp://h", "javascript:alert(1)", "nope", "", undefined]) assert.equal(parseConsoleUrl(u as string).ok, false, String(u));

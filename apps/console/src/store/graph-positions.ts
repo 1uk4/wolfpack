@@ -1,7 +1,7 @@
 /**
  * The graph's stored node positions: data/graph/positions.json, a plain
  * JSON map nodeId → {x, y} in the console's own data dir (the KB is never
- * written). Shape rules live in src/core/graph-persistence.ts; this module
+ * written). Shape rules live in src/core/graph/graph-persistence.ts; this module
  * only moves bytes. Whatever comes off disk is sanitized; writes go to a
  * temp file and rename over, so a crash never tears the file.
  */
@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { POSITIONS_FILE } from "../../config.ts";
-import { sanitizePositions, type PositionMap } from "../core/graph-persistence.ts";
+import { sanitizePositions, type PositionMap } from "../core/graph/graph-persistence.ts";
 
 /** The stored positions; empty when absent or unreadable. */
 export function readGraphPositions(): PositionMap {

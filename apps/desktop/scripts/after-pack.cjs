@@ -24,4 +24,13 @@ module.exports = async function afterPack(context) {
 	const source = path.join(context.packager.info.projectDir, "build", "icon.icns");
 	fs.copyFileSync(source, target);
 	console.log(`[after-pack] pre-Tahoe fallback icns (full-res) → ${target}`);
+
+	// electron-builder never copies a folder named node_modules out of extraResources, so the runtime's node_modules
+	// (onnxruntime-node darwin-arm64 natives, tokenizers; see scripts/stage-runtime-assets.mjs) is added here, before signing.
+	const mods = path.join(context.packager.info.projectDir, "runtime", "node_modules");
+	if (fs.existsSync(mods)) {
+		const dest = path.join(appBundle, "Contents", "Resources", "runtime", "node_modules");
+		fs.cpSync(mods, dest, { recursive: true, dereference: true });
+		console.log(`[after-pack] runtime node_modules → ${dest}`);
+	}
 };

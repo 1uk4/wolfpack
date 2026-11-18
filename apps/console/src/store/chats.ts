@@ -4,18 +4,18 @@
  * Implements core/ports.ts ChatStore; the record shapes live in
  * core/contracts.ts (ChatRecord/ChatSummary). Idioms: sync fs, tiny
  * records, id-guarded filenames, JSON with tab indentation. Wired in the
- * composition root (src/server/stores.ts); nothing else constructs it.
+ * composition root (src/server/settings/stores.ts); nothing else constructs it.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
-import { emit } from "../core/events.ts";
-import type { ChatStore } from "../core/ports.ts";
+import { emit } from "../core/thread/events.ts";
+import type { ChatStore } from "../core/ui/ports.ts";
 import type { ChatRecord, ChatSettings, ChatSummary, TurnUsage } from "../core/contracts.ts";
 import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
-import type { LhMessage } from "../core/native-messages.ts";
-import { danglingQuestionOf } from "../core/native-messages.ts";
+import type { LhMessage } from "../core/thread/native-messages.ts";
+import { danglingQuestionOf } from "../core/thread/native-messages.ts";
 
 function chatFile(id: string): string {
 	if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Invalid chat id: ${id}`);

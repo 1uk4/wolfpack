@@ -12,7 +12,7 @@ import { bindingForAction, formatBinding, type KeyAction } from "@/src/core"
  * as too much air.
  *
  * The binding is override-aware: pass `action` for registry shortcuts (a
- * user rebind in Settings → Keyboard changes the suffix live), or
+ * user rebind in Pack → This device → Keyboard changes the suffix live), or
  * `binding` for surface-owned keys with no registry entry ("escape" for a
  * dialog close, "enter" for a form submit).
  *
@@ -33,7 +33,7 @@ interface HintProps {
 }
 
 /** The composition itself, pure — "Dictate" + ⌘D → "Dictate (⌘D)". Exported
- *  for the mechanism pins (tests/tooltip-mechanism.test.tsx). */
+ *  for the mechanism pins (tests/core/ui/tooltip-mechanism.test.tsx). */
 export function hintText(label: string, action?: KeyAction, binding?: string): string {
 	const live = action
 		? formatBinding(bindingForAction(action))

@@ -18,6 +18,7 @@ import { ENGINE_CONTEXT as ctx } from "../../packages/harness/src/engine/index.j
 import { createScriptedModel, fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { effectiveConsolidationInterval, parseConsolidationInterval } from "@wolfpack/engine";
 import createMemoryExtension from "./unified.js";
+import { memoryActionsFor } from "./memory-actions.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -89,8 +90,10 @@ describe("memory.consolidation.trigger", () => {
   it("manual: neither the threshold nor the timer consolidates", async () => {
     await withWolf({ trigger: "manual", threshold: 1, poolTarget: 0, interval: "4h" }, async ({ den, logs, session }) => {
       // the observer ran (it pooled the exchange), so the zero counts below are not vacuous
+      // (waited for, not asserted once: withWolf only waits for the pool file to exist, and on a loaded runner the
+      // file can exist before its first line is flushed)
       const pool = join(den, ".memory", "pool", "observations.jsonl");
-      expect(existsSync(pool) && readFileSync(pool, "utf8").trim().length > 0).toBe(true);
+      await eventually(() => expect(existsSync(pool) && readFileSync(pool, "utf8").trim().length > 0).toBe(true));
       seedPool(den);
       await staysTrue(() => {
         expect(count(logs(), THRESHOLD)).toBe(0);
@@ -186,6 +189,12 @@ interface BootOpts {
   instances?: number;
   /** Stop (lifecycle.stop) the first instance before the engine attaches. */
   stopFirstBeforeAttach?: boolean;
+  /** Extension env (KB_BASE + KB_OPS make promotion available). */
+  env?: Record<string, string>;
+  /** Collects console.log lines. */
+  logs?: string[];
+  /** The engine's consolidate step waits for this before running (holds a consolidation in flight). */
+  gate?: Promise<void>;
 }
 
 /** Boot only (no message). `seed` runs before boot. Counts engine consolidate calls and 50ms timers (the intervalMs seam). */
@@ -193,10 +202,10 @@ async function bootOnly(consolidation: Record<string, unknown>, seed: ((den: str
   const den = mkdtempSync(join(tmpdir(), "boot-"));
   dirs.push(den);
   if (seed) seed(den);
-  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void opts.logs?.push(a.join(" ")));
   let consolidates = 0;
   const base = stubEngine();
-  const engine = { call: (step: string, schema: never, ...rest: never[]) => { if (step === "consolidate") { consolidates++; opts.onConsolidate?.(den, consolidates); } return (base.call as (...a: unknown[]) => unknown)(step, schema, ...rest); } } as unknown as Engine;
+  const engine = { call: (step: string, schema: never, ...rest: never[]) => { if (step === "consolidate") { consolidates++; opts.onConsolidate?.(den, consolidates); if (opts.gate) return opts.gate.then(() => (base.call as (...a: unknown[]) => unknown)(step, schema, ...rest)); } return (base.call as (...a: unknown[]) => unknown)(step, schema, ...rest); } } as unknown as Engine;
   const realSetInterval = globalThis.setInterval;
   let timers = 0;
   vi.spyOn(globalThis, "setInterval").mockImplementation(((fn: never, ms?: number, ...a: never[]) => {
@@ -206,7 +215,7 @@ async function bootOnly(consolidation: Record<string, unknown>, seed: ((den: str
   const sm = createScriptedModel([fauxAssistantMessage("REPLY we decided to cache the session lookups for five minutes because of the hot path.")]);
   const registry = createRegistry();
   for (let i = 0; i < (opts.instances ?? 1); i++) {
-    const ext = createMemoryExtension({ live: true, engine, consolidation, intervalMs: 50 } as never, { wolfDen: den, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: {} });
+    const ext = createMemoryExtension({ live: true, engine, consolidation, intervalMs: 50 } as never, { wolfDen: den, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: opts.env ?? {} });
     if (i === 0 && opts.stopFirstBeforeAttach) ext.lifecycle?.stop?.();
     registry.install(adaptToDurable(ext, { wolfDen: den, wolfName: "w" }));
   }
@@ -260,6 +269,64 @@ describe("boot-time consolidation timer", () => {
       await eventually(() => expect(existsSync(join(den, ".memory/sessions/durable/caching.md"))).toBe(true));
       await eventually(() => expect(readFileSync(join(den, ".memory", "pool", "observations.jsonl"), "utf8")).not.toContain("arrived mid-run"));
     }, { onConsolidate: (den) => { if (!appended) { appended = true; appendPool(den, "Observation: arrived mid-run"); } } });
+  });
+
+  it("with promotion available a tick folds the pool and runs the daily pass; it never promotes every topic", async () => {
+    const kb = mkdtempSync(join(tmpdir(), "kb-"));
+    dirs.push(kb);
+    writeFileSync(join(kb, "domains.yaml"), "domains:\n  wolfpack: {}\n");
+    const today = new Date().toISOString().slice(0, 10);
+    const logs: string[] = [];
+    const seed = (den: string) => {
+      seedPool(den);
+      mkdirSync(join(den, "memory"), { recursive: true });
+      writeFileSync(join(den, "memory", "active-hours.json"), JSON.stringify({ version: 1, hours: [`${today}T00`] }));
+    };
+    await bootOnly({ trigger: "timer", poolTarget: 0 }, seed, async ({ den, consolidateCalls }) => {
+      await eventually(() => expect(consolidateCalls()).toBeGreaterThan(0));
+      await eventually(() => expect(JSON.parse(readFileSync(join(den, "memory", "promote-state.json"), "utf8")).lastActiveDayPassed).toBe(today));
+      expect(count(logs, /Timer-triggered consolidation/)).toBeGreaterThan(0);
+      expect(count(logs, /consolidate \+ promote/)).toBe(0);
+    }, { env: { KB_BASE: kb, KB_OPS: kb }, logs });
+  });
+
+  it("a threshold trigger while a timer consolidation is running reuses it instead of starting a second", async () => {
+    const logs: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    await bootOnly({ trigger: "hybrid", threshold: 1, poolTarget: 0 }, seedPool, async ({ consolidateCalls, harnessRoot }) => {
+      try {
+        await eventually(() => expect(consolidateCalls()).toBe(1)); // the timer's consolidation is in flight
+        await harnessRoot(); // a message: the observation crosses the threshold while it runs
+        await staysTrue(() => expect(consolidateCalls()).toBe(1), 400);
+        expect(count(logs, THRESHOLD)).toBe(0); // the threshold path found the running one and did not start its own
+      } finally {
+        release();
+      }
+    }, { logs, gate });
+  });
+
+  it("a Promote started while a consolidation runs waits for it instead of overlapping", async () => {
+    const kb = mkdtempSync(join(tmpdir(), "kb-"));
+    dirs.push(kb);
+    writeFileSync(join(kb, "domains.yaml"), "domains:\n  wolfpack: {}\n");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    await bootOnly({ trigger: "timer", poolTarget: 0 }, seedPool, async ({ den, consolidateCalls }) => {
+      let job: ReturnType<NonNullable<ReturnType<typeof memoryActionsFor>>["promote"]>;
+      let settled = false;
+      try {
+        await eventually(() => expect(consolidateCalls()).toBe(1)); // the timer's consolidation is in flight
+        job = memoryActionsFor(den)!.promote();
+        expect(job.status).toBe("started");
+        if (job.status === "started") void job.done.then(() => { settled = true; }, () => { settled = true; });
+        await staysTrue(() => expect(settled).toBe(false), 300); // queued behind the running consolidation
+      } finally {
+        release();
+      }
+      if (job.status === "started") await job.done; // runs once the first finished
+      expect(settled).toBe(true);
+    }, { env: { KB_BASE: kb, KB_OPS: kb }, gate });
   });
 
   it("two extension instances on one den give one timer", async () => {

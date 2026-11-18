@@ -401,7 +401,7 @@ export function createSlots({
 						PORT: String(port),
 						HOSTNAME: "127.0.0.1",
 						HOME: home,
-						WOLFPACK_AUTH_FILE: path.join(dir, "auth.json"),
+						WOLFPACK_KEY_FILE: path.join(dir, "keys.env"),
 						PATH: env.PATH ?? process.env.PATH ?? "/usr/bin:/bin",
 					};
 					const pid = spawn({ home, port, worktree, env: childEnv, logFile: logOf(port), idleMs, prep });

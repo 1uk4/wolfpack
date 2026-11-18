@@ -3,6 +3,7 @@
  * Pure (global fetch + timers only) so the console server and the browser bundle can both import it.
  * The event-loop lag monitor lives in ./health-lag.ts (node-only).
  */
+import type { CommandKind } from "./command.js";
 
 /** Body of GET /healthz on hubd, workerd and wolfd. Services may add fields (workerd keeps `wolves`, `kb`, `hub`). */
 export interface HealthBody {
@@ -29,6 +30,8 @@ export interface HubHealthHost {
   presence: "online" | "asleep" | "offline";
   /** The machine this host's worker reported in its hello (several host ids can share one machine). Absent: older worker, or never connected. */
   machine?: string;
+  /** Command kinds this host's worker advertised in its hello. Absent: older worker, offline, or none. */
+  commands?: CommandKind[];
   /** When presence last changed, as seen by this hubd process (absent: unchanged since it started). */
   since?: string;
   wolves: { name: string; status: "online" | "offline" }[];

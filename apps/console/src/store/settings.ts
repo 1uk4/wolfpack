@@ -2,7 +2,7 @@
  * Server-side persistence for THE user settings record (settings-storage
  * wave, 2026-09-19): data/settings.json (config.SETTINGS_FILE), under the
  * WOLFPACK_DATA_DIR seam — read-modify-write, NOT a ledger. Non-secret product
- * preferences only; secrets stay in auth.json / .env.local.
+ * preferences only; secrets stay in the Pack key file / .env.local.
  *
  * This adapter OWNS the lazy migrations:
  *  1. schema-version bumps (CURRENT_SETTINGS_VERSION) slot in here — the
@@ -23,8 +23,8 @@ import { SETTINGS_FILE } from "../../config.ts";
 import {
 	sanitizeUserSettings,
 	type UserSettings,
-} from "../core/settings.ts";
-import type { SettingsStore } from "../core/ports.ts";
+} from "../core/settings/settings.ts";
+import type { SettingsStore } from "../core/ui/ports.ts";
 
 /** The persisted record, or null when none exists (first boot). Runs the
  *  migration chain on every read — cheap: a no-op file check when current. */

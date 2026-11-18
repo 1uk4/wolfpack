@@ -113,7 +113,7 @@ USAGE
   # setup.sh refuses (e.g. the previous release has no server.js / workerd.mjs), that refusal stands: nothing is swapped behind its back.
   # Then: unit active and stable across a settle. Never automatic.
   # Exit 0 rolled back (healthy, or left stopped as it was), 1 refused / nothing changed, 2 usage, 4 changed but unhealthy or half-done
-  # (needs a person). The console's modal maps these codes to text (apps/console/src/core/pack-health-view.ts rollbackFinished).
+  # (needs a person). The console's modal maps these codes to text (apps/console/src/core/pack/pack-health-view.ts rollbackFinished).
   rollback_only() {
     [ -z "$VER" ] && [ -z "$WOLF" ] && [ "$UNITSET" = 0 ] && [ -z "$WUSHA" ] && [ -z "$PINSHA" ] && ((!DRY)) || usage
     case "$COMP" in hubd|workerd|console) ;; *) die "--rollback supports hubd|workerd|console, got '$COMP'" 2 ;; esac

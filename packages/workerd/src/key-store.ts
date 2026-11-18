@@ -7,16 +7,35 @@
  * key.set: unseal -> freshness (5 min) -> replay (seen cmdIds: 1000 in memory, newest 100 persisted) -> provider check -> atomic write
  * -> restart the wolves that use the slot. A rejected check keeps the old key. Never log or return a key.
  */
-import { chmodSync, chownSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
-import { dirname } from "node:path";
+import { chmodSync, chownSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { PROVIDERS, maskKey, normalizeKey, providerForSlot, unseal, type CheckResult, type RestartedWolf } from "@wolfpack/protocol";
 import type { KeyHandler, KeyResult } from "./commands.js";
 
 /** Environment variable each key slot is stored under. */
 export const SLOT_ENV: Readonly<Record<string, string>> = { anthropic: "ANTHROPIC_API_KEY", deepgram: "DEEPGRAM_API_KEY" };
 
-/** Names workerd forwards to wolves as they are, for any transport: the Claude subscription plug-in's token and the paths to Claude Code (and its node). */
-export const PASSTHROUGH_ENV: readonly string[] = ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_PATH", "CLAUDE_CODE_NODE"];
+/**
+ * The env names declared (requiredEnv / optionalEnv) by the plug-in manifests installed under WOLFPACK_PLUGINS_DIR
+ * (`<dir>/<id>/package.json`, `wolfpack` block). A missing dir or an unreadable manifest contributes nothing.
+ */
+function declaredPluginEnv(env: Record<string, string | undefined>): string[] {
+  const dir = env.WOLFPACK_PLUGINS_DIR?.trim();
+  if (!dir) return [];
+  const names = new Set<string>();
+  let ids: string[];
+  try { ids = readdirSync(dir); } catch { return []; }
+  for (const id of ids) {
+    try {
+      const m = JSON.parse(readFileSync(join(dir, id, "package.json"), "utf8"))?.wolfpack;
+      for (const key of ["requiredEnv", "optionalEnv"]) {
+        const list = m?.[key];
+        if (Array.isArray(list)) for (const n of list) if (typeof n === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) names.add(n);
+      }
+    } catch { /* unreadable manifest: nothing extra */ }
+  }
+  return [...names];
+}
 
 export const SEAL_MAX_AGE_MS = 5 * 60_000;
 const SEEN_MEMORY = 1000;
@@ -56,10 +75,10 @@ function readFileEnv(file: string): Map<string, string> {
 }
 
 /** The key slots stored in `file`, as env variables (name -> value). Missing or unreadable file = empty. For spawning processes: never log it. */
-export function readKeyFileEnv(file: string): Record<string, string> {
+export function readKeyFileEnv(file: string, env: Record<string, string | undefined> = process.env): Record<string, string> {
   const all = readFileEnv(file);
   const out: Record<string, string> = {};
-  for (const name of [...Object.values(SLOT_ENV), ...PASSTHROUGH_ENV]) {
+  for (const name of [...Object.values(SLOT_ENV), ...declaredPluginEnv(env)]) {
     const v = all.get(name);
     if (v) out[name] = v;
   }

@@ -22,14 +22,23 @@ function runOnFakeBundle(env: NodeJS.ProcessEnv, inRuntime?: (runtime: string) =
 
 const noCrash = /ReferenceError|TypeError|at file:|node:internal/;
 
-it("fails a bundle that carries the claude-subscription plug-in (it lives in the user's state, not in the app)", () => {
+it("fails a bundle that carries any plug-in package (plug-ins live in the user's state, not in the app)", () => {
   const r = runOnFakeBundle({ ...process.env }, (runtime) => {
-    fs.mkdirSync(path.join(runtime, "plugins", "claude-subscription"), { recursive: true });
-    fs.writeFileSync(path.join(runtime, "plugins", "claude-subscription", "package.json"), '{"name":"@wolfpack/plugin-claude-subscription"}');
+    fs.mkdirSync(path.join(runtime, "plugins", "example-provider"), { recursive: true });
+    fs.writeFileSync(path.join(runtime, "plugins", "example-provider", "package.json"), '{"name":"example-provider"}');
   });
   expect(r.status).toBe(1);
-  expect(r.stderr).toMatch(/FAIL runtime ships the claude-subscription plug-in/);
+  expect(r.stderr).toMatch(/FAIL runtime ships a plug-in package/);
   expect(r.stderr).not.toMatch(noCrash);
+});
+
+it("fails a bundle that carries a package with a wolfpack plug-in manifest anywhere in the runtime", () => {
+  const r = runOnFakeBundle({ ...process.env }, (runtime) => {
+    fs.mkdirSync(path.join(runtime, "node_modules", "@scope", "example-provider"), { recursive: true });
+    fs.writeFileSync(path.join(runtime, "node_modules", "@scope", "example-provider", "package.json"), '{"name":"@scope/example-provider","wolfpack":{"entry":"x.js"}}');
+  });
+  expect(r.status).toBe(1);
+  expect(r.stderr).toMatch(/FAIL runtime ships a plug-in package/);
 });
 
 it("--sign-only reports a missing codesign as one FAIL, not a crash (Linux CI has no codesign)", () => {

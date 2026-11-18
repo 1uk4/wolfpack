@@ -614,11 +614,11 @@ describe("app runtime on one Mac", () => {
     // the owner (or Claude Code) moves the wolf to the plug-in; a restart keeps that and leaves the curator's file alone
     const wolfModels = join(wolves, "wolf", "models.json");
     const m = JSON.parse(readFileSync(wolfModels, "utf8"));
-    m.tiers.main.provider = "claude-subscription";
+    m.tiers.main.provider = "example-provider";
     writeFileSync(wolfModels, JSON.stringify(m));
     const again = mk();
     await again.start();
-    expect(JSON.parse(readFileSync(wolfModels, "utf8")).tiers.main.provider).toBe("claude-subscription");
+    expect(JSON.parse(readFileSync(wolfModels, "utf8")).tiers.main.provider).toBe("example-provider");
     expect(JSON.parse(readFileSync(curatorFile, "utf8")).tiers.main.provider).toBe("anthropic");
   }, 180_000);
 

@@ -18,6 +18,8 @@ export const NO_RESTART_HINT = "This machine can't restart it from here";
 export type RestartKind = "wolves.restart" | "workerd.restart";
 export const NO_LOG_NOTE = "This machine has no log for that service";
 export const CHANNEL_READONLY_NOTE = "Change it from that machine's console";
+export const SINGLE_MAC_CHANNEL_NOTE = "App updates are set in Settings → This device";
+export const OWN_SETTINGS_UNREADABLE_NOTE = "Couldn't read this machine's update settings";
 export const UPDATE_READONLY_NOTE = "Update it from that machine's console";
 
 export interface MachineServiceView {
@@ -45,7 +47,7 @@ export interface MachineCardView {
 	label: string;
 	online: boolean;
 	services: MachineServiceView[];
-	channel: { value: "stable" | "main" | null; editable: boolean; note?: string; /** Shown instead of "unknown" when the inventory could not be read. */ missing?: string };
+	channel: { value: "stable" | "main" | null; editable: boolean; note?: string; /** The console machine's update mode; own card only. */ mode?: "manual" | "auto" | "off"; /** Shown instead of "unknown" when the inventory could not be read. */ missing?: string };
 	/** The update block: the pack's (banner, channel, Check now) or, in single-Mac on this Mac's card, the app's own updater block; none on other cards in single-Mac. */
 	update?: { kind: "pack" } | { kind: "app"; version: string | null };
 }
@@ -68,7 +70,16 @@ const RANK: Record<Tone, number> = { green: 0, grey: 1, amber: 2, red: 3 };
 const RESTART_OF: Partial<Record<MachineServiceView["kind"], RestartKind>> = { wolfd: "wolves.restart", workerd: "workerd.restart" };
 
 /** `ownChannel`: this console's own machine channel (null when unknown or not asked). Only used on the console's own card. */
-export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null, opts?: { singleMac?: boolean }): MachineCardView {
+export const MODE_LABEL = { button: "manual", auto: "auto", off: "off" } as const;
+
+/**
+ * `opts.mode`: the console machine's update mode (null/"unknown": the default, manual). `opts.readFailed`: the own subscription read failed.
+ * On the own card a missing channel is the default "stable", never "unknown".
+ */
+export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null, opts: { singleMac?: boolean; mode?: "off" | "button" | "auto" | "unknown" | null; readFailed?: boolean } = {}): MachineCardView {
+	const singleMac = opts.singleMac ?? false;
+	const ownMode = opts.mode ?? null;
+	const ownReadFailed = opts.readFailed ?? false;
 	// The console's own entry (its version, uptime, lag) comes with the snapshot and needs no channel: the single-Mac app never asks for one.
 	const own = card.console && (ownChannel || card.self) ? { channel: ownChannel ?? card.self?.channel ?? null, latest: {}, consoleVersion: null, self: card.self ?? null } : null;
 	const rows = machineServices(card, card.inventory, own);
@@ -105,16 +116,19 @@ export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null
 		}
 	}
 	const fromInv = card.inventory.find((e) => e.channel)?.channel ?? null;
-	const value = card.console ? ownChannel : fromInv;
-	const editable = card.console && ownChannel !== null;
+	const value = card.console ? (ownChannel ?? card.self?.channel ?? "stable") : fromInv;
+	// The own card is never read-only: while the subscription is pending (or failed) the picker shows disabled, and a failed read says so.
+	// In the Mac app the channel is a derived read-only badge (the app has no pack updater); its updates live in Settings.
+	const editable = card.console && !singleMac;
+	const note = singleMac && card.console ? SINGLE_MAC_CHANNEL_NOTE : card.console ? (ownReadFailed && ownChannel === null ? OWN_SETTINGS_UNREADABLE_NOTE : undefined) : CHANNEL_READONLY_NOTE;
 	const missing = value === null && card.inventoryState && card.inventoryState !== "ok" ? UNREAD[card.inventoryState] : undefined;
 	return {
 		id: card.id,
 		label: card.label,
 		online,
 		services,
-		channel: { value, editable, ...(editable ? {} : { note: CHANNEL_READONLY_NOTE }), ...(missing ? { missing } : {}) },
-		...(opts?.singleMac ? (card.console ? { update: { kind: "app" as const, version: services.find((s) => s.version)?.version ?? null } } : {}) : { update: { kind: "pack" as const } }),
+		channel: { value, editable, ...(note ? { note } : {}), ...(missing ? { missing } : {}), ...(card.console ? { mode: MODE_LABEL[ownMode === "off" || ownMode === "auto" ? ownMode : "button"] } : {}) },
+		...(singleMac ? (card.console ? { update: { kind: "app" as const, version: services.find((s) => s.version)?.version ?? null } } : {}) : { update: { kind: "pack" as const } }),
 	};
 }
 

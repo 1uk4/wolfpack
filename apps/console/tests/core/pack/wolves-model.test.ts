@@ -59,7 +59,7 @@ describe("Wolves section model", () => {
 	});
 
 	it("words each save outcome: saved, changed since loaded (409), refused with the server's reason (400), network failure", () => {
-		assert.deepEqual(saveMessage(200, null, "dewey"), { ok: true, text: "Saved for dewey only. It takes effect when dewey restarts." });
+		assert.deepEqual(saveMessage(200, null, "dewey"), { ok: true, text: "Saved to wolf.yaml for dewey only. Takes effect after the wolf restarts." });
 		assert.match(saveMessage(409, null, "dewey").text, /changed since you loaded/);
 		assert.deepEqual(saveMessage(400, { error: "Memory can only use an Anthropic model" }, "dewey"), { ok: false, text: "Memory can only use an Anthropic model" });
 		assert.deepEqual(saveMessage("network", null, "dewey"), { ok: false, text: "Couldn't save; nothing changed." });

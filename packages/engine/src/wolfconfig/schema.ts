@@ -85,7 +85,13 @@ export const WolfFileSchema = z.object({
     .passthrough()
     .optional(),
   models: z
-    .object({ main: ModelTierSetting.optional(), smart: ModelTierSetting.optional(), fast: ModelTierSetting.optional() })
+    .object({
+      main: ModelTierSetting.optional(),
+      smart: ModelTierSetting.optional(),
+      fast: ModelTierSetting.optional(),
+      /** Glob patterns (`*`, `?`) of model ids this wolf must not use, e.g. `claude-fable-*`. The Settings save refuses a matching model. */
+      deny: z.array(z.string().min(1)).optional(),
+    })
     .passthrough()
     .optional(),
   /** The wolf's one main color: a THREAD_COLOR_KEYS key (validated by the settings store on write). Unset = automatic. */
@@ -182,6 +188,8 @@ export interface WolfConfig {
     tiers?: Partial<Record<"main" | "smart" | "fast", TierOverrideConfig>>;
     /** wolf.yaml `models:`; when present wolfd regenerates the wolf's models.json from it at start. */
     models?: Partial<Record<"main" | "smart" | "fast", { provider?: string; model?: string; thinking?: string }>>;
+    /** wolf.yaml `models.deny`: glob patterns of model ids the Settings save refuses. */
+    modelDeny?: string[];
     /** Absolute path. Default: the directory holding wolf.yaml. */
     workspace: string;
   };
@@ -248,4 +256,12 @@ export interface WolfConfig {
   dir: string;
   /** Absolute path of wolf.yaml. */
   file: string;
+}
+
+/** The first `models.deny` glob (`*` any run, `?` one character) matching the whole model id (case-insensitive), or undefined. */
+export function deniedModelPattern(deny: readonly string[] | undefined, modelId: string): string | undefined {
+  return (deny ?? []).find((g) => {
+    const re = g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+    return new RegExp(`^${re}$`, "i").test(modelId);
+  });
 }

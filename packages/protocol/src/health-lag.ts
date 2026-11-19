@@ -119,6 +119,25 @@ export function readMachineChannel(env: Record<string, string | undefined> = pro
   }
 }
 
+/**
+ * The update mode this machine uses, from the same subscription file as the channel: "off" | "button" | "auto". No file, or a file without a
+ * valid mode: "button" (the default; shown as "manual"). Never creates the file. An unreadable file: undefined.
+ */
+export function readMachineMode(env: Record<string, string | undefined> = process.env): "off" | "button" | "auto" | undefined {
+  let text: string;
+  try {
+    text = readFileSync(/*turbopackIgnore: true*/ subscriptionFile(env), "utf8");
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? "button" : undefined;
+  }
+  try {
+    const m = (JSON.parse(text) as { mode?: unknown } | null)?.mode;
+    return m === "off" || m === "auto" ? m : "button";
+  } catch {
+    return undefined;
+  }
+}
+
 const COMPONENT_OF_PACKAGE: Record<string, string> = { "@wolfpack/console": "console", "@wolfpack/hubd": "hubd", "@wolfpack/workerd": "workerd", "@wolfpack/harness": "wolfd" };
 
 /**

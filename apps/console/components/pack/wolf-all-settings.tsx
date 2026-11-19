@@ -291,7 +291,7 @@ export function WolfAllSettings(props: { wolfName: string; view: WolfSettingsVie
 			)}
 			<div className="flex flex-wrap items-center gap-3">
 				<button className="rounded border px-3 py-1 disabled:opacity-50 max-md:min-h-11" disabled={!dirtyCount} onClick={() => void save()} data-testid="settings-save">Save{dirtyCount ? ` (${dirtyCount})` : ""}</button>
-				{saved && <span className="text-muted-foreground" data-testid="settings-saved">Saved. Takes effect after a restart.</span>}
+				{saved && <span className="text-muted-foreground" data-testid="settings-saved">Saved to wolf.yaml. Takes effect after the wolf restarts.</span>}
 				{formError && <span className="text-destructive" role="alert" data-testid="settings-form-error">{formError}</span>}
 			</div>
 

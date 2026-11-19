@@ -51,6 +51,12 @@ describe("single-Mac mode (WOLFPACK_SINGLE_MAC=1, work-wolfpack-TdmbaV4)", () =>
 			for (const p of ["/api/devices", "/api/devices/pairing-code", "/api/hub-url", "/api/updates", "/api/stt/token"]) assert.equal(proxy(at(p)).status, 404, p);
 		});
 	});
+	it("keeps this Mac's own subscription route reachable (the own machine card reads it) while the rest of /api/health stays unavailable", () => {
+		withFlag("1", () => {
+			assert.equal(proxy(at("/api/health/subscription")).status, 200);
+			assert.equal(proxy(at("/api/health/subscription/x")).status, 501);
+		});
+	});
 	it("redirects the pairing page home", () => {
 		withFlag("1", () => {
 			const pair = proxy(at("/pair"));
@@ -126,7 +132,7 @@ describe("single-Mac mode (WOLFPACK_SINGLE_MAC=1, work-wolfpack-TdmbaV4)", () =>
 		const subs = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && existsSync(join(dir, d.name, "route.ts"))).map((d) => d.name).sort();
 		assert.deepEqual(subs, ["inventory", "restart", "rollback", "stream", "subscription", "update"]); // a new route fails here until it is sorted into one of the two sets below
 		withFlag("1", () => {
-			for (const s of subs) assert.equal(proxy(at(`/api/health/${s}`)).status, ["inventory", "stream"].includes(s) ? 200 : 501, s);
+			for (const s of subs) assert.equal(proxy(at(`/api/health/${s}`)).status, ["inventory", "stream", "subscription"].includes(s) ? 200 : 501, s); // subscription: GET only (the own card reads it); its PUT is 501 above
 		});
 	});
 	it("changes nothing with the flag unset", () => {

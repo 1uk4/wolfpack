@@ -13,6 +13,14 @@ function windowAllClosedAction({ appRuntime, platform }) {
 	return platform === "darwin" ? "stay" : "quit";
 }
 
+/** Bring a window forward: restore it if minimised, show it if hidden (closed to the menu bar), then focus. No window: nothing to do. */
+function focusFirstWindow(win) {
+	if (!win) return;
+	if (win.isMinimized()) win.restore();
+	if (!win.isVisible()) win.show();
+	win.focus();
+}
+
 /** The Open-at-login state, shared by the tray checkbox and the console Settings switch: { openAtLogin, needsApproval }. */
 function loginItemState(app) {
 	const login = app.getLoginItemSettings();
@@ -74,4 +82,4 @@ function createTray({ app, Tray, Menu, nativeImage, getStatus, openWindow, quit,
 	return { refresh, destroy: () => tray.destroy() };
 }
 
-module.exports = { windowAllClosedAction, createTray, loginItemState, setLoginItem };
+module.exports = { windowAllClosedAction, focusFirstWindow, createTray, loginItemState, setLoginItem };

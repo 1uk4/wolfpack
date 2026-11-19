@@ -107,6 +107,27 @@ describe("wolfd /settings", () => {
     expect(existsSync(configFile + ".tmp")).toBe(false);
   });
 
+  it("refuses a model matching models.deny with the reason, keeps unknown keys and comments on a model save", async () => {
+    const { url, configFile } = await boot();
+    const original = "# keep me\nname: w\ndomains: [personal]\nmystery: {a: 1}\nmodels:\n  main:\n    provider: claude-stateless\n    model: claude-opus-5-5\n  deny: [\"claude-fable-*\"]\n";
+    writeFileSync(configFile, original);
+    const v = await (await send(url, "GET")).json();
+    const denied = await send(url, "PUT", { set: { "models.main.model": "claude-fable-5-1" } }, { "If-Match": v.etag });
+    expect(denied.status).toBe(400);
+    expect((await denied.json()).message).toContain("claude-fable-5-1 is not allowed for this wolf (models.deny)");
+    expect(readFileSync(configFile, "utf8")).toBe(original);
+    const denied2 = await send(url, "PUT", { set: { "memory.model": "claude-fable-5" } }, { "If-Match": v.etag });
+    expect(denied2.status).toBe(400);
+    const ok = await send(url, "PUT", { set: { "models.main.model": "claude-sonnet-5-5", "models.smart.model": "claude-opus-5-5" } }, { "If-Match": v.etag });
+    expect(ok.status).toBe(200);
+    const text = readFileSync(configFile, "utf8");
+    expect(text).toContain("# keep me");
+    expect(text).toContain("mystery:");
+    expect(text).toContain("claude-fable-*");
+    expect(text).toContain("model: claude-sonnet-5-5");
+    expect(text).toContain("model: claude-opus-5-5");
+  });
+
   it("lists memory.model as editable and saves it to wolf.yaml", async () => {
     const { url, configFile } = await boot();
     const v = await (await send(url, "GET")).json();

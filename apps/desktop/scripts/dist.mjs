@@ -27,7 +27,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { planBuild } from "./sign-plan.mjs";
+import { planBuild, DMG_SIGN_ARG } from "./sign-plan.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -71,7 +71,7 @@ if (ci) {
 	if (!fs.existsSync(process.env.APPLE_API_KEY)) fail("APPLE_API_KEY must be the path of the App Store Connect .p8 file");
 	delete env.APPLE_KEYCHAIN_PROFILE;
 	checkAppFlags = ["--signed"];
-	builderArgs.push("-c.mac.notarize=true");
+	builderArgs.push("-c.mac.notarize=true", DMG_SIGN_ARG);
 } else {
 	// unsigned (default), --signed or --sign-only: the decision is pure, see sign-plan.mjs
 	const plan = planBuild({

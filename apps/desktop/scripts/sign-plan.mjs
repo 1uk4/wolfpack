@@ -10,6 +10,9 @@ const APPLE_VARS = ["APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID", 
  * probeNotary(): true when the notarytool keychain profile works (only called for --signed).
  * Returns { error } or { builderArgs, env, checkAppFlags }.
  */
+/** electron-builder flag that signs the dmg container (Developer ID Application) in every signed path, local and CI. */
+export const DMG_SIGN_ARG = "-c.dmg.sign=true";
+
 export function planBuild({ args, env, identities, probeNotary, profile }) {
 	const signed = args.includes("--signed");
 	const signOnly = args.includes("--sign-only");
@@ -29,12 +32,12 @@ export function planBuild({ args, env, identities, probeNotary, profile }) {
 	const childEnv = { ...env };
 	for (const k of APPLE_VARS) delete childEnv[k];
 	if (signOnly) {
-		builderArgs.push("-c.mac.notarize=false");
+		builderArgs.push("-c.mac.notarize=false", DMG_SIGN_ARG);
 		return { builderArgs, env: childEnv, checkAppFlags: ["--sign-only"] };
 	}
 	if (!probeNotary()) return { error: `notarytool keychain profile "${profile}" is missing or invalid. Create it: xcrun notarytool store-credentials ${profile}` };
 	childEnv.APPLE_KEYCHAIN_PROFILE = profile;
-	builderArgs.push("-c.mac.notarize=true");
+	builderArgs.push("-c.mac.notarize=true", DMG_SIGN_ARG);
 	return { builderArgs, env: childEnv, checkAppFlags: ["--signed"] };
 }
 

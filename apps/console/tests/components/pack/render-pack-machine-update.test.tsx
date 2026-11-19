@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ConsoleMachineCard, MachineCard, MachinesSection } from "../../../components/pack/pack-machines.tsx";
+import { SingleMacContext } from "../../../components/shell/single-mac.tsx";
 import { machineCard } from "../../../src/core/pack/machine-card.ts";
 import type { HealthLink } from "../../../src/core/pack/pack-health-view.ts";
 import type { HostCard } from "../../../src/core/pack/pack-hosts.ts";
@@ -292,10 +293,21 @@ describe("Pack > Machines > Update automatically (own machine)", () => {
 	it("keeps the switch disabled and says so when the machine's settings can't be read, and never saves a guessed channel", async () => {
 		const s = script({ subStatus: 500 });
 		const m = await mount(own());
-		assert.match(m.q("machine-sub-error")!.textContent ?? "", /Could not read this machine's update settings/);
+		assert.match(m.q("machine-channel")!.textContent ?? "", /Couldn't read this machine's update settings/);
+		assert.doesNotMatch(m.q("machine-channel")!.textContent ?? "", /Change it from that machine's console/);
+		assert.equal(m.q("machine-mode")!.textContent, "· manual");
 		assert.equal((m.q("machine-auto-switch") as HTMLInputElement).disabled, true);
-		assert.equal(m.q("machine-channel-select"), null);
+		assert.equal((m.q("machine-channel-select") as HTMLSelectElement).disabled, true);
 		await m.change("machine-auto-switch", { checked: true });
+		assert.equal(puts(s).length, 0);
+		await m.unmount();
+	});
+
+	it("in the Mac app shows the app's own update block and no channel row, picker, switch, pack Check now or PUT", async () => {
+		const s = script({ sub: { exists: false, channel: "stable", mode: "button" } });
+		const m = await mount(<SingleMacContext.Provider value={true}>{own()}</SingleMacContext.Provider>);
+		assert.notEqual(m.q("machine-app-update"), null);
+		for (const id of ["machine-channel", "machine-channel-value", "machine-channel-select", "machine-auto-switch", "machine-check"]) assert.equal(m.q(id), null, id);
 		assert.equal(puts(s).length, 0);
 		await m.unmount();
 	});

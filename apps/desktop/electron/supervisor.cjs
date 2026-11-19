@@ -19,7 +19,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
-const { ensureWorkAccess } = require("./work-access.cjs"); // WORK_ENDPOINT / WORK_TOKEN in the wolf's .env (work-wolfpack-ZQDxB3j)
+const { ensureWorkAccess, wolfYamlLists } = require("./work-access.cjs"); // WORK_ENDPOINT / WORK_TOKEN in the wolf's .env (work-wolfpack-ZQDxB3j)
 const { KEYS_FILE: KEY_FILE, ANTHROPIC_ENV, DEEPGRAM_ENV, readKey, writeKey, keyProblem } = require("./key-file.cjs"); // keys.env (ANTHROPIC_API_KEY=…), mode 0600, in the pack state dir; workerd and the console read it too
 // Model names live here (and only here): update them in this block when a model is retired.
 const SONNET = "claude-sonnet-5-5";
@@ -186,7 +186,10 @@ function createSupervisor(opts) {
 		const seedDir = path.join(stateDir, "seed");
 		fs.mkdirSync(seedDir, { recursive: true });
 		// JSON strings are valid YAML scalars, so a description needs no escaping of its own.
-		const domainLines = domains.flatMap((d) => (d.description ? [`  ${d.name}:`, `    description: ${JSON.stringify(d.description)}`] : [`  ${d.name}: {}`]));
+		// A kept wolf folder whose wolf.yaml already lists the wolf-named default domain (ensureWorkAccess added it earlier) meeting a fresh hub: seed it too,
+		// because hubd refuses a seed that lacks a domain the wolf lists.
+		const seeded = !domains.some((d) => d.name === wolfName) && wolfYamlLists(path.join(wolfDir, "wolf.yaml"), wolfName) ? [...domains, { name: wolfName, description: "" }] : domains;
+		const domainLines = seeded.flatMap((d) => (d.description ? [`  ${d.name}:`, `    description: ${JSON.stringify(d.description)}`] : [`  ${d.name}: {}`]));
 		fs.writeFileSync(path.join(seedDir, "domains.yaml"), ["domains:", ...domainLines, ""].join("\n"));
 		const ext = path.join(wolfDir, "den", "extensions", "wolfpack-memory");
 		fs.mkdirSync(ext, { recursive: true });

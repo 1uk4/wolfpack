@@ -45,7 +45,30 @@ function writeEnvAtomic(file, text) {
 	fs.renameSync(tmp, file);
 }
 
-/** One-line `domains: [a, b]` in wolf.yaml gets `name` appended. Returns false when the file or line is not in that shape (left alone). */
+const unq = (x) => x.trim().replace(/\s+#.*$/, "").trim().replace(/^(["'])(.*)\1$/, "$2");
+
+/**
+ * Find the wolf.yaml `domains` list. Shapes: flow `domains: [a, b]` (one line or several; what the 0.4.0 setup writes) and block (`- a` per line).
+ * -> { names, flow } / { names, block } with the matched text, or null for anything else (no list, or a shape this does not know).
+ */
+function findDomains(text) {
+	const flow = /^domains:[ \t]*\[([^\]]*)\][ \t]*(?:#.*)?$/m.exec(text);
+	if (flow) return { names: flow[1].split(",").map(unq).filter(Boolean), flow };
+	const block = /^domains:[ \t]*(?:#.*)?\n((?:[ \t]*-[^\n]*\n?)+)/m.exec(text);
+	if (block) return { names: block[1].split("\n").filter((l) => /^\s*-/.test(l)).map((l) => unq(l.replace(/^\s*-/, ""))), block };
+	return null;
+}
+
+/** Does the wolf.yaml in this folder list `name` under domains? */
+function wolfYamlLists(file, name) {
+	try {
+		return !!findDomains(fs.readFileSync(file, "utf8"))?.names.includes(name);
+	} catch {
+		return false;
+	}
+}
+
+/** Add `name` to wolf.yaml's domains list (flow or block), every other line untouched, written atomically. False for an unknown shape or no file (left alone). */
 function addDomainToWolfYaml(file, name) {
 	let text;
 	try {
@@ -53,11 +76,19 @@ function addDomainToWolfYaml(file, name) {
 	} catch {
 		return false;
 	}
-	const m = /^domains:[ \t]*\[([^\]\n]*)\][ \t]*$/m.exec(text);
-	if (!m) return false;
-	const have = m[1].split(",").map((x) => x.trim().replace(/^(["'])(.*)\1$/, "$2")).filter(Boolean);
-	if (have.includes(name)) return true;
-	fs.writeFileSync(file, text.replace(m[0], `domains: [${[...have, name].join(", ")}]`));
+	const f = findDomains(text);
+	if (!f || f.names.some((n) => !/^[A-Za-z0-9_-]+$/.test(n))) return false;
+	if (f.names.includes(name)) return true;
+	let next;
+	if (f.flow) next = text.replace(f.flow[0], () => f.flow[0].replace(/\[[^\]]*\]/, `[${[...f.names, name].join(", ")}]`));
+	else {
+		const last = f.block[1].replace(/\n$/, "").split("\n").pop();
+		const indent = /^\s*/.exec(last)[0];
+		next = text.replace(f.block[0], () => `${f.block[0].replace(/\n?$/, "\n")}${indent}- ${name}\n`);
+	}
+	const tmp = `${file}.tmp-${process.pid}`;
+	fs.writeFileSync(tmp, next, { mode: fs.statSync(file).mode & 0o777 });
+	fs.renameSync(tmp, file);
 	return true;
 }
 
@@ -83,7 +114,7 @@ async function ensureWorkAccess({ wolfDir, wolfId, hubUrl, hubToken, mintToken, 
 		const r = await call("POST", "/v1/registry/wolves", { name: wolfId, domains: [...new Set(["personal", wolfId])] });
 		if (!r.ok) throw new Error(`could not register the wolf (${r.status})`);
 	} else throw new Error(`could not read the wolf's registry entry (${wolfRes.status})`);
-	if (!addDomainToWolfYaml(path.join(wolfDir, "wolf.yaml"), wolfId)) log(`wolf.yaml's domains line is not one line: add ${wolfId} to it by hand`);
+	if (!addDomainToWolfYaml(path.join(wolfDir, "wolf.yaml"), wolfId)) log(`wolf.yaml's domains list has a shape the app does not know: add ${wolfId} to it by hand`);
 
 	// 2. the token: keep a stored one hubd still accepts
 	const envFile = path.join(wolfDir, ENV_FILE);
@@ -112,4 +143,4 @@ async function ensureWorkAccess({ wolfDir, wolfId, hubUrl, hubToken, mintToken, 
 	return { endpoint, token };
 }
 
-module.exports = { ensureWorkAccess, envValue, mergeEnv, addDomainToWolfYaml };
+module.exports = { ensureWorkAccess, wolfYamlLists, envValue, mergeEnv, addDomainToWolfYaml };

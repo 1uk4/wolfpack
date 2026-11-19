@@ -125,7 +125,8 @@ describe("first-run setup", () => {
       expect(JSON.parse(readFileSync(join(stateDir, "setup.json"), "utf8"))).toEqual({ complete: true, wolf: "retry", wolfName: "Retry", domains: [{ name: "personal", description: "" }, { name: "recipes", description: "Dinners" }] });
       // See below: the hub API needs a token the test does not have before pairing.
       const reg = JSON.parse(readFileSync(join(stateDir, "hub", "registry", "registry.json"), "utf8"));
-      expect(reg.domains.map((d: { name: string }) => d.name)).toEqual(["personal", "recipes"]);
+      // The wolf-named default domain ("retry") is created on the hub after the start, for its work items.
+      expect(reg.domains.map((d: { name: string }) => d.name)).toEqual(["personal", "recipes", "retry"]);
     } finally {
       await sup.stop();
     }
@@ -168,8 +169,8 @@ describe("first-run setup", () => {
     try {
       const reg = JSON.parse(readFileSync(join(stateDir, "hub", "registry", "registry.json"), "utf8"));
       // Setup made the folder on attempt 1, so the retry's domains replace recipes everywhere.
-      expect(reg.domains.map((d: { name: string }) => d.name)).toEqual(["personal", "garden"]);
-      expect(readFileSync(join(wolvesDir, "late", "wolf.yaml"), "utf8")).toContain("domains: [personal, garden]");
+      expect(reg.domains.map((d: { name: string }) => d.name)).toEqual(["personal", "garden", "late"]); // plus the wolf-named default domain
+      expect(readFileSync(join(wolvesDir, "late", "wolf.yaml"), "utf8")).toContain("domains: [personal, garden, late]");
       expect(JSON.parse(readFileSync(join(stateDir, "setup.json"), "utf8")).domains.map((d: { name: string }) => d.name)).toEqual(["personal", "garden"]);
     } finally {
       await sup.stop();

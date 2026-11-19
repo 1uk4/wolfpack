@@ -87,6 +87,22 @@ describe("work access for the app's wolf", () => {
 		expect(readFileSync(join(wolfDir, ".env"), "utf8")).toBe(`WORK_ENDPOINT=${hubUrl}/v1/workapi\nWORK_TOKEN=fresh-token\nFOO=bar\n`);
 	});
 
+	it("upgrade: a wolf.yaml exactly as 0.4.0 setup wrote it gets the domain, other keys kept", async () => {
+		const v040 = `id: luka\nname: luka\ndomains: [personal, recipes]\nworkspace: /Users/x/Wolves/luka/workspace\nextensions: [memory]\nmemory:\n  live: true\n  defaultDomain: personal\n`;
+		writeFileSync(join(wolfDir, "wolf.yaml"), v040);
+		await run();
+		expect(readFileSync(join(wolfDir, "wolf.yaml"), "utf8")).toBe(v040.replace("[personal, recipes]", "[personal, recipes, luka]"));
+	});
+
+	it("a block-style domains list gets a new item; an unreadable shape is left alone", async () => {
+		writeFileSync(join(wolfDir, "wolf.yaml"), "id: luka\ndomains:\n  - personal\n  - recipes\nmemory:\n  live: true\n");
+		await run();
+		expect(readFileSync(join(wolfDir, "wolf.yaml"), "utf8")).toBe("id: luka\ndomains:\n  - personal\n  - recipes\n  - luka\nmemory:\n  live: true\n");
+		writeFileSync(join(wolfDir, "wolf.yaml"), "id: luka\ndomains: *shared\n");
+		await run();
+		expect(readFileSync(join(wolfDir, "wolf.yaml"), "utf8")).toBe("id: luka\ndomains: *shared\n");
+	});
+
 	it("registers the wolf with the default domain when the hub has no entry for it", async () => {
 		wolfDomains = null;
 		await run();

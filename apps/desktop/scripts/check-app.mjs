@@ -108,7 +108,19 @@ for (const bundle of bundles) {
 	else bad(`onnxruntime_binding.node does not load: ${(r.stdout || r.stderr).trim().slice(0, 400)}`);
 }
 
+/** Signed modes: the dmg container next to the .app folder is signed too (skipped when the build left none). */
+const distDir = path.dirname(app);
+const dmgCheck = () => {
+	const dmgs = fs.existsSync(path.join(distDir, "..")) ? fs.readdirSync(path.join(distDir, "..")).filter((f) => f.endsWith(".dmg")) : [];
+	for (const d of dmgs) {
+		const r = spawnSync("codesign", ["--verify", "--verbose=2", path.join(distDir, "..", d)], { encoding: "utf8" });
+		if (r.status === 0) ok(`codesign dmg ${d}`);
+		else bad(`codesign dmg ${d}: ${(r.stderr || r.stdout).trim().split("\n").pop()}`);
+	}
+};
+
 if (signed) {
+	dmgCheck();
 	for (const [label, cmd, a] of [
 		["codesign", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]],
 		["spctl", "spctl", ["-a", "-vv", app]],
@@ -121,6 +133,7 @@ if (signed) {
 }
 
 signOnly: if (signOnly) {
+	dmgCheck();
 	const sh = (cmd, a, input) => {
 		const r = spawnSync(cmd, a, { encoding: "utf8", input });
 		return { ...r, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };

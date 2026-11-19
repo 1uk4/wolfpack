@@ -122,7 +122,7 @@ describe("first-run setup", () => {
     const sup = await runSetup(answers, { stateDir, wolvesDir, runtimeDir, nodeBin, modelBaseUrl: fakeUrl });
     try {
       expect(needsSetup(stateDir)).toBe(false);
-      expect(JSON.parse(readFileSync(join(stateDir, "setup.json"), "utf8"))).toEqual({ complete: true, wolf: "retry", wolfName: "Retry", domains: [{ name: "personal", description: "" }, { name: "recipes", description: "Dinners" }] });
+      expect(JSON.parse(readFileSync(join(stateDir, "setup.json"), "utf8"))).toEqual({ complete: true, wolf: "retry", wolfName: "Retry", domains: [{ name: "personal", description: "" }, { name: "recipes", description: "Dinners" }], wolvesDir });
       // See below: the hub API needs a token the test does not have before pairing.
       const reg = JSON.parse(readFileSync(join(stateDir, "hub", "registry", "registry.json"), "utf8"));
       // The wolf-named default domain ("retry") is created on the hub after the start, for its work items.

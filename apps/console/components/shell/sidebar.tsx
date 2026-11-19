@@ -452,6 +452,8 @@ export function SessionRow({
 				offline && "opacity-50",
 				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
 				indented && "ml-4 w-[calc(100%-1rem)] border-l border-border rounded-l-none",
+				// Phones show the ⋯ button always, pinned at the right: keep the title's ellipsis clear of it.
+				tref && "max-md:pr-12",
 				active && "bg-accent shadow-[inset_2px_0_0_var(--thread-accent)]",
 				kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 			)}

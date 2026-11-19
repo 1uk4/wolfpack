@@ -87,7 +87,7 @@ export function MachineCard(p: {
 						<option value="main">main (testing)</option>
 					</select>
 				) : (
-					<span data-testid="machine-channel-value" className="rounded-sm border px-1.5 text-foreground">{view.channel.value ?? "unknown"}</span>
+					<span data-testid="machine-channel-value" className="rounded-sm border px-1.5 text-foreground">{view.channel.value ?? "unknown"}{view.channel.mode ? ` · ${view.channel.mode}` : ""}</span>
 				)}
 				{view.channel.note && <span className="text-muted-foreground/70">{view.channel.note}</span>}
 				{p.onCheck && <button type="button" data-testid="machine-check" onClick={p.onCheck} className={cn(BTN, "ml-auto")}>Check now</button>}
@@ -329,7 +329,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 			{saveErr && <p data-testid="machine-save-error" className="mt-1 text-red-600 dark:text-red-400">{saveErr}</p>}
 		</div>
 	);
-	return <MachineCard view={machineCard(card, sub?.channel ?? null)} update={update} checkNote={checkNote} onCheck={() => void check()} channelDisabled={!canAct || !sub || saving} onChannel={(c) => void save({ channel: c })} {...rest} />;
+	return <MachineCard view={machineCard(card, sub?.channel ?? null, sub?.mode ?? null)} update={update} checkNote={checkNote} onCheck={() => void check()} channelDisabled={!canAct || !sub || saving} onChannel={(c) => void save({ channel: c })} {...rest} />;
 }
 
 /** The Machines section body. */

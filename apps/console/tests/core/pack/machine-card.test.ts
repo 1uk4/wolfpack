@@ -29,6 +29,18 @@ describe("machineCard", () => {
 	});
 });
 
+describe("machineCard own card without a subscription file", () => {
+	it("shows the default stable and manual, never unknown, while the subscription is unknown", () => {
+		const c = card({ console: true, workerds: [{ link: link("workerd", "workerd"), wolves: [] }] });
+		const v = machineCard(c, null, "unknown").channel;
+		assert.equal(v.value, "stable");
+		assert.equal(v.mode, "manual");
+		assert.equal(machineCard(c, "stable", "button").channel.mode, "manual");
+		assert.equal(machineCard(c, "main", "auto").channel.mode, "auto");
+		assert.equal(machineCard(c, "stable", "off").channel.mode, "off");
+	});
+});
+
 describe("machineCard log fetching", () => {
 	const down = (over: Partial<HostCard> = {}) => card({ hub: link("hubd", "hubd", { status: "down", error: "refused" }), workerds: [{ link: link("workerd", "workerd", { status: "down", error: "refused" }), wolves: [] }], ...over });
 	it("never asks a machine for logs unless it advertised logs.fetch", () => {

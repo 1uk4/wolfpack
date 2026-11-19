@@ -1,13 +1,12 @@
 /**
  * GET/PUT /api/health/subscription: which release channel this host follows and how it updates (work-wolfpack-pr6t1Y9).
  * The file is `{schema:1, channel: stable|main, mode: off|button|auto}`; scripts/auto-update.mjs reads it. A missing or broken file
- * means stable + the host default mode (auto when WOLFPACK_AUTO_UPDATE=1 is in the console's env, else button; "unknown" when the console
- * cannot tell). On sfo-01 it lives in its own root:console 0775 directory (deploy/auto-update/setup.sh), apart from the root-only updater state dir.
+ * means stable + the host default mode (auto when WOLFPACK_AUTO_UPDATE=1 is in the console's env, else button, from readMachineMode, which owns the default). On sfo-01 it lives in its own root:console 0775 directory (deploy/auto-update/setup.sh), apart from the root-only updater state dir.
  * Both verbs need the same verified-device bearer as the other pack actions (`gate`).
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { subscriptionFile } from "@wolfpack/protocol/health-lag";
+import { readMachineMode, subscriptionFile } from "@wolfpack/protocol/health-lag";
 
 const CHANNELS = ["stable", "main"] as const;
 const MODES = ["off", "button", "auto"] as const;
@@ -48,7 +47,7 @@ export function createSubscriptionHandler(o: { gate: (req: Request) => Promise<s
 			const s = readFileSub(file);
 			if (s) return Response.json({ exists: true, ...s }, { headers: NO_STORE });
 			// No usable file: the host default decides. The console may not see the updater's env file, then the mode is unknown.
-			const mode = env.WOLFPACK_AUTO_UPDATE === undefined ? "unknown" : env.WOLFPACK_AUTO_UPDATE === "1" ? "auto" : "button";
+			const mode = env.WOLFPACK_AUTO_UPDATE === "1" ? "auto" : (readMachineMode({ ...env, WOLFPACK_SUBSCRIPTION_FILE: file }) ?? "button");
 			return Response.json({ exists: false, channel: "stable", mode }, { headers: NO_STORE });
 		},
 		async put(req: Request): Promise<Response> {

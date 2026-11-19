@@ -1,10 +1,10 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { INVENTORY_MAX_ENTRIES, InventoryEntrySchema } from "./inventory.js";
 import { parseLinkFrame } from "./link.js";
-import { readMachineChannel } from "./health-lag.js";
+import { readMachineChannel, readMachineMode } from "./health-lag.js";
 
 const entry = { machine: "sfo-01", kind: "workerd", id: "sfo-01-wolves", version: "0.1.5", channel: "main" };
 
@@ -44,5 +44,13 @@ describe("readMachineChannel", () => {
     expect(readMachineChannel({ WOLFPACK_SUBSCRIPTION_FILE: path.join(dir, "missing.json") })).toBe("stable");
     expect(readMachineChannel({ WOLFPACK_SUBSCRIPTION_FILE: file("b.json", "{nope") })).toBeUndefined();
     expect(readMachineChannel({ WOLFPACK_SUBSCRIPTION_FILE: dir })).toBeUndefined();
+  });
+  it("reads the mode; a missing file or a file without a mode is button (manual) and the file is not created", () => {
+    expect(readMachineMode({ WOLFPACK_SUBSCRIPTION_FILE: file("c.json", '{"channel":"main","mode":"auto"}') })).toBe("auto");
+    expect(readMachineMode({ WOLFPACK_SUBSCRIPTION_FILE: file("d.json", '{"mode":"off"}') })).toBe("off");
+    expect(readMachineMode({ WOLFPACK_SUBSCRIPTION_FILE: file("e.json", "{}") })).toBe("button");
+    const missing = path.join(dir, "nope.json");
+    expect(readMachineMode({ WOLFPACK_SUBSCRIPTION_FILE: missing })).toBe("button");
+    expect(existsSync(missing)).toBe(false);
   });
 });

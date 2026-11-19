@@ -8,7 +8,7 @@ import { createSubscriptionHandler } from "../../../src/server/pack/subscription
 const req = (method: string, body?: unknown) => new Request("http://c/api/health/subscription", { method, body: body === undefined ? undefined : JSON.stringify(body), headers: { "content-type": "application/json" } });
 
 describe("/api/health/subscription", () => {
-	it("needs the device gate; reports the effective mode when no file exists (host default from WOLFPACK_AUTO_UPDATE, else unknown), also for a corrupt file; PUT saves {schema,channel,mode} and rejects bad values without writing", async () => {
+	it("needs the device gate; reports the effective mode when no file exists (host default from WOLFPACK_AUTO_UPDATE, else button), also for a corrupt file; PUT saves {schema,channel,mode} and rejects bad values without writing", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "subscription-"));
 		const file = join(dir, "subscription.json");
 		let allowed = false;
@@ -21,14 +21,14 @@ describe("/api/health/subscription", () => {
 			assert.equal((await h.get(req("GET"))).status, 401);
 			assert.equal((await h.put(req("PUT", { channel: "main", mode: "auto" }))).status, 401);
 			allowed = true;
-			assert.deepEqual(await (await h.get(req("GET"))).json(), { exists: false, channel: "stable", mode: "unknown" });
+			assert.deepEqual(await (await h.get(req("GET"))).json(), { exists: false, channel: "stable", mode: "button" });
 			const ok = await h.put(req("PUT", { channel: "main", mode: "auto" }));
 			assert.equal(ok.status, 200);
 			assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { schema: 1, channel: "main", mode: "auto" });
 			assert.deepEqual(await (await h.get(req("GET"))).json(), { exists: true, channel: "main", mode: "auto" });
 			for (const bad of [{ channel: "beta", mode: "auto" }, { channel: "main", mode: "sometimes" }, { channel: "main" }, "x"]) assert.equal((await h.put(req("PUT", bad))).status, 400);
 			writeFileSync(file, "{broken");
-			assert.deepEqual(await (await h.get(req("GET"))).json(), { exists: false, channel: "stable", mode: "unknown" });
+			assert.deepEqual(await (await h.get(req("GET"))).json(), { exists: false, channel: "stable", mode: "button" });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

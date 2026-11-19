@@ -41,7 +41,7 @@ export interface MachineCardView {
 	label: string;
 	online: boolean;
 	services: MachineServiceView[];
-	channel: { value: "stable" | "main" | null; editable: boolean; note?: string };
+	channel: { value: "stable" | "main" | null; editable: boolean; note?: string; /** The console machine's update mode; own card only. */ mode?: "manual" | "auto" | "off" };
 }
 
 const LABEL = { console: "Console", hubd: "Hub", wolfd: "Wolf runtime", workerd: "Background service" } as const;
@@ -51,7 +51,10 @@ const RANK: Record<Tone, number> = { green: 0, grey: 1, amber: 2, red: 3 };
 const RESTART_OF: Partial<Record<MachineServiceView["kind"], RestartKind>> = { wolfd: "wolves.restart", workerd: "workerd.restart" };
 
 /** `ownChannel`: this console's own machine channel (null when unknown or not asked). Only used on the console's own card. */
-export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null): MachineCardView {
+export const MODE_LABEL = { button: "manual", auto: "auto", off: "off" } as const;
+
+/** `ownMode`: the console machine's update mode (null/"unknown": the default, manual). On the own card a missing channel is the default "stable", never "unknown". */
+export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null, ownMode: "off" | "button" | "auto" | "unknown" | null = null): MachineCardView {
 	const own = card.console && ownChannel ? { channel: ownChannel, latest: {}, consoleVersion: null, self: card.self ?? null } : null;
 	const rows = machineServices(card, card.inventory, own);
 	const flat = rows.flatMap((r) => [r, ...r.children]);
@@ -80,14 +83,14 @@ export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null
 		}
 	}
 	const fromInv = card.inventory.find((e) => e.channel)?.channel ?? null;
-	const value = card.console ? ownChannel : fromInv;
+	const value = card.console ? (ownChannel ?? "stable") : fromInv;
 	const editable = card.console && ownChannel !== null;
 	return {
 		id: card.id,
 		label: card.label,
 		online,
 		services,
-		channel: { value, editable, ...(editable ? {} : { note: CHANNEL_READONLY_NOTE }) },
+		channel: { value, editable, ...(editable ? {} : { note: CHANNEL_READONLY_NOTE }), ...(card.console ? { mode: MODE_LABEL[ownMode === "off" || ownMode === "auto" ? ownMode : "button"] } : {}) },
 	};
 }
 

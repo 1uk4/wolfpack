@@ -27,6 +27,32 @@ const MODES: [string, (url: string, wolf: string) => Record<string, string>][] =
 ];
 const noScope = async () => { throw new Error("headers was called outside a request scope"); };
 
+describe("single-Mac keeps the console's own hub token for hub calls", () => {
+	const run = async (extra: Record<string, string>): Promise<string[]> => {
+		const { hub, seen, url } = await startHub();
+		try {
+			const env = { WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: OWN, WOLFPACK_HUB_RELAY: "0", WOLFPACK_API_URL: url, ...extra };
+			const client = createConsoleClient(env, makeRequestToken(async () => new Headers()));
+			await client.machineCommand?.("host-1", { kind: "restart" as never }).catch(() => undefined);
+			return seen.filter((x) => x.includes("/machines/"));
+		} finally {
+			hub.closeAllConnections();
+			hub.close();
+		}
+	};
+
+	it("single-Mac: the client keeps the env hub token for hub calls even with a request resolver", async () => {
+		const seen = await run({ WOLFPACK_SINGLE_MAC: "1" });
+		assert.equal(seen.length, 1);
+		assert.ok(seen[0]!.endsWith(`Bearer ${OWN}`), "machineCommand carries the env token");
+	});
+
+	it("outside single-Mac the env token is still stripped when a resolver exists", async () => {
+		const seen = await run({});
+		assert.deepEqual(seen.filter((x) => x.includes(OWN)), []);
+	});
+});
+
 describe("no browser token = 401, never the console's own token", () => {
 	for (const [label, mkEnv] of MODES) {
 		it(`${label}: no token (scope without Authorization, or no scope) never puts the console token on the wire`, async () => {

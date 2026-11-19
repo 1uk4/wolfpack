@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { BellIcon, BellOffIcon } from "lucide-react";
 import { desktopBridge } from "@/components/shell/sidebar";
+import { fetchWolfThreads } from "@/components/kb/kb-client";
 import { useServerEvent, useServerResync } from "@/components/shell/server-events";
 import { browserNotifyState, deliverNotification, setBrowserNotify, type BrowserNotifyState } from "@/components/shell/needs-you-notify";
 import {
@@ -230,9 +231,10 @@ export function ReplyNotifier(): null {
 				await Promise.all(
 					names.map(async (wolf) => {
 						try {
-							const res = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/threads`, { cache: "no-store", ...(signal ? { signal } : {}) });
+							// The needs-you sync is event-driven: always revalidate (the answer still lands in the store for the others).
+							const res = await fetchWolfThreads<{ threads?: { id: string; status?: string; kind?: string; closed?: boolean }[] }>(wolf, 0);
 							if (!res.ok) return;
-							const list = ((await res.json()) as { threads?: { id: string; status?: string; kind?: string; closed?: boolean }[] }).threads ?? [];
+							const list = res.data.threads ?? [];
 							covered.push(wolf);
 							for (const t of list) if (t.kind !== "subagent" && t.kind !== "process" && !t.closed) threads.push({ wolf, threadId: t.id, ...(t.status ? { status: t.status } : {}) });
 						} catch {

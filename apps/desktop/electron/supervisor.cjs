@@ -26,6 +26,7 @@ const SONNET = "claude-sonnet-5-5";
 const HAIKU = "claude-haiku-5-5";
 
 const TAIL_LINES = 20;
+const CONSOLE_TOKEN_FILE = "console-hub-token.json"; // { token }, mode 0600: the app console's own loopback token for its hubd
 const HUB_TOKEN_FILE = "hub-token.json"; // { token }, mode 0600: the wolf's loopback token for this app's own hubd
 const DEFAULT_WINDOW_MAX = 5; // curator ticks (one contribution each) per curation window
 const WINDOW_TIMEOUT_MS = 20 * 60_000;
@@ -172,15 +173,17 @@ function createSupervisor(opts) {
 		for (const f of [...curateWaiters]) f({ skipped: why });
 		windowRunning = false;
 	};
-	const redact = (s) => [...secrets, hubToken].reduce((t, v) => (v ? t.split(v).join("[redacted]") : t), s);
+	const redact = (s) => [...secrets, hubToken, sup.consoleToken].reduce((t, v) => (v ? t.split(v).join("[redacted]") : t), s);
 	const sup = { urls: {}, ports: {}, wolfDir: path.join(wolvesDir, wolfName), pids: () => [...children.values()].map((c) => c.pid) };
 
 	function setup() {
 		const wolfDir = sup.wolfDir;
-		for (const d of [stateDir, wolvesDir, path.join(stateDir, "wolves-root"), path.join(stateDir, "kb", "ops"), path.join(stateDir, "kb", "base"), path.join(wolfDir, "workspace"), path.join(wolfDir, "den", "extensions")]) fs.mkdirSync(d, { recursive: true });
+		for (const d of [stateDir, wolvesDir, path.join(stateDir, "wolves-root"), path.join(stateDir, "kb", "ops"), path.join(stateDir, "kb", "base"), path.join(wolfDir, "workspace"), path.join(wolfDir, "den", "extensions"), path.join(stateDir, "plugins")]) fs.mkdirSync(d, { recursive: true });
 		fs.chmodSync(stateDir, 0o700);
 		fs.chmodSync(wolfDir, 0o700);
 		writeIfMissing(path.join(wolfDir, "models.json"), JSON.stringify(modelsJson(), null, 2));
+		// hubd's curator keeps its own api/Haiku tiers: moving the wolf to a plug-in (edits models.json) never touches curation.
+		writeIfMissing(path.join(wolfDir, "models.curator.json"), JSON.stringify(modelsJson(), null, 2));
 		writeIfMissing(path.join(wolfDir, "wolf.yaml"), wolfYaml(wolfName, wolfDir, domains));
 		// hubd's one-time registry seed (read only while the hub has no registry yet): the domains, plus the wolf.yaml above.
 		const seedDir = path.join(stateDir, "seed");
@@ -259,34 +262,117 @@ function createSupervisor(opts) {
 	 * A single-use pairing code for a console token, from the hubd CLI (file based: hubd is not up yet). Null when a token is already stored.
 	 * Safe to run again on a start retry: a token file that was redeemed is skipped, and a fresh code is minted only while none is stored.
 	 */
-	function mintHubToken(hubDir) {
-		const file = path.join(stateDir, HUB_TOKEN_FILE);
+	function mintHubToken(hubDir, fileName = HUB_TOKEN_FILE, label = "wolf") {
+		const file = path.join(stateDir, fileName);
 		if (fs.existsSync(file)) {
 			try {
 				if (typeof JSON.parse(fs.readFileSync(file, "utf8")).token === "string") return null;
 			} catch {}
 			// Unreadable (corrupt, empty, no token): set it aside, never delete it, and mint a fresh one.
 			fs.renameSync(file, `${file}.bad-${Date.now()}`);
-			log(`${HUB_TOKEN_FILE} was unreadable: set aside, minting a new token`);
+			log(`${fileName} was unreadable: set aside, minting a new token`);
 		}
-		const r = spawnSync(nodeBin, [path.join(runtimeDir, "hubd.mjs"), "pair", "--kind", "console", "--label", "wolf", "--data-dir", hubDir], { env: base({}), encoding: "utf8" });
+		const r = spawnSync(nodeBin, [path.join(runtimeDir, "hubd.mjs"), "pair", "--kind", "console", "--label", label, "--data-dir", hubDir], { env: base({}), encoding: "utf8" });
 		const m = /pairing code: (\S+)/.exec(`${r.stdout}`);
-		if (!m) throw new Error(`could not mint the wolf's hub token: ${String(r.stderr || r.stdout).split("\n")[0]}`);
+		if (!m) throw new Error(`could not mint the ${label}'s hub token: ${redact(String(r.stderr || r.stdout).split("\n")[0])}`);
 		return m[1];
 	}
 
 	/** Trade the code for the token (once) and keep it in a 0600 file; later starts read it back. */
-	async function redeemHubToken(hubUrl, code) {
-		const file = path.join(stateDir, HUB_TOKEN_FILE);
+	async function redeemHubToken(hubUrl, code, fileName = HUB_TOKEN_FILE, label = "wolf") {
+		const file = path.join(stateDir, fileName);
 		if (!code) return JSON.parse(fs.readFileSync(file, "utf8")).token;
-		const res = await fetch(`${hubUrl}/v1/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, label: "wolf" }) });
-		if (!res.ok) throw new Error(`hubd refused the wolf's pairing code (${res.status})`);
+		const res = await fetch(`${hubUrl}/v1/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, label }) });
+		if (!res.ok) throw new Error(`hubd refused the ${label}'s pairing code (${res.status})`);
 		const { token } = await res.json();
 		const tmp = `${file}.tmp-${process.pid}`;
 		fs.writeFileSync(tmp, JSON.stringify({ token }), { mode: 0o600 });
 		fs.chmodSync(tmp, 0o600);
 		fs.renameSync(tmp, file);
 		return token;
+	}
+
+	/**
+	 * True when hubd answers 401 to this token (unknown to it: the hub's data dir was reset). One cheap authenticated read; hubd authenticates
+	 * before it checks a token's kind, so a worker token gets 403 here (valid, just not allowed) and only an unknown token gets 401.
+	 * Any other outcome (network error, 5xx) counts as accepted: never throw a working token away on a hiccup.
+	 */
+	async function hubRejects(hubUrl, token) {
+		try {
+			const res = await fetch(`${hubUrl}/v1/machines/keys`, { headers: { authorization: `Bearer ${token}` } });
+			return res.status === 401;
+		} catch {
+			return false;
+		}
+	}
+
+	/** Redeem a fresh code, or reuse the stored token; a stored token hubd rejects is set aside (`.stale-<ts>`, never deleted) and replaced. */
+	async function redeemOrRepair(hubUrl, code, fileName, label) {
+		if (code) return redeemHubToken(hubUrl, code, fileName, label);
+		const file = path.join(stateDir, fileName);
+		const token = JSON.parse(fs.readFileSync(file, "utf8")).token;
+		if (!(await hubRejects(hubUrl, token))) return token;
+		fs.renameSync(file, `${file}.stale-${Date.now()}`);
+		log(`${fileName} is not accepted by hubd (its data was reset): set aside, pairing again`);
+		return redeemHubToken(hubUrl, mintHubToken(hubDir, fileName, label), fileName, label);
+	}
+
+	/** This Mac's id in its own pack: the short hostname, lowercased, in the hub's machine-id charset; `this-mac` when nothing usable is left. */
+	const machineId = () => {
+		// Once registered, the hub knows this Mac under its stored host id: a renamed Mac keeps reporting under that one.
+		try {
+			const stored = JSON.parse(fs.readFileSync(path.join(stateDir, "workerd", "hub.json"), "utf8")).hostId;
+			if (typeof stored === "string" && stored) return stored;
+		} catch {}
+		const id = String((opts.hostname ?? os.hostname)()).split(".")[0].toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+/, "").slice(0, 64).replace(/-+$/, "");
+		return id || "this-mac";
+	};
+
+	/**
+	 * Register this Mac with the app's own hubd: workerd joins a hub only through <stateDir>/workerd/hub.json { hubUrl, token, hostId }.
+	 * A stored file is kept (only hubUrl is rewritten, hubd's port can move); an unreadable one is set aside, never deleted; otherwise
+	 * a worker pairing code bound to this Mac's id is minted from the hubd CLI and redeemed at POST /v1/pair.
+	 */
+	async function ensureWorkerHub(hubUrl) {
+		const dir = path.join(stateDir, "workerd");
+		const file = path.join(dir, "hub.json");
+		const write = (cfg) => {
+			fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+			const tmp = `${file}.tmp-${process.pid}`;
+			fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+			fs.chmodSync(tmp, 0o600);
+			fs.renameSync(tmp, file);
+		};
+		let id = machineId();
+		if (fs.existsSync(file)) {
+			let j = null;
+			try {
+				j = JSON.parse(fs.readFileSync(file, "utf8"));
+			} catch {}
+			if (j && typeof j.token === "string" && typeof j.hostId === "string") {
+				if (!(await hubRejects(hubUrl, j.token))) {
+					if (j.hubUrl !== hubUrl) write({ hubUrl, token: j.token, hostId: j.hostId });
+					return;
+				}
+				// hubd's data was reset: the token is unknown to it. Keep the stored host id, pair again.
+				// Pairing never fails on a repeated host id (hubd's redeem has no uniqueness check), so a crash between redeem and write is
+				// harmless: the next start finds no file and pairs again; it only leaves one unused worker token in the hub.
+				id = j.hostId;
+				fs.renameSync(file, `${file}.stale-${Date.now()}`);
+				log("workerd/hub.json holds a token hubd does not accept: set aside, registering this Mac again");
+			} else {
+				fs.renameSync(file, `${file}.bad-${Date.now()}`);
+				log("workerd/hub.json was unreadable: set aside, registering this Mac again");
+			}
+		}
+		const r = spawnSync(nodeBin, [path.join(runtimeDir, "hubd.mjs"), "pair", "--kind", "worker", "--host-id", id, "--label", id, "--data-dir", hubDir], { env: base({}), encoding: "utf8" });
+		const m = /pairing code: (\S+)/.exec(`${r.stdout}`);
+		if (!m) throw new Error(`could not mint this Mac's worker token: ${redact(String(r.stderr || r.stdout).split("\n")[0])}`);
+		const res = await fetch(`${hubUrl}/v1/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: m[1], label: id, kind: "worker" }) });
+		if (!res.ok) throw new Error(`hubd refused this Mac's pairing code (${res.status})`);
+		const body = await res.json();
+		if (typeof body.token !== "string" || !body.hostId) throw new Error("hubd's pairing answer had no token or host id");
+		write({ hubUrl, token: body.token, hostId: body.hostId });
 	}
 
 	async function bringUp(keyFile) {
@@ -302,8 +388,11 @@ function createSupervisor(opts) {
 		// Half the cores for the embedder, so the laptop stays responsive.
 		embedEnv = curatorOn ? { WOLFPACK_EMBED_PROVIDER: "onnx", WOLFPACK_EMBED_MODEL_DIR: modelDir, WOLFPACK_EMBED_THREADS: String(opts.embedThreads ?? Math.max(1, Math.floor(os.cpus().length / 2))) } : {};
 		const pairCode = mintHubToken(hubDir);
+		const consoleCode = mintHubToken(hubDir, CONSOLE_TOKEN_FILE, "console");
 		await startHubd();
-		hubToken = await redeemHubToken(sup.urls.hubd, pairCode);
+		hubToken = await redeemOrRepair(sup.urls.hubd, pairCode, HUB_TOKEN_FILE, "wolf");
+		sup.consoleToken = await redeemOrRepair(sup.urls.hubd, consoleCode, CONSOLE_TOKEN_FILE, "console");
+		await ensureWorkerHub(sup.urls.hubd);
 		await setUpWorkAccess();
 		await startWorkerd();
 		wolfUp = true;
@@ -355,7 +444,7 @@ function createSupervisor(opts) {
 				HUBD_CURATOR: curatorOn ? "1" : "0",
 				HUBD_CURATOR_POLL_MS: "0",
 				HUBD_CURATOR_WINDOW_MAX: String(opts.curateWindowMax ?? DEFAULT_WINDOW_MAX),
-				HUBD_CURATOR_MODELS: path.join(sup.wolfDir, "models.json"),
+				HUBD_CURATOR_MODELS: path.join(sup.wolfDir, "models.curator.json"),
 				...embedEnv,
 				// The curator calls the model provider (Haiku) with the user's key; proxy settings so a user behind one can reach it.
 				...(secret ? { ANTHROPIC_API_KEY: secret } : {}),
@@ -378,9 +467,12 @@ function createSupervisor(opts) {
 			WOLFPACK_APP_NODE: nodeBin,
 			WOLFPACK_APP_WOLFD: path.join(runtimeDir, "wolfd", "wolfd.mjs"),
 			WOLFPACK_MODELS_FILE: path.join(sup.wolfDir, "models.json"),
+			WOLFPACK_PLUGINS_DIR: path.join(stateDir, "plugins"), // wolfd loads the wolf.yaml `plugins:` from here
 			KB_BASE: path.join(stateDir, "kb", "base"),
 			KB_OPS: path.join(stateDir, "kb", "ops"),
 			WORKERD_KEY_FILE: path.join(stateDir, KEY_FILE),
+			WOLFPACK_MACHINE: machineId(), // this Mac's name in its own pack; the app stays out of ~/.wolfpack
+			WOLFPACK_SUBSCRIPTION_FILE: path.join(stateDir, "release-channel.json"),
 			// The wolf keeps its KB through the app's own hubd on loopback: it mirrors the KB from it and feeds its contributions to it.
 			WOLFPACK_HUB_KB: "1",
 			WOLFPACK_HUB_URL: sup.urls.hubd,

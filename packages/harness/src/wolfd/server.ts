@@ -32,6 +32,8 @@ import {
   PROTOCOL_VERSION_HEADER,
   SubmitBodySchema,
   ThreadSettingsPatchSchema,
+  KeepLocalBodySchema,
+  PromoteBodySchema,
   CompactBodySchema,
   matchRoute,
   type ThreadSettings,
@@ -55,8 +57,8 @@ import { graduationActionsFor, memoryActionsFor, type MemoryActions } from "../m
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@wolfpack/kb/graph";
-import { readDenTopics } from "@wolfpack/memory";
-import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryNode, readMemoryObservations, readMemoryStatus, readMemoryTree, readMemoryTopic, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
+import { readDenTopics, recordOwnerMessage } from "@wolfpack/memory";
+import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryNode, readMemoryObservations, readMemoryStatus, readMemoryTree, readMemoryTopic, readSessionTopics, setTopicKeepLocal, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
 import type { AskBridge } from "../extensions/ask.js";
@@ -149,8 +151,9 @@ export interface ThreadConversations {
   setTier?(conv: EngineConversation, tier: ThreadTier): Promise<void>;
 }
 
-/** Release version: packages/harness/VERSION (`pnpm runtime:update` stamp), else the release tarball root VERSION (src/wolfd and dist/wolfd sit four levels below it), else <package.json>-dev. */
-const WOLFD_VERSION = stampedVersion([new URL("../../VERSION", import.meta.url), new URL("../../../../VERSION", import.meta.url)], new URL("../../package.json", import.meta.url));
+/** Release version: VERSION next to the bundle (the desktop app's <runtime>/wolfd/VERSION), else packages/harness/VERSION (`pnpm runtime:update` stamp), else the release tarball root VERSION (src/wolfd and dist/wolfd sit four levels below it), else <package.json>-dev. */
+export const WOLFD_VERSION_STAMPS = [new URL("./VERSION", import.meta.url), new URL("../../VERSION", import.meta.url), new URL("../../../../VERSION", import.meta.url)];
+const WOLFD_VERSION = stampedVersion(WOLFD_VERSION_STAMPS, new URL("../../package.json", import.meta.url));
 const WOLF_EVENT_BUFFER = 256;
 const MEMORY_KEEPALIVE_MS = 20_000;
 const MEMORY_STREAM_MAX_BUFFER = 1_000_000;
@@ -692,7 +695,15 @@ export class WolfServer {
         return this.json(res, 200, { wolves: [this.wolfSummary()] });
       case "listThreads":
         this.checkWolf(params.name);
-        return this.json(res, 200, { threads: await Promise.all([...this.threads.values()].map((t) => this.withWorkspace(t.threadSummary()))) });
+        {
+          // The sidebar draws parents and running subagents only; settled subagents (done/failed/stopped) are most of a long-lived
+          // wolf's threads, so they come only with `?all=1`, and without the per-thread workspace lookup.
+          const all = url.searchParams.get("all") === "1";
+          const summaries = [...this.threads.values()].map((t) => t.threadSummary());
+          const settledChild = (s: ThreadSummary) => s.kind === "subagent" && (s.state === "done" || s.state === "failed" || s.state === "stopped");
+          const listed = all ? summaries : summaries.filter((s) => !settledChild(s));
+          return this.json(res, 200, { threads: await Promise.all(listed.map((s) => (settledChild(s) ? s : this.withWorkspace(s)))) });
+        }
       case "listCards":
         this.checkWolf(params.name);
         return this.json(res, 200, { cards: [...this.threads.values()].flatMap((t) => t.cards.pending()) });
@@ -814,7 +825,21 @@ export class WolfServer {
       // --- end feature progress ---
       case "listChildren": {
         const t = this.checkThread(params.id);
-        return this.json(res, 200, { threads: await Promise.all((this.subagents?.children(t.summary.id) ?? []).map((c) => this.withWorkspace(c))) });
+        // Default: live children plus the 20 most recent settled ones finished within 24 h, settled ones without the workspace lookup.
+        // `?all=1` returns every child with workspaces (the subagent modal's done list).
+        const all = url.searchParams.get("all") === "1";
+        const kids = this.subagents?.children(t.summary.id) ?? [];
+        const isSettled = (s: ThreadSummary) => s.state === "done" || s.state === "failed" || s.state === "stopped";
+        if (all) return this.json(res, 200, { threads: await Promise.all(kids.map((c) => this.withWorkspace(c))) });
+        const cutoff = Date.now() - 24 * 3600_000;
+        const finished = (s: ThreadSummary) => (s.finishedAt ? Date.parse(s.finishedAt) : 0);
+        const recent = kids
+          .filter((s) => isSettled(s) && finished(s) >= cutoff)
+          .sort((a, b) => finished(b) - finished(a))
+          .slice(0, 20);
+        const keep = new Set(recent.map((s) => s.id));
+        const listed = kids.filter((s) => !isSettled(s) || keep.has(s.id));
+        return this.json(res, 200, { threads: await Promise.all(listed.map((s) => (isSettled(s) ? s : this.withWorkspace(s)))) });
       }
       case "getLedger": {
         const t = this.checkThread(params.id);
@@ -849,6 +874,8 @@ export class WolfServer {
         if (!body.success) throw new HttpError("invalid_request", "body must be {input, whenBusy: steer|followUp|reject}");
         const refs = body.data.attachments ?? [];
         if (body.data.input.trim() === "" && refs.length === 0) throw new HttpError("invalid_request", "input is required");
+        // The owner is active this hour: the clock the promote pass ages topics by. Never fails a submit.
+        if (this.opts.den) { try { recordOwnerMessage(this.opts.den); } catch { /* best effort */ } }
         // A subagent's messages from the operator go through its manager: ledger, resume, state.
         if (t.isChild && this.subagents) return this.json(res, 200, await this.subagents.submitFromOwner(t.summary.id, body.data.input, body.data.whenBusy, refs));
         return this.json(res, 200, await t.submit(body.data.input, body.data.whenBusy, refs));
@@ -979,6 +1006,22 @@ export class WolfServer {
         const { state, reason } = memoryState(this.memoryReadInput());
         if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
         return this.json(res, 200, await readMemoryObservations(this.opts.den!, rawLimit === null ? undefined : Number(rawLimit), this.opts.work ?? {}));
+      }
+      case "getMemorySessionTopics": {
+        this.checkWolf(params.name);
+        const { state, reason } = memoryState(this.memoryReadInput());
+        if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
+        return this.json(res, 200, readSessionTopics(this.opts.den!));
+      }
+      case "putMemoryKeepLocal": {
+        this.checkWolf(params.name);
+        if (!isTopicId(params.id)) throw new HttpError("invalid_request", "malformed topic id");
+        const body = KeepLocalBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {keepLocal: boolean}");
+        const { state, reason } = memoryState(this.memoryReadInput());
+        if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
+        if (!setTopicKeepLocal(this.opts.den!, params.id, body.data.keepLocal)) throw new HttpError("not_found", `topic ${params.id}`);
+        return this.json(res, 200, { id: params.id, keepLocal: body.data.keepLocal });
       }
       case "getMemoryTree": {
         this.checkWolf(params.name);
@@ -1118,7 +1161,10 @@ export class WolfServer {
         this.checkWolf(params.name);
         const actions = this.memoryActions();
         if (!actions.promoteEnabled) throw new HttpError("promote_unavailable", "promote needs KB roots (KB_BASE and KB_OPS); this wolf has none");
-        const start = actions.promote();
+        // Optional body {ids}: promote only those topics. No body (or a malformed one): every topic.
+        const pbody = PromoteBodySchema.safeParse(await readJson(req));
+        const ids = pbody.success ? pbody.data.ids : undefined;
+        const start = actions.promote(ids?.length ? { ids } : undefined);
         // The extension emits promote_started/finished/failed itself; `done` is only observed here so a failed job
         // is not an unhandled rejection.
         if (start.status === "started") start.done.catch(() => {});

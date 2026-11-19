@@ -1264,6 +1264,9 @@ export type ConsolidateResponse = z.infer<typeof ConsolidateResponseSchema>;
  * `promote_finished` / `promote_failed` MemoryEvents carrying the same `jobId`. `already_running` (HTTP 409) names
  * the job in flight and starts nothing (HTTP 202 as well: every non-2xx is an ErrorEnvelope).
  */
+/** Optional `POST .../memory/promote` body: promote only these session topics. No body or no ids: every topic. */
+export const PromoteBodySchema = z.object({ ids: z.array(z.string().min(1)).max(200).optional() });
+export type PromoteBody = z.infer<typeof PromoteBodySchema>;
 export const PromoteResponseSchema = z.object({
   jobId: z.string(),
   status: z.enum(["started", "already_running"]),
@@ -1403,6 +1406,38 @@ export const MemoryTreeSchema = z.object({
   den: z.object({ pending: nn, archived: nn.optional() }),
 });
 export type MemoryTree = z.infer<typeof MemoryTreeSchema>;
+
+/** One session topic as the Memory panel's Topics section lists it. */
+export const MemoryTopicRowSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  bytes: nn,
+  updated: z.string(),
+  /** Threads (`thread:<id>`) and work ids whose notes fed the topic; `legacy` for a topic from before sources were tracked. */
+  sources: z.array(z.string()),
+  /** active: local and still being fed; promoted: sent to the KB, confirmed or not yet retired; held: failed distill (see `reason`); parked: the KB needs attention; retired: moved to retired/. */
+  state: z.enum(["active", "promoted", "held", "parked", "retired"]),
+  reason: z.string().optional(),
+  keepLocal: z.boolean(),
+  /** The KB entries a create/merge receipt confirmed, primary first. */
+  entryIds: z.array(z.string()),
+});
+export type MemoryTopicRow = z.infer<typeof MemoryTopicRowSchema>;
+
+/** `GET /v1/wolves/:name/memory/session-topics`: every live session topic plus the retired ones, and the byte budget. */
+export const MemoryTopicsSchema = z.object({
+  topics: z.array(MemoryTopicRowSchema),
+  totalBytes: nn,
+  capBytes: nn,
+  /** Topics moved to retired/ (their KB entries are reloaded when an old thread resumes). */
+  retired: z.array(MemoryTopicRowSchema),
+});
+export type MemoryTopics = z.infer<typeof MemoryTopicsSchema>;
+
+/** `PUT /v1/wolves/:name/memory/topics/:id/keep-local` body and answer. */
+export const KeepLocalBodySchema = z.object({ keepLocal: z.boolean() });
+export const KeepLocalResponseSchema = z.object({ id: z.string(), keepLocal: z.boolean() });
+export type KeepLocalResponse = z.infer<typeof KeepLocalResponseSchema>;
 
 /** `GET /v1/wolves/:name/memory/tree/:workId`: the observations funnelling into one node. */
 export const MemoryNodeObservationsSchema = z.object({

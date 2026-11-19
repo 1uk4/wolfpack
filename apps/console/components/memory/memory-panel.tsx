@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon, InfoIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { fetchMemoryNode, fetchMemoryObservations, fetchMemoryStatus, fetchMemoryTree, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb/kb-client";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { fetchSessionTopics, putKeepLocal, fetchMemoryNode, fetchMemoryObservations, fetchMemoryStatus, fetchMemoryTree, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb/kb-client";
 import { WorkIdChip } from "@/components/work/work-id-chip";
 import { ContextSection } from "@/components/thread/context-section";
 import { useMemoryEvents } from "@/components/memory/memory-events";
@@ -13,12 +14,15 @@ import {
 	MEMORY_PANEL_OPEN_KEY,
 	PROMOTE_IDLE,
 	actionBlock,
+	memoryActionsFor,
 	applyPromoteEvent,
 	bannerOf,
 	blockedLabel,
 	consolidateMessage,
 	reconcilePromote,
 	pendingWarning,
+	workApiWarning,
+	type KeyMachine,
 	type PoolPending,
 	buildMemoryTreeRows,
 	DEN_GROUP,
@@ -26,6 +30,15 @@ import {
 	type MemoryNodeObservations,
 	type MemoryTree,
 	focusRefetchDue,
+	formatTopicSize,
+	topicSecondLine,
+	sortedTopics,
+	topicsHeader,
+	MEMORY_PANEL_SECTION_KEY,
+	parseSection,
+	serializeSection,
+	type PanelSection,
+	type MemoryTopics,
 	latestOnly,
 	parseOpen,
 	poolSummary,
@@ -34,11 +47,31 @@ import {
 	refreshPlan,
 	settlePromotePost,
 	serializeOpen,
+	SECTION_INFO,
 	type GroupInfo,
 	type PoolObservation,
 	type MemoryStatus,
 	type PromoteState,
 } from "@/src/core";
+
+/** A section heading with an ⓘ that explains the section on hover or focus. */
+function SectionHeading({ label, info }: { label: string; info: string }) {
+	return (
+		<h3 className="mb-1 flex items-center gap-1 text-xs font-medium uppercase text-muted-foreground">
+			{label}
+			<TooltipProvider>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<button type="button" aria-label={`About ${label}`} className="inline-flex rounded text-muted-foreground/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" data-testid="memory-section-info">
+							<InfoIcon className="size-3" aria-hidden />
+						</button>
+					</TooltipTrigger>
+					<TooltipContent side="left" className="max-w-72 normal-case text-left leading-snug">{info}</TooltipContent>
+				</Tooltip>
+			</TooltipProvider>
+		</h3>
+	);
+}
 
 const REFRESH_DEBOUNCE_MS = 250;
 /** A work item's title/stage is looked up again once it is this old (stages change; a failed lookup retries too). */
@@ -74,12 +107,26 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		} catch {}
 	};
 
+	const [section, setSection] = useState<PanelSection>("observations");
+	useEffect(() => {
+		try {
+			setSection(parseSection(localStorage.getItem(MEMORY_PANEL_SECTION_KEY)));
+		} catch {}
+	}, []);
+	const chooseSection = (next: PanelSection) => {
+		setSection(next);
+		try {
+			localStorage.setItem(MEMORY_PANEL_SECTION_KEY, serializeSection(next));
+		} catch {}
+	};
+
 	const [status, setStatus] = useState<MemoryStatus | null>(null);
 	const [statusError, setStatusError] = useState<string | null>(null);
 	/** The wolf's observation pool (null until the first load) and the work items' titles/stages looked up for its groups. */
 	const [obsPool, setObsPool] = useState<PoolObservation[] | null>(null);
 	const [poolError, setPoolError] = useState<string | null>(null);
 	const [poolPending, setPoolPending] = useState<PoolPending | null>(null);
+	const [poolBlocked, setPoolBlocked] = useState<"work-api-unavailable" | undefined>(undefined);
 	const [tree, setTree] = useState<MemoryTree | null>(null);
 	const [treeError, setTreeError] = useState<string | null>(null);
 	const [treeVersion, setTreeVersion] = useState(0);
@@ -89,15 +136,27 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	const [promote, setPromote] = useState<PromoteState>(PROMOTE_IDLE);
 	const [consolidating, setConsolidating] = useState(false);
 	const [note, setNote] = useState<string | null>(null);
+	/** The pack keys state, fetched once on mount (never polled). Null until it answers, or when the request fails: the buttons then stay. */
+	const [keys, setKeys] = useState<{ machines?: KeyMachine[] } | null>(null);
+	useEffect(() => {
+		const ac = new AbortController();
+		fetch("/api/pack/machines/keys", { signal: ac.signal })
+			.then(async (r) => (r.ok ? ((await r.json()) as { machines?: KeyMachine[] }) : null))
+			.then((b) => { if (!ac.signal.aborted) setKeys(b); })
+			.catch(() => {});
+		return () => ac.abort();
+	}, []);
+	const actions = memoryActionsFor(keys);
 
 	const statusReq = useRef(0);
 	const poolReq = useRef(latestOnly());
 	/** When each work id's info was fetched (success or failure), so lookups are not repeated every event. */
 	const infoAt = useRef(new Map<string, number>());
 
-	const refreshStatus = useCallback(async () => {
+	/** `maxAgeMs` undefined = the store's mount age; live refreshes (events, focus, actions) pass 0 to revalidate. */
+	const refreshStatus = useCallback(async (maxAgeMs?: number) => {
 		const req = ++statusReq.current;
-		const r = await fetchMemoryStatus(wolf, threadId);
+		const r = await fetchMemoryStatus(wolf, threadId, maxAgeMs);
 		if (req !== statusReq.current) return;
 		if (r.ok) {
 			setStatus(r.data);
@@ -107,14 +166,15 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		} else setStatusError(r.message);
 	}, [wolf, threadId]);
 
-	const refreshPool = useCallback(async () => {
+	const refreshPool = useCallback(async (maxAgeMs?: number) => {
 		const guard = poolReq.current;
 		const token = guard.start();
-		const [r, t] = await Promise.all([fetchMemoryObservations(wolf), fetchMemoryTree(wolf)]);
+		const [r, t] = await Promise.all([fetchMemoryObservations(wolf, maxAgeMs), fetchMemoryTree(wolf, maxAgeMs)]);
 		if (!guard.isCurrent(token)) return;
 		if (r.ok) {
 			setObsPool(r.data.observations);
 			setPoolPending(r.data.pending ?? null);
+			setPoolBlocked(r.data.blocked);
 			setPoolError(null);
 		} else setPoolError(r.message);
 		if (t.ok) {
@@ -156,8 +216,8 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		timer.current = null;
 		dirty.current = false;
 		// the pool is read whenever the status is (a capture, consolidation, promote or archive all change both)
-		void refreshStatus();
-		void refreshPool();
+		void refreshStatus(0);
+		void refreshPool(0);
 	}, [refreshStatus, refreshPool]);
 	const schedule = useCallback(() => {
 		dirty.current = true;
@@ -223,8 +283,8 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		setConsolidating(false);
 		if (r.ok) setNote(consolidateMessage(r.data));
 		else setNote(r.code === "memory_busy" ? BUSY_TEXT : r.message);
-		void refreshStatus();
-		void refreshPool();
+		void refreshStatus(0);
+		void refreshPool(0);
 	};
 	const startPromote = async () => {
 		setNote(null);
@@ -256,15 +316,21 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 					<div className="mb-1 flex items-center justify-between gap-2">
 						<h3 className="text-xs font-medium uppercase text-muted-foreground">Pool</h3>
 						<div className="flex items-center gap-1" data-testid="memory-actions">
-							<Button size="xs" variant="ghost" disabled={block !== null} onClick={consolidate}>
-								{consolidating ? "Consolidating…" : "Consolidate"}
-							</Button>
-							<Button size="xs" variant="ghost" disabled={block !== null} onClick={startPromote}>
-								Promote
-							</Button>
+							{actions.hidden ? (
+								<span className="text-xs text-muted-foreground" data-testid="memory-needs-key">{actions.note}</span>
+							) : (
+								<>
+									<Button size="xs" variant="ghost" disabled={block !== null} onClick={consolidate}>
+										{consolidating ? "Consolidating…" : "Consolidate"}
+									</Button>
+									<Button size="xs" variant="ghost" disabled={block !== null} onClick={startPromote}>
+										Promote
+									</Button>
+								</>
+							)}
 						</div>
 					</div>
-					<div className="relative h-1.5 rounded bg-muted">
+					<div className="relative h-1.5 rounded bg-muted" title={`Consolidation ${pool.triggerText}`} data-testid="memory-trigger">
 						<div className="h-full rounded bg-foreground/60" style={{ width: `${Math.round(pool.fill * 100)}%` }} />
 						<div className="absolute top-[-2px] h-2.5 w-px bg-foreground" style={{ left: `${Math.round(pool.targetMark * 100)}%` }} title={`pool target ${pool.poolTarget.toLocaleString("en-US")}`} />
 					</div>
@@ -272,8 +338,6 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 						{pool.tokensText} ·{" "}
 						<span data-testid="memory-observations">{pool.observationsText}</span>
 					</p>
-					<p className="text-xs text-muted-foreground" data-testid="memory-trigger">Consolidation {pool.triggerText}</p>
-					{block === "memory_busy" ? <p className="text-xs text-muted-foreground" data-testid="memory-busy">{BUSY_TEXT}</p> : null}
 					{pline ? <p className="text-xs text-muted-foreground" data-testid="memory-promote">{pline}</p> : null}
 					{note ? <p className="text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}
 				</section>
@@ -283,7 +347,25 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 				</div>
 			)}
 
-			<ObservationsSection wolf={wolf} observations={{ tree, error: treeError ?? poolError, pool: obsPool, pending: poolPending, info: groupInfo, open: openGroup, onOpen: setOpenGroup, version: treeVersion }} />
+			<div role="group" aria-label="Memory section" className="mt-3 grid grid-cols-2 gap-0.5 rounded-md bg-muted p-0.5 text-xs" data-testid="memory-section-toggle">
+				{([["observations", "Observations"], ["topics", "Topics"]] as const).map(([key, label]) => (
+					<button
+						key={key}
+						type="button"
+						aria-pressed={section === key}
+						data-testid={`memory-section-${key}`}
+						onClick={() => chooseSection(key)}
+						className={`rounded px-2 py-1 transition-colors max-md:min-h-11 ${section === key ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+					>
+						{label}
+					</button>
+				))}
+			</div>
+			{section === "topics" ? (
+				<TopicsSection wolf={wolf} />
+			) : (
+				<ObservationsSection wolf={wolf} observations={{ tree, error: treeError ?? poolError, pool: obsPool, pending: poolPending, blocked: poolBlocked, info: groupInfo, open: openGroup, onOpen: setOpenGroup, version: treeVersion }} />
+			)}
 		</div>
 	);
 	if (embedded) return content;
@@ -311,6 +393,56 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 	);
 }
 
+/** One line per session topic: title (links to the topic page), size, keep-local checkbox. A second line only for a non-active state or real sources. */
+function TopicsSection({ wolf }: { wolf: string }) {
+	const [topics, setTopics] = useState<MemoryTopics | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const load = useCallback(async () => {
+		const r = await fetchSessionTopics(wolf);
+		// An older wolfd or a stub can answer with another shape: show it as unavailable, never crash the panel.
+		if (r.ok && Array.isArray(r.data?.topics)) { setTopics(r.data); setError(null); }
+		else { setTopics(null); setError(r.ok ? "unexpected response" : r.message); }
+	}, [wolf]);
+	useEffect(() => { void load(); }, [load]);
+	const toggle = async (id: string, keepLocal: boolean) => {
+		const r = await putKeepLocal(wolf, id, keepLocal);
+		if (!r.ok) setError(r.message);
+		await load();
+	};
+	return (
+		<section className="mt-3" data-testid="memory-topics">
+			<SectionHeading label="Topics" info={SECTION_INFO.topics} />
+			{topics && topics.topics.length > 0 && <p className="mb-1 text-[11px] text-muted-foreground" data-testid="memory-topics-header">{topicsHeader(topics)}</p>}
+			{topics === null ? (
+				<p className="text-xs text-muted-foreground">{error ? `Topics unavailable: ${error}` : "Loading…"}</p>
+			) : topics.topics.length === 0 ? (
+				<p className="text-xs text-muted-foreground">No session topics.</p>
+			) : (
+				<ul className="flex min-w-0 flex-col gap-1">
+					{sortedTopics(topics.topics).map((t) => {
+						const second = topicSecondLine(t);
+						return (
+							<li key={t.id} className="flex flex-col gap-0.5 px-1.5 py-1 text-xs" data-testid="memory-topic-row">
+								<div className="flex items-center gap-1.5">
+									<a href={`/wolf/${encodeURIComponent(wolf)}/memory/topic/${encodeURIComponent(t.id)}`} className="min-w-0 truncate font-medium underline-offset-2 hover:underline" data-testid="memory-topic-link">{t.title}</a>
+									{second?.chip && <span title={second.chip.title} className={`ml-auto shrink-0 rounded-full px-1.5 text-[10px] ${second.chip.tone === "warn" ? "bg-amber-50 text-amber-700" : "bg-muted text-muted-foreground"}`} data-testid="memory-topic-chip">{second.chip.label}</span>}
+									<span className={`shrink-0 text-[10px] text-muted-foreground${second?.chip ? "" : " ml-auto"}`}>{formatTopicSize(t.bytes)}</span>
+									<input type="checkbox" aria-label="Keep local" title="Keep local" className="shrink-0" checked={t.keepLocal} onChange={(e) => void toggle(t.id, e.target.checked)} />
+								</div>
+								{second && second.sources.length > 0 && (
+									<div className="flex min-w-0 items-center gap-1.5">
+										<span className="min-w-0 truncate text-[10px] text-muted-foreground">{second.sources.join(", ")}</span>
+									</div>
+								)}
+							</li>
+						);
+					})}
+				</ul>
+			)}
+		</section>
+	);
+}
+
 const chipOf = (id: string) => (
 	<span className="shrink-0" data-testid="memory-obs-chip" onClick={(e) => e.stopPropagation()}>
 		<WorkIdChip id={id} />
@@ -331,6 +463,8 @@ export function ObservationsSection({ wolf, observations }: {
 		error: string | null;
 		pool: PoolObservation[] | null;
 		pending?: PoolPending | null;
+		/** The response's pool-level `blocked`: one section warning, never a per-group label. */
+		blocked?: "work-api-unavailable";
 		info: Readonly<Record<string, GroupInfo | undefined>>;
 		open: string | null;
 		onOpen: (id: string | null) => void;
@@ -339,7 +473,8 @@ export function ObservationsSection({ wolf, observations }: {
 	};
 }) {
 	const { tree, pool, info, open } = observations;
-	const rows = tree ? buildMemoryTreeRows(tree) : [];
+	const latest = Object.fromEntries((pool ? groupObservations(pool) : []).map((g) => [g.key, g.latest]));
+	const rows = tree ? buildMemoryTreeRows(tree, latest) : [];
 	const archivedStage = (id: string, stage?: string) => (stage ?? info[id]?.stage) === "archived";
 	const blocked = new Map((pool ? groupObservations(pool) : []).filter((g) => g.blocked).map((g) => [g.key, g]));
 	const blockedNote = (id: string) => {
@@ -392,7 +527,8 @@ export function ObservationsSection({ wolf, observations }: {
 
 	return (
 		<section data-testid="memory-feed" className="min-w-0">
-			<h3 className="mb-1 text-xs font-medium uppercase text-muted-foreground">Observations</h3>
+			<SectionHeading label="Observations" info={SECTION_INFO.observations} />
+			{workApiWarning(observations.blocked) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-work-api-warning">{workApiWarning(observations.blocked)}</p> : null}
 			{pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
 			{tree === null ? (
 				<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{observations.error ? `Observations unavailable: ${observations.error}` : "Loading…"}</p>

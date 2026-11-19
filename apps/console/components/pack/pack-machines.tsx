@@ -10,15 +10,20 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { usePackHealth } from "@/components/pack/pack-health";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
-import { useSingleMac } from "@/components/shell/single-mac";
 import { cn } from "@/lib/utils";
+import { useSingleMac } from "@/components/shell/single-mac";
+import { useAppBridge } from "@/components/settings/app-bridge";
 import {
+	appCheckNote,
+	appRestartLabel,
 	ageText,
 	groupByHost,
+	type InventoryRowView,
 	logLines,
 	machineCard,
 	restartSummary,
 	sendMachineCommand,
+	versionText,
 	updateFinished,
 	updateOffered,
 	updateOutcome,
@@ -50,6 +55,32 @@ export function fakeSend(outcome: string): Send {
 }
 
 /** The presentational card. `logs`: fetched lines by log service; `notes`: the last restart line by service kind; `busy`: the service kinds being restarted. */
+/**
+ * Single-Mac: the desktop app's own updater (electron-updater downloads in the background and installs on quit). Says so, shows the app
+ * version, offers Check now (the app answers with its own dialog) and, once an update is downloaded, Restart to update.
+ */
+export function AppUpdateBlock({ version }: { version: string | null }) {
+	const bridge = useAppBridge();
+	const [ready, setReady] = useState<string | null>(null);
+	const [checking, setChecking] = useState(false);
+	const [note, setNote] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
+	useEffect(() => bridge?.onUpdateStatus?.((s) => { if (s.status === "downloaded" && s.version) setReady(s.version); }), [bridge]);
+	const restart = appRestartLabel(ready);
+	return (
+		<div data-testid="machine-app-update" className="mt-2 rounded-md border px-2 py-1.5 text-muted-foreground">
+			<p data-testid="machine-app-update-note">Updates install by themselves: the app downloads them in the background and asks you to restart.</p>
+			<div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+				<span data-testid="machine-app-version" className="text-foreground">{version ? `Wolfpack v${version}` : "Wolfpack"}</span>
+				<span className="ml-auto flex flex-wrap items-center gap-1.5">
+					{restart && <button type="button" data-testid="machine-app-restart" onClick={() => bridge?.installUpdate?.()} className={BTN}>{restart}</button>}
+					{bridge?.checkForUpdates && <button type="button" data-testid="machine-app-check" disabled={checking} onClick={() => { setChecking(true); setNote(null); void bridge.checkForUpdates!().then((r) => setNote(appCheckNote(r))).catch(() => setNote(appCheckNote({ ok: false }))).finally(() => setChecking(false)); }} className={BTN}>Check now</button>}
+				</span>
+			</div>
+			{note && <p data-testid={note.tone === "error" ? "machine-app-update-error" : "machine-app-update-ok"} className={note.tone === "error" ? "mt-1 text-red-600 dark:text-red-400" : "mt-1"}>{note.text}</p>}
+		</div>
+	);
+}
+
 export function MachineCard(p: {
 	view: MachineCardView;
 	logs: Record<string, LogState>;
@@ -79,8 +110,9 @@ export function MachineCard(p: {
 					<ServiceRow key={s.kind} s={s} note={p.notes?.[s.kind]} busy={p.busy?.has(s.kind) ?? false} onRestart={() => p.onRestart?.(s)} log={s.logService ? p.logs[s.logService] : undefined} onRefresh={s.logService && view.online ? () => p.onRefreshLog?.(s.logService!) : undefined} />
 				))}
 			</ul>
-			{p.update ?? <p data-testid="machine-update-readonly" className="mt-2 text-muted-foreground/70">{UPDATE_READONLY_NOTE}</p>}
-			<div data-testid="machine-channel" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+			{view.update?.kind === "app" && <AppUpdateBlock version={view.update.version} />}
+			{view.update?.kind === "pack" && (p.update ?? <p data-testid="machine-update-readonly" className="mt-2 text-muted-foreground/70">{UPDATE_READONLY_NOTE}</p>)}
+			{view.update?.kind === "pack" && <div data-testid="machine-channel" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
 				<span>Update channel</span>
 				{view.channel.editable ? (
 					<select data-testid="machine-channel-select" disabled={p.channelDisabled} value={view.channel.value ?? "stable"} onChange={(e) => p.onChannel?.(e.target.value as "stable" | "main")} className="rounded-sm border bg-background px-2 py-1 max-md:min-h-11">
@@ -88,13 +120,13 @@ export function MachineCard(p: {
 						<option value="main">main (testing)</option>
 					</select>
 				) : (
-					<span data-testid="machine-channel-value" className="rounded-sm border px-1.5 text-foreground">{view.channel.value ?? "unknown"}{view.channel.mode ? ` · ${view.channel.mode}` : ""}</span>
+					<span data-testid="machine-channel-value" className="rounded-sm border px-1.5 text-foreground">{view.channel.value ?? view.channel.missing ?? "unknown"}{view.channel.mode ? ` · ${view.channel.mode}` : ""}</span>
 				)}
 				{view.channel.editable && view.channel.mode && <span data-testid="machine-mode" className="text-foreground">· {view.channel.mode}</span>}
 				{view.channel.note && <span className="text-muted-foreground/70">{view.channel.note}</span>}
 				{p.onCheck && <button type="button" data-testid="machine-check" onClick={p.onCheck} className={cn(BTN, "ml-auto")}>Check now</button>}
-			</div>
-			{p.checkNote && <p data-testid="machine-check-note" className="mt-1 text-muted-foreground">{p.checkNote}</p>}
+			</div>}
+			{view.update?.kind === "pack" && p.checkNote && <p data-testid="machine-check-note" className="mt-1 text-muted-foreground">{p.checkNote}</p>}
 		</section>
 	);
 }
@@ -106,12 +138,24 @@ function ServiceRow({ s, log, note, busy, onRestart, onRefresh }: { s: MachineSe
 				<span aria-hidden className={cn("size-2 rounded-full", TONE[s.tone])} />
 				<span className="text-foreground">{s.label}{s.count && s.count > 1 ? ` (${s.count})` : ""}</span>
 				<span data-testid="machine-service-status" className="text-muted-foreground">{s.status === "ok" ? "running" : s.down ? "down" : s.status}</span>
-				<span data-testid="machine-service-version" className="text-muted-foreground">{s.version ? `v${s.version}` : "version unknown"}</span>
+				<span data-testid="machine-service-version" className="text-muted-foreground">{versionText(s.version, s.versionNote)}</span>
 				{onRefresh && <button type="button" data-testid="machine-log-refresh" onClick={onRefresh} className={cn(BTN, "ml-auto")}>Refresh log</button>}
 				{s.restart && (
 					<button type="button" data-testid="machine-restart" data-for={s.kind} disabled={busy} onClick={onRestart} className={cn(BTN, onRefresh ? "" : "ml-auto")}>{busy ? "Restarting…" : "Restart"}</button>
 				)}
 			</div>
+			{s.wolves && s.wolves.length > 0 && (
+				<ul data-testid="machine-wolves" className="mt-1 space-y-0.5 pl-4 text-xs">
+					{s.wolves.map((w) => (
+						<li key={`${s.kind}:${w.name}`} data-testid="machine-wolf" data-wolf={w.name} className="flex flex-wrap items-center gap-x-2">
+							<span aria-hidden className={cn("size-1.5 rounded-full", TONE[w.tone])} />
+							<span className="text-foreground">{w.name}</span>
+							<span className="text-muted-foreground">{w.status === "ok" ? "running" : w.tone === "red" ? "down" : w.status === "unknown" ? "not reporting" : w.status}</span>
+							<span className="text-muted-foreground">{versionText(w.version, w.versionNote)}</span>
+						</li>
+					))}
+				</ul>
+			)}
 			{s.hint && <p data-testid="machine-restart-hint" className="mt-1 text-muted-foreground">{s.hint}</p>}
 			{note && <p data-testid="machine-service-note" className="mt-1 text-muted-foreground">{note}</p>}
 			{s.down && log !== undefined && (
@@ -140,9 +184,8 @@ type Ui = { phase: "idle" } | { phase: "confirm" } | { phase: "sending" } | { ph
  * failed poll shows "reconnecting", not an error. `api`: dev fixtures replace fetch (?healthUpdate=).
  */
 export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { card: HostCard; canAct: boolean; actions: HealthActionsView | undefined; api?: typeof fetch } & Pick<Parameters<typeof MachineCard>[0], "logs" | "notes" | "busy" | "onRestart" | "onRefreshLog">) {
-	const call: typeof fetch = (u, i) => (api ?? fetch)(u, i);
-	// The Mac app has no pack updater: the card shows the derived channel read-only, with no update banner, switch or Check now.
 	const singleMac = useSingleMac();
+	const call: typeof fetch = (u, i) => (api ?? fetch)(u, i);
 	const label = card.label;
 	const [state, setState] = useState<UpdateState | null>(null);
 	const [sub, setSub] = useState<Sub | null>(null);
@@ -332,13 +375,13 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 						{saveErr && <p data-testid="machine-save-error" className="mt-1 text-red-600 dark:text-red-400">{saveErr}</p>}
 		</div>
 	);
-	if (singleMac) return <MachineCard view={machineCard(card, sub?.channel ?? null, sub?.mode ?? null, false, true)} update={<></>} {...rest} />;
-	return <MachineCard view={machineCard(card, sub?.channel ?? null, sub?.mode ?? null, subErr && !sub)} update={update} checkNote={checkNote} onCheck={() => void check()} channelDisabled={!canAct || !sub || saving} onChannel={(c) => void save({ channel: c })} {...rest} />;
+	return <MachineCard view={machineCard(card, sub?.channel ?? null, { singleMac, mode: sub?.mode ?? null, readFailed: subErr && !sub })} update={update} checkNote={checkNote} onCheck={() => void check()} channelDisabled={!canAct || !sub || saving} onChannel={(c) => void save({ channel: c })} {...rest} />;
 }
 
 /** The Machines section body. */
 export function MachinesSection() {
 	const { snapshot, reachable, lastSeenAt, now } = usePackHealth();
+	const singleMac = useSingleMac();
 	const [send, setSend] = useState<Send>(() => sendMachineCommand);
 	// dev: ?healthUpdate= / ?healthAuto= replace the update and subscription routes with a fake (pack-health-fixtures.ts); until it loads, nothing is fetched.
 	const fakeWanted = typeof window !== "undefined" && process.env.NODE_ENV !== "production" && /[?&]health(Update|Auto)=/.test(window.location.search);
@@ -360,7 +403,36 @@ export function MachinesSection() {
 		const fake = process.env.NODE_ENV !== "production" ? new URLSearchParams(window.location.search).get("machineCmd") : null;
 		if (fake) setSend(() => fakeSend(fake));
 	}, []);
-	const cards = snapshot ? groupByHost(snapshot).filter((c) => c.checked) : [];
+	// The hub inventory is read with THIS browser's sign-in (the app's fetch wrapper adds the stored bearer), not a console token.
+	type Inv = { state: "ok" | "unavailable" | "signed-out"; rows?: InventoryRowView[]; hubMachine?: string | null };
+	const [inv, setInv] = useState<Inv | null>(null);
+	useEffect(() => {
+		if (fakeWanted) return;
+		const ac = new AbortController();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		// One poll at a time: the next is scheduled after the previous settles; unmount aborts the one in flight.
+		const load = async () => {
+			let next: Inv = { state: "unavailable" };
+			try {
+				const r = await fetch("/api/health/inventory", { cache: "no-store", signal: ac.signal });
+				const b = (await r.json()) as Inv;
+				if (r.ok && (b.state === "ok" || b.state === "signed-out")) next = b;
+			} catch {
+				/* unavailable */
+			}
+			if (ac.signal.aborted) return;
+			setInv(next);
+			timer = setTimeout(() => void load(), 5_000);
+		};
+		void load();
+		return () => {
+			ac.abort();
+			clearTimeout(timer);
+		};
+	}, [fakeWanted]);
+	// Before the first per-viewer answer the cards show a neutral "loading" note, never snapshot data or "version unknown".
+	const merged = snapshot ? { ...snapshot, inventory: inv ? { state: inv.state, rows: inv.state === "ok" ? (inv.rows ?? []) : [], stale: false, hubMachine: inv.hubMachine ?? null } : { state: "loading" as const, rows: [], stale: false, hubMachine: null } } : snapshot;
+	const cards = merged ? groupByHost(merged).filter((c) => c.checked) : [];
 	const hubIdOf = useCallback((id: string) => snapshot?.hosts?.find((h) => h.id === id)?.hubId, [snapshot]);
 	const fetchLog = useCallback(
 		async (cardId: string, service: string) => {
@@ -372,7 +444,7 @@ export function MachinesSection() {
 		},
 		[send, hubIdOf],
 	);
-	const views = cards.map((c) => machineCard(c, null)); // the channel only matters for display; the own card builds its own view
+	const views = cards.map((c) => machineCard(c, null, { singleMac })); // the channel only matters for display; the own card builds its own view
 	const downKey = views.map((v) => (v.online ? v.services.filter((s) => s.logService).map((s) => `${v.id}/${s.logService}`) : []).flat()).flat().join(",");
 	useEffect(() => {
 		for (const k of downKey ? downKey.split(",") : []) {

@@ -28,6 +28,15 @@ describe("key-file", () => {
     expect(readdirSync(dir)).toEqual(["keys.env"]); // no temp file left
   });
 
+  it("round-trips names beyond the known slots (plug-in env names) at mode 0600", () => {
+    writeKey(file, "EXAMPLE_TOKEN", "tok-fake_1");
+    writeKey(file, "EXAMPLE_PATH", "/opt/example/bin/tool");
+    expect(readFileSync(file, "utf8")).toBe("EXAMPLE_TOKEN=tok-fake_1\nEXAMPLE_PATH=/opt/example/bin/tool\n");
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readKey(file, "EXAMPLE_TOKEN")).toBe("tok-fake_1");
+    expect(readKey(file, "EXAMPLE_PATH")).toBe("/opt/example/bin/tool");
+  });
+
   it("replaces one key and keeps the other lines", () => {
     writeFileSync(file, "# mine\nDEEPGRAM_API_KEY=dg-1\nANTHROPIC_API_KEY=old\n", { mode: 0o600 });
     writeKey(file, "ANTHROPIC_API_KEY", "new");

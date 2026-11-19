@@ -172,9 +172,8 @@ describe("pack health: GET /api/health", () => {
 	it("carries this console's own entry as `self` even when the hub has no inventory", async () => {
 		const fakeFetch = (async () => new Response("{}", { status: 404 })) as unknown as typeof fetch;
 		const entry = { machine: "luka-air", kind: "console" as const, id: "console", version: "0.1.20", channel: "main" as const, uptimeS: 42, lagMs: 3 };
-		const health = createPackHealth({ targets: healthTargets({}), fetch: fakeFetch, now: () => T0, consoleHost: "luka-air", platform: "darwin", log: () => {}, inventory: () => null, self: () => entry });
+		const health = createPackHealth({ targets: healthTargets({}), fetch: fakeFetch, now: () => T0, consoleHost: "luka-air", platform: "darwin", log: () => {}, self: () => entry });
 		const snap = await health.tick();
-		assert.equal(snap.inventory, null);
 		assert.deepEqual(snap.self, entry);
 	});
 

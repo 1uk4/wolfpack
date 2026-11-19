@@ -8,6 +8,7 @@
  * model and Auto-ship controls are hidden. "Answering Qn" is the inline composer's: its text goes to the question, not to the chat.
  */
 import { useEffect, useState } from "react";
+import type { PendingCard } from "@wolfpack/client";
 import dynamic from "next/dynamic";
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { useBarCards } from "@/components/chat-bar/chat-bar-cards";
@@ -36,9 +37,9 @@ export interface OwnAsk {
 	settle: () => void;
 }
 
-export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: number | null, dictation: Dictation, onCollapse?: (n: NoteState) => void): OwnAsk {
+export function useOwnAsk(target: AttachedRef, working: boolean, dockHeight: number | null, dictation: Dictation, onCollapse?: (n: NoteState) => void, initialPending?: PendingCard[]): OwnAsk {
 	const wide = useWide();
-	const cards = useBarCards(target, working, BAR_EXTRAS.ask);
+	const cards = useBarCards(target, working, BAR_EXTRAS.ask, initialPending);
 	const queue = useAskQueue(BAR_EXTRAS.ask ? askQueue(cards.pending) : []);
 	const pc = queue.current;
 	const session = useAskSession(target, pc, { onSubmitted: (id) => cards.settle(id), queued: queue.ids, onRefetch: cards.refetch, onCollapse });

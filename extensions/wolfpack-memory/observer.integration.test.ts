@@ -189,6 +189,8 @@ describe("full-transcript observer", () => {
     // the unbound observations went to the pool
     const pool = readFileSync(join(dev, "den/.memory/pool/observations.jsonl"), "utf8");
     expect(pool.trim().split("\n")).toHaveLength(stub.prompts.length);
+    // each line names the thread (conversation) it was observed in; the promote pass groups topics by it
+    for (const line of pool.trim().split("\n")) expect(JSON.parse(line).thread).toBe("1");
   });
 
   it("a general observation in a bound main session keeps the work tag only as origin when generalToDen is on, and is fully tagged when off", async () => {
@@ -363,7 +365,7 @@ describe("full-transcript observer", () => {
     expect(count(stub.text(), "A_TWO")).toBe(1);
   });
 
-  it("(i) trigger hybrid: the interval tick consolidates + promotes the whole pool (ignoring poolTarget), and stops on close", async () => {
+  it("(i) trigger hybrid: the interval tick consolidates the whole pool (ignoring poolTarget) without promoting, and stops on close", async () => {
     const dev = await devRoot();
     const stub = stubEngine();
     tw = await startTestWolf({
@@ -382,10 +384,11 @@ describe("full-transcript observer", () => {
       },
     });
     await tw.submit(say("USER_ONE"));
-    const topics = join(dev, "den/memory/topics");
+    const topics = join(dev, "den/.memory/sessions/durable"); // session topics: the fold target, not the promoted den topics
     await waitFor(() => existsSync(topics) && readdirSync(topics).some((f) => f.endsWith(".md")));
     expect(stub.steps.filter((x) => x === "consolidate")).toHaveLength(1); // below threshold: only the timer ran
-    expect(readdirSync(join(dev, "ops/inbox/testwolf")).length).toBeGreaterThan(0);
+    const inbox = join(dev, "ops/inbox/testwolf");
+    expect(existsSync(inbox) ? readdirSync(inbox).length : 0).toBe(0); // a tick never promotes every topic
     await tw.stop();
     tw = undefined;
     const n = stub.steps.length;

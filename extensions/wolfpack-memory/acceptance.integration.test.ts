@@ -200,8 +200,8 @@ describe("durable memory: sandbox acceptance", { timeout: 60_000 }, () => {
           const c = { wolfDen: den, wolfName: "1uk4", domains: config.identity.domains, wolfConfig: { sandbox: config.sandbox, memory: config.memory }, env: { ...env, KB_BASE: live.kb } };
           return [
             parkExtension,
-            adaptToDurable(createMemoryExtension({ ...config.memory, engine: stubEngine() }, c), { wolfDen: den, wolfName: "1uk4" }),
-            adaptToDurable(createTasksExtension({}, c), { wolfDen: den, wolfName: "1uk4" }),
+            adaptToDurable(createMemoryExtension({ ...config.memory, workLog: "fold", engine: stubEngine() }, c), { wolfDen: den, wolfName: "1uk4" }),
+            adaptToDurable(createTasksExtension({ workLog: "fold" }, c), { wolfDen: den, wolfName: "1uk4" }),
           ];
         },
       },

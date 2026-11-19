@@ -21,7 +21,7 @@ function stub(listen: number | string): Promise<Server> {
 }
 const child = (name: string, url: string | null) => ({ name, state: "online" as const, pid: 1, url, adopted: false, restarts: 0, failures: 0, nextRestartInMs: null, logFile: "" });
 
-function reporter(children: ReturnType<typeof child>[], over: { enabled?: boolean; keys?: () => InventoryEntry["keys"]; busy?: (name: string) => Promise<boolean>; transport?: (name: string) => "api" | "subscription" } = {}) {
+function reporter(children: ReturnType<typeof child>[], over: { consoleUrl?: string; enabled?: boolean; keys?: () => InventoryEntry["keys"]; busy?: (name: string) => Promise<boolean>; transport?: (name: string) => "api" | "subscription" } = {}) {
   const sent: InventoryEntry[][] = [];
   const r = createInventoryReporter({
     hostId: "sfo-01-wolves",
@@ -31,6 +31,7 @@ function reporter(children: ReturnType<typeof child>[], over: { enabled?: boolea
     children: () => children,
     send: (entries) => (sent.push(entries), true),
     enabled: () => over.enabled ?? true,
+    ...(over.consoleUrl ? { consoleUrl: over.consoleUrl } : {}),
     ...(over.keys ? { keys: over.keys } : {}),
     ...(over.busy ? { busy: over.busy } : {}),
     ...(over.transport ? { transport: over.transport } : {}),
@@ -110,6 +111,26 @@ describe("workerd inventory reporter", () => {
     expect(Date.now() - t0).toBeLessThan(1_500);
     const e = sent.at(-1)!;
     for (const id of ["drip", "big", "ftp"]) expect(e.find((x) => x.id === id)!.version).toBeUndefined();
+  });
+
+  it("reports the machine's own console from its /api/health self part, and nothing when the console does not answer", async () => {
+    const con = createServer((req, res) => {
+      if (req.url === "/api/health") res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ self: { machine: "ignored", kind: "console", id: "console", version: "0.1.20", channel: "stable", uptimeS: 77, lagMs: 3 }, links: [] }));
+      else res.writeHead(404).end();
+    });
+    cleanup.push(() => con.close());
+    await new Promise<void>((r) => con.listen(0, () => r()));
+    const up = reporter([], { consoleUrl: `http://127.0.0.1:${(con.address() as { port: number }).port}` });
+    await up.r.report();
+    const c = up.sent.at(-1)!.find((x) => x.kind === "console")!;
+    expect(c).toEqual({ machine: "sfo-01", kind: "console", id: "console", version: "0.1.20", channel: "stable", uptimeS: 77, lagMs: 3 });
+    expect(InventoryEntrySchema.safeParse(c).success).toBe(true);
+    const down = reporter([], { consoleUrl: "http://127.0.0.1:1" });
+    await down.r.report();
+    expect(down.sent.at(-1)!.some((x) => x.kind === "console")).toBe(false);
+    const unset = reporter([]);
+    await unset.r.report();
+    expect(unset.sent.at(-1)!.some((x) => x.kind === "console")).toBe(false);
   });
 
   it("sends nothing until the hub's welcome advertised inventory", async () => {

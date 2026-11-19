@@ -314,7 +314,7 @@ export class Supervisor implements WolfRegistry {
    * cannot be determined, see wolfTransport) never receives the metered key.
    */
   private packKeysFor(config: WolfConfig): Record<string, string> {
-    const env = readKeyFileEnv(this.opts.keyFile!);
+    const env = readKeyFileEnv(this.opts.keyFile!, this.opts.env ?? process.env);
     if (wolfTransport(config, this.opts.env ?? process.env) !== "api") delete env.ANTHROPIC_API_KEY;
     return env;
   }

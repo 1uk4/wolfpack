@@ -26,6 +26,7 @@ import {
 	type WolfLite,
 } from "@/src/core";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/shell/server-events";
+import { fetchWolfThreads } from "@/components/kb/kb-client";
 import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 
 export interface AttachedThreadApi {
@@ -164,8 +165,9 @@ export function AttachedThreadProvider({
 			const next: Record<string, readonly BarThread[] | undefined> = {};
 			await Promise.all(
 				ws.filter((w) => w.status !== "offline").map(async (w) => {
-					const t = await getJson<{ threads?: BarThread[] }>(`/api/wolves/${encodeURIComponent(w.name)}/threads`);
-					next[w.name] = Array.isArray(t?.threads) ? t.threads : undefined;
+					// Shares one request per wolf with the sidebar and the other readers that mount with it.
+					const t = await fetchWolfThreads<{ threads?: BarThread[] }>(w.name);
+					next[w.name] = t.ok && Array.isArray(t.data.threads) ? t.data.threads : undefined;
 				}),
 			);
 			// Per wolf, keep a list that a later fetch (an attach's refreshWolf) already committed.
@@ -183,7 +185,9 @@ export function AttachedThreadProvider({
 	const refreshWolf = useCallback((wolf: string) => {
 		const g = gen.current;
 		const started = ++seq.current;
-		void getJson<{ threads?: BarThread[] }>(`/api/wolves/${encodeURIComponent(wolf)}/threads`).then((t) => {
+		// A refresh after an attach or an event always revalidates.
+		void fetchWolfThreads<{ threads?: BarThread[] }>(wolf, 0).then((r) => {
+			const t = r.ok ? r.data : undefined;
 			if (!Array.isArray(t?.threads)) return;
 			if ((wolfSeq.current[wolf] ?? 0) > started) return; // a newer fetch of this wolf already landed
 			wolfSeq.current[wolf] = started;

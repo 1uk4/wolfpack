@@ -28,7 +28,7 @@ import {
 	wolfItems,
 	type PaletteItem,
 } from "@/src/core";
-import { fetchKbGraph, fetchWolves, postConsolidate, postPromote } from "@/components/kb/kb-client";
+import { fetchKbGraph, fetchWolfThreads, fetchWolves, postConsolidate, postPromote } from "@/components/kb/kb-client";
 
 type Wolves = { name: string; status?: string; librarian?: boolean; kbReadable?: boolean }[];
 
@@ -46,9 +46,8 @@ async function loadThreadItems(wolves: Wolves): Promise<PaletteItem[]> {
 	const lists = await Promise.all(
 		wolves.map(async (wolf) => {
 			try {
-				const res = await fetch(`/api/wolves/${encodeURIComponent(wolf.name)}/threads`, { cache: "no-store" });
-				const d = (await res.json()) as { threads: { id: string; title: string; kind?: string; state?: "queued" | "running" | "waiting" | "done" | "failed" | "stopped"; parentThreadId?: string; settings?: { color?: string } }[] };
-				return threadItems(wolf.name, d.threads);
+				const r = await fetchWolfThreads<{ threads: { id: string; title: string; kind?: string; state?: "queued" | "running" | "waiting" | "done" | "failed" | "stopped"; parentThreadId?: string; settings?: { color?: string } }[] }>(wolf.name);
+				return r.ok ? threadItems(wolf.name, r.data.threads) : [];
 			} catch {
 				return [];
 			}

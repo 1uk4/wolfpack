@@ -5,6 +5,8 @@ import type { SessionTransport } from "@/components/thread/session-core";
 
 /** Messages per transcript page: the initial open, each "Show earlier" and the settle refetch. */
 export const THREAD_PAGE_SIZE = 50;
+/** The thread page's first paint; "load earlier" pages use THREAD_PAGE_SIZE. */
+export const THREAD_FIRST_PAGE = 25;
 
 /**
  * The session transport for a ConsoleClient thread: the /api/wolves routes

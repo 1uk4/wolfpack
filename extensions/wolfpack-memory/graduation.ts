@@ -44,6 +44,8 @@ export interface GraduationDeps {
   finalPass?: (featureId: string) => Promise<unknown>;
   /** Called with every item that graduated (cache invalidation). */
   forget?: (id: string) => void;
+  /** Called once a graduation has happened (after the unbind), with the graduated item: the promote pass for its topics. Never breaks the graduation. */
+  onGraduated?: (id: string) => void;
 }
 
 export function createGraduation(deps: GraduationDeps) {
@@ -130,6 +132,7 @@ export function createGraduation(deps: GraduationDeps) {
     const unbound = unbindOnGraduation(wolfDen, { id: p.itemId, title: p.title, archived: done.archived, exceptRoot });
     deps.forget?.(p.itemId);
     for (const a of done.archived) deps.forget?.(a);
+    try { deps.onGraduated?.(p.itemId); } catch { /* an observer never breaks a graduation */ }
     return unbound;
   }
 

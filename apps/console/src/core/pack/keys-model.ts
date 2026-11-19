@@ -72,9 +72,15 @@ export function cellOf(m: KeyMachine, slot: string, needed: boolean, capability?
 /** Dictation is needed on any machine that serves a console; chat and memory on every machine that runs wolves (all listed here). */
 const neededOn = (cap: Capability, m: KeyMachine): boolean => (cap === "dictation" ? !!m.servesConsole : true);
 
-export function buildGrid(machines: readonly KeyMachine[]): GridGroup[] {
+/** Single-Mac (the desktop app): dictation is off there, so its group is never listed or offered. */
+export interface GridOptions {
+	singleMac?: boolean;
+}
+const capabilitiesFor = (opts?: GridOptions): readonly Capability[] => (opts?.singleMac ? CAPABILITIES.filter((c) => c !== "dictation") : CAPABILITIES);
+
+export function buildGrid(machines: readonly KeyMachine[], opts?: GridOptions): GridGroup[] {
 	const hasAny = (slot: string) => machines.some((m) => m.slots.some((s) => s.slot === slot && s.present));
-	return CAPABILITIES.map((cap) => ({
+	return capabilitiesFor(opts).map((cap) => ({
 		capability: cap,
 		label: CAPABILITY_LABEL[cap],
 		rows: providersByCapability(cap)
@@ -86,9 +92,9 @@ export function buildGrid(machines: readonly KeyMachine[]): GridGroup[] {
 }
 
 /** Providers the picker offers for adding: those with no row in any group yet, grouped by capability. */
-export function pickerOptions(grid: readonly GridGroup[]): { capability: Capability; label: string; providers: { id: string; name: string; slot: string }[] }[] {
+export function pickerOptions(grid: readonly GridGroup[], opts?: GridOptions): { capability: Capability; label: string; providers: { id: string; name: string; slot: string }[] }[] {
 	const shown = new Set(grid.flatMap((g) => g.rows.map((r) => r.slot)));
-	return CAPABILITIES.map((cap) => ({
+	return capabilitiesFor(opts).map((cap) => ({
 		capability: cap,
 		label: CAPABILITY_LABEL[cap],
 		providers: providersByCapability(cap).flatMap((p) => p.slots.filter((s) => !shown.has(s.id)).map((s) => ({ id: p.id, name: p.name, slot: s.id }))),

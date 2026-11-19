@@ -168,6 +168,21 @@ describe("consolidateSession reconcile", () => {
     expect(existsSync(join(den, "memory", "archive"))).toBe(false);
   });
 
+  it("promotes only the topics named in onlyIds (the promote pass chooses; keep-local topics never reach the den)", async () => {
+    sessionTopic("chosen");
+    sessionTopic("left-alone");
+    await consolidateSession({
+      engine: stubEngine,
+      den: { denRoot: den, wolfName: WOLF },
+      memoryRoot,
+      sessionId: "sess-1",
+      kbRoots: roots,
+      skipClaims: true,
+      onlyIds: ["chosen"],
+    });
+    expect(readdirSync(join(den, "memory", "topics")).filter((f) => f.endsWith(".md"))).toEqual(["chosen.md"]);
+  });
+
   it("logs and skips a topic with an unsafe id instead of aborting the promote", async () => {
     // Session topic whose frontmatter id would escape the topics directory.
     const dir = join(memoryRoot, "sess-1");

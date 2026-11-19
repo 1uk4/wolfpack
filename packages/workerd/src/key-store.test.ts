@@ -1,9 +1,9 @@
-import { chmodSync, chownSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { seal, type CheckResult } from "@wolfpack/protocol";
-import { createKeyStore, readKeyPresence } from "./key-store.js";
+import { createKeyStore, readKeyFileEnv, readKeyPresence } from "./key-store.js";
 import { loadOrCreateMachineKey, type MachineKey } from "./machine-key.js";
 
 const ANT = "sk-ant-api03-" + "a".repeat(40);
@@ -149,6 +149,36 @@ describe("key store: hardening", () => {
     expect(r.ok).toBe(true);
     expect(statSync(t.file).mode & 0o777).toBe(0o640);
     expect(existsSync(stale)).toBe(false);
+  });
+});
+
+describe("key store: plug-in env names", () => {
+  const plugin = (dir: string, id: string, manifest: unknown) => {
+    mkdirSync(join(dir, id), { recursive: true });
+    writeFileSync(join(dir, id, "package.json"), JSON.stringify({ name: id, wolfpack: manifest }));
+  };
+
+  it("forwards the env names that installed plug-in manifests declare, and no others", () => {
+    const dir = tmp();
+    plugin(dir, "example-provider", { requiredEnv: ["EXAMPLE_TOKEN"], optionalEnv: ["EXAMPLE_PATH"] });
+    plugin(dir, "other-provider", { requiredEnv: ["EXAMPLE_TOKEN", "OTHER_NAME"] });
+    mkdirSync(join(dir, "broken"));
+    writeFileSync(join(dir, "broken", "package.json"), "{not json");
+    const file = join(tmp(), "keys.env");
+    writeFileSync(file, `ANTHROPIC_API_KEY=${ANT}\nEXAMPLE_TOKEN=tok-fake-1\nEXAMPLE_PATH=/opt/x\nOTHER_NAME=o\nUNDECLARED=x\n`);
+    expect(readKeyFileEnv(file, { WOLFPACK_PLUGINS_DIR: dir })).toEqual({
+      ANTHROPIC_API_KEY: ANT,
+      EXAMPLE_TOKEN: "tok-fake-1",
+      EXAMPLE_PATH: "/opt/x",
+      OTHER_NAME: "o",
+    });
+  });
+
+  it("forwards only the key slots when the plug-ins directory is missing or unset", () => {
+    const file = join(tmp(), "keys.env");
+    writeFileSync(file, `ANTHROPIC_API_KEY=${ANT}\nEXAMPLE_TOKEN=tok\n`);
+    expect(readKeyFileEnv(file, { WOLFPACK_PLUGINS_DIR: join(tmp(), "nope") })).toEqual({ ANTHROPIC_API_KEY: ANT });
+    expect(readKeyFileEnv(file, {})).toEqual({ ANTHROPIC_API_KEY: ANT });
   });
 });
 

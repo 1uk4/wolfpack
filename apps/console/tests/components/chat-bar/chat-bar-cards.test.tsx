@@ -30,14 +30,18 @@ Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {}
 
 const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { FakeNav } = await import("../../helpers/fake-nav.tsx");
+const { dataStore } = await import("../../../src/core/data-store.ts");
 const { AttachedThreadProvider } = await import("../../../components/chat-bar/attached-thread.tsx");
 const { ChatBar } = await import("../../../components/chat-bar/chat-bar.tsx");
+const { useBarCards } = await import("../../../components/chat-bar/chat-bar-cards.ts");
 const { ATTACHED_KEY, BAR_EXTRAS } = await import("../../../src/core/thread/chat-bar.ts");
 // The extras (cards, peek, badge, switcher) are off in the shipped floating chat; this file covers their kept code, so it switches them on.
 Object.assign(BAR_EXTRAS, { cards: true, peek: true, badge: true, switcher: true });
 
 type Call = { url: string; body?: any };
 let calls: Call[] = [];
+/** Slugs of every thread GET, in order. */
+let threadGets: string[] = [];
 /** Per thread slug: what GET thread returns. */
 let bodies: Record<string, { messages: any[]; pendingCards: any[] }> = {};
 let threadStatus: Record<string, string> = {};
@@ -71,6 +75,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	const g = /^\/api\/wolves\/w\/threads\/([^/?]+)\?/.exec(url);
 	if (g) {
 		const slug = g[1]!;
+		threadGets.push(slug);
 		if (failGet.has(slug)) return new Response("{}", { status: 500 });
 		const snapshot = JSON.parse(JSON.stringify(body(slug)));
 		if (gate?.slug === slug) await gate.until;
@@ -132,12 +137,14 @@ const switchTo = async (id: string) => {
 };
 
 afterEach(async () => {
+	dataStore.clear(); // the thread list goes through the client store: the next test must not read this one's list
 	mock.timers.reset();
 	await act(async () => root?.unmount());
 	root = null;
 	document.body.innerHTML = "";
 	mem.clear();
 	calls = [];
+	threadGets = [];
 	bodies = {};
 	threadStatus = {};
 	extraThreads = [];
@@ -637,6 +644,43 @@ describe("ChatBar needs-you badge order", () => {
 		needsYou = [{ wolf: "w", threadId: "w/c", raisedAt: "2026-01-01T00:00:00Z" }];
 		await emit("needs-you-changed", { wolf: "w", kind: "card" });
 		await until(() => q('[data-testid="chat-bar-needs-you"]')!.getAttribute("data-thread") === "w/c", "the re-sort");
+	});
+});
+
+describe("useBarCards seeded from the page", () => {
+	function Probe({ initial }: { initial?: any[] }) {
+		const c = useBarCards(A, false, true, initial);
+		return <div data-testid="probe">{c.pending.map((p) => p.callId).join(",")}</div>;
+	}
+	async function mountProbe(initial?: any[]) {
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<ServerEventsProvider connect={fakeSource}>
+					<Probe initial={initial} />
+				</ServerEventsProvider>,
+			);
+		});
+		await flush();
+	}
+
+	it("a seeded mount shows the page's cards without fetching the thread; a card event then refetches once", async () => {
+		raise("a", q1("c2"));
+		await mountProbe([q1("c1")]);
+		assert.equal(q('[data-testid="probe"]')!.textContent, "c1");
+		assert.deepEqual(threadGets, []);
+		await emit("needs-you-changed", { wolf: "w", kind: "card", threadId: "w/a", status: "idle" });
+		await until(() => q('[data-testid="probe"]')!.textContent === "c2", "the refetched card");
+		assert.deepEqual(threadGets, ["a"]);
+	});
+
+	it("an unseeded mount fetches the thread once", async () => {
+		raise("a", q1("c1"));
+		await mountProbe();
+		assert.equal(q('[data-testid="probe"]')!.textContent, "c1");
+		assert.deepEqual(threadGets, ["a"]);
 	});
 });
 

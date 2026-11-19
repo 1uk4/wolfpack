@@ -3,7 +3,7 @@
 (() => {
 	const stub = {
 		info: async () => ({ keyEnv: false, keySaved: false, prefill: null }),
-		suggestedName: async () => "Maya's wolf",
+		suggestedName: async () => "Alpha wolf",
 		checkKey: async (key) => (key === "sk-ok" ? { ok: true } : { ok: false, error: "That key didn't work" }),
 		openExternal: async (url) => void window.open(url, "_blank"),
 		finish: async (answers) => (console.log("setup.finish", JSON.stringify(answers)), { ok: true }),

@@ -42,6 +42,8 @@ import {
   type MemoryStatus,
   type MemoryTopic,
   type MemoryObservations,
+  type MemoryTopics,
+  type KeepLocalResponse,
   type MemoryTree,
   type MemoryNodeObservations,
   type WorkRecordResponse,
@@ -123,8 +125,8 @@ export class HttpConsoleClient implements ConsoleClient {
     return (r as { wolves: WolfSummary[] }).wolves;
   }
 
-  async listThreads(wolf: string): Promise<ThreadSummary[]> {
-    const r = await this.json("listThreads", { name: wolf }, ROUTES.listThreads.response.schema);
+  async listThreads(wolf: string, opts: { all?: boolean } = {}): Promise<ThreadSummary[]> {
+    const r = await this.json("listThreads", { name: wolf }, ROUTES.listThreads.response.schema, undefined, undefined, opts.all ? "?all=1" : "");
     return (r as { threads: ThreadSummary[] }).threads;
   }
 
@@ -139,8 +141,8 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("getThread", { id: threadId }, ROUTES.getThread.response.schema, undefined, threadId, q.toString() ? `?${q}` : "")) as ThreadDetail;
   }
 
-  async listChildren(threadId: string): Promise<ThreadSummary[]> {
-    const r = await this.json("listChildren", { id: threadId }, ROUTES.listChildren.response.schema, undefined, threadId);
+  async listChildren(threadId: string, opts: { all?: boolean } = {}): Promise<ThreadSummary[]> {
+    const r = await this.json("listChildren", { id: threadId }, ROUTES.listChildren.response.schema, undefined, threadId, opts.all ? "?all=1" : "");
     return (r as { threads: ThreadSummary[] }).threads;
   }
 
@@ -467,8 +469,8 @@ export class HttpConsoleClient implements ConsoleClient {
   }
 
   /** Never waits for the job. `already_running` (the running job's id) is a normal 202 answer, not an error. */
-  async promoteMemory(wolf: string): Promise<PromoteResponse> {
-    return (await this.json("promoteMemory", { name: wolf }, ROUTES.promoteMemory.response.schema, undefined, wolf)) as PromoteResponse;
+  async promoteMemory(wolf: string, opts: { ids?: string[] } = {}): Promise<PromoteResponse> {
+    return (await this.json("promoteMemory", { name: wolf }, ROUTES.promoteMemory.response.schema, opts.ids?.length ? { ids: opts.ids } : undefined, wolf)) as PromoteResponse;
   }
 
   async getMemoryStatus(wolf: string, opts: { thread?: string } = {}): Promise<MemoryStatus> {
@@ -484,6 +486,14 @@ export class HttpConsoleClient implements ConsoleClient {
   async getMemoryObservations(wolf: string, opts: { limit?: number } = {}): Promise<MemoryObservations> {
     const query = opts.limit !== undefined ? `?limit=${encodeURIComponent(String(opts.limit))}` : "";
     return (await this.json("getMemoryObservations", { name: wolf }, ROUTES.getMemoryObservations.response.schema, undefined, wolf, query)) as MemoryObservations;
+  }
+
+  async getMemorySessionTopics(wolf: string): Promise<MemoryTopics> {
+    return (await this.json("getMemorySessionTopics", { name: wolf }, ROUTES.getMemorySessionTopics.response.schema, undefined, wolf)) as MemoryTopics;
+  }
+
+  async putMemoryKeepLocal(wolf: string, topicId: string, keepLocal: boolean): Promise<KeepLocalResponse> {
+    return (await this.json("putMemoryKeepLocal", { name: wolf, id: topicId }, ROUTES.putMemoryKeepLocal.response.schema, { keepLocal }, wolf)) as KeepLocalResponse;
   }
 
   async getMemoryTree(wolf: string): Promise<MemoryTree> {

@@ -429,7 +429,7 @@ function SubagentView({ wolf, childThreadId, titleId, close, onLeave }: { wolf: 
 		const parent = summaryRef.current?.parentThreadId;
 		try {
 			if (parent) {
-				const res = await fetch(`${threadBase(wolf, threadSlug(wolf, parent))}/children`);
+				const res = await fetch(`${threadBase(wolf, threadSlug(wolf, parent))}/children?all=1`);
 				if (res.ok) {
 					const mine = ((await res.json()) as { threads?: ThreadSummary[] }).threads?.find((t) => t.id === childThreadId);
 					if (mine) applySummary(mine);

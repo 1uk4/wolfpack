@@ -2,6 +2,7 @@
  * Browser fetch helper for the KB activity route. Same KbResult contract as kb-client.ts: resolves, never throws; 409 = "unavailable".
  */
 import type { KbActivityResponse } from "@/src/core";
+import { dataStore, StoreHttpError } from "@/src/core/data-store";
 import type { KbFailureReason } from "./kb-client";
 
 /** `unauthorized`: the browser has no (or a revoked) hub token. */
@@ -15,26 +16,21 @@ export interface KbActivityParams {
 	domain?: string;
 }
 
-export async function fetchKbActivity(params: KbActivityParams = {}): Promise<KbActivityResult> {
+/** `maxAgeMs`: reuse a stored answer younger than this (a page mount); 0 (the default) always revalidates with the ETag. */
+export async function fetchKbActivity(params: KbActivityParams = {}, maxAgeMs = 0): Promise<KbActivityResult> {
 	const q = new URLSearchParams();
 	if (params.since) q.set("since", params.since);
 	if (params.before) q.set("before", params.before);
 	if (params.limit !== undefined) q.set("limit", String(params.limit));
 	if (params.domain) q.set("domain", params.domain);
-	let res: Response;
+	let res: { status: number; body: unknown; headers: Headers };
 	try {
-		res = await fetch(`/api/kb/activity${q.size ? `?${q}` : ""}`, { cache: "no-store" });
+		return { ok: true, data: await dataStore.load<KbActivityResponse>(`/api/kb/activity${q.size ? `?${q}` : ""}`, { maxAgeMs }) };
 	} catch (err) {
-		return { ok: false, reason: "error", message: err instanceof Error ? err.message : "network error" };
+		if (!(err instanceof StoreHttpError)) return { ok: false, reason: "error", message: err instanceof Error ? err.message : "network error" };
+		res = err;
 	}
-	if (res.ok) {
-		try {
-			return { ok: true, data: (await res.json()) as KbActivityResponse };
-		} catch {
-			return { ok: false, reason: "error", message: "response is not JSON" };
-		}
-	}
-	const body = (await res.json().catch(() => null)) as { error?: string; code?: string } | null;
+	const body = res.body as { error?: string; code?: string } | null;
 	const reason: KbActivityFailureReason = res.status === 401 ? "unauthorized" : res.status === 409 ? "unavailable" : res.status === 404 ? "not_found" : "error";
 	const message = body?.error ?? `HTTP ${res.status}`;
 	const out: KbActivityResult = { ok: false, reason, message };

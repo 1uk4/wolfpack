@@ -61,6 +61,7 @@ describe("hubd inventory", () => {
       { machine: "liar", kind: "workerd", id: "sfo-01-wolves", version: "0.1.5", channel: "main" },
       { machine: "liar", kind: "wolfd", id: "hal", parent: "sfo-01-wolves", version: "0.1.15", responseMs: 3 },
       { machine: "liar", kind: "hubd", id: "evil", version: "9.9.9" },
+      { machine: "liar", kind: "console", id: "console", version: "0.1.20", channel: "stable" },
     ]);
     await until(async () => (await list()).entries.some((e) => e.kind === "wolfd"), "report listed");
     const { entries, hubMachine } = await list();
@@ -68,10 +69,32 @@ describe("hubd inventory", () => {
     expect(entries.filter((e) => e.id !== "hubd" || e.machine !== "hub-box").map((e) => [e.machine, e.kind, e.id, e.version])).toEqual([
       ["sfo-01", "workerd", "sfo-01-wolves", "0.1.5"],
       ["sfo-01", "wolfd", "hal", "0.1.15"],
+      ["sfo-01", "console", "console", "0.1.20"],
     ]);
     expect(entries.find((e) => e.kind === "hubd")).toMatchObject({ machine: "hub-box", id: "hubd" });
     w.ws.close();
     await until(async () => !(await list()).entries.some((e) => e.kind === "workerd"), "cleared on disconnect");
+  });
+
+  it("a worker's console entry is the machine's own one: one per report, only its version fields kept", async () => {
+    const w = await worker("mac-1uk4", "Mac");
+    w.report([
+      { machine: "x", kind: "console", id: "console", version: "0.1.20", channel: "stable", uptimeS: 5, lagMs: 2, busy: true, transport: "api", parent: "evil", keys: [{ slot: "s", present: true }] },
+      { machine: "x", kind: "console", id: "second", version: "6.6.6" },
+    ]);
+    await until(async () => (await list()).entries.some((e) => e.kind === "console"), "console listed");
+    const consoles = (await list()).entries.filter((e) => e.kind === "console");
+    expect(consoles).toHaveLength(1);
+    expect(consoles[0]).toEqual({ machine: "mac", kind: "console", id: "console", version: "0.1.20", channel: "stable", uptimeS: 5, lagMs: 2, ageS: 0 });
+  });
+
+  it("during skew a machine's old console heartbeat and its workerd's console entry list as one console, the workerd's", async () => {
+    expect((await post(operator(), consoleEntry({ machine: "mac", version: "0.1.19" }))).status).toBe(200);
+    const w = await worker("mac-1uk4", "mac");
+    w.report([{ machine: "mac", kind: "console", id: "console", version: "0.1.21" }]);
+    await until(async () => (await list()).entries.some((e) => e.kind === "console" && e.version === "0.1.21"), "workerd console listed");
+    const consoles = (await list()).entries.filter((e) => e.kind === "console");
+    expect(consoles.map((e) => [e.machine, e.version])).toEqual([["mac", "0.1.21"]]);
   });
 
   it("reports expire after the workerd TTL and console heartbeats after the console TTL (injected clock)", async () => {

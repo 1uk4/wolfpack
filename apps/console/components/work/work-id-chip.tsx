@@ -18,7 +18,7 @@ import { usePathname } from "next/navigation";
 import { createPortal } from "react-dom";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { cn } from "@/lib/utils";
-import { fetchWolves, fetchWorkRecord, openFeatureThread, type KbResult } from "@/components/kb/kb-client";
+import { fetchWolfThreads, fetchWolves, fetchWorkRecord, openFeatureThread, type KbResult } from "@/components/kb/kb-client";
 import { openWorkItem } from "@/components/work/work-reader-nav";
 import { featureThreadWolves, findLibrarian, resolveWork, threadHref, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 import { shortWorkId, workIdDomain } from "@/src/core";
@@ -81,9 +81,9 @@ export const currentWolfOf = (pathname: string | null): string | null => {
 export async function findFeatureThread(featureId: string, wolves: readonly string[]): Promise<FeatureThread | null> {
 	for (const wolf of wolves) {
 		try {
-			const res = await fetch(`/api/wolves/${encodeURIComponent(wolf)}/threads`, { cache: "no-store" });
+			const res = await fetchWolfThreads<{ threads?: { id: string; kind?: string; boundItem?: string; boundWorkItem?: string }[] }>(wolf);
 			if (!res.ok) continue;
-			const list = ((await res.json()) as { threads?: { id: string; kind?: string; boundItem?: string; boundWorkItem?: string }[] }).threads ?? [];
+			const list = res.data.threads ?? [];
 			const hit = list.find((t) => t.kind === "feature" && (t.boundItem ?? t.boundWorkItem) === featureId) ?? list.find((t) => (t.boundItem ?? t.boundWorkItem) === featureId && t.kind !== "task");
 			if (hit) return { wolf, id: hit.id };
 		} catch {

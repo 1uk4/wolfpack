@@ -128,31 +128,46 @@ export const claudeStatelessModels = (_ctx?: { cwd: string; env: NodeJS.ProcessE
 /** Lookup list for stored `claude-bridge/<model>` refs (conversations written before the bridge was retired). */
 export const legacyBridgeLookupModels = (ctx?: { cwd: string; env: NodeJS.ProcessEnv }) => claudeStatelessModels(ctx, LEGACY_CLAUDE_BRIDGE_ID);
 
-export const claudeStatelessPaths = (ctx: { cwd: string; env: NodeJS.ProcessEnv }) => {
+export const claudeStatelessPaths = (ctx: { cwd: string; env: NodeJS.ProcessEnv }, id: string = CLAUDE_STATELESS_ID) => {
   const den = ctx.env.WOLF_DEN;
-  if (!den) throw new Error("claude-stateless: WOLF_DEN is not set (wolfd sets it); refusing to put session files in the working directory");
-  const root = join(dirname(den), CLAUDE_STATELESS_ID, basename(den));
+  if (!den) throw new Error(`${id}: WOLF_DEN is not set (wolfd sets it); refusing to put session files in the working directory`);
+  const root = join(dirname(den), id, basename(den));
   return { sessionDir: join(root, "sessions"), debugLogPath: join(root, "debug.log") };
 };
 
-export const claudeStatelessFactory: ProviderFactory = (ctx) => {
-  const seams = (ctx.seams?.[CLAUDE_STATELESS_ID] ?? {}) as ClaudeStatelessSeams;
-  const { sessionDir, debugLogPath } = claudeStatelessPaths(ctx);
+const withExecOptions = (queryFn: (args: any) => any, execOpts: object) => (args: any) =>
+  Object.keys(execOpts).length ? queryFn({ ...args, options: { ...args?.options, ...execOpts } }) : queryFn(args);
+
+/** The stateless provider factory for any provider id (a plug-in registers its own id; state lives under that id). */
+export interface StatelessExecOptions {
+  /** Absolute path of the `claude` to spawn (the SDK resolves its bundled one when omitted). */
+  pathToClaudeCodeExecutable?: string;
+  /** Runtime that launches `claude` when it is a JS launcher (SDK option `executable`). */
+  executable?: string;
+}
+
+export const makeStatelessFactory = (id: string, exec: StatelessExecOptions = {}): ProviderFactory => (ctx) => {
+  const execOpts = {
+    ...(exec.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: exec.pathToClaudeCodeExecutable } : {}),
+    ...(exec.executable ? { executable: exec.executable } : {}),
+  };
+  const seams = (ctx.seams?.[id] ?? {}) as ClaudeStatelessSeams;
+  const { sessionDir, debugLogPath } = claudeStatelessPaths(ctx, id);
   // The bridge does not create the CLI cwd: with a missing folder the first round fails with a misleading "native binary
   // failed to launch" (spawn ENOENT). Create it here (found in the live smoke test; report upstream).
   try { mkdirSync(sessionDir, { recursive: true }); } catch (e) { console.warn(`claude-stateless: cannot create ${sessionDir}: ${e instanceof Error ? e.message : String(e)}`); }
   const handle = (seams.createProvider ?? createStatelessProvider)({
-    id: CLAUDE_STATELESS_ID,
-    models: (seams.models ?? claudeStatelessModels(ctx)) as never,
+    id,
+    models: (seams.models ?? claudeStatelessModels(ctx, id)) as never,
     sessionDir,
     env: { ...ctx.env, ...NO_TOOL_SEARCH },
     debug: true,
     continuePrompt: CONTINUE_PROMPT,
     debugLogPath,
     // Always wrapped, whoever builds the registry (wolfd passes no seams; the pi entry injects the host query).
-    queryFn: withMaxTurnsAsTurnEnd(withFreshSystemPrompt((seams.queryFn ?? lazySdkQuery()) as (args: any) => any)) as never,
+    queryFn: withMaxTurnsAsTurnEnd(withFreshSystemPrompt(withExecOptions((seams.queryFn ?? lazySdkQuery()) as (args: any) => any, execOpts))) as never,
   });
-  guardProviderStreams(handle.provider as never, { provider: CLAUDE_STATELESS_ID });
+  guardProviderStreams(handle.provider as never, { provider: id });
   // Logs the SDK's final message for a round the bridge dropped a tool call in (work-wolfpack-7g4ZFMJ).
   const p = handle.provider as any;
   // pi's agent loop calls streamSimple (compat.js streamSimple -> provider.streamSimple); stream() is the non-simple entry.
@@ -160,5 +175,7 @@ export const claudeStatelessFactory: ProviderFactory = (ctx) => {
   // the other's signature if the bridge ever splits them.
   p.stream = withDroppedCallNet(p.stream.bind(p));
   p.streamSimple = withDroppedCallNet(p.streamSimple.bind(p));
-  return { provider: handle.provider as never, forget: (id) => void handle.forget(id), dispose: () => void handle.dispose() };
+  return { provider: handle.provider as never, forget: (sid) => void handle.forget(sid), dispose: () => void handle.dispose() };
 };
+
+export const claudeStatelessFactory: ProviderFactory = makeStatelessFactory(CLAUDE_STATELESS_ID);

@@ -1,5 +1,5 @@
 import { discoverWolves } from "@wolfpack/engine";
-import { kbOpsDir, wolvesDir as defaultWolvesDir, workerdPort } from "@wolfpack/protocol/runtime-home";
+import { DEFAULT_CONSOLE_URL, kbOpsDir, wolvesDir as defaultWolvesDir, workerdPort } from "@wolfpack/protocol/runtime-home";
 import { startSharedWorkServer, type SharedWorkServer, type StartWorkServer } from "@wolfpack/harness/sandbox";
 import { WorkerdServer, VERSION as WORKERD_VERSION } from "./proxy.js";
 import { createInventoryReporter, type InventoryReporter } from "./wolfd-probe.js";
@@ -239,6 +239,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     inventory = createInventoryReporter({
       hostId: hubCfg.hostId,
       machine: machineName(),
+      // The console on this machine (its /api/health `self` part is reported as a console entry). WOLFPACK_CONSOLE_URL overrides; the default is the deployed console's loopback port.
+      consoleUrl: (opts.env ?? process.env).WOLFPACK_CONSOLE_URL?.trim() || DEFAULT_CONSOLE_URL,
       ...(WORKERD_VERSION ? { version: WORKERD_VERSION } : {}),
       channel: () => readMachineChannel(),
       children: () => supervisor.status(),

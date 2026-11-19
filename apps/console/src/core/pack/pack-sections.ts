@@ -57,6 +57,11 @@ export const PACK_SECTIONS: readonly PackSectionDef[] = [
 	{ id: "this-device", label: "This device", badge: none },
 ];
 
+/** The sections the menu shows: a single-Mac app is a pack of one, so it has no Devices (pairing phones and browsers to a hub) and no This device (the app has its own Settings). */
+export function packSectionsFor(singleMac: boolean): readonly PackSectionDef[] {
+	return singleMac ? PACK_SECTIONS.filter((s) => s.id !== "devices" && s.id !== "this-device") : PACK_SECTIONS;
+}
+
 export function sectionBadges(ctx: PackBadgeContext): Record<PackSectionId, PackBadge | null> {
 	return Object.fromEntries(PACK_SECTIONS.map((s) => [s.id, s.badge(ctx)])) as Record<PackSectionId, PackBadge | null>;
 }

@@ -365,7 +365,7 @@ describe("graduation: preview then confirm", () => {
     const bad = { contributions: [{ slug: "x", title: "Compose stack", summary: "s", body: "## How\n\nFixed in commit ee17088. 682 tests passed." }] };
     const { client } = fakeClient([init, f, t1, t2], { [f.id]: PLAN });
     const p = await previewGraduation({ client, engine: engineOf(bad).engine, id: f.id as string, today: "2026-10-22" });
-    expect(p.blocked).toMatch(/commit-hash/);
+    expect(p.blocked).toMatch(/test-count/); // the commit hash is scrubbed before the lint; the test count still blocks
     await expect(confirmGraduation({ client, roots, wolf: "owner", preview: p, ship: async () => {} })).rejects.toThrow(/cannot send/);
     expect(sentTopics()).toEqual([]);
   });

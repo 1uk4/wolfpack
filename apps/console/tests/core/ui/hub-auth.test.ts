@@ -25,7 +25,8 @@ describe("withHubAuth", () => {
 		await f(`${ORIGIN}/api/x`, { headers: { Authorization: "Bearer explicit" } });
 		await f("/not-api");
 		await f("http://other.example/api/x");
-		assert.deepEqual(seen, ["Bearer tok", "Bearer explicit", null, null]);
+		await f("/api/health/inventory", { cache: "no-store" }); // the Pack panel's inventory poll
+		assert.deepEqual(seen, ["Bearer tok", "Bearer explicit", null, null, "Bearer tok"]);
 	});
 	it("sends nothing without a token", async () => {
 		let auth: string | null = "unset";

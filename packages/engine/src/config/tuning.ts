@@ -374,7 +374,8 @@ export const CRAWL = {
  * (no embeddings needed there).
  */
 export const DIGEST = {
-  /** Max canonical topics included in a domain digest. */
+  /** Max canonical KB topics included in a domain digest. NOT the session-topic cap: that is
+   *  `memory.consolidation.maxTopics`, whose one default (40) is DEFAULT_CONSOLIDATION in wolfconfig/schema.ts. */
   maxTopics: 60,
   /** Max topics actually injected into a single consolidation prompt (the
    *  relevant subset for the topics being consolidated). */

@@ -28,11 +28,15 @@ export interface MachineServiceView {
 	status: HealthStatus;
 	tone: Tone;
 	version: string | null;
+	/** Why `version` is empty when the inventory could not be read; absent when it was read (then "version unknown" is honest). */
+	versionNote?: string;
 	down: boolean;
 	/** `logs.fetch` service name for a down service (hubd, workerd, console, or the first down wolf's name). */
 	logService?: string;
 	/** Wolf runtime: how many wolves. */
 	count?: number;
+	/** Wolf runtime: one entry per wolf, sorted by name, with its own status and version (`versionNote`: why the version is empty when the inventory could not be read). */
+	wolves?: { name: string; status: HealthStatus; tone: Tone; version: string | null; versionNote?: string }[];
 	/** A down service the machine advertised a restart for. */
 	restart?: RestartKind;
 	/** A down service the machine cannot restart from here: why. */
@@ -43,9 +47,22 @@ export interface MachineCardView {
 	label: string;
 	online: boolean;
 	services: MachineServiceView[];
-	channel: { value: "stable" | "main" | null; editable: boolean; note?: string; /** The console machine's update mode; own card only. */ mode?: "manual" | "auto" | "off" };
+	channel: { value: "stable" | "main" | null; editable: boolean; note?: string; /** The console machine's update mode; own card only. */ mode?: "manual" | "auto" | "off"; /** Shown instead of "unknown" when the inventory could not be read. */ missing?: string };
+	/** The update block: the pack's (banner, channel, Check now) or, in single-Mac on this Mac's card, the app's own updater block; none on other cards in single-Mac. */
+	update?: { kind: "pack" } | { kind: "app"; version: string | null };
 }
 
+/** The button text once the app has downloaded an update, or null when none is staged. */
+/** The one inline line after Check now: the app's note on success (else "up to date"), its plain error on failure. No native dialog: the block is the answer. */
+export const appCheckNote = (r: { ok: boolean; error?: string; note?: string }): { text: string; tone: "ok" | "error" } =>
+	r.ok ? { text: r.note ?? "You're up to date.", tone: "ok" } : { text: r.error ?? "Couldn't check for updates", tone: "error" };
+
+export const appRestartLabel = (version: string | null | undefined): string | null => (version ? `Restart to update to v${version}` : null);
+
+/** The text next to a service: "v1.2.3", the reason it could not be read, or nothing when the version is simply unknown. */
+export const versionText = (version: string | null, note: string | undefined): string => (version ? `v${version}` : (note ?? ""));
+
+const UNREAD = { unavailable: "reports unavailable", "signed-out": "sign in on this device first", loading: "loading…" } as const;
 const LABEL = { console: "Console", hubd: "Hub", wolfd: "Wolf runtime", workerd: "Background service" } as const;
 const ORDER = ["console", "hubd", "wolfd", "workerd"] as const;
 const RANK: Record<Tone, number> = { green: 0, grey: 1, amber: 2, red: 3 };
@@ -55,9 +72,16 @@ const RESTART_OF: Partial<Record<MachineServiceView["kind"], RestartKind>> = { w
 /** `ownChannel`: this console's own machine channel (null when unknown or not asked). Only used on the console's own card. */
 export const MODE_LABEL = { button: "manual", auto: "auto", off: "off" } as const;
 
-/** `ownMode`: the console machine's update mode (null/"unknown": the default, manual). On the own card a missing channel is the default "stable", never "unknown". */
-export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null, ownMode: "off" | "button" | "auto" | "unknown" | null = null, ownReadFailed = false, singleMac = false): MachineCardView {
-	const own = card.console && ownChannel ? { channel: ownChannel, latest: {}, consoleVersion: null, self: card.self ?? null } : null;
+/**
+ * `opts.mode`: the console machine's update mode (null/"unknown": the default, manual). `opts.readFailed`: the own subscription read failed.
+ * On the own card a missing channel is the default "stable", never "unknown".
+ */
+export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null, opts: { singleMac?: boolean; mode?: "off" | "button" | "auto" | "unknown" | null; readFailed?: boolean } = {}): MachineCardView {
+	const singleMac = opts.singleMac ?? false;
+	const ownMode = opts.mode ?? null;
+	const ownReadFailed = opts.readFailed ?? false;
+	// The console's own entry (its version, uptime, lag) comes with the snapshot and needs no channel: the single-Mac app never asks for one.
+	const own = card.console && (ownChannel || card.self) ? { channel: ownChannel ?? card.self?.channel ?? null, latest: {}, consoleVersion: null, self: card.self ?? null } : null;
 	const rows = machineServices(card, card.inventory, own);
 	const flat = rows.flatMap((r) => [r, ...r.children]);
 	const services: MachineServiceView[] = [];
@@ -66,8 +90,15 @@ export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null
 		if (rs.length === 0) continue;
 		const worst = rs.reduce((a, r) => (RANK[toneOf(r.status)] > RANK[toneOf(a.status)] ? r : a));
 		const downs = rs.filter((r) => toneOf(r.status) === "red");
-		const v: MachineServiceView = { kind, label: LABEL[kind], status: worst.status, tone: toneOf(worst.status), version: rs[0]!.version, down: downs.length > 0 };
-		if (kind === "wolfd") v.count = rs.length;
+		const v: MachineServiceView = { kind, label: LABEL[kind], status: worst.status, tone: toneOf(worst.status), version: rs.find((r) => r.version)?.version ?? null, down: downs.length > 0 };
+		const unread = card.inventoryState && card.inventoryState !== "ok" ? UNREAD[card.inventoryState] : undefined;
+		if (!v.version && unread) v.versionNote = unread;
+		if (kind === "wolfd") {
+			v.count = rs.length;
+			v.wolves = [...rs]
+				.sort((a, b) => a.name.localeCompare(b.name))
+				.map((r) => ({ name: r.name, status: r.status, tone: toneOf(r.status), version: r.version, ...(!r.version && unread ? { versionNote: unread } : {}) }));
+		}
 		// workerd's logs.fetch reads wolf logs anywhere, but console / hubd / workerd only from systemd units (Linux): never ask the Mac for those.
 		const canLog = !!card.hubId && !!card.commands?.includes("logs.fetch") && (kind === "wolfd" || card.facts?.host !== "Mac");
 		if (downs.length > 0 && canLog) v.logService = kind === "wolfd" ? downs[0]!.name : kind;
@@ -85,17 +116,19 @@ export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null
 		}
 	}
 	const fromInv = card.inventory.find((e) => e.channel)?.channel ?? null;
-	const value = card.console ? (ownChannel ?? "stable") : fromInv;
+	const value = card.console ? (ownChannel ?? card.self?.channel ?? "stable") : fromInv;
 	// The own card is never read-only: while the subscription is pending (or failed) the picker shows disabled, and a failed read says so.
 	// In the Mac app the channel is a derived read-only badge (the app has no pack updater); its updates live in Settings.
 	const editable = card.console && !singleMac;
 	const note = singleMac && card.console ? SINGLE_MAC_CHANNEL_NOTE : card.console ? (ownReadFailed && ownChannel === null ? OWN_SETTINGS_UNREADABLE_NOTE : undefined) : CHANNEL_READONLY_NOTE;
+	const missing = value === null && card.inventoryState && card.inventoryState !== "ok" ? UNREAD[card.inventoryState] : undefined;
 	return {
 		id: card.id,
 		label: card.label,
 		online,
 		services,
-		channel: { value, editable, ...(note ? { note } : {}), ...(card.console ? { mode: MODE_LABEL[ownMode === "off" || ownMode === "auto" ? ownMode : "button"] } : {}) },
+		channel: { value, editable, ...(note ? { note } : {}), ...(missing ? { missing } : {}), ...(card.console ? { mode: MODE_LABEL[ownMode === "off" || ownMode === "auto" ? ownMode : "button"] } : {}) },
+		...(singleMac ? (card.console ? { update: { kind: "app" as const, version: services.find((s) => s.version)?.version ?? null } } : {}) : { update: { kind: "pack" as const } }),
 	};
 }
 

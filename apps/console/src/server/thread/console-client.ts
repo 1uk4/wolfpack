@@ -10,6 +10,7 @@
  */
 
 import { HttpConsoleClient, MockConsoleClient, ProtocolError, type ConsoleClient } from "@wolfpack/client";
+import { isSingleMac } from "../../core/single-mac.ts";
 import { bearerOf } from "../../core/ui/hub-auth.ts";
 import { defaultDirectRoute, type DirectRoute } from "../pack/direct-path.ts";
 import { isRelayMode } from "./relay-mode.ts";
@@ -321,8 +322,10 @@ export function createConsoleClient(env: Record<string, string | undefined> = pr
 	const baseUrl = env.WOLFPACK_API_URL?.trim();
 	const hubUrl = env.WOLFPACK_HUB_URL?.trim();
 	// With a per-request resolver the client holds NO hub token at all (no super-token by construction); WOLFPACK_HUB_TOKEN is read only for resolver-less
-	// callers (scripts, tests), here.
-	const hub = hubUrl ? { baseUrl: hubUrl, token: requestToken ? undefined : env.WOLFPACK_HUB_TOKEN?.trim() || undefined } : undefined;
+	// callers (scripts, tests), here. Exception: single-Mac (the desktop app). Its console is loopback-only and its own token is the one and only user
+	// (the proxy injects the same token on requests), so hub calls that are not request-scoped (machine commands, the events bridge) keep it.
+	const keepEnvToken = !requestToken || isSingleMac(env);
+	const hub = hubUrl ? { baseUrl: hubUrl, token: keepEnvToken ? env.WOLFPACK_HUB_TOKEN?.trim() || undefined : undefined } : undefined;
 	if (env.WOLFPACK_HUB_KEY?.trim()) console.warn("console: WOLFPACK_HUB_KEY is no longer supported and is ignored; set WOLFPACK_HUB_TOKEN (from `hubd pair`)");
 	const haveToken = !!requestToken || !!hub?.token;
 	if (hub && isRelayMode(env, haveToken)) {

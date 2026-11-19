@@ -35,7 +35,9 @@ const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs")
 const { createSupervisor } = require("./supervisor.cjs");
 const { KEYS_FILE } = require("./key-file.cjs"); // the console reads/writes the same keys.env workerd does (Pack → Keys)
 const { shouldCurate, parseBatteryPercent } = require("./curator-gate.cjs");
+const { updateCheckMessage } = require("./update-message.cjs");
 const { resolveWolvesDir, needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup, wolfIdFor } = require("./setup.cjs");
+const { suggestedWolfName } = require("./wolf-name.cjs");
 const { consoleEnv } = require("./console-env.cjs");
 const { windowAllClosedAction, focusFirstWindow, createTray } = require("./tray.cjs");
 const { createAppSettings } = require("./app-settings.cjs");
@@ -74,9 +76,14 @@ function serverEntry() {
 if (process.env.WOLFPACK_DEV_URL || undefined) {
 	app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
+// Logged before the lock so a boot that never reaches `ready` leaves a trace (startup-guard.cjs); a lost lock exits
+// outright instead of a quit that may idle before `ready`.
+log(`startup: ${PRODUCT_NAME} ${app.getVersion()} pid ${process.pid}`);
 if (!app.requestSingleInstanceLock()) {
-	app.quit(); // silently: the running instance's second-instance handler brings its window forward
+	log("startup: another instance holds the lock; exiting");
+	app.exit(0); // the running instance's second-instance handler brings its window forward
 } else {
+	require("./startup-guard.cjs").readyWatchdog({ whenReady: app.whenReady(), ms: 20000, log, exit: (c) => app.exit(c) });
 	app.on("second-instance", () => focusFirstWindow(BrowserWindow.getAllWindows()[0]));
 	main();
 }
@@ -91,19 +98,6 @@ let systemShutdown = false; // set by powerMonitor "shutdown": before-quit must 
 let chatWolf = "wolf"; // the wolf whose chat the window opens on (chosen in the setup wizard)
 let wizardWindow = null; // the first-run setup window, closed once the main window is up
 let wizardFinishing = false; // finish has started: closing the wizard window must not quit the app (set until the chat window exists)
-
-/** Suggested wolf name: the macOS user's first name + "'s wolf". */
-function suggestedWolfName() {
-	let first = "";
-	try {
-		first = String(require("node:child_process").execFileSync("id", ["-F"], { encoding: "utf8" })).trim().split(/\s+/)[0];
-	} catch {
-		/* fall back to the login name */
-	}
-	if (!first) first = require("node:os").userInfo().username;
-	first = first.replace(/[^\p{L}\p{N}]/gu, "");
-	return wolfIdFor(first) ? `${first.charAt(0).toUpperCase()}${first.slice(1)}'s wolf` : "My wolf";
-}
 
 /**
  * First launch (or a relaunch after an unfinished setup): show the setup wizard, prefilled with what was stored; resolve to the running
@@ -611,20 +605,29 @@ function broadcastUpdateStatus(status) {
 	}
 }
 
-function checkForUpdates({ manual = false } = {}) {
-	if (!autoUpdater) return;
-	autoUpdater
+/**
+ * `manual`: a person asked (menu/tray or the console's Check now). `inline`: the console shows the answer itself, so no
+ * native dialog: an app-modal dialog with no parent window blocks the whole app (renderer included) until it is dismissed.
+ */
+function checkForUpdates({ manual = false, inline = false } = {}) {
+	if (!autoUpdater) return Promise.resolve({ ok: false, error: "Updates are off in this build" });
+	return autoUpdater
 		.checkForUpdates()
 		.then((result) => {
 			// The download itself is silent (autoDownload); the banner fires on
 			// update-downloaded. Manual checks additionally answer directly.
 			if (!manual) return;
 			const version = result?.updateInfo?.version;
-			if (!version) dialog.showMessageBox({ type: "info", message: "You're up to date.", detail: `${PRODUCT_NAME} ${app.getVersion()} is the latest version.` });
+			const newer = version && version !== app.getVersion() ? version : null;
+			if (!inline && !newer) dialog.showMessageBox({ type: "info", message: "You're up to date.", detail: `${PRODUCT_NAME} ${app.getVersion()} is the latest version.` });
+			return { ok: true, ...(newer ? { note: `Downloading v${newer} in the background.` } : {}) };
 		})
 		.catch((err) => {
 			log(`update check failed: ${err?.message ?? err}`);
-			if (manual) dialog.showMessageBox({ type: "warning", message: "Couldn't check for updates.", detail: String(err?.message ?? err) });
+			// One plain line for the person; the raw HttpError (URL, token hint, headers) stays in the log.
+			const error = updateCheckMessage(err, app.getVersion());
+			if (manual && !inline) dialog.showMessageBox({ type: "warning", message: "Couldn't check for updates.", detail: error });
+			return { ok: false, error };
 		});
 }
 
@@ -820,10 +823,10 @@ async function main() {
 			app.quit();
 			return;
 		}
-		// The console talks to the app's own workerd only (loopback); no hub URL/token yet (ticket: hub token for work reads).
+		// The console talks to the app's own workerd and hubd only (loopback), with its own console-kind hub token (a pack of one Mac).
 		// A quit during startup nulls `supervisor` (before-quit): stop here instead of touching it.
 		if (!supervisor) return;
-		await startServer(new URL(url).port, { WOLFPACK_API_URL: supervisor.urls.workerd, WOLFPACK_WORKERD_DIRECT_URL: supervisor.urls.workerd, WOLFPACK_KEY_FILE: path.join(appStateDir(), KEYS_FILE) }, { appRuntime: true });
+		await startServer(new URL(url).port, { WOLFPACK_API_URL: supervisor.urls.workerd, WOLFPACK_WORKERD_DIRECT_URL: supervisor.urls.workerd, WOLFPACK_KEY_FILE: path.join(appStateDir(), KEYS_FILE), WOLFPACK_HUB_URL: supervisor.urls.hubd, WOLFPACK_HUB_TOKEN: supervisor.consoleToken, WORKERD_CONFIG_DIR: path.join(appStateDir(), "workerd") }, { appRuntime: true });
 		await waitUntilUp(url).catch((err) => {
 			if (supervisor) throw err;
 		});
@@ -844,6 +847,7 @@ async function main() {
 	// are log lines — this can never block boot.
 	setupAutoUpdater();
 	ipcMain.on("wolfpack:update-install", () => installUpdateNow());
+	ipcMain.handle("wolfpack:update-check", () => checkForUpdates({ manual: true, inline: true }));
 	// Needs-you notifications: validation + delivery live in notify.cjs (tested without Electron).
 	const notifyNeedsYou = createNeedsYouNotifier({ Notification, appOrigin: new URL(url).origin, log });
 	ipcMain.on("wolfpack:notify", (event, n) => notifyNeedsYou(event, BrowserWindow.fromWebContents(event.sender), n));

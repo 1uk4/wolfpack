@@ -109,5 +109,7 @@ if (process.env.WOLFPACK_SKIP_RUNTIME !== "1") {
 	if (need.length) fail(`WOLFPACK_SKIP_RUNTIME=1 but runtime/ lacks: ${need.join(", ")}. Run without it (or scripts/stage-runtime-assets.mjs).`);
 }
 run("pnpm", ["run", "build:server"]);
+// One build, one version: every bundled service reports the app's own version (work-wolfpack-SzoWaBZ).
+run(process.execPath, ["scripts/stamp-version.mjs", path.join(root, "runtime"), path.join(root, "..", "console", ".next", "standalone")]);
 run("pnpm", ["exec", "electron-builder", ...builderArgs]);
 run(process.execPath, ["scripts/check-app.mjs", path.join(root, "dist", "mac-arm64", "Wolfpack Console.app"), ...checkAppFlags]);

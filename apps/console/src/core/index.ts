@@ -80,6 +80,7 @@ export * from "./kb/entry-view.ts";
 export * from "./work/work-view.ts";
 export * from "./kb/item-document.ts";
 export * from "./kb/memory-panel-model.ts";
+export * from "./kb/topics-model.ts";
 export * from "./ui/panel-host.ts";
 export * from "./work/task-graph.ts";
 export * from "./work/task-graph-layout.ts";
@@ -97,7 +98,7 @@ export * from "./work/work-id-link.ts";
 export * from "./settings/wolf-settings-form.ts";
 // pack-sections.ts: the Pack panel sections, badges and entry summary. Pure.
 export * from "./pack/pack-sections.ts";
-export type { Tone, HealthLink, HealthSnapshotView } from "./pack/pack-health-view.ts";
+export type { Tone, HealthLink, HealthSnapshotView, InventoryRowView, InventoryState } from "./pack/pack-health-view.ts";
 export { ageText, BACK_MS, packSummary } from "./pack/pack-health-view.ts";
 export { groupByHost } from "./pack/pack-hosts.ts";
 export type { HostInfo, HostCard } from "./pack/pack-hosts.ts";

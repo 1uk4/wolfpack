@@ -58,6 +58,7 @@ Object.assign(globalThis, {
 		if (u.endsWith("/memory/observations")) {
 			return poolStatus === 200 ? json({ observations: pool, total: pool.length, ...(poolPending ? { pending: poolPending } : {}) }) : json({ error: "nope", code: "memory_unavailable" }, poolStatus);
 		}
+		if (u.endsWith("/memory/session-topics")) return json({ topics: [], totalBytes: 0, capBytes: 184320 });
 		if (u.endsWith("/memory/tree")) {
 			treeFetches++;
 			return poolStatus === 200 ? json(tree()) : json({ error: "nope", code: "memory_unavailable" }, poolStatus);
@@ -71,6 +72,7 @@ Object.assign(globalThis, {
 
 const { MemoryPanel } = await import("../../../components/memory/memory-panel.tsx");
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
+const { dataStore } = await import("../../../src/core/data-store.ts");
 
 let emit: (frame: unknown) => void = () => {};
 const source = () => ({
@@ -94,6 +96,7 @@ async function mount() {
 	await settle();
 }
 beforeEach(() => {
+	dataStore.clear();
 	store.clear();
 	pool = [ob("1", "2026-10-26T09:00:00Z", "den one")];
 	poolStatus = 200;
@@ -173,6 +176,15 @@ describe("observation tree in the Memory panel", () => {
 		poolStatus = 409;
 		await mount();
 		assert.match(q('[data-testid="memory-obs-state"]')!.textContent!, /unavailable/);
+	});
+
+	it("reads the tree once on open and reuses it when the panel reopens within 5 s", async () => {
+		await mount();
+		assert.equal(treeFetches, 1);
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		await mount();
+		assert.equal(treeFetches, 1);
 	});
 
 	it("refetches the tree on a live observation", async () => {

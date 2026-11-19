@@ -40,6 +40,12 @@ export interface AppBridge {
 	};
 	/** This device > Reset app: stops the wolves, moves Chromium cache folders to the Trash and relaunches (older apps lack it). */
 	resetAppUi?(): Promise<Result>;
+	/** Pack > Machines: ask the app's updater now (main shows its own up-to-date / couldn't-check dialog). Older apps lack it. */
+	checkForUpdates?(): Promise<Result>;
+	/** Pushes {status:"downloaded", version} once an update is staged; returns the unsubscribe. */
+	onUpdateStatus?(cb: (s: { status: string; version?: string }) => void): () => void;
+	/** Quit and install the staged update. */
+	installUpdate?(): void;
 }
 
 /** Tests provide a bridge (or null) here; undefined means "read window". */
@@ -64,6 +70,7 @@ function devStub(): AppBridge {
 			set: async (channel) => ({ ok: true, available: true, channel }),
 			checkMain: async () => ({ ahead: "0.4.1-main.1", upToDate: false }),
 		},
+		checkForUpdates: async () => ({ ok: true }),
 	};
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-	FEED_CAP, PROMOTE_IDLE, latestOnly, focusRefetchDue, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, poolSummary, triggerText,
+	FEED_CAP, PROMOTE_IDLE, latestOnly, focusRefetchDue, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, parseSection, serializeSection, MEMORY_PANEL_SECTION_KEY, poolSummary, triggerText,
 	bindOffered, promoteBusy, promoteLine, recordStale, recordView, serializeOpen, groupObservations, blockedLabel, buildMemoryTreeRows, consolidateMessage, reconcilePromote, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
 } from "../../../src/core/index.ts";
 
@@ -11,7 +11,7 @@ const obs = (threadId: string | undefined, target: unknown, summary = "s"): Memo
 const st = (state: MemoryStatus["state"]): MemoryStatus => ({ state, reason: "why", pool: null, sessionTopics: [], denTopics: [], lastPromote: null });
 const rec = (o: Partial<WorkRecordResponse>): WorkRecordResponse => ({ id: "a", title: "A", kind: "task", stage: "plan", plan: "", record: "", ...o });
 
-import { pendingWarning, nestGroups, type ObservationGroup } from "../../../src/core/kb/memory-panel-model.ts";
+import { pendingWarning, workApiWarning, nestGroups, type ObservationGroup } from "../../../src/core/kb/memory-panel-model.ts";
 
 describe("nestGroups", () => {
 	const g = (key: string, count: number): ObservationGroup => ({ key, kind: "work", count, latest: "2026-11-01" });
@@ -28,6 +28,13 @@ describe("nestGroups", () => {
 			["orphan", false, 4, 4, []],
 			["f2", true, 1, undefined, ["t3"]],
 		]);
+	});
+});
+
+describe("Work API section warning", () => {
+	it("one section-level line when the response is blocked on the Work API, nothing otherwise", () => {
+		assert.equal(workApiWarning("work-api-unavailable"), "Work API not reachable right now; notes are kept and will be written when it is back");
+		assert.equal(workApiWarning(undefined), null);
 	});
 });
 
@@ -54,6 +61,13 @@ describe("memory panel model", () => {
 		assert.equal(parseOpen(null), true);
 		assert.equal(parseOpen(serializeOpen(false)), false);
 		assert.equal(parseOpen(serializeOpen(true)), true);
+	});
+	it("section toggle persists per browser: defaults to observations, round-trips topics, junk reads as observations", () => {
+		assert.equal(MEMORY_PANEL_SECTION_KEY, "memory-panel-section");
+		assert.equal(parseSection(null), "observations");
+		assert.equal(parseSection("junk"), "observations");
+		assert.equal(parseSection(serializeSection("topics")), "topics");
+		assert.equal(parseSection(serializeSection("observations")), "observations");
 	});
 	it("view key helper: defaults to item, round-trips both, reads the legacy record and the retired graph as item", () => {
 		assert.equal(MEMORY_PANEL_VIEW_KEY, "wolfpack.memory-panel.view.v1");
@@ -149,7 +163,7 @@ describe("memory panel model", () => {
 		assert.equal(actionBlock({ status: st("live"), promote: s, consolidating: false }), "memory_busy");
 		s = applyPromoteEvent(s, { ...base, type: "promote_finished", jobId: "j", consolidated: 3, contributions: 2, pending: 1 } as MemoryEventFrame);
 		assert.equal(promoteBusy(s), false);
-		assert.match(promoteLine(s) ?? "", /3 consolidated, 2 contributed, 1 pending/);
+		assert.equal(promoteLine(s), "Promote done: 2 topics sent, 1 queued");
 		s = applyPromoteEvent(s, { ...base, type: "promote_failed", jobId: "k", message: "boom" } as MemoryEventFrame);
 		assert.equal(promoteLine(s), "Promote failed: boom");
 		assert.equal(applyPromoteEvent(s, obs("t", { kind: "den" })), s);
@@ -185,7 +199,8 @@ describe("memory panel model", () => {
 		const s = reconcilePromote(PROMOTE_IDLE, running);
 		assert.deepEqual(s, { phase: "running", jobId: "j1" });
 		const done = { ...st("live"), lastPromote: { jobId: "j1", at: "x", result: "finished" as const, consolidated: 3, contributions: 2 } };
-		assert.match(promoteLine(reconcilePromote(s, done)) ?? "", /3 consolidated, 2 contributed/);
+		assert.equal(promoteLine(reconcilePromote(s, done)), "Promote done: 2 topics sent");
+		assert.equal(promoteLine({ phase: "finished", jobId: "j1", consolidated: 3, contributions: 1, pending: 0 }), "Promote done: 1 topic sent");
 		assert.deepEqual(reconcilePromote(PROMOTE_IDLE, st("live")), PROMOTE_IDLE);
 	});
 	it("a tree response of the wrong shape gives no rows instead of throwing", () => {
@@ -217,6 +232,28 @@ describe("memory panel model", () => {
 		assert.equal(busy.kind === "feature" && busy.own.pending, 1);
 		assert.deepEqual(busy.kind === "feature" && busy.tasks.map((t) => t.id), ["work-d-t2", "work-d-t1"]);
 	});
+	it("with pool stamps every level is newest first: a feature takes its newest task's stamp, unstamped rows follow busiest-first", () => {
+		const tree = {
+			features: [
+				{ id: "f-busy-old", title: "Busy old", own: { pending: 9, archived: 0 }, tasks: [{ id: "t-busy", title: "T", pending: 1, archived: 0 }] },
+				{ id: "f-new-task", title: "New via task", own: { pending: 1, archived: 0 }, tasks: [
+					{ id: "t-a", title: "A", pending: 5, archived: 0 },
+					{ id: "t-b", title: "B", pending: 1, archived: 0 },
+				] },
+				{ id: "f-unstamped", title: "No stamp", own: { pending: 2, archived: 0 }, tasks: [] },
+			],
+			other: [
+				{ id: "x-old", pending: 9, archived: 0 },
+				{ id: "x-new", pending: 1, archived: 0 },
+			],
+			den: { pending: 1, archived: 0 },
+		};
+		const latest = { "f-busy-old": "2026-11-10T08:00:00Z", "t-b": "2026-11-15T08:00:00Z", "t-a": "2026-11-12T08:00:00Z", "x-old": "2026-11-01T08:00:00Z", "x-new": "2026-11-14T08:00:00Z" };
+		const rows = buildMemoryTreeRows(tree, latest);
+		assert.deepEqual(rows.map((r) => r.id), ["f-new-task", "f-busy-old", "f-unstamped", "x-new", "x-old", "den"]);
+		const f = rows[0]!;
+		assert.deepEqual(f.kind === "feature" && f.tasks.map((t) => t.id), ["t-b", "t-a"]);
+	});
 	it("record falls back to the parent's when empty", () => {
 		const own = rec({ partOf: "p" });
 		assert.equal(parentToFetch(own), "p");
@@ -226,5 +263,20 @@ describe("memory panel model", () => {
 		assert.deepEqual(v.inheritedFrom, { id: "p", title: "P" });
 		assert.equal(v.record, "R");
 		assert.equal(recordView(rec({ record: "mine" }), null).inheritedFrom, null);
+	});
+});
+
+import { memoryActionsFor } from "../../../src/core/kb/memory-panel-model.ts";
+import type { KeyMachine } from "../../../src/core/pack/keys-model.ts";
+
+describe("memoryActionsFor", () => {
+	const mac = (slots: KeyMachine["slots"]): KeyMachine => ({ hostId: "h1", machine: "mac", online: true, canSetKeys: true, slots });
+	it("memory actions are hidden while the wolf has no key", () => {
+		assert.deepEqual(memoryActionsFor({ machines: [mac([])] }), { hidden: true, note: "Add a key in Pack → Keys to use memory" });
+		assert.deepEqual(memoryActionsFor({ machines: [mac([{ slot: "anthropic", present: true, source: "pack", masked: "sk-…1" }])] }), { hidden: false });
+	});
+	it("a failed keys request keeps the buttons", () => {
+		assert.deepEqual(memoryActionsFor(null), { hidden: false });
+		assert.deepEqual(memoryActionsFor({ error: "x" }), { hidden: false });
 	});
 });

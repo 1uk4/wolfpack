@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
 import { writeDenTopic } from "./den.js";
-import { reconcileDen } from "./den-reconcile.js";
+import { denTopicStates, reconcileDen } from "./den-reconcile.js";
 import { renderDenContext } from "./prompt-context.js";
 
 const WOLF = "w1";
@@ -158,5 +158,19 @@ describe("renderDenContext", () => {
     receipt("t", topic("t"), "create", "kb-wolfpack-AAAAAAA");
     reconcileDen(den, roots, WOLF);
     expect(renderDenContext(den, WOLF, roots)).toBeNull();
+  });
+});
+
+describe("denTopicStates receipt targets", () => {
+  it("reads every id of routing.targets (primary first), falling back to target, then to the body", () => {
+    const dir = join(roots.opsRoot, "receipts", WOLF);
+    mkdirSync(dir, { recursive: true });
+    const write = (id: string, body: string, routing: string, detail: string) =>
+      writeFileSync(join(dir, `${id}-${hex10(body)}.md`), `---\nfrom: ${WOLF}\nden_topic_id: ${id}\noutcome: create\nprocessed: 2026-10-19 20:20\n${routing}---\n\n${detail}\n`);
+    write("multi", topic("multi"), `routing: ${JSON.stringify({ target: "kb-w-A", targets: ["kb-w-A", "kb-w-B"] })}\n`, "kb-w-A");
+    write("single", topic("single"), `routing: ${JSON.stringify({ target: "kb-w-C" })}\n`, "kb-w-C");
+    write("old", topic("old"), "", "kb-w-D");
+    const ids = Object.fromEntries(denTopicStates(den, roots, WOLF).map((s) => [s.topic.id, s.status.kind === "absorbed" ? s.status.entryIds : null]));
+    expect(ids).toEqual({ multi: ["kb-w-A", "kb-w-B"], single: ["kb-w-C"], old: ["kb-w-D"] });
   });
 });

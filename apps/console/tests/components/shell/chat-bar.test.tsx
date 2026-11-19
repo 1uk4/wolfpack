@@ -24,6 +24,7 @@ Object.assign(globalThis, {
 Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {} });
 
 const { usePathname } = await import("next/navigation");
+const { dataStore } = await import("../../../src/core/data-store.ts");
 const { AppRouterContext: await_ctx } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { KeyboardShortcuts } = await import("../../../components/shell/keyboard-shortcuts.tsx");
@@ -92,6 +93,7 @@ const click = (el: HTMLElement | null) =>
 const submit = () => act(async () => void ta().closest("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
 
 afterEach(async () => {
+	dataStore.clear(); // the thread list goes through the client store: the next test must not read this one's list
 	await act(async () => root?.unmount());
 	root = null;
 	document.body.innerHTML = "";

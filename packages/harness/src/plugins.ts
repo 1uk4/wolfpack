@@ -31,6 +31,7 @@ interface Manifest {
   apiVersion?: unknown;
   entry?: unknown;
   requiredEnv?: unknown;
+  optionalEnv?: unknown;
   providers?: unknown;
   engineProviders?: unknown;
 }
@@ -71,6 +72,7 @@ async function loadOne(id: string, dir: string, env: NodeJS.ProcessEnv): Promise
   if (!manifest || typeof manifest !== "object") throw new Error(`Plug-in ${id}: ${pkgFile} has no "wolfpack" field.`);
   if (manifest.apiVersion !== PLUGIN_API_VERSION) throw new Error(`Plug-in ${id} was built for plug-in API ${String(manifest.apiVersion)}; this Wolfpack needs ${PLUGIN_API_VERSION}.`);
   const required = stringList(id, "requiredEnv", manifest.requiredEnv);
+  const optional = stringList(id, "optionalEnv", manifest.optionalEnv);
   const providers = stringList(id, "providers", manifest.providers);
   const engineProviders = stringList(id, "engineProviders", manifest.engineProviders);
   if (manifest.entry !== undefined && typeof manifest.entry !== "string") throw new Error(`Plug-in ${id}: "entry" in its wolfpack manifest must be a string.`);
@@ -80,6 +82,8 @@ async function loadOne(id: string, dir: string, env: NodeJS.ProcessEnv): Promise
     if (!v) throw new Error(`Plug-in ${id} needs ${name}; set it and restart.`);
     pluginEnv[name] = v;
   }
+  // optionalEnv: copied only when set; never an error when missing.
+  for (const name of optional) if (env[name]) pluginEnv[name] = env[name]!;
   for (const p of providers) if (hasProviderFactory(p) || Object.hasOwn(LOOKUP_MODELS, p)) throw new Error(`Plug-in ${id} declares provider "${p}", which is already registered (a built-in or another plug-in); rename it.`);
 
   const entryPath = resolve(root, (manifest.entry as string | undefined) ?? "./dist/index.js");

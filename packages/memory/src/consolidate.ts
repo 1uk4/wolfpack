@@ -56,6 +56,10 @@ export interface ConsolidateOptions {
   allowedDomains?: readonly string[];
   /** Skip emitting deltas to the KB. */
   skipClaims?: boolean;
+  /** Promote only these session topics (the promote pass chooses them). Omitted: all, as before. */
+  onlyIds?: readonly string[];
+  /** Resolved routing hints by topic id (from the promote pass): the emit target for that topic. */
+  targets?: Record<string, string>;
   /** Optional progress sink — called with human-readable status lines as the
    *  pipeline advances, so a UI can show what is actually being processed. */
   onProgress?: (msg: string) => void;
@@ -131,7 +135,8 @@ export async function consolidateSession(
   const evictedTopics = readEvictedTopics(sessionDir).map((t) =>
     liveIds.has(t.id) ? { ...t, id: `${t.id}-evicted-${t.filename.replace(/\.md$/, "").replace(/[^A-Za-z0-9_-]/g, "")}` } : t,
   );
-  const sessionTopics = refuseTagged([...live, ...evictedTopics], onProgress);
+  const only = options.onlyIds ? new Set(options.onlyIds) : null;
+  const sessionTopics = refuseTagged([...live, ...evictedTopics], onProgress).filter((t) => !only || only.has(t.id));
   const sessionJourney = readJourney(sessionDir);
   if (sessionTopics.length === 0) {
     onProgress?.("no session topics to promote — nothing to do");
@@ -177,6 +182,7 @@ export async function consolidateSession(
     body: string;
     domain?: string;
     change: "create" | "merge";
+    target?: string;
   }> = [];
 
   const now = new Date().toISOString().replace("T", " ").slice(0, 16);
@@ -215,7 +221,7 @@ export async function consolidateSession(
       onProgress?.(`  held back (not promotable): ${t.id} — ${gate.promotableReason}`);
       continue;
     }
-    updatedTopics.push({ ...topic, change });
+    updatedTopics.push({ ...topic, change, ...(options.targets?.[t.id] ? { target: options.targets[t.id] } : {}) });
 
     if (change === "merge") merged++;
     else created++;

@@ -128,7 +128,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       ...(v.memory.hubKb === true ? { hubKb: true } : {}),
       ...(v.memory.generalToDen === true ? { generalToDen: true } : {}),
       ...(v.memory.subagentMemory ? { subagentMemory: v.memory.subagentMemory } : {}),
-      ...(v.memory.workLog === "append" ? { workLog: "append" as const } : {}),
+      ...(v.memory.workLog ? { workLog: v.memory.workLog } : {}),
       ...(v.memory.defaultDomain ? { defaultDomain: v.memory.defaultDomain } : {}),
       ...(v.memory.model ? { model: v.memory.model } : {}),
       ...(v.memory.sweepInterval ? { sweepInterval: v.memory.sweepInterval } : {}),

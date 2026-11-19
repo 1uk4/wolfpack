@@ -9,6 +9,7 @@
  * held back and wins over the server copy.
  */
 import { useEffect, useRef, useState } from "react";
+import { dataStore } from "@/src/core/data-store";
 import { DEFAULT_RENDER_SETTINGS, sanitizeRenderSettings, type GraphRenderSettings } from "@/src/core";
 
 export interface GraphSettingsState {
@@ -22,7 +23,9 @@ function saveToServer(s: GraphRenderSettings): void {
 		method: "PUT",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(s),
-	}).catch((err) => console.error("[graph] settings save failed:", err));
+	})
+		.then(() => dataStore.invalidate("/api/graph/render-settings"))
+		.catch((err) => console.error("[graph] settings save failed:", err));
 }
 
 export function useGraphSettings(): GraphSettingsState {
@@ -44,8 +47,9 @@ export function useGraphSettings(): GraphSettingsState {
 	};
 
 	useEffect(() => {
-		fetch("/api/graph/render-settings")
-			.then((res) => (res.ok ? (res.json() as Promise<unknown>) : null))
+		// Read once and cached: a remount within a minute (or after no save) shows the stored settings without a request.
+		dataStore
+			.load<unknown>("/api/graph/render-settings", { maxAgeMs: 60_000 })
 			.then((raw) => {
 				if (raw !== null && !userTouched.current) setSettings(sanitizeRenderSettings(raw));
 			})

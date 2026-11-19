@@ -134,6 +134,10 @@ describe("sweep: prevent at source", () => {
       expect(aliases).toContain("some-topic");
       expect(aliases.some((a) => a.startsWith("some-topic~split-syncthing-setup"))).toBe(true);
       expect(receipt()).toMatch(/"overflow":\{"title":"Syncthing setup","denTopicId":"some-topic~split-syncthing-setup","target":"kb-wp-/);
+      // the receipt lists every child entry; `target` stays the first one for older wolves
+      const rec = JSON.parse(/^routing: (.*)$/m.exec(receipt())![1]);
+      expect(rec.targets).toEqual([rec.target, rec.overflow.target]);
+      expect(rec.targets).toHaveLength(2);
     });
 
     it("decisions: a committed overflow gets its own decision next to the main one", async () => {

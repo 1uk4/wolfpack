@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useSingleMac } from "@/components/shell/single-mac";
 import {
 	apiWolves,
 	buildGrid,
@@ -168,8 +169,9 @@ const cellText = (c: ReturnType<typeof buildGrid>[number]["rows"][number]["cells
 export function KeysView(props: { machines: KeyMachine[]; support: { ok: true } | { ok: false; message: string }; send: Send; reload: () => void; ack?: (hostId: string, fingerprint: string) => void }) {
 	const [editing, setEditing] = useState<{ slot: string; name: string; hostId?: string } | null>(null);
 	const [picker, setPicker] = useState(false);
-	const grid = buildGrid(props.machines);
-	const options = pickerOptions(grid);
+	const singleMac = useSingleMac();
+	const grid = buildGrid(props.machines, { singleMac });
+	const options = pickerOptions(grid, { singleMac });
 	return (
 		<div data-testid="pack-keys" className="flex flex-col gap-3 text-xs">
 			{props.machines.filter((m) => m.keyChanged).map((m) => (

@@ -108,8 +108,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         working-directory: apps/desktop
         run: |
-          pnpm exec electron-builder publish --policy always \
-            --files dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml
+          v=$(node -p "require('./package.json').version")
+          gh release view "desktop/v$v" >/dev/null 2>&1 || gh release create "desktop/v$v" --draft --title "Desktop $v" --notes "Signed, notarised Mac app $v."
+          gh release upload "desktop/v$v" dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml --clobber
+      - name: refresh the rolling desktop-latest updater feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: apps/desktop
+        run: |
+          # Pre-release so it never becomes the repo's releases/latest; the runtime stable manifest only matches component tag patterns.
+          gh release view desktop-latest >/dev/null 2>&1 || gh release create desktop-latest --prerelease --title "Desktop (rolling updater feed)" --notes "Assets replaced by every desktop release; the app's updater reads latest-mac.yml here."
+          gh release upload desktop-latest dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml --clobber
       - uses: actions/upload-artifact@v4
         with:
           name: wolfpack-desktop-arm64-signed

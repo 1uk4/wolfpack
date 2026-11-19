@@ -13,14 +13,25 @@ export function entryDomain(id: string): string | null {
   return m ? m[1] : null;
 }
 
-/** The survivor a retire reason names ("merged into <id>" / "moved to <id>"). */
-export function survivorOf(log: KbEvent[], id: string): string | null {
+/**
+ * Entries that replaced a retired one, newest retire event wins. Reads the
+ * structured `survivors` field; events from before it existed fall back to the
+ * reason wording ("merged into <id>" / "moved to <id>"). [] = no replacement.
+ */
+export function survivorsOf(log: KbEvent[], id: string): string[] {
   for (let i = log.length - 1; i >= 0; i--) {
     const e = log[i];
     if (e.t !== "entry_retired" || e.entryId !== id) continue;
-    return /\b(?:merged into|moved to)\s+(kb-[A-Za-z0-9-]+)/i.exec(e.reason ?? "")?.[1] ?? null;
+    if (e.survivors) return [...e.survivors];
+    const m = /\b(?:merged into|moved to)\s+(kb-[A-Za-z0-9-]+)/i.exec(e.reason ?? "");
+    return m ? [m[1]] : [];
   }
-  return null;
+  return [];
+}
+
+/** The primary survivor of a retired entry (first of `survivorsOf`), or null. */
+export function survivorOf(log: KbEvent[], id: string): string | null {
+  return survivorsOf(log, id)[0] ?? null;
 }
 
 export interface ResolvedAlias {

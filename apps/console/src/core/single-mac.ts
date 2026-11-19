@@ -15,6 +15,10 @@ export const SINGLE_MAC_HIDDEN_PREFIXES = [
 	"/api/stt", // voice dictation token (Deepgram)
 ] as const;
 
+/** Exact paths under a hidden prefix that the app's own machine card needs: this Mac's release channel and update mode. */
+export const SINGLE_MAC_ALLOWED = ["/api/health/subscription"] as const;
+
 export function isHiddenInSingleMac(pathname: string): boolean {
+	if ((SINGLE_MAC_ALLOWED as readonly string[]).includes(pathname)) return false;
 	return SINGLE_MAC_HIDDEN_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }

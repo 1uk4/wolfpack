@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -29,6 +29,20 @@ describe("/api/health/subscription", () => {
 			for (const bad of [{ channel: "beta", mode: "auto" }, { channel: "main", mode: "sometimes" }, { channel: "main" }, "x"]) assert.equal((await h.put(req("PUT", bad))).status, 400);
 			writeFileSync(file, "{broken");
 			assert.deepEqual(await (await h.get(req("GET"))).json(), { exists: false, channel: "stable", mode: "button" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("in the Mac app (WOLFPACK_SINGLE_MAC=1, no paired device) GET answers without a bearer, reports the default and creates no file", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "subscription-"));
+		const file = join(dir, "release-channel.json");
+		try {
+			const h = createSubscriptionHandler({ env: { HOME: dir, WOLFPACK_SINGLE_MAC: "1", WOLFPACK_SUBSCRIPTION_FILE: file }, gate: async () => Response.json({ code: "unauthorized" }, { status: 401 }) });
+			const r = await h.get(req("GET"));
+			assert.equal(r.status, 200);
+			assert.deepEqual(await r.json(), { exists: false, channel: "stable", mode: "button" });
+			assert.equal(existsSync(file), false);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

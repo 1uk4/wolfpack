@@ -41,6 +41,15 @@ describe("machineCard own card without a subscription file", () => {
 	});
 });
 
+describe("machineCard own card is never read-only", () => {
+	it("stays editable while the subscription is pending, says so when the read failed, and leaves remote cards read-only", () => {
+		const own = card({ console: true, workerds: [{ link: link("workerd", "workerd"), wolves: [] }] });
+		assert.deepEqual(machineCard(own, null).channel, { value: "stable", editable: true, mode: "manual" });
+		assert.deepEqual(machineCard(own, null, null, true).channel, { value: "stable", editable: true, note: "Couldn't read this machine's update settings", mode: "manual" });
+		assert.equal(machineCard(card({ workerds: [{ link: link("workerd", "workerd"), wolves: [] }] }), null).channel.note, "Change it from that machine's console");
+	});
+});
+
 describe("machineCard log fetching", () => {
 	const down = (over: Partial<HostCard> = {}) => card({ hub: link("hubd", "hubd", { status: "down", error: "refused" }), workerds: [{ link: link("workerd", "workerd", { status: "down", error: "refused" }), wolves: [] }], ...over });
 	it("never asks a machine for logs unless it advertised logs.fetch", () => {

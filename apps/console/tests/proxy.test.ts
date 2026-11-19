@@ -48,6 +48,12 @@ describe("single-Mac mode (WOLFPACK_SINGLE_MAC=1, work-wolfpack-TdmbaV4)", () =>
 			for (const p of ["/api/devices", "/api/devices/pairing-code", "/api/hub-url", "/api/health/update", "/api/updates", "/api/stt/token"]) assert.equal(proxy(at(p)).status, 404, p);
 		});
 	});
+	it("keeps this Mac's own subscription route reachable (the own machine card reads it) while the rest of /api/health stays hidden", () => {
+		withFlag("1", () => {
+			assert.equal(proxy(at("/api/health/subscription")).status, 200);
+			assert.equal(proxy(at("/api/health/subscription/x")).status, 404);
+		});
+	});
 	it("redirects the pairing page home", () => {
 		withFlag("1", () => {
 			const pair = proxy(at("/pair"));

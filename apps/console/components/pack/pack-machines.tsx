@@ -89,6 +89,7 @@ export function MachineCard(p: {
 				) : (
 					<span data-testid="machine-channel-value" className="rounded-sm border px-1.5 text-foreground">{view.channel.value ?? "unknown"}{view.channel.mode ? ` · ${view.channel.mode}` : ""}</span>
 				)}
+				{view.channel.editable && view.channel.mode && <span data-testid="machine-mode" className="text-foreground">· {view.channel.mode}</span>}
 				{view.channel.note && <span className="text-muted-foreground/70">{view.channel.note}</span>}
 				{p.onCheck && <button type="button" data-testid="machine-check" onClick={p.onCheck} className={cn(BTN, "ml-auto")}>Check now</button>}
 			</div>
@@ -325,11 +326,10 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 				<span className="text-muted-foreground/70">wolfd always waits for you</span>
 				{sub?.exists === false && sub.mode === "unknown" && <span className="text-muted-foreground/70">not set (host default)</span>}
 			</div>
-			{subErr && !sub && <p data-testid="machine-sub-error" className="mt-1 text-red-600 dark:text-red-400">Could not read this machine's update settings</p>}
-			{saveErr && <p data-testid="machine-save-error" className="mt-1 text-red-600 dark:text-red-400">{saveErr}</p>}
+						{saveErr && <p data-testid="machine-save-error" className="mt-1 text-red-600 dark:text-red-400">{saveErr}</p>}
 		</div>
 	);
-	return <MachineCard view={machineCard(card, sub?.channel ?? null, sub?.mode ?? null)} update={update} checkNote={checkNote} onCheck={() => void check()} channelDisabled={!canAct || !sub || saving} onChannel={(c) => void save({ channel: c })} {...rest} />;
+	return <MachineCard view={machineCard(card, sub?.channel ?? null, sub?.mode ?? null, subErr && !sub)} update={update} checkNote={checkNote} onCheck={() => void check()} channelDisabled={!canAct || !sub || saving} onChannel={(c) => void save({ channel: c })} {...rest} />;
 }
 
 /** The Machines section body. */

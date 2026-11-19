@@ -6,6 +6,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { isSingleMac } from "../../core/single-mac.ts";
 import { readMachineMode, subscriptionFile } from "@wolfpack/protocol/health-lag";
 
 const CHANNELS = ["stable", "main"] as const;
@@ -40,9 +41,11 @@ function readFileSub(file: string): Subscription | null {
 export function createSubscriptionHandler(o: { gate: (req: Request) => Promise<string | Response>; file?: string; env?: Record<string, string | undefined>; platform?: string; home?: string }) {
 	const env = o.env ?? process.env;
 	const file = o.file ?? subscriptionFile(env, o.platform, o.home);
+	// The Mac app (single-Mac) has no paired devices to carry a bearer: its console is the machine's own loopback server, so the owner gate is skipped there.
+	const gate = (req: Request): Promise<string | Response> => (isSingleMac(env) ? Promise.resolve("this Mac") : o.gate(req));
 	return {
 		async get(req: Request): Promise<Response> {
-			const g = await o.gate(req);
+			const g = await gate(req);
 			if (g instanceof Response) return g;
 			const s = readFileSub(file);
 			if (s) return Response.json({ exists: true, ...s }, { headers: NO_STORE });
@@ -51,7 +54,7 @@ export function createSubscriptionHandler(o: { gate: (req: Request) => Promise<s
 			return Response.json({ exists: false, channel: "stable", mode }, { headers: NO_STORE });
 		},
 		async put(req: Request): Promise<Response> {
-			const g = await o.gate(req);
+			const g = await gate(req);
 			if (g instanceof Response) return g;
 			const body = (await req.json().catch(() => null)) as Partial<Subscription> | null;
 			const channel = CHANNELS.find((c) => c === body?.channel);

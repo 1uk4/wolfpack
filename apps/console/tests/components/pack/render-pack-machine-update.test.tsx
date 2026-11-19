@@ -292,9 +292,11 @@ describe("Pack > Machines > Update automatically (own machine)", () => {
 	it("keeps the switch disabled and says so when the machine's settings can't be read, and never saves a guessed channel", async () => {
 		const s = script({ subStatus: 500 });
 		const m = await mount(own());
-		assert.match(m.q("machine-sub-error")!.textContent ?? "", /Could not read this machine's update settings/);
+		assert.match(m.q("machine-channel")!.textContent ?? "", /Couldn't read this machine's update settings/);
+		assert.doesNotMatch(m.q("machine-channel")!.textContent ?? "", /Change it from that machine's console/);
+		assert.equal(m.q("machine-mode")!.textContent, "· manual");
 		assert.equal((m.q("machine-auto-switch") as HTMLInputElement).disabled, true);
-		assert.equal(m.q("machine-channel-select"), null);
+		assert.equal((m.q("machine-channel-select") as HTMLSelectElement).disabled, true);
 		await m.change("machine-auto-switch", { checked: true });
 		assert.equal(puts(s).length, 0);
 		await m.unmount();

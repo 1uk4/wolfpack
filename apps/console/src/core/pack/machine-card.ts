@@ -18,6 +18,7 @@ export const NO_RESTART_HINT = "This machine can't restart it from here";
 export type RestartKind = "wolves.restart" | "workerd.restart";
 export const NO_LOG_NOTE = "This machine has no log for that service";
 export const CHANNEL_READONLY_NOTE = "Change it from that machine's console";
+export const OWN_SETTINGS_UNREADABLE_NOTE = "Couldn't read this machine's update settings";
 export const UPDATE_READONLY_NOTE = "Update it from that machine's console";
 
 export interface MachineServiceView {
@@ -54,7 +55,7 @@ const RESTART_OF: Partial<Record<MachineServiceView["kind"], RestartKind>> = { w
 export const MODE_LABEL = { button: "manual", auto: "auto", off: "off" } as const;
 
 /** `ownMode`: the console machine's update mode (null/"unknown": the default, manual). On the own card a missing channel is the default "stable", never "unknown". */
-export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null, ownMode: "off" | "button" | "auto" | "unknown" | null = null): MachineCardView {
+export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null, ownMode: "off" | "button" | "auto" | "unknown" | null = null, ownReadFailed = false): MachineCardView {
 	const own = card.console && ownChannel ? { channel: ownChannel, latest: {}, consoleVersion: null, self: card.self ?? null } : null;
 	const rows = machineServices(card, card.inventory, own);
 	const flat = rows.flatMap((r) => [r, ...r.children]);
@@ -84,13 +85,15 @@ export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null
 	}
 	const fromInv = card.inventory.find((e) => e.channel)?.channel ?? null;
 	const value = card.console ? (ownChannel ?? "stable") : fromInv;
-	const editable = card.console && ownChannel !== null;
+	// The own card is never read-only: while the subscription is pending (or failed) the picker shows disabled, and a failed read says so.
+	const editable = card.console;
+	const note = card.console ? (ownReadFailed && ownChannel === null ? OWN_SETTINGS_UNREADABLE_NOTE : undefined) : CHANNEL_READONLY_NOTE;
 	return {
 		id: card.id,
 		label: card.label,
 		online,
 		services,
-		channel: { value, editable, ...(editable ? {} : { note: CHANNEL_READONLY_NOTE }), ...(card.console ? { mode: MODE_LABEL[ownMode === "off" || ownMode === "auto" ? ownMode : "button"] } : {}) },
+		channel: { value, editable, ...(note ? { note } : {}), ...(card.console ? { mode: MODE_LABEL[ownMode === "off" || ownMode === "auto" ? ownMode : "button"] } : {}) },
 	};
 }
 

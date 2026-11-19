@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { usePackHealth } from "@/components/pack/pack-health";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
+import { useSingleMac } from "@/components/shell/single-mac";
 import { cn } from "@/lib/utils";
 import {
 	ageText,
@@ -140,6 +141,8 @@ type Ui = { phase: "idle" } | { phase: "confirm" } | { phase: "sending" } | { ph
  */
 export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { card: HostCard; canAct: boolean; actions: HealthActionsView | undefined; api?: typeof fetch } & Pick<Parameters<typeof MachineCard>[0], "logs" | "notes" | "busy" | "onRestart" | "onRefreshLog">) {
 	const call: typeof fetch = (u, i) => (api ?? fetch)(u, i);
+	// The Mac app has no pack updater: the card shows the derived channel read-only, with no update banner, switch or Check now.
+	const singleMac = useSingleMac();
 	const label = card.label;
 	const [state, setState] = useState<UpdateState | null>(null);
 	const [sub, setSub] = useState<Sub | null>(null);
@@ -329,6 +332,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 						{saveErr && <p data-testid="machine-save-error" className="mt-1 text-red-600 dark:text-red-400">{saveErr}</p>}
 		</div>
 	);
+	if (singleMac) return <MachineCard view={machineCard(card, sub?.channel ?? null, sub?.mode ?? null, false, true)} update={<></>} {...rest} />;
 	return <MachineCard view={machineCard(card, sub?.channel ?? null, sub?.mode ?? null, subErr && !sub)} update={update} checkNote={checkNote} onCheck={() => void check()} channelDisabled={!canAct || !sub || saving} onChannel={(c) => void save({ channel: c })} {...rest} />;
 }
 

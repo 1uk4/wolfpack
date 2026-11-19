@@ -50,6 +50,14 @@ describe("machineCard own card is never read-only", () => {
 	});
 });
 
+describe("machineCard in the Mac app (single-Mac)", () => {
+	it("shows the derived channel and mode as a read-only badge with the Settings note", () => {
+		const own = card({ console: true, workerds: [{ link: link("workerd", "workerd"), wolves: [] }] });
+		assert.deepEqual(machineCard(own, null, null, false, true).channel, { value: "stable", editable: false, note: "App updates are set in Settings → This device", mode: "manual" });
+		assert.deepEqual(machineCard(own, "main", "auto", false, true).channel, { value: "main", editable: false, note: "App updates are set in Settings → This device", mode: "auto" });
+	});
+});
+
 describe("machineCard log fetching", () => {
 	const down = (over: Partial<HostCard> = {}) => card({ hub: link("hubd", "hubd", { status: "down", error: "refused" }), workerds: [{ link: link("workerd", "workerd", { status: "down", error: "refused" }), wolves: [] }], ...over });
 	it("never asks a machine for logs unless it advertised logs.fetch", () => {

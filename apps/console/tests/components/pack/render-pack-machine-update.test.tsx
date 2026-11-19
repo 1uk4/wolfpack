@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ConsoleMachineCard, MachineCard, MachinesSection } from "../../../components/pack/pack-machines.tsx";
+import { SingleMacContext } from "../../../components/shell/single-mac.tsx";
 import { machineCard } from "../../../src/core/pack/machine-card.ts";
 import type { HealthLink } from "../../../src/core/pack/pack-health-view.ts";
 import type { HostCard } from "../../../src/core/pack/pack-hosts.ts";
@@ -298,6 +299,17 @@ describe("Pack > Machines > Update automatically (own machine)", () => {
 		assert.equal((m.q("machine-auto-switch") as HTMLInputElement).disabled, true);
 		assert.equal((m.q("machine-channel-select") as HTMLSelectElement).disabled, true);
 		await m.change("machine-auto-switch", { checked: true });
+		assert.equal(puts(s).length, 0);
+		await m.unmount();
+	});
+
+	it("in the Mac app shows a read-only stable · manual badge with the Settings note, and no picker, switch, Check now or PUT", async () => {
+		const s = script({ sub: { exists: false, channel: "stable", mode: "button" } });
+		const m = await mount(<SingleMacContext.Provider value={true}>{own()}</SingleMacContext.Provider>);
+		assert.equal(m.q("machine-channel-value")!.textContent, "stable · manual");
+		assert.match(m.q("machine-channel")!.textContent ?? "", /App updates are set in Settings → This device/);
+		assert.doesNotMatch(m.q("machine-channel")!.textContent ?? "", /Change it from that machine's console/);
+		for (const id of ["machine-channel-select", "machine-auto-switch", "machine-check"]) assert.equal(m.q(id), null, id);
 		assert.equal(puts(s).length, 0);
 		await m.unmount();
 	});

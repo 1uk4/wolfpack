@@ -43,6 +43,9 @@ describe("/api/health/subscription", () => {
 			assert.equal(r.status, 200);
 			assert.deepEqual(await r.json(), { exists: false, channel: "stable", mode: "button" });
 			assert.equal(existsSync(file), false);
+			// The app never writes this file: PUT stays gated and writes nothing.
+			assert.equal((await h.put(req("PUT", { channel: "main", mode: "auto" }))).status, 401);
+			assert.equal(existsSync(file), false);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

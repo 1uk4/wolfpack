@@ -54,7 +54,7 @@ export function RemoveThreadDialog({ wolf, workTitle, onCancel, onConfirm }: { w
 			<div className="w-full max-w-sm rounded-xl border bg-card p-5 shadow-xl">
 				<h2 className="text-base font-medium">Remove this thread?</h2>
 				<p className="mt-2 text-sm text-muted-foreground">
-					The conversation on {wolf} is deleted. The work item {workTitle} is not changed.
+					The thread is removed from {wolf} and disappears from the list. The work item {workTitle} is not changed.
 				</p>
 				{error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}
 				<div className="mt-4 flex justify-end gap-2">

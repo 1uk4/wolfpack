@@ -36,6 +36,8 @@ import {
   ThreadContextSchema,
   CompactBodySchema,
   CompactAckSchema,
+  CloseThreadResponseSchema,
+  RemoveThreadResponseSchema,
   ThreadSettingsResponseSchema,
   ThreadEventSchema,
   ThreadSummarySchema,
@@ -365,6 +367,16 @@ export const ROUTES = {
    * (re-read the context route). Body `{instructions?}`. 400 `invalid_request`, 404 `not_found`.
    */
   compactThread: { method: "POST", path: "/v1/threads/:id/compact", body: CompactBodySchema, response: { kind: "json", schema: CompactAckSchema }, status: [200], error: err },
+  /**
+   * Close a feature thread by hand (soft, reversible): read-only history, sends answer `thread_closed`, `closedReason`
+   * is "Closed by you". Idempotent (200 when already closed). The work item is never touched. 400 `invalid_request` for
+   * a non-feature thread, 404 `not_found`.
+   */
+  closeThread: { method: "POST", path: "/v1/threads/:id/close", response: { kind: "json", schema: CloseThreadResponseSchema }, status: [200], error: err },
+  /** Reopen a closed feature thread. 409 `thread_graduated` when its work item has graduated or is archived. 400 non-feature, 404. */
+  reopenThread: { method: "POST", path: "/v1/threads/:id/reopen", response: { kind: "json", schema: CloseThreadResponseSchema }, status: [200], error: err },
+  /** Remove a closed feature thread: drops the saved thread and detaches it; the work item is untouched. 409 `thread_open` unless closed. 400 non-feature, 404. */
+  removeThread: { method: "DELETE", path: "/v1/threads/:id", response: { kind: "json", schema: RemoveThreadResponseSchema }, status: [200], error: err },
   // --- feature progress: bind ---
   /**
    * Bind the thread's conversation to a work item (task, issue or spike), the way the agent's `task_bind` does: same

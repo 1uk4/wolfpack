@@ -353,9 +353,28 @@ export class MockConsoleClient implements ConsoleClient {
   // --- internals ---
 
   /** Test hook: mark a thread read-only history (its feature graduated); submits then reject with `thread_closed`. */
-  closeThread(threadId: string, reason = "This feature has graduated; its thread is read-only history. Start a new feature or use home."): void {
+  markThreadClosed(threadId: string, reason = "This feature has graduated; its thread is read-only history. Start a new feature or use home."): void {
     const t = this.get(threadId);
     t.summary = { ...t.summary, closed: true, closedReason: reason };
+  }
+
+  async closeThread(threadId: string): Promise<{ closed: boolean; closedReason?: string }> {
+    const t = this.get(threadId);
+    if (!t.summary.closed) t.summary = { ...t.summary, closed: true, closedReason: "Closed by you" };
+    return { closed: true, ...(t.summary.closedReason ? { closedReason: t.summary.closedReason } : {}) };
+  }
+
+  async reopenThread(threadId: string): Promise<{ closed: boolean; closedReason?: string }> {
+    const t = this.get(threadId);
+    const { closed: _c, closedReason: _r, ...rest } = t.summary;
+    t.summary = rest;
+    return { closed: false };
+  }
+
+  async removeThread(threadId: string): Promise<void> {
+    const t = this.get(threadId);
+    if (!t.summary.closed) throw new ProtocolError("thread_open", "close the thread before removing it", false);
+    this.threads.delete(threadId);
   }
 
   private get(threadId: string): ThreadState {

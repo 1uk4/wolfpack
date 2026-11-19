@@ -159,6 +159,8 @@ const MEMORY_KEEPALIVE_MS = 20_000;
 const MEMORY_STREAM_MAX_BUFFER = 1_000_000;
 
 const GRADUATED_MESSAGE = "This feature has graduated; its thread is read-only history. Start a new feature or use home.";
+/** The reason a thread the owner closed by hand carries (the console tells it from GRADUATED_MESSAGE by this text). */
+export const CLOSED_BY_OWNER = "Closed by you";
 
 export class WolfServer {
   private readonly name: string;
@@ -802,6 +804,45 @@ export class WolfServer {
         announce();
         return this.json(res, 200, { accepted: true });
       }
+      case "closeThread": {
+        const t = this.checkFeatureThread(params.id);
+        // Idempotent: an already closed thread keeps its reason (graduated stays graduated).
+        if (!t.summary.closed) this.markClosed(t, CLOSED_BY_OWNER);
+        return this.json(res, 200, { closed: true, closedReason: t.summary.closedReason });
+      }
+      case "reopenThread": {
+        const t = this.checkFeatureThread(params.id);
+        if (!t.summary.closed) return this.json(res, 200, { closed: false });
+        const saved = this.opts.den ? loadThreads(this.opts.den).find((s) => s.id === t.summary.id) : undefined;
+        const graduated = await this.closedReasonOf(t.summary.boundWorkItem ?? "", saved ? Number(saved.conversationId) : -1);
+        if (graduated) {
+          if (t.summary.closedReason !== graduated) this.markClosed(t, graduated);
+          throw new HttpError("thread_graduated", "the work item has graduated or is archived; its thread stays closed");
+        }
+        const { closed: _c, closedReason: _r, ...rest } = t.summary;
+        t.summary = rest;
+        if (this.opts.den && saved) {
+          const { closedReason: _drop, ...keep } = saved;
+          saveThread(this.opts.den, keep, (e) => this.opts.onError?.(e));
+        }
+        this.closeChecks.delete(t.summary.id);
+        this.emitWolf({ type: "thread-updated", thread: t.threadSummary() });
+        return this.json(res, 200, { closed: false });
+      }
+      case "removeThread": {
+        const t = this.checkFeatureThread(params.id);
+        if (!t.summary.closed) throw new HttpError("thread_open", "close the thread before removing it");
+        // Stop its sub-agents, detach the live thread, drop the registry record. The engine has no conversation-delete API:
+        // the stored conversation rows stay. The work item is never touched.
+        this.subagents?.closeChildrenOf(t.summary.id);
+        t.supersedePending();
+        this.threads.delete(t.summary.id);
+        await t.close().catch(() => {});
+        if (this.opts.den) removeThread(this.opts.den, t.summary.id, (e) => this.opts.onError?.(e));
+        this.closeChecks.delete(t.summary.id);
+        this.emitWolf({ type: "thread-updated", thread: { ...t.threadSummary(), closed: true } });
+        return this.json(res, 200, { removed: true });
+      }
       // --- feature progress: bind ---
       case "bindThread": {
         const t = this.checkThread(params.id);
@@ -1268,6 +1309,12 @@ export class WolfServer {
       }
     }
     return out;
+  }
+
+  private checkFeatureThread(id: string): ThreadRuntime {
+    const t = this.checkThread(id);
+    if (t.isChild || t.summary.kind !== "feature") throw new HttpError("invalid_request", `a ${t.summary.kind} thread cannot be closed or removed`);
+    return t;
   }
 
   private checkThread(id: string): ThreadRuntime {

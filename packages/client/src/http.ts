@@ -263,6 +263,18 @@ export class HttpConsoleClient implements ConsoleClient {
     await this.json("compactThread", { id: threadId }, ROUTES.compactThread.response.schema, instructions ? { instructions } : {}, threadId);
   }
 
+  async closeThread(threadId: string): Promise<{ closed: boolean; closedReason?: string }> {
+    return (await this.json("closeThread", { id: threadId }, ROUTES.closeThread.response.schema, {}, threadId)) as { closed: boolean; closedReason?: string };
+  }
+
+  async reopenThread(threadId: string): Promise<{ closed: boolean; closedReason?: string }> {
+    return (await this.json("reopenThread", { id: threadId }, ROUTES.reopenThread.response.schema, {}, threadId)) as { closed: boolean; closedReason?: string };
+  }
+
+  async removeThread(threadId: string): Promise<void> {
+    await this.json("removeThread", { id: threadId }, ROUTES.removeThread.response.schema, undefined, threadId);
+  }
+
   // --- feature progress: bind ---
   async bindThread(threadId: string, workItemId: string): Promise<BindThreadResponse> {
     return (await this.json("bindThread", { id: threadId }, ROUTES.bindThread.response.schema, { workItemId }, threadId)) as BindThreadResponse;

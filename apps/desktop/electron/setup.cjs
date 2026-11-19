@@ -54,6 +54,17 @@ function readSetup(stateDir) {
 	return null;
 }
 
+/**
+ * Where the wolves live. WOLFPACK_APP_WOLVES wins; then the path setup recorded; then ~/Wolves for an install that predates the record
+ * (it already keeps its wolves there); a NEW install gets ~/Wolves/local (the local/ level leaves room for other machines beside it).
+ */
+function resolveWolvesDir({ stateDir, home, env = {} }) {
+	if (env.WOLFPACK_APP_WOLVES) return env.WOLFPACK_APP_WOLVES;
+	const prev = readSetup(stateDir);
+	if (typeof prev?.wolvesDir === "string" && prev.wolvesDir) return prev.wolvesDir;
+	return prev ? path.join(home, "Wolves") : path.join(home, "Wolves", "local");
+}
+
 /** The wolf id chosen at setup ("wolf", the pre-wizard default, when there is no record). */
 function readWolfId(stateDir) {
 	const w = readSetup(stateDir)?.wolf;
@@ -265,7 +276,7 @@ async function runSetup(answers, opts) {
 	fs.mkdirSync(opts.stateDir, { recursive: true, mode: 0o700 });
 	fs.chmodSync(opts.stateDir, 0o700);
 	if (key) writeKey(path.join(opts.stateDir, KEYS_FILE), ANTHROPIC_ENV, key); // credentials.json is left as it is
-	const record = { wolf: wolfId, wolfName, domains };
+	const record = { wolf: wolfId, wolfName, domains, wolvesDir: opts.wolvesDir };
 	writeAtomic(path.join(opts.stateDir, SETUP_FILE), JSON.stringify({ ...record, complete: false, folderPreexisted, hubWasFresh }));
 	if (rewrite) writeAtomic(wolfYamlPath, rewrite);
 	if (retry && hubWasFresh) setAsideHalfMadeHub(opts.stateDir, false, opts.log); // nothing completed: the retry seeds exactly its answers
@@ -282,4 +293,4 @@ async function runSetup(answers, opts) {
 	return sup;
 }
 
-module.exports = { writeAtomic, needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup, wolfIdFor, domainNameProblem, ANTHROPIC_BASE, MAX_DESCRIPTION, MAX_DOMAINS };
+module.exports = { writeAtomic, resolveWolvesDir, needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup, wolfIdFor, domainNameProblem, ANTHROPIC_BASE, MAX_DESCRIPTION, MAX_DOMAINS };

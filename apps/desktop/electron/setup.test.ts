@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const { checkKey, needsSetup, resolveFinishKey, runSetup } = createRequire(import.meta.url)("./setup.cjs");
+const { resolveWolvesDir, checkKey, needsSetup, resolveFinishKey, runSetup } = createRequire(import.meta.url)("./setup.cjs");
 const runtimeDir = join(here, "..", "runtime");
 
 let fake: Server;
@@ -75,6 +75,23 @@ describe("key check", () => {
 });
 
 const nodeBin = process.env.WOLFPACK_DESKTOP_TEST_NODE === "1" ? process.execPath : "";
+
+describe("wolves folder", () => {
+  it("offers ~/Wolves/local to a new install, keeps ~/Wolves for an older one, and a recorded path or the env wins", () => {
+    const home = "/Users/ann";
+    const fresh = join(root, "wd-fresh");
+    expect(resolveWolvesDir({ stateDir: fresh, home, env: {} })).toBe("/Users/ann/Wolves/local");
+    const old = join(root, "wd-old");
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "setup.json"), JSON.stringify({ wolf: "ann", complete: true }));
+    expect(resolveWolvesDir({ stateDir: old, home, env: {} })).toBe("/Users/ann/Wolves");
+    const rec = join(root, "wd-rec");
+    mkdirSync(rec, { recursive: true });
+    writeFileSync(join(rec, "setup.json"), JSON.stringify({ wolf: "ann", complete: true, wolvesDir: "/data/w" }));
+    expect(resolveWolvesDir({ stateDir: rec, home, env: {} })).toBe("/data/w");
+    expect(resolveWolvesDir({ stateDir: rec, home, env: { WOLFPACK_APP_WOLVES: "/tmp/x" } })).toBe("/tmp/x");
+  });
+});
 
 describe("setup answers", () => {
   it("rejects a bad domain, a reserved domain, an emoji-only name and a long description with nothing written", async () => {

@@ -191,6 +191,32 @@ describe("thread API: reads and commands", () => {
 	});
 });
 
+describe("thread API: close, reopen, remove", () => {
+	it("closes a thread, reopens it, and refuses to remove it while open (409 thread_open)", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		const api = createThreadApi(() => client);
+		const closed = await api.close(ref);
+		assert.equal(closed.status, 200);
+		assert.deepEqual(await closed.json(), { closed: true, closedReason: "Closed by you" });
+		assert.equal(((await (await api.thread(ref)).json()) as { closed?: boolean }).closed, true);
+		const reopened = await api.reopen(ref);
+		assert.deepEqual(await reopened.json(), { closed: false });
+		const open = await api.remove(ref);
+		assert.equal(open.status, 409);
+		assert.equal(((await open.json()) as { code: string }).code, "thread_open");
+	});
+
+	it("removes a closed thread, then 404s it; answers 501 when the client cannot", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		const api = createThreadApi(() => client);
+		await api.close(ref);
+		assert.deepEqual(await (await api.remove(ref)).json(), { removed: true });
+		assert.equal((await api.thread(ref)).status, 404);
+		const bare = createThreadApi(() => ({ listThreads: async () => [{ id: "1uk4/home", wolf: "1uk4", kind: "home", title: "Home" }] }) as never);
+		assert.equal((await bare.close(ref)).status, 501);
+	});
+});
+
 describe("console client factory", () => {
 	it("is a process singleton (a turn started in one request is visible to the next)", async () => {
 		setConsoleClient(undefined);

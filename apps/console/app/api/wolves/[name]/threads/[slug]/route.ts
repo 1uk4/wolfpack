@@ -19,3 +19,8 @@ export async function GET(
 	const limit = rawLimit !== null ? Number(rawLimit) : undefined;
 	return threadApi().thread({ wolf: name, slug }, { ...(limit !== undefined ? { limit } : {}), ...(before ? { before } : {}) });
 }
+
+export async function DELETE(_req: Request, ctx: { params: Promise<{ name: string; slug: string }> }): Promise<Response> {
+	const { name, slug } = await ctx.params;
+	return threadApi().remove({ wolf: name, slug });
+}

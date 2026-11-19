@@ -89,6 +89,9 @@ function failure(err: unknown): Response {
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "invalid_request") return json({ error: err.message }, 400);
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "conflict") return json({ error: err.message, code: "conflict" }, 409);
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "thread_closed") return json({ error: err.message, code: "thread_closed" }, 409);
+	for (const code of ["thread_open", "thread_graduated"]) {
+		if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === code) return json({ error: err.message, code }, 409);
+	}
 	return json({ error: err instanceof Error ? err.message : "Unexpected error" }, 500);
 }
 
@@ -433,6 +436,40 @@ export function createThreadApi(source: ClientSource) {
 				if (typeof body.instructions === "string" && body.instructions.length > 4000) return json({ error: "instructions are limited to 4000 characters" }, 400);
 				await client.compactThread(await resolve(client, ref), body.instructions || undefined);
 				return json({ accepted: true });
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Close a feature thread by hand: `POST /v1/threads/:id/close`. The work item is not touched. */
+		async close(ref: ThreadRef): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.closeThread) return json({ error: "this client cannot close threads" }, 501);
+				return json(await client.closeThread(await resolve(client, ref)));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Reopen a closed feature thread: `POST /v1/threads/:id/reopen` (409 thread_graduated when its work item graduated). */
+		async reopen(ref: ThreadRef): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.reopenThread) return json({ error: "this client cannot reopen threads" }, 501);
+				return json(await client.reopenThread(await resolve(client, ref)));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Remove a closed feature thread: `DELETE /v1/threads/:id` (409 thread_open unless closed). */
+		async remove(ref: ThreadRef): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.removeThread) return json({ error: "this client cannot remove threads" }, 501);
+				await client.removeThread(await resolve(client, ref));
+				return json({ removed: true });
 			} catch (err) {
 				return failure(err);
 			}

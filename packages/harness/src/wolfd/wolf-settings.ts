@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { atomicWrite, backupFile } from "@wolfpack/agents";
-import { WolfFileSchema } from "@wolfpack/engine";
+import { WolfFileSchema, deniedModelPattern } from "@wolfpack/engine";
 import { THREAD_COLOR_KEYS, isMaskedConfigKey, isSecretValue, maskSecrets, type EnvVarView } from "@wolfpack/protocol";
 import { isMap, parse as parseYaml, parseDocument } from "yaml";
 
@@ -126,8 +126,13 @@ export class WolfSettingsStore {
     const doc = parseDocument(text);
     if (doc.errors.length > 0) throw new SettingsError("invalid_request", "wolf.yaml has a syntax error; fix it by hand");
     if (doc.contents === null || !isMap(doc.contents)) throw new SettingsError("invalid_request", "wolf.yaml is not a mapping");
+    const deny = (doc.getIn(["models", "deny"]) as { toJSON?: () => unknown } | null | undefined)?.toJSON?.();
+    const denyList = Array.isArray(deny) ? deny.filter((d): d is string => typeof d === "string") : [];
     for (const [key, value] of Object.entries(set)) {
       if (!EDITABLE_KEYS.includes(key)) throw new SettingsError("invalid_request", `"${key}" is not an editable setting`);
+      if (typeof value === "string" && (key === "memory.model" || /^(models|tiers)\.(main|smart|fast)\.model$/.test(key)) && deniedModelPattern(denyList, value)) {
+        throw new SettingsError("invalid_request", `${value} is not allowed for this wolf (models.deny)`);
+      }
       if (key === "color" && value !== null && !(typeof value === "string" && (THREAD_COLOR_KEYS as readonly string[]).includes(value))) {
         throw new SettingsError("invalid_request", `color must be one of ${THREAD_COLOR_KEYS.join(", ")} (or null for automatic)`);
       }

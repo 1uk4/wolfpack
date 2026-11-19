@@ -111,6 +111,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       tools: v.tools,
       ...(v.tiers ? { tiers: v.tiers as WolfConfig["capability"]["tiers"] } : {}),
       ...(v.models ? { models: definedModels(v.models) } : {}),
+      ...(v.models?.deny?.length ? { modelDeny: v.models.deny } : {}),
       workspace: v.workspace ? expand(v.workspace, dir, home) : dir,
     },
     serve: {

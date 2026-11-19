@@ -88,7 +88,7 @@ export function memoryIgnoredOn(tierProviders: Record<string, string> | undefine
 /** The words for a save's outcome: the HTTP status, or "network" when the call itself failed. `body` is the parsed error body, if any. */
 export function saveMessage(status: number | "network", body: { error?: string } | null, wolf: string): { ok: boolean; text: string } {
 	if (status === "network") return { ok: false, text: "Couldn't save; nothing changed." };
-	if (status >= 200 && status < 300) return { ok: true, text: `Saved for ${wolf} only. It takes effect when ${wolf} restarts.` };
+	if (status >= 200 && status < 300) return { ok: true, text: `Saved to wolf.yaml for ${wolf} only. Takes effect after the wolf restarts.` };
 	if (status === 409) return { ok: false, text: "This wolf's config changed since you loaded it. Reload to see the current values." };
 	return { ok: false, text: body?.error ?? `Not saved (${status}).` };
 }

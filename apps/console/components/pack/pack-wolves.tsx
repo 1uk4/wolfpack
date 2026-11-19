@@ -152,7 +152,7 @@ export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; cata
 				{!access.reachable ? <p data-testid="wolf-readonly" className="text-muted-foreground">{access.note}</p> : null}
 				{access.reachable ? <PickerField label="Chat" testid="picker-chat" picker={pickers.chat} current={String(getAt(view?.config ?? {}, "models.main.model") ?? "")} editable={canEdit("models.main.model")} onPick={(id) => void save("models.main.model", id)} /> : null}
 				{access.reachable ? <PickerField label="Memory" testid="picker-memory" hint="Used for memory's main steps; quick steps keep the fast model." picker={pickers.memory} current={String(getAt(view?.config ?? {}, "memory.model") ?? "")} editable={canEdit("memory.model") && !memoryIgnored} note={memoryIgnored ? `Memory runs on ${memoryIgnored} for this wolf; this setting has no effect.` : undefined} onPick={(id) => void save("memory.model", id)} /> : null}
-				{saved ? <p data-testid="wolf-saved" className="text-muted-foreground">Saved for {wolf.name} only. It takes effect when {wolf.name} restarts.</p> : null}
+				{saved ? <p data-testid="wolf-saved" className="text-muted-foreground">Saved to wolf.yaml for {wolf.name} only. Takes effect after the wolf restarts.</p> : null}
 			</section>
 			{access.reachable ? (
 				<details className="rounded-md border p-3" data-testid="wolf-all-settings">

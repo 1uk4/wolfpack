@@ -303,13 +303,11 @@ describe("Pack > Machines > Update automatically (own machine)", () => {
 		await m.unmount();
 	});
 
-	it("in the Mac app shows a read-only stable · manual badge with the Settings note, and no picker, switch, Check now or PUT", async () => {
+	it("in the Mac app shows the app's own update block and no channel row, picker, switch, pack Check now or PUT", async () => {
 		const s = script({ sub: { exists: false, channel: "stable", mode: "button" } });
 		const m = await mount(<SingleMacContext.Provider value={true}>{own()}</SingleMacContext.Provider>);
-		assert.equal(m.q("machine-channel-value")!.textContent, "stable · manual");
-		assert.match(m.q("machine-channel")!.textContent ?? "", /App updates are set in Settings → This device/);
-		assert.doesNotMatch(m.q("machine-channel")!.textContent ?? "", /Change it from that machine's console/);
-		for (const id of ["machine-channel-select", "machine-auto-switch", "machine-check"]) assert.equal(m.q(id), null, id);
+		assert.notEqual(m.q("machine-app-update"), null);
+		for (const id of ["machine-channel", "machine-channel-value", "machine-channel-select", "machine-auto-switch", "machine-check"]) assert.equal(m.q(id), null, id);
 		assert.equal(puts(s).length, 0);
 		await m.unmount();
 	});

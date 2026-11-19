@@ -439,7 +439,7 @@ export function SessionRow({
 	const wolfName = chat.href ? /\/wolf\/([^/]+)\//.exec(chat.href)?.[1] : undefined;
 	const tref = featureSlug && wolfName ? { wolf: decodeURIComponent(wolfName), slug: featureSlug } : undefined;
 	return (
-		<div className="group/row relative" data-testid="session-row-wrap">
+		<div className="group/row relative" data-testid="row-wrap">
 		<button
 			type="button"
 			onClick={onOpen}

@@ -35,9 +35,9 @@ const { resolveConsoleTarget, errorPageHtml, pairUrl } = require("./remote.cjs")
 const { createSupervisor } = require("./supervisor.cjs");
 const { KEYS_FILE } = require("./key-file.cjs"); // the console reads/writes the same keys.env workerd does (Pack → Keys)
 const { shouldCurate, parseBatteryPercent } = require("./curator-gate.cjs");
-const { needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup, wolfIdFor } = require("./setup.cjs");
+const { resolveWolvesDir, needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup, wolfIdFor } = require("./setup.cjs");
 const { consoleEnv } = require("./console-env.cjs");
-const { windowAllClosedAction, createTray } = require("./tray.cjs");
+const { windowAllClosedAction, focusFirstWindow, createTray } = require("./tray.cjs");
 const { createAppSettings } = require("./app-settings.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/shell/sidebar.tsx — keep in sync (the
@@ -74,15 +74,9 @@ if (process.env.WOLFPACK_DEV_URL || undefined) {
 	app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
 if (!app.requestSingleInstanceLock()) {
-	app.quit();
+	app.quit(); // silently: the running instance's second-instance handler brings its window forward
 } else {
-	app.on("second-instance", () => {
-		const win = BrowserWindow.getAllWindows()[0];
-		if (win) {
-			if (win.isMinimized()) win.restore();
-			win.focus();
-		}
-	});
+	app.on("second-instance", () => focusFirstWindow(BrowserWindow.getAllWindows()[0]));
 	main();
 }
 
@@ -238,14 +232,14 @@ async function safeUpdate(stateDir, wolvesDir) {
 	throw e;
 }
 
-/** Start the app's own runtime. State: WOLFPACK_APP_HOME (default userData); wolves: WOLFPACK_APP_WOLVES (default ~/Wolves). Until setup.json says complete, the setup wizard runs (prefilled with the stored answers); WOLFPACK_APP_API_KEY skips its sign-in step. */
+/** Start the app's own runtime. State: WOLFPACK_APP_HOME (default userData); wolves: WOLFPACK_APP_WOLVES (default: the path setup recorded; ~/Wolves for an older install; ~/Wolves/local for a new one). Until setup.json says complete, the setup wizard runs (prefilled with the stored answers); WOLFPACK_APP_API_KEY skips its sign-in step. */
 async function startRuntime() {
 	// A dev run from the repo must not touch the owner's real folders: on a case-insensitive Mac the packaged default ~/Wolves IS the live ~/wolves.
 	if (!app.isPackaged && !(process.env.WOLFPACK_APP_HOME && process.env.WOLFPACK_APP_WOLVES)) {
 		throw new Error("Dev run: set both WOLFPACK_APP_HOME and WOLFPACK_APP_WOLVES to scratch folders (the defaults are the real app's userData and ~/Wolves).");
 	}
 	const stateDir = appStateDir();
-	const wolvesDir = process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves");
+	const wolvesDir = resolveWolvesDir({ stateDir, home: app.getPath("home"), env: process.env });
 	await safeUpdate(stateDir, wolvesDir); // first launch after an update: back up, migrate, or put the data back and quit
 	const runtimeDir = app.isPackaged ? path.join(process.resourcesPath, "runtime") : path.join(__dirname, "..", "runtime");
 	const opts = {
@@ -871,7 +865,7 @@ async function main() {
 	if (appRuntime && supervisor) {
 		const stateDir = appStateDir();
 		const settings = createAppSettings({
-			stateDir, wolvesDir: process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves"),
+			stateDir, wolvesDir: resolveWolvesDir({ stateDir, home: app.getPath("home"), env: process.env }),
 			getSup: () => supervisor, modelBaseUrl: process.env.WOLFPACK_ANTHROPIC_BASE_URL || undefined, version: app.getVersion(),
 			sysVersion: `${process.getSystemVersion()}`, log, shell, clipboard, app,
 			// The native second step for Reset and Change key: Cancel is the default, so Enter never confirms.
@@ -903,9 +897,7 @@ async function main() {
 			openWindow: () => {
 				const w = BrowserWindow.getAllWindows()[0];
 				if (!w) return createWindow(url, landingUrl);
-				if (w.isMinimized()) w.restore();
-				w.show();
-				w.focus();
+				focusFirstWindow(w);
 			},
 			quit: () => app.quit(),
 		});

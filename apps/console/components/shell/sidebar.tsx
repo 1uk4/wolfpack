@@ -22,6 +22,7 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { RemoveThreadDialog, ThreadActionsMenu, closedByOwner, slugOfHref, threadCloseApi } from "@/components/thread/thread-close-actions";
 import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, startVisibleTimer, type WolfStatus, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
 import { settingsUrl } from "@/components/thread/thread-transport";
 import { useServerEvent, useServerResync } from "@/components/shell/server-events";
@@ -29,7 +30,7 @@ import { THREAD_COLORS, threadColor, threadColorIndex, threadAccentStyle, thread
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
-type SessionItem = ChatListItem & { href: string; meta?: string; needsYou?: boolean; archived?: boolean; kind?: string; alias?: string; branch?: string; color?: string } & Omit<ChildThread, "id" | "title">;
+type SessionItem = ChatListItem & { href: string; meta?: string; needsYou?: boolean; archived?: boolean; closedReason?: string; kind?: string; alias?: string; branch?: string; color?: string } & Omit<ChildThread, "id" | "title">;
 
 const itemHref = (c: SessionItem) => c.href;
 import { kbdEventForAction } from "@/src/core";
@@ -364,6 +365,7 @@ export function SessionRow({
 	indented = false,
 	offline = false,
 	wolfStatus,
+	onRemoved,
 	dotColor,
 }: {
 	chat: SessionItem;
@@ -371,6 +373,8 @@ export function SessionRow({
 	dotColor?: string;
 	/** The wolf's liveness, drawn as a badge on its group header (the Home row). */
 	wolfStatus?: WolfStatus;
+	/** A feature thread was removed from its row menu (the sidebar leaves the thread if it is the open one). */
+	onRemoved?: (tref: { wolf: string; slug: string }) => void;
 	/** Its wolf is offline: the row we still hold is greyed and says so. */
 	offline?: boolean;
 	/** A subagent row under its feature: two steps in, compact single line. */
@@ -431,7 +435,11 @@ export function SessionRow({
 			</div>
 		);
 	}
+	const featureSlug = chat.kind === "feature" ? slugOfHref(chat.href) : undefined;
+	const wolfName = chat.href ? /\/wolf\/([^/]+)\//.exec(chat.href)?.[1] : undefined;
+	const tref = featureSlug && wolfName ? { wolf: decodeURIComponent(wolfName), slug: featureSlug } : undefined;
 	return (
+		<div className="group/row relative" data-testid="session-row-wrap">
 		<button
 			type="button"
 			onClick={onOpen}
@@ -444,6 +452,8 @@ export function SessionRow({
 				offline && "opacity-50",
 				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
 				indented && "ml-4 w-[calc(100%-1rem)] border-l border-border rounded-l-none",
+				// Phones show the ⋯ button always, pinned at the right: keep the title's ellipsis clear of it.
+				tref && "max-md:pr-12",
 				active && "bg-accent shadow-[inset_2px_0_0_var(--thread-accent)]",
 				kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 			)}
@@ -479,6 +489,39 @@ export function SessionRow({
 			</span>
 			{home && wolfStatus && <WolfBadge wolf={wolfStatus} />}
 		</button>
+		{tref && <SessionRowActions tref={tref} chat={chat} onRemoved={onRemoved} />}
+		</div>
+	);
+}
+
+/** The row's ⋯ menu on a feature thread: hover-revealed on desktop, always visible on phones (no hover there). Open: Close. Closed: Reopen (owner-closed only) and Remove… */
+function SessionRowActions({ tref, chat, onRemoved }: { tref: { wolf: string; slug: string }; chat: SessionItem; onRemoved?: (tref: { wolf: string; slug: string }) => void }) {
+	const [removeOpen, setRemoveOpen] = useState(false);
+	const closed = chat.archived === true;
+	return (
+		<>
+			<ThreadActionsMenu
+				testid="row-actions"
+				className="absolute right-1 top-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100 max-md:opacity-100"
+				closed={closed}
+				canReopen={closedByOwner(chat.closedReason)}
+				onClose={() => threadCloseApi.close(tref)}
+				onReopen={() => threadCloseApi.reopen(tref)}
+				onRemove={() => setRemoveOpen(true)}
+			/>
+			{removeOpen && (
+				<RemoveThreadDialog
+					wolf={tref.wolf}
+					workTitle={chat.title}
+					onCancel={() => setRemoveOpen(false)}
+					onConfirm={async () => {
+						await threadCloseApi.remove(tref);
+						setRemoveOpen(false);
+						onRemoved?.(tref);
+					}}
+				/>
+			)}
+		</>
 	);
 }
 
@@ -597,6 +640,7 @@ export function SessionsSidebar() {
 										indented={indented}
 										offline={offlineWolves.has(rowWolf(c))}
 										wolfStatus={rosterByName.get(rowWolf(c))}
+										onRemoved={(t) => { if (pathname.endsWith(`/thread/${t.slug}`)) router.push(`/wolf/${encodeURIComponent(t.wolf)}/thread/home`); void refresh(); }}
 										active={pathname === itemHref(c)}
 										kbdSelected={at === kbdIndex}
 										onOpen={() => {

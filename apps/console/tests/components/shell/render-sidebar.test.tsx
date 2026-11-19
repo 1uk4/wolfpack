@@ -182,3 +182,19 @@ describe("SessionRow offline", () => {
 		assert.ok(!render(item({})).includes("opacity-50"));
 	});
 });
+
+describe("SessionRow thread actions", () => {
+	const feature = { href: "/wolf/w/thread/feature-work-w-abc", kind: "feature" } as Partial<ChatListItem>;
+	it("a feature row carries a visible-on-phone actions button with a 44px target; home and subagent rows do not", () => {
+		const html = render(item(feature));
+		assert.ok(html.includes("data-testid=\"row-actions-button\""), "the ⋯ button");
+		assert.ok(html.includes("max-md:opacity-100") && html.includes("max-md:size-11"), "always visible, 44px on phones");
+		assert.ok(!render(item({ kind: "home" } as Partial<ChatListItem>)).includes("row-actions-button"));
+		assert.ok(!render(item({})).includes("row-actions-button"));
+	});
+
+	it("a closed feature row still renders its actions (menu content opens on click)", () => {
+		const html = render(item({ ...feature, archived: true, closedReason: "Closed by you" } as Partial<ChatListItem>));
+		assert.ok(html.includes("row-actions-button"));
+	});
+});

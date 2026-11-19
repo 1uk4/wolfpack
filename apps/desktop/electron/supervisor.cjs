@@ -19,6 +19,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
+const { ensureWorkAccess } = require("./work-access.cjs"); // WORK_ENDPOINT / WORK_TOKEN in the wolf's .env (work-wolfpack-ZQDxB3j)
 const { KEYS_FILE: KEY_FILE, ANTHROPIC_ENV, DEEPGRAM_ENV, readKey, writeKey, keyProblem } = require("./key-file.cjs"); // keys.env (ANTHROPIC_API_KEY=…), mode 0600, in the pack state dir; workerd and the console read it too
 // Model names live here (and only here): update them in this block when a model is retired.
 const SONNET = "claude-sonnet-5-5";
@@ -165,6 +166,7 @@ function createSupervisor(opts) {
 	let embedEnv = {};
 	let windowRunning = false;
 	let hubToken = "";
+	let workEnv = {}; // WORK_ENDPOINT / WORK_TOKEN for the wolf's task tools, handed to workerd (its wolfd inherits them)
 	const curateWaiters = new Set(); // done() of each pending curate(): stop() and hubd's exit resolve them
 	const endCurate = (why) => {
 		for (const f of [...curateWaiters]) f({ skipped: why });
@@ -299,10 +301,34 @@ function createSupervisor(opts) {
 		const pairCode = mintHubToken(hubDir);
 		await startHubd();
 		hubToken = await redeemHubToken(sup.urls.hubd, pairCode);
+		await setUpWorkAccess();
 		await startWorkerd();
 		wolfUp = true;
 		changed();
 		startPoll();
+	}
+
+	/**
+	 * The wolf's task tools: the default domain (named after the wolf), a work token on this hubd and WORK_* in the wolf's .env. Idempotent; a stored
+	 * token hubd still accepts is reused. A failure is logged (never the token) and the wolf starts without work items rather than not at all.
+	 */
+	async function setUpWorkAccess() {
+		const mintToken = async () => {
+			const r = spawnSync(nodeBin, [path.join(runtimeDir, "hubd.mjs"), "pair", "--kind", "console", "--label", "wolf-work", "--data-dir", hubDir], { env: base({}), encoding: "utf8" });
+			const m = /pairing code: (\S+)/.exec(`${r.stdout}`);
+			if (!m) throw new Error("could not mint a work token");
+			const res = await fetch(`${sup.urls.hubd}/v1/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: m[1], label: "wolf-work" }) });
+			if (!res.ok) throw new Error(`hubd refused the work token's pairing code (${res.status})`);
+			return (await res.json()).token;
+		};
+		try {
+			const w = await ensureWorkAccess({ wolfDir: sup.wolfDir, wolfId: wolfName, hubUrl: sup.urls.hubd, hubToken, mintToken, log });
+			workEnv = { WORK_ENDPOINT: w.endpoint, WORK_TOKEN: w.token };
+			secrets = [...secrets, w.token];
+		} catch (e) {
+			workEnv = {};
+			log(`work items are not set up: ${redact(String(e.message))}`);
+		}
 	}
 
 	/** Launch hubd on `sup.ports.hubd` with the Anthropic key as keys.env holds it now (its curator calls Haiku with it), and wait until it is healthy. */
@@ -356,6 +382,7 @@ function createSupervisor(opts) {
 			WOLFPACK_HUB_KB: "1",
 			WOLFPACK_HUB_URL: sup.urls.hubd,
 			WOLFPACK_HUB_TOKEN: wolfHubToken,
+			...workEnv,
 			...embedEnv,
 			// Proxy settings go to workerd (and so its wolfd) and to hubd (its curator calls the model provider), so a user behind a proxy can reach it.
 			...proxyEnv(),

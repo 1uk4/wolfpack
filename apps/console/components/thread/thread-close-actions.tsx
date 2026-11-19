@@ -123,7 +123,10 @@ export function ThreadActionsMenu({
 		</button>
 	);
 	return (
-		<span className={`relative inline-flex ${className}`} onClick={(e) => e.stopPropagation()}>
+		// The outer span takes the caller's positioning (the sidebar row pins it absolute at the right edge); the inner one anchors the menu.
+		// They must be separate: `relative` and `absolute` on one element cancel each other and drop the button into the flow, under the title.
+		<span className={`inline-flex shrink-0 ${className}`} onClick={(e) => e.stopPropagation()}>
+		<span className="relative inline-flex">
 			<button
 				type="button"
 				data-testid={`${testid}-button`}
@@ -143,6 +146,7 @@ export function ThreadActionsMenu({
 				</div>
 			)}
 			{error && <span role="alert" data-testid={`${testid}-error`} className="absolute right-0 top-full z-40 mt-1 w-56 rounded-md border bg-card p-2 text-xs text-destructive">{error}</span>}
+		</span>
 		</span>
 	);
 }

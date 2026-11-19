@@ -6,7 +6,7 @@
  * keyboard bindings and the knowledge base are never touched.
  */
 import { useEffect, useState } from "react";
-import { useAppBridge, type AppBridge } from "@/components/settings/app-bridge";
+import { useAppBridge, type AppBridge, type UpdateChannelState } from "@/components/settings/app-bridge";
 import { AppearanceSection } from "@/components/settings/appearance-section";
 import { KeyboardSection } from "@/components/settings/keyboard-section";
 import { useAppearance } from "@/components/settings/appearance";
@@ -33,7 +33,21 @@ export function MacAppGroups({ bridge }: { bridge: AppBridge }) {
 			.catch(() => setFolderError("Couldn't open the folder."));
 	};
 
+	const [chan, setChan] = useState<UpdateChannelState | null>(null);
+	const [ahead, setAhead] = useState<string | null>(null);
+	const [aheadMsg, setAheadMsg] = useState<string | null>(null);
+	const checkMain = () => {
+		setAheadMsg("Checking…");
+		void bridge.updateChannel?.checkMain().then((r) => {
+			setAhead(r.ahead);
+			setAheadMsg(r.error ? "Couldn't check main." : r.ahead ? null : "Up to date");
+		}).catch(() => setAheadMsg("Couldn't check main."));
+	};
 	useEffect(() => {
+		void bridge.updateChannel?.get().then((s) => {
+			setChan(s);
+			if (s.available) checkMain();
+		}).catch(() => {});
 		void bridge.folders().then(setPaths).catch(() => {});
 		void bridge.loginItem.get().then(setLogin).catch(() => {});
 	}, [bridge]);
@@ -59,6 +73,31 @@ export function MacAppGroups({ bridge }: { bridge: AppBridge }) {
 					<Toggle label="Open Wolfpack when I log in" checked={login?.openAtLogin ?? false} disabled={!login} onChange={(on) => void bridge.loginItem.set(on).then(setLogin)} />
 				</SettingsRow>
 			</SettingsGroup>
+			{chan && (
+				<SettingsGroup label="App updates" testid="this-device-updates">
+					{!chan.available ? (
+						<p data-testid="this-device-updates-note" className="text-xs text-muted-foreground">{chan.note}</p>
+					) : (
+						<>
+							<SettingsRow label="Update channel" hint="Stable is the default. Main gets pre-releases earlier.">
+								<select
+									aria-label="Update channel"
+									data-testid="this-device-channel"
+									className={BTN}
+									value={chan.channel}
+									onChange={(e) => void bridge.updateChannel?.set(e.target.value as "stable" | "main").then((r) => { if (r.ok) { setChan(r); checkMain(); } }).catch(() => {})}
+								>
+									<option value="stable">Stable</option>
+									<option value="main">Main</option>
+								</select>
+							</SettingsRow>
+							{ahead && <p role="status" data-testid="this-device-main-ahead" className="text-xs text-muted-foreground">Main is ahead: {ahead}</p>}
+							{!ahead && aheadMsg && <p role="status" className="text-xs text-muted-foreground">{aheadMsg}</p>}
+							{chan.returnNote && <p data-testid="this-device-return-note" className="text-xs text-muted-foreground">{chan.returnNote}</p>}
+						</>
+					)}
+				</SettingsGroup>
+			)}
 			<SettingsGroup label="Support" testid="this-device-support">
 				<div className="flex flex-wrap items-center gap-3">
 					<button

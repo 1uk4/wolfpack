@@ -14,6 +14,14 @@ export interface Result {
 	/** Shown with a success, e.g. when memory tidying waits for the next launch. */
 	note?: string;
 }
+export interface UpdateChannelState {
+	available: boolean;
+	channel: "stable" | "main";
+	/** Remote mode / dev build: why the switch is hidden. */
+	note?: string;
+	/** Shown after picking stable while running a main build. */
+	returnNote?: string;
+}
 export interface AppBridge {
 	folders(): Promise<{ state: string; wolves: string; logs?: string }>;
 	showFolder(name: "state" | "wolves" | "logs"): Promise<Result>;
@@ -24,6 +32,12 @@ export interface AppBridge {
 	changeKey(key: string): Promise<Result>;
 	copyDiagnostics(): Promise<Result>;
 	reset(): Promise<Result>;
+	/** This device > App updates (work-wolfpack-JIIInfm): the stable/main switch for the app's own updater; older apps lack it. */
+	updateChannel?: {
+		get(): Promise<UpdateChannelState>;
+		set(channel: "stable" | "main"): Promise<UpdateChannelState & Result>;
+		checkMain(): Promise<{ ahead: string | null; upToDate: boolean; error?: string }>;
+	};
 	/** This device > Reset app: stops the wolves, moves Chromium cache folders to the Trash and relaunches (older apps lack it). */
 	resetAppUi?(): Promise<Result>;
 }
@@ -45,6 +59,11 @@ function devStub(): AppBridge {
 		copyDiagnostics: async () => ({ ok: true }),
 		reset: async () => ({ ok: false, error: "Reset does nothing in the browser preview." }),
 		resetAppUi: async () => ({ ok: false, error: "Reset does nothing in the browser preview." }),
+		updateChannel: {
+			get: async () => ({ available: true, channel: "stable" }),
+			set: async (channel) => ({ ok: true, available: true, channel }),
+			checkMain: async () => ({ ahead: "0.4.1-main.1", upToDate: false }),
+		},
 	};
 }
 

@@ -39,6 +39,7 @@ const { resolveWolvesDir, needsSetup, readSetup, readWolfId, storedKey, checkKey
 const { consoleEnv } = require("./console-env.cjs");
 const { windowAllClosedAction, focusFirstWindow, createTray } = require("./tray.cjs");
 const { createAppSettings } = require("./app-settings.cjs");
+const { createUpdateChannel } = require("./update-channel.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/shell/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -598,6 +599,7 @@ const ZOOM_LADDER = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
  * and before-quit alone would race the swap. */
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let autoUpdater = null; // electron-updater's, packaged builds only
+let updateChannel = null; // stable/main switch for the app's own updater (update-channel.cjs); local mode only
 
 function broadcastUpdateStatus(status) {
 	for (const win of BrowserWindow.getAllWindows()) {
@@ -654,6 +656,9 @@ function setupAutoUpdater() {
 	}
 	autoUpdater.autoDownload = true;
 	autoUpdater.autoInstallOnAppQuit = true;
+	// The owner's stable/main choice (work-wolfpack-JIIInfm); WOLFPACK_UPDATE_FEED stays a full override of the feed.
+	updateChannel = createUpdateChannel({ stateDir: appStateDir(), updater: autoUpdater, version: app.getVersion(), remote: remoteTarget, log });
+	if (!feed) updateChannel.init();
 	// Route every updater log line through the shell's own log (userData/
 	// logs/main.log) — feed failures must be diagnosable after the fact.
 	autoUpdater.logger = {
@@ -890,6 +895,11 @@ async function main() {
 		on("copy-diagnostics", () => settings.copyDiagnostics());
 		on("reset", () => settings.reset());
 		on("reset-app-ui", () => settings.resetAppUi());
+		// App updates channel (work-wolfpack-JIIInfm). Dev builds have no updater: the switch reports unavailable.
+		const noUpdater = { available: false, channel: "stable", note: "Updates are off in this build." };
+		on("update-channel", () => updateChannel?.state() ?? noUpdater);
+		on("set-update-channel", (c) => updateChannel?.setChannel(String(c)) ?? { ok: false, error: noUpdater.note });
+		on("check-main", () => updateChannel?.checkMain() ?? { ahead: null, upToDate: false, error: noUpdater.note });
 		const sup = supervisor;
 		tray = createTray({
 			app, Tray, Menu, nativeImage, log,

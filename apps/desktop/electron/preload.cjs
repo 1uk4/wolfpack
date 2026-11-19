@@ -68,6 +68,11 @@ if (api.singleMac && !process.argv.includes("--wolfpack-setup")) {
 		changeKey: (key) => call("change-key", key),
 		copyDiagnostics: () => call("copy-diagnostics"),
 		reset: () => call("reset"),
+		updateChannel: {
+			get: () => call("update-channel"),
+			set: (c) => call("set-update-channel", c), // "stable" | "main"
+			checkMain: () => call("check-main"),
+		},
 		resetAppUi: () => call("reset-app-ui"), // This device > Reset app: stops the wolves first, then moves Chromium caches only
 	};
 }

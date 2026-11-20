@@ -5,6 +5,7 @@
  * pi sessions, between runs) aren't reread; a changed one is rescanned whole.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { UsageEvent, UsageSource } from "../usage-log.js";
 import { listSources, readSource, reportSources, type CollectOptions, type SourceReport } from "./collect.js";
@@ -39,6 +40,16 @@ export interface IngestResult {
 const STATE_FILE = ".ingest-state.json";
 const LOCK_FILE = ".ingest.lock";
 const STALE_LOCK_MS = 10 * 60_000;
+
+/** Append one timestamped line to <logDir>/usage-ingest.log (default ~/.wolfpack/logs). Never throws. */
+export function appendIngestLog(line: string, logDir: string = path.join(os.homedir(), ".wolfpack", "logs")): void {
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(path.join(logDir, "usage-ingest.log"), `${new Date().toISOString()} ${line}\n`);
+  } catch {
+    /* logging must never fail the caller */
+  }
+}
 
 export function statePath(ledgerDir: string): string {
   return path.join(ledgerDir, STATE_FILE);

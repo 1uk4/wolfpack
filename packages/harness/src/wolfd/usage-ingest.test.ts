@@ -1,5 +1,8 @@
 /** wolfd feeds the usage ledger itself: a finished turn triggers an ingest of this wolf's den (the break behind work-wolfpack-2lGbN3k). */
+import fs from "node:fs";
+import os from "node:os";
 import { join } from "node:path";
+import { createUsageIngester } from "./usage-ingest.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
@@ -41,5 +44,31 @@ describe("wolfd usage ingest", () => {
     const events = await tw.submit("a");
     expect(events.at(-1)).toMatchObject({ type: "turn-end", reason: "complete" });
     await vi.waitFor(() => expect(lines.filter((l) => l.includes("ledger disk full"))).toHaveLength(1));
+  });
+
+  it("appends ingest errors and the locked outcome to usage-ingest.log", async () => {
+    const logDir = fs.mkdtempSync(join(os.tmpdir(), "usage-log-"));
+    try {
+      let n = 0;
+      const ing = createUsageIngester({
+        den: "/d",
+        wolf: "w",
+        debounceMs: 5,
+        logDir,
+        log: () => {},
+        ingest: async () => {
+          if (n++ === 0) throw new Error("ledger disk full");
+          return { locked: true };
+        },
+      });
+      const file = join(logDir, "usage-ingest.log");
+      ing.trigger();
+      await vi.waitFor(() => expect(fs.readFileSync(file, "utf8")).toContain("ledger disk full"));
+      ing.trigger();
+      await vi.waitFor(() => expect(fs.readFileSync(file, "utf8")).toContain("locked"));
+      ing.stop();
+    } finally {
+      fs.rmSync(logDir, { recursive: true, force: true });
+    }
   });
 });

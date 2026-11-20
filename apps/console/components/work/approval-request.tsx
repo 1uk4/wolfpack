@@ -74,7 +74,10 @@ export function ApprovalButtons({ request, onDecided }: { request: ApprovalReque
 		setBusy(verb);
 		setError(null);
 		try {
-			const res = await fetch(`/api/work/requests/${encodeURIComponent(request.id)}/${verb}`, { method: "POST" });
+			const rid = encodeURIComponent(request.id);
+			// Two literal paths (not `/${verb}`) so the api-routes guard can match each to its route file.
+			const path = verb === "approve" ? `/api/work/requests/${rid}/approve` : `/api/work/requests/${rid}/reject`;
+			const res = await fetch(path, { method: "POST" });
 			if (res.ok) onDecided({ status: verb === "approve" ? "approved" : "rejected", at: new Date().toISOString() });
 			else setError(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `The hub answered ${res.status}.`);
 		} catch {

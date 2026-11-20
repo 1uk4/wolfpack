@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const { checkKey, needsSetup, resolveFinishKey, runSetup } = createRequire(import.meta.url)("./setup.cjs");
+const { resolveWolvesDir, checkKey, needsSetup, resolveFinishKey, runSetup } = createRequire(import.meta.url)("./setup.cjs");
 const runtimeDir = join(here, "..", "runtime");
 
 let fake: Server;
@@ -76,6 +76,23 @@ describe("key check", () => {
 
 const nodeBin = process.env.WOLFPACK_DESKTOP_TEST_NODE === "1" ? process.execPath : "";
 
+describe("wolves folder", () => {
+  it("offers ~/Wolves/local to a new install, keeps ~/Wolves for an older one, and a recorded path or the env wins", () => {
+    const home = "/Users/ann";
+    const fresh = join(root, "wd-fresh");
+    expect(resolveWolvesDir({ stateDir: fresh, home, env: {} })).toBe("/Users/ann/Wolves/local");
+    const old = join(root, "wd-old");
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "setup.json"), JSON.stringify({ wolf: "ann", complete: true }));
+    expect(resolveWolvesDir({ stateDir: old, home, env: {} })).toBe("/Users/ann/Wolves");
+    const rec = join(root, "wd-rec");
+    mkdirSync(rec, { recursive: true });
+    writeFileSync(join(rec, "setup.json"), JSON.stringify({ wolf: "ann", complete: true, wolvesDir: "/data/w" }));
+    expect(resolveWolvesDir({ stateDir: rec, home, env: {} })).toBe("/data/w");
+    expect(resolveWolvesDir({ stateDir: rec, home, env: { WOLFPACK_APP_WOLVES: "/tmp/x" } })).toBe("/tmp/x");
+  });
+});
+
 describe("setup answers", () => {
   it("rejects a bad domain, a reserved domain, an emoji-only name and a long description with nothing written", async () => {
     const base = { apiKey: "sk-ok", wolfName: "Maya" };
@@ -105,10 +122,11 @@ describe("first-run setup", () => {
     const sup = await runSetup(answers, { stateDir, wolvesDir, runtimeDir, nodeBin, modelBaseUrl: fakeUrl });
     try {
       expect(needsSetup(stateDir)).toBe(false);
-      expect(JSON.parse(readFileSync(join(stateDir, "setup.json"), "utf8"))).toEqual({ complete: true, wolf: "retry", wolfName: "Retry", domains: [{ name: "personal", description: "" }, { name: "recipes", description: "Dinners" }] });
+      expect(JSON.parse(readFileSync(join(stateDir, "setup.json"), "utf8"))).toEqual({ complete: true, wolf: "retry", wolfName: "Retry", domains: [{ name: "personal", description: "" }, { name: "recipes", description: "Dinners" }], wolvesDir });
       // See below: the hub API needs a token the test does not have before pairing.
       const reg = JSON.parse(readFileSync(join(stateDir, "hub", "registry", "registry.json"), "utf8"));
-      expect(reg.domains.map((d: { name: string }) => d.name)).toEqual(["personal", "recipes"]);
+      // The wolf-named default domain ("retry") is created on the hub after the start, for its work items.
+      expect(reg.domains.map((d: { name: string }) => d.name)).toEqual(["personal", "recipes", "retry"]);
     } finally {
       await sup.stop();
     }
@@ -151,8 +169,8 @@ describe("first-run setup", () => {
     try {
       const reg = JSON.parse(readFileSync(join(stateDir, "hub", "registry", "registry.json"), "utf8"));
       // Setup made the folder on attempt 1, so the retry's domains replace recipes everywhere.
-      expect(reg.domains.map((d: { name: string }) => d.name)).toEqual(["personal", "garden"]);
-      expect(readFileSync(join(wolvesDir, "late", "wolf.yaml"), "utf8")).toContain("domains: [personal, garden]");
+      expect(reg.domains.map((d: { name: string }) => d.name)).toEqual(["personal", "garden", "late"]); // plus the wolf-named default domain
+      expect(readFileSync(join(wolvesDir, "late", "wolf.yaml"), "utf8")).toContain("domains: [personal, garden, late]");
       expect(JSON.parse(readFileSync(join(stateDir, "setup.json"), "utf8")).domains.map((d: { name: string }) => d.name)).toEqual(["personal", "garden"]);
     } finally {
       await sup.stop();

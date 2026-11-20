@@ -36,11 +36,12 @@ const { createSupervisor } = require("./supervisor.cjs");
 const { KEYS_FILE } = require("./key-file.cjs"); // the console reads/writes the same keys.env workerd does (Pack → Keys)
 const { shouldCurate, parseBatteryPercent } = require("./curator-gate.cjs");
 const { updateCheckMessage } = require("./update-message.cjs");
-const { needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup } = require("./setup.cjs");
+const { resolveWolvesDir, needsSetup, readSetup, readWolfId, storedKey, checkKey, resolveFinishKey, runSetup, wolfIdFor } = require("./setup.cjs");
 const { suggestedWolfName } = require("./wolf-name.cjs");
 const { consoleEnv } = require("./console-env.cjs");
-const { windowAllClosedAction, createTray } = require("./tray.cjs");
+const { windowAllClosedAction, focusFirstWindow, createTray } = require("./tray.cjs");
 const { createAppSettings } = require("./app-settings.cjs");
+const { createUpdateChannel } = require("./update-channel.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/shell/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -80,16 +81,10 @@ if (process.env.WOLFPACK_DEV_URL || undefined) {
 log(`startup: ${PRODUCT_NAME} ${app.getVersion()} pid ${process.pid}`);
 if (!app.requestSingleInstanceLock()) {
 	log("startup: another instance holds the lock; exiting");
-	app.exit(0);
+	app.exit(0); // the running instance's second-instance handler brings its window forward
 } else {
 	require("./startup-guard.cjs").readyWatchdog({ whenReady: app.whenReady(), ms: 20000, log, exit: (c) => app.exit(c) });
-	app.on("second-instance", () => {
-		const win = BrowserWindow.getAllWindows()[0];
-		if (win) {
-			if (win.isMinimized()) win.restore();
-			win.focus();
-		}
-	});
+	app.on("second-instance", () => focusFirstWindow(BrowserWindow.getAllWindows()[0]));
 	main();
 }
 
@@ -232,14 +227,14 @@ async function safeUpdate(stateDir, wolvesDir) {
 	throw e;
 }
 
-/** Start the app's own runtime. State: WOLFPACK_APP_HOME (default userData); wolves: WOLFPACK_APP_WOLVES (default ~/Wolves). Until setup.json says complete, the setup wizard runs (prefilled with the stored answers); WOLFPACK_APP_API_KEY skips its sign-in step. */
+/** Start the app's own runtime. State: WOLFPACK_APP_HOME (default userData); wolves: WOLFPACK_APP_WOLVES (default: the path setup recorded; ~/Wolves for an older install; ~/Wolves/local for a new one). Until setup.json says complete, the setup wizard runs (prefilled with the stored answers); WOLFPACK_APP_API_KEY skips its sign-in step. */
 async function startRuntime() {
 	// A dev run from the repo must not touch the owner's real folders: on a case-insensitive Mac the packaged default ~/Wolves IS the live ~/wolves.
 	if (!app.isPackaged && !(process.env.WOLFPACK_APP_HOME && process.env.WOLFPACK_APP_WOLVES)) {
 		throw new Error("Dev run: set both WOLFPACK_APP_HOME and WOLFPACK_APP_WOLVES to scratch folders (the defaults are the real app's userData and ~/Wolves).");
 	}
 	const stateDir = appStateDir();
-	const wolvesDir = process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves");
+	const wolvesDir = resolveWolvesDir({ stateDir, home: app.getPath("home"), env: process.env });
 	await safeUpdate(stateDir, wolvesDir); // first launch after an update: back up, migrate, or put the data back and quit
 	const runtimeDir = app.isPackaged ? path.join(process.resourcesPath, "runtime") : path.join(__dirname, "..", "runtime");
 	const opts = {
@@ -598,6 +593,7 @@ const ZOOM_LADDER = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
  * and before-quit alone would race the swap. */
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let autoUpdater = null; // electron-updater's, packaged builds only
+let updateChannel = null; // stable/main switch for the app's own updater (update-channel.cjs); local mode only
 
 function broadcastUpdateStatus(status) {
 	for (const win of BrowserWindow.getAllWindows()) {
@@ -663,6 +659,9 @@ function setupAutoUpdater() {
 	}
 	autoUpdater.autoDownload = true;
 	autoUpdater.autoInstallOnAppQuit = true;
+	// The owner's stable/main choice (work-wolfpack-JIIInfm); WOLFPACK_UPDATE_FEED stays a full override of the feed.
+	updateChannel = createUpdateChannel({ stateDir: appStateDir(), updater: autoUpdater, version: app.getVersion(), remote: remoteTarget, log });
+	if (!feed) updateChannel.init();
 	// Route every updater log line through the shell's own log (userData/
 	// logs/main.log) — feed failures must be diagnosable after the fact.
 	autoUpdater.logger = {
@@ -875,7 +874,7 @@ async function main() {
 	if (appRuntime && supervisor) {
 		const stateDir = appStateDir();
 		const settings = createAppSettings({
-			stateDir, wolvesDir: process.env.WOLFPACK_APP_WOLVES || path.join(app.getPath("home"), "Wolves"),
+			stateDir, wolvesDir: resolveWolvesDir({ stateDir, home: app.getPath("home"), env: process.env }),
 			getSup: () => supervisor, modelBaseUrl: process.env.WOLFPACK_ANTHROPIC_BASE_URL || undefined, version: app.getVersion(),
 			sysVersion: `${process.getSystemVersion()}`, log, shell, clipboard, app,
 			// The native second step for Reset and Change key: Cancel is the default, so Enter never confirms.
@@ -900,6 +899,11 @@ async function main() {
 		on("copy-diagnostics", () => settings.copyDiagnostics());
 		on("reset", () => settings.reset());
 		on("reset-app-ui", () => settings.resetAppUi());
+		// App updates channel (work-wolfpack-JIIInfm). Dev builds have no updater: the switch reports unavailable.
+		const noUpdater = { available: false, channel: "stable", note: "Updates are off in this build." };
+		on("update-channel", () => updateChannel?.state() ?? noUpdater);
+		on("set-update-channel", (c) => updateChannel?.setChannel(String(c)) ?? { ok: false, error: noUpdater.note });
+		on("check-main", () => updateChannel?.checkMain() ?? { ahead: null, upToDate: false, error: noUpdater.note });
 		const sup = supervisor;
 		tray = createTray({
 			app, Tray, Menu, nativeImage, log,
@@ -907,9 +911,7 @@ async function main() {
 			openWindow: () => {
 				const w = BrowserWindow.getAllWindows()[0];
 				if (!w) return createWindow(url, landingUrl);
-				if (w.isMinimized()) w.restore();
-				w.show();
-				w.focus();
+				focusFirstWindow(w);
 			},
 			quit: () => app.quit(),
 		});

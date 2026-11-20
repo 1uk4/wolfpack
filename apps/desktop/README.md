@@ -40,7 +40,8 @@ Inside the app (`Contents/Resources/`): `app.asar` (the shell only, ~2 MB), `ser
 CI: `.github/workflows/desktop.yml` has two jobs on a `macos-15` runner.
 - `build` (pull requests and manual runs): unsigned, read-only token, no secrets; uploads the dmg, zip and `latest-mac.yml` as an artifact.
 - `release` (manual runs only): runs in the protected environment `desktop-release` (the owner creates it and stores `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` there). It runs `node apps/desktop/scripts/dist.mjs --ci` (the same build chain, signing, notarising and stapling, credentials from env, the `.p8` written under `umask 077` and deleted afterwards) and uploads a DRAFT release.
-- Releases come only from `stable` (the job's `if` checks the ref). Set a deployment-branch rule on the `desktop-release` environment restricting it to `stable`, so no other branch can reach the signing secrets.
+- Two channels, chosen by the `channel` input of the manual run. `stable` (default, only from the `stable` ref): DRAFT release `desktop/vX.Y.Z` with `latest-mac.yml`; the owner publishes it. `main` (from `stable` or `wolf/1uk4`): the runner sets the version to `X.Y.Z-main.<run number>` (nothing is committed), electron-builder writes `main-mac.yml` (it takes the channel from the semver prerelease tag, `appInfo.channel` in app-builder-lib), and the job auto-publishes a PRE-RELEASE `desktop/vX.Y.Z-main.N` and refreshes `desktop-latest` with `main-mac.yml` in the same run. Main pre-releases never become releases/latest, a main run never touches `latest-mac.yml`, and a stable run never touches `main-mac.yml`. Run: `gh workflow run desktop.yml --ref wolf/1uk4 -f channel=main`.
+- The `desktop-release` environment's deployment-branch policy must allow `stable` and `wolf/1uk4` (the job's `if` also checks the ref and channel).
 - The app is API-key only: the Claude subscription bridge and the Agent SDK are not built in (`check-app.mjs` fails if either is in the runtime); a subscription can be added as a provider plug-in (`packages/harness/src/providers/README.md`).
 
 Publishing the draft creates a `v<version>` tag on the default branch's HEAD. Bump the version in `apps/desktop/package.json` first and publish from the commit that was built.
@@ -51,7 +52,7 @@ Both need Xcode 26+ (`actool` compiles `build/icon.icon`). `scripts/dist.mjs` se
 
 ## Install and verify
 
-1. Open the dmg, drag Wolfpack Console to Applications, launch it.
+1. Open the dmg (`Wolfpack-<version>-arm64.dmg`; the update zip is `Wolfpack-<version>-arm64.zip`), drag Wolfpack Console to Applications, launch it.
 2. Setup can finish without an API key ("Skip, add a key later in Pack → Keys" on the sign-in step). Chat then says to add one in Pack → Keys; saving it there makes the next chat work. Keys live in `keys.env` in the app data folder (the old `credentials.json` is no longer read, and is left untouched).
    - Settings → Change key restarts hubd (its memory curator) and the wolf, so both use the new key at once. A key saved in Pack → Keys is written by workerd: the wolf can use it after a wolf restart, but hubd's curator only sees it after the app restarts (hubd reads its key at launch).
 3. Local mode: no `console.json` in the app folder above; the git graph loads.
@@ -59,6 +60,7 @@ Both need Xcode 26+ (`actool` compiles `build/icon.icon`). `scripts/dist.mjs` se
    - `codesign --verify --deep --strict --verbose=2 "/Applications/Wolfpack Console.app"`
    - `spctl --assess --type execute --verbose "/Applications/Wolfpack Console.app"` (expect `accepted`, source `Notarized Developer ID`)
    - `xcrun stapler validate "/Applications/Wolfpack Console.app"`
+   - `codesign --verify --verbose=2 Wolfpack-<version>-arm64.dmg` (the dmg container is signed with the Developer ID Application identity)
 
 ## Upgrades and existing wolves
 

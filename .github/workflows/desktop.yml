@@ -1,7 +1,14 @@
 # Desktop app (work-wolfpack-07v3AmE): build the arm64 Mac app with the runtime inside (hubd, workerd, wolfd, memory, onnx natives, embedding model).
 #   build   : pull requests that touch apps/desktop, and manual runs. UNSIGNED, read-only token, no secrets. Uploads the dmg + zip + latest-mac.yml as a CI artifact.
 #   release : manual runs only, in the protected environment `desktop-release` (the owner creates it and holds the secrets there).
-#             Signs, notarises, staples and uploads a DRAFT GitHub release; the owner publishes it. Tag pushes do not trigger this.
+#             Tag pushes do not trigger this. Two channels, chosen by the `channel` input:
+#             stable (default, ref stable only): signs, notarises, staples and uploads a DRAFT release desktop/vX.Y.Z; the owner publishes it.
+#               Feed file latest-mac.yml.
+#             main (ref stable or wolf/1uk4): the runner sets the version to X.Y.Z-main.<run_number> (nothing committed), so electron-builder
+#               writes main-mac.yml (channel from the semver prerelease tag). Publishes automatically as a PRE-RELEASE desktop/vX.Y.Z-main.N
+#               (never a draft, never releases/latest) and refreshes the rolling `desktop-latest` feed with main-mac.yml in the same run.
+#               A main run never touches latest-mac.yml; a stable run never touches main-mac.yml.
+#             The environment's deployment-branch policy must allow stable and wolf/1uk4.
 # Secrets (environment desktop-release): CSC_LINK (base64 .p12 of the Developer ID Application certificate), CSC_KEY_PASSWORD,
 #   APPLE_API_KEY (the App Store Connect .p8 contents), APPLE_API_KEY_ID, APPLE_API_ISSUER (ticket work-wolfpack-2bWFgG5).
 # Both jobs run apps/desktop/scripts/dist.mjs, which ends with scripts/check-app.mjs on the built app.
@@ -10,6 +17,12 @@ on:
   pull_request:
     paths: ['apps/desktop/**', '.github/workflows/desktop.yml', 'scripts/fetch-embed-model.mjs']
   workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Channel of the signed release job: stable (draft, from stable) or main (auto pre-release X.Y.Z-main.N, from stable or wolf/1uk4)'
+        type: choice
+        options: [stable, main]
+        default: stable
 permissions:
   contents: read
 concurrency:
@@ -60,7 +73,10 @@ jobs:
           retention-days: 14
 
   release:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/stable'
+    if: >-
+      github.event_name == 'workflow_dispatch' && (
+      (inputs.channel == 'stable' && github.ref == 'refs/heads/stable') ||
+      (inputs.channel == 'main' && (github.ref == 'refs/heads/stable' || github.ref == 'refs/heads/wolf/1uk4')))
     runs-on: macos-26   # same as build: actool needs Xcode 26 on macOS 26 to compile build/icon.icon
     timeout-minutes: 90
     environment: desktop-release
@@ -87,6 +103,17 @@ jobs:
           key: embed-model-${{ hashFiles('scripts/fetch-embed-model.mjs') }}
       - name: fetch the embedding model (pinned, checksummed)
         run: node scripts/fetch-embed-model.mjs "$RUNNER_TEMP/embed-model"
+      - name: version (main channel only; runner-local, nothing committed)
+        id: ver
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          RUN_NUMBER: ${{ github.run_number }}
+        working-directory: apps/desktop
+        run: |
+          if [ "$CHANNEL" = main ]; then
+            node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json","utf8"));p.version=p.version.replace(/-.*$/,"")+"-main."+process.env.RUN_NUMBER;fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")'
+          fi
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       - name: signed + notarised build + app check (dist.mjs --ci)
         env:
           WOLFPACK_EMBED_MODEL_SRC: ${{ runner.temp }}/embed-model
@@ -103,28 +130,43 @@ jobs:
       - name: delete the API key file
         if: always()
         run: rm -f "$RUNNER_TEMP/AuthKey.p8"
-      - name: upload the DRAFT release (no signing secrets in this step)
+      - name: upload the DRAFT release (stable; no signing secrets in this step)
+        if: inputs.channel == 'stable'
         env:
           GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.ver.outputs.version }}
         working-directory: apps/desktop
         run: |
-          v=$(node -p "require('./package.json').version")
-          gh release view "desktop/v$v" >/dev/null 2>&1 || gh release create "desktop/v$v" --draft --title "Desktop $v" --notes "Signed, notarised Mac app $v."
-          gh release upload "desktop/v$v" dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml --clobber
-      - name: refresh the rolling desktop-latest updater feed
+          gh release view "desktop/v$V" >/dev/null 2>&1 || gh release create "desktop/v$V" --draft --title "Desktop $V" --notes "Signed, notarised Mac app $V."
+          gh release upload "desktop/v$V" dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml --clobber
+      - name: refresh the rolling desktop-latest updater feed (stable)
+        if: inputs.channel == 'stable'
         env:
           GH_TOKEN: ${{ github.token }}
         working-directory: apps/desktop
         run: |
           # Pre-release so it never becomes the repo's releases/latest; the runtime stable manifest only matches component tag patterns.
-          gh release view desktop-latest >/dev/null 2>&1 || gh release create desktop-latest --prerelease --title "Desktop (rolling updater feed)" --notes "Assets replaced by every desktop release; the app's updater reads latest-mac.yml here."
+          gh release view desktop-latest >/dev/null 2>&1 || gh release create desktop-latest --prerelease --title "Desktop (rolling updater feed)" --notes "Assets replaced by every desktop release; the app's updater reads latest-mac.yml (stable) or main-mac.yml (main) here."
           gh release upload desktop-latest dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml --clobber
+      - name: publish the main PRE-RELEASE and refresh the feed (main; no signing secrets in this step)
+        if: inputs.channel == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.ver.outputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        working-directory: apps/desktop
+        run: |
+          gh release view "desktop/v$V" >/dev/null 2>&1 || gh release create "desktop/v$V" --prerelease --title "Desktop $V (main)" --notes "Signed, notarised Mac app $V from $REF_NAME (main channel pre-release, auto-published)."
+          gh release upload "desktop/v$V" dist/*.dmg dist/*.zip dist/*.blockmap dist/main-mac.yml --clobber
+          gh release view desktop-latest >/dev/null 2>&1 || gh release create desktop-latest --prerelease --title "Desktop (rolling updater feed)" --notes "Assets replaced by every desktop release; the app's updater reads latest-mac.yml (stable) or main-mac.yml (main) here."
+          gh release upload desktop-latest dist/*.dmg dist/*.zip dist/*.blockmap dist/main-mac.yml --clobber
       - uses: actions/upload-artifact@v4
         with:
-          name: wolfpack-desktop-arm64-signed
+          name: wolfpack-desktop-arm64-signed-${{ inputs.channel }}
           path: |
             apps/desktop/dist/*.dmg
             apps/desktop/dist/*.zip
             apps/desktop/dist/*.blockmap
             apps/desktop/dist/latest-mac.yml
+            apps/desktop/dist/main-mac.yml
           retention-days: 14

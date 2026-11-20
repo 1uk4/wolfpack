@@ -10,7 +10,7 @@ it("--sign-only signs without notarizing: no notary probe, no APPLE_* env, notar
   let probed = false;
   const plan = planBuild({ ...base, args: ["--sign-only"], probeNotary: () => ((probed = true), true) });
   expect(plan.error).toBeUndefined();
-  expect(plan.builderArgs).toEqual(["--mac", "--arm64", "--publish", "never", "-c.mac.notarize=false"]);
+  expect(plan.builderArgs).toEqual(["--mac", "--arm64", "--publish", "never", "-c.mac.notarize=false", "-c.dmg.sign=true"]);
   expect(plan.env).toEqual({ PATH: "/usr/bin" });
   expect(plan.checkAppFlags).toEqual(["--sign-only"]);
   expect(probed).toBe(false);
@@ -24,11 +24,13 @@ it("--sign-only fails early without a Developer ID identity, and is refused toge
 it("--signed still notarizes through the keychain profile; no flag stays unsigned", () => {
   const signed = planBuild({ ...base, args: ["--signed"] });
   expect(signed.builderArgs).toContain("-c.mac.notarize=true");
+  expect(signed.builderArgs).toContain("-c.dmg.sign=true");
   expect(signed.env).toEqual({ PATH: "/usr/bin", APPLE_KEYCHAIN_PROFILE: "WOLFPACK_NOTARY" });
   expect(signed.checkAppFlags).toEqual(["--signed"]);
   expect(planBuild({ ...base, args: ["--signed"], probeNotary: () => false }).error).toMatch(/WOLFPACK_NOTARY/);
   const plain = planBuild({ ...base, args: [] });
   expect(plain.builderArgs).toEqual(["--mac", "--arm64", "--publish", "never", "-c.mac.identity=null", "-c.mac.notarize=false"]);
+  expect(plain.builderArgs).not.toContain("-c.dmg.sign=true");
   expect(plain.checkAppFlags).toEqual([]);
 });
 

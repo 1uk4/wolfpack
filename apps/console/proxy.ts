@@ -37,7 +37,7 @@ export function proxy(req: NextRequest): NextResponse {
 		if (req.nextUrl.pathname.startsWith("/api/")) return NextResponse.json({ error: "not found" }, { status: 404 });
 		return NextResponse.redirect(new URL("/", req.url));
 	}
-	if (isSingleMac() && isUnavailableInSingleMac(req.nextUrl.pathname)) return NextResponse.json({ error: "not available on this Mac", code: "unsupported" }, { status: 501, headers: { "Cache-Control": "no-store" } });
+	if (isSingleMac() && isUnavailableInSingleMac(req.nextUrl.pathname, req.method)) return NextResponse.json({ error: "not available on this Mac", code: "unsupported" }, { status: 501, headers: { "Cache-Control": "no-store" } });
 	const injected = singleMacBearer({ method: req.method, pathname: req.nextUrl.pathname, headers: req.headers, urlHost: req.nextUrl.host });
 	if (injected) return NextResponse.next({ request: { headers: injected } });
 	const headers = withCookieBearer(req.method, req.headers, isHttps(req));

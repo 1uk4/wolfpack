@@ -17,7 +17,9 @@ export const SINGLE_MAC_HIDDEN_PREFIXES = [
 /** Health actions that need other machines or a release pipeline: GET /api/health, /stream and /inventory stay, these answer 501. */
 const UNAVAILABLE_PREFIXES = ["/api/health/restart", "/api/health/rollback", "/api/health/update", "/api/health/subscription"] as const;
 
-export function isUnavailableInSingleMac(pathname: string): boolean {
+/** The own machine card reads this Mac's release channel and update mode (work-wolfpack-AAEtByQ): GET/HEAD on the exact subscription path stay open; writes answer 501. */
+export function isUnavailableInSingleMac(pathname: string, method = "POST"): boolean {
+	if (pathname === "/api/health/subscription" && (method === "GET" || method === "HEAD")) return false;
 	return UNAVAILABLE_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 

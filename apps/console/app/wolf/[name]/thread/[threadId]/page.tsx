@@ -59,6 +59,7 @@ async function ThreadBody({ params }: Params) {
 				colorThreads={threads.filter((t) => t.kind !== "subagent").map((t) => ({ id: t.id, kind: t.kind, parentThreadId: t.parentThreadId, settings: t.settings }))}
 				wolfColor={wolfColor}
 				initialBound={thread.boundItem ?? thread.boundWorkItem}
+				kind={thread.kind}
 				closedReason={thread.closed ? (thread.closedReason ?? FEATURE_GRADUATED) : undefined}
 			/>
 		);

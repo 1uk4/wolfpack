@@ -49,6 +49,10 @@ export const ErrorCodeSchema = z.enum([
   "kb_unavailable",
   /** The thread is closed history (its feature graduated): reads work, sends are refused. */
   "thread_closed",
+  /** Remove: the thread is still open; close it first. */
+  "thread_open",
+  /** Reopen: the thread's work item has graduated or been archived, so its thread stays closed. */
+  "thread_graduated",
   /** Graduation: the work item is not ready to graduate (the message says why: "2 tasks open"). */
   "not_ready",
   /** Graduation: the preview token is unknown, used, expired or for another item. Preview again. */
@@ -93,6 +97,8 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   memory_busy: 409,
   kb_unavailable: 409,
   thread_closed: 409,
+  thread_open: 409,
+  thread_graduated: 409,
   not_ready: 409,
   preview_stale: 409,
   conflict: 409,
@@ -405,6 +411,12 @@ export const CompactBodySchema = z.object({ instructions: z.string().max(4000).o
 export type CompactBody = z.infer<typeof CompactBodySchema>;
 export const CompactAckSchema = z.object({ accepted: z.literal(true) });
 export type CompactAck = z.infer<typeof CompactAckSchema>;
+
+/** Close / reopen a feature thread: its new state (closedReason set while closed). */
+export const CloseThreadResponseSchema = z.object({ closed: z.boolean(), closedReason: z.string().optional() });
+export type CloseThreadResponse = z.infer<typeof CloseThreadResponseSchema>;
+export const RemoveThreadResponseSchema = z.object({ removed: z.literal(true) });
+export type RemoveThreadResponse = z.infer<typeof RemoveThreadResponseSchema>;
 
 /** `color: null` resets to automatic. */
 export const ThreadSettingsPatchSchema = ThreadSettingsSchema.omit({ color: true })

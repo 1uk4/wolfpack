@@ -114,6 +114,14 @@ describe("Pack > Keys > phone list", () => {
 		assert.match(oldHtml, /data-testid="keys-why-chat-anthropic-old"[^>]*>can(?:'|&#x27;)t take keys \(update its workerd\)</);
 	});
 
+	it("a current workerd without a key file says so, not 'update its workerd': the hub holds its key but it reports no slots", () => {
+		// work-wolfpack-YBmGAcW: both machines showed "update its workerd" while the real gap was WORKERD_KEY_FILE unset.
+		const noFile: KeyMachine[] = [{ hostId: "nf", machine: "no-file", online: true, canSetKeys: false, pubkey: "PK", slots: [] }];
+		const h = renderToStaticMarkup(<KeysView machines={noFile} support={{ ok: true }} send={send} reload={() => {}} />);
+		assert.match(h, /data-testid="keys-why-chat-anthropic-nf"[^>]*>no key file on this machine \(set WORKERD_KEY_FILE for its workerd\)</);
+		assert.ok(!h.includes("update its workerd"));
+	});
+
 	it("tapping a machine's row opens the editor with only that machine picked", async () => {
 		const { createRoot } = await import("react-dom/client");
 		const { parseHTML } = await import("linkedom");

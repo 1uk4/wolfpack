@@ -24,6 +24,11 @@ export interface KeyMachine {
 	midReply?: string[];
 	/** The machine's wolves with the transport each reports (inventory). Absent or empty = unknown, treated as needing the key. */
 	wolves?: { name: string; transport: "api" | "subscription" }[];
+	/**
+	 * How the hubd on this machine reaches Claude for curation and sweeps, as hubd reports it in its own inventory entry
+	 * (`memoryTransport`). Absent = no hubd on this machine, so only the wolves' own memory steps count.
+	 */
+	hubMemory?: "subscription" | "api" | "none";
 	pubkey?: string;
 	fingerprint?: string;
 	keyChanged?: boolean;
@@ -63,6 +68,11 @@ const allSubscription = (m: KeyMachine): boolean => !!m.wolves && m.wolves.lengt
 export function cellOf(m: KeyMachine, slot: string, needed: boolean, capability?: Capability): Cell {
 	if (!m.canSetKeys || !m.online) return { hostId: m.hostId, state: "unknown", missing: false };
 	if (capability === "chat" && slot === "anthropic" && allSubscription(m)) return { hostId: m.hostId, state: "subscription", missing: false };
+	// Memory runs in each wolf (its own transport) and in hubd's curator: both must be off the metered key.
+	if (capability === "memory" && slot === "anthropic" && allSubscription(m)) {
+		if (m.hubMemory === undefined || m.hubMemory === "subscription") return { hostId: m.hostId, state: "subscription", missing: false };
+		if (m.hubMemory === "none") return { hostId: m.hostId, state: "none", missing: needed };
+	}
 	const s = m.slots.find((x) => x.slot === slot);
 	if (!s || !s.present) return { hostId: m.hostId, state: "none", missing: needed };
 	if (s.source === "pack" && s.shadowsEnv) return { hostId: m.hostId, state: "shadowed", masked: s.masked, note: "The Pack's key is used; this machine's environment also sets one.", missing: false };

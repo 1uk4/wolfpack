@@ -42,6 +42,8 @@ import { cardAnswerUrl, cardSkipUrl, attachmentUrl, diagramUrl, threadTransport,
 import { useOptionalServerEvent } from "@/components/shell/server-events";
 import { TopBar } from "@/components/shell/top-bar";
 import { ThreadGitRow } from "@/components/thread/thread-git-tree";
+import { useRouter } from "next/navigation";
+import { RemoveThreadDialog, ThreadActionsMenu, closedByOwner, threadCloseApi } from "@/components/thread/thread-close-actions";
 import { ThreadContextChip } from "@/components/thread/thread-context";
 import type { ThreadWorkspace } from "@wolfpack/client";
 import {
@@ -210,6 +212,7 @@ function ThreadChatInner({
 	initiallyInFlight,
 	initialCards = NO_CARDS,
 	closedReason: closedReasonProp,
+	kind,
 	initialBound,
 	parentThreadId,
 	colorThreads = NO_COLOR_THREADS,
@@ -232,6 +235,8 @@ function ThreadChatInner({
 	initialCards?: ThreadCards;
 	/** Set when the thread is read-only history (its feature graduated): the notice replaces the composer. */
 	closedReason?: string;
+	/** The thread kind: only a "feature" thread has the close / reopen / remove menu. */
+	kind?: string;
 	/** The work item the thread is bound to at load (`boundItem ?? boundWorkItem`): its progress panel replaces the floating checklist from the first paint. */
 	initialBound?: string;
 	/** A subagent thread: the thread that spawned it (it shows that thread's color). */
@@ -253,7 +258,15 @@ function ThreadChatInner({
 	useOptionalServerEvent("thread-updated", (p) => {
 		if (p.wolf === wolf && p.thread.id === threadId && p.thread.closed) setClosedLive(p.thread.closedReason ?? FEATURE_GRADUATED);
 	});
-	const closedReason = closedReasonProp ?? closedLive;
+	// Owner actions: Close / Reopen change the notice at once (the wolf also pushes thread-updated); Remove leaves for the wolf's home thread.
+	const [closedOverride, setClosedOverride] = useState<{ reason: string | null } | undefined>(undefined);
+	useOptionalServerEvent("thread-updated", (p) => {
+		if (p.wolf === wolf && p.thread.id === threadId && !p.thread.closed) setClosedOverride({ reason: null });
+	});
+	const closedReason = closedOverride ? (closedOverride.reason ?? undefined) : (closedReasonProp ?? closedLive);
+	const [removeOpen, setRemoveOpen] = useState(false);
+	const router = useRouter();
+	const ref = { wolf, slug };
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
 	const pageRef = useRef<(json: unknown) => void>(() => {});
@@ -704,7 +717,26 @@ function ThreadChatInner({
 					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
 					<TurnTimer startedAt={turnStart} />
 					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} />
+					{kind === "feature" && (
+						<ThreadActionsMenu
+							testid="thread-header-actions"
+							className="ml-auto"
+							closed={closedReason !== undefined}
+							canReopen={closedByOwner(closedReason)}
+							onClose={async () => { await threadCloseApi.close(ref); setClosedOverride({ reason: "Closed by you" }); }}
+							onReopen={async () => { await threadCloseApi.reopen(ref); setClosedOverride({ reason: null }); }}
+							onRemove={() => setRemoveOpen(true)}
+						/>
+					)}
 				</TopBar>
+				{removeOpen && (
+					<RemoveThreadDialog
+						wolf={wolf}
+						workTitle={title}
+						onCancel={() => setRemoveOpen(false)}
+						onConfirm={async () => { await threadCloseApi.remove(ref); router.push(`/wolf/${encodeURIComponent(wolf)}/thread/home`); }}
+					/>
+				)}
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />
 				<div className="relative flex min-h-0 flex-1" data-testid="thread-tint" data-thread-color={tintHex}>
@@ -860,8 +892,16 @@ function ThreadChatInner({
 									<SubagentStrip wolf={wolf} slug={slug} items={subagents} attached={attachedRow} />
 									{closedReason !== undefined ? (
 										<div data-testid="thread-closed" className="pointer-events-auto rounded-2xl border bg-card px-4 py-3 text-sm shadow-lg">
-											<div className="font-medium">{FEATURE_GRADUATED}</div>
-											<div className="text-muted-foreground">{closedReason}</div>
+											<div className="font-medium">{closedByOwner(closedReason) ? closedReason : FEATURE_GRADUATED}</div>
+											{!closedByOwner(closedReason) && <div className="text-muted-foreground">{closedReason}</div>}
+											{kind === "feature" && (
+												<div className="mt-2 flex gap-2">
+													{closedByOwner(closedReason) && (
+														<button type="button" data-testid="thread-closed-reopen" onClick={() => { void threadCloseApi.reopen(ref).then(() => setClosedOverride({ reason: null })).catch(() => {}); }} className="rounded-md border px-3 py-1 text-sm max-md:min-h-11">Reopen</button>
+													)}
+													<button type="button" data-testid="thread-closed-remove" onClick={() => setRemoveOpen(true)} className="rounded-md border px-3 py-1 text-sm max-md:min-h-11">Remove…</button>
+												</div>
+											)}
 											{busy ? (
 												<button type="button" data-testid="thread-closed-stop" onClick={onStop} className="mt-2 rounded-md border px-3 py-1 text-sm">
 													Stop the running turn

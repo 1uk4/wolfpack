@@ -25,9 +25,16 @@ export function createHubHealth(hosts?: () => HubHealthHost[]): HubHealth {
   const stall = createStallWatch({ thresholdMs: env > 0 ? env : DEFAULT_STALL_MS });
   return {
     body: () => ({ ...baseHealth("hubd", monitor, hubVersion()), ...(hosts ? { hosts: hosts() } : {}) }),
-    self: () => ({ machine: machineName(), kind: "hubd", id: "hubd", version: hubVersion(), ...(channel ? { channel } : {}), uptimeS: Math.round(process.uptime()), lagMs: Math.round(monitor.sample().p99Ms) }),
+    self: () => ({ machine: machineName(), kind: "hubd", id: "hubd", version: hubVersion(), ...(channel ? { channel } : {}), memoryTransport: memoryTransport(), uptimeS: Math.round(process.uptime()), lagMs: Math.round(monitor.sample().p99Ms) }),
     stop: () => { monitor.stop(); stall.stop(); },
   };
+}
+
+/** How hubd's own Claude calls (curator, sweeps) authenticate. An OAuth token wins over an API key, as in the Claude SDK. Never returns the credential. */
+function memoryTransport(): "subscription" | "api" | "none" {
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return "subscription";
+  if (process.env.ANTHROPIC_API_KEY?.trim()) return "api";
+  return "none";
 }
 
 export const DEFAULT_STALL_MS = 5_000;

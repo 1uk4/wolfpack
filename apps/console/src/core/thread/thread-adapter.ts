@@ -356,9 +356,9 @@ export function threadLabel(wolf: string, thread: { kind?: string; title: string
 
 export function threadListItem(
 	wolf: string,
-	thread: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string; workspace?: { branch?: string }; settings?: { color?: string } } & Omit<ChildThread, "id" | "title">,
+	thread: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; closedReason?: string; kind?: string; workspace?: { branch?: string }; settings?: { color?: string } } & Omit<ChildThread, "id" | "title">,
 	busy = thread.status === "busy",
-): ChatListItem & { href: string; meta: string; needsYou: boolean; archived?: boolean; kind?: string; alias?: string; branch?: string; color?: string } & Omit<ChildThread, "id" | "title"> {
+): ChatListItem & { href: string; meta: string; needsYou: boolean; archived?: boolean; closedReason?: string; kind?: string; alias?: string; branch?: string; color?: string } & Omit<ChildThread, "id" | "title"> {
 	const now = new Date().toISOString();
 	return {
 		id: thread.id,
@@ -375,7 +375,7 @@ export function threadListItem(
 		meta: wolf,
 		needsYou: thread.status === "needs-you",
 		// A graduated feature's thread is read-only history: the sidebar files it under "Archived".
-		...(thread.closed ? { archived: true } : {}),
+		...(thread.closed ? { archived: true, ...(thread.closedReason ? { closedReason: thread.closedReason } : {}) } : {}),
 		...(thread.kind !== undefined ? { kind: thread.kind } : {}),
 		// The git branch the thread works on (a feature row shows it as its meta line).
 		...(thread.workspace?.branch ? { branch: thread.workspace.branch } : {}),

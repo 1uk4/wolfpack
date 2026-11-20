@@ -66,6 +66,25 @@ describe("Pack keys API", () => {
 		assert.equal(gone.online, false);
 	});
 
+	it("puts the hub's memory transport on the machine that hosts hubd, and leaves other machines without it", async () => {
+		const { api } = setup({
+			"/v1/inventory": {
+				status: 200,
+				body: {
+					entries: [
+						{ machine: "sfo-01", kind: "hubd", id: "hubd", memoryTransport: "subscription" },
+						{ machine: "sfo-01", kind: "workerd", id: "sfo-01-wolves", ageS: 1, keys: [] },
+						{ machine: "mac", kind: "workerd", id: "mac-wolves", ageS: 1, keys: [] },
+					],
+				},
+			},
+			"/v1/machines/keys": { status: 200, body: { keys: {} } },
+		});
+		const body = (await (await api.machines(req("GET"))).json()) as { machines: { hostId: string; hubMemory?: string }[] };
+		assert.equal(body.machines.find((m) => m.hostId === "sfo-01-wolves")!.hubMemory, "subscription");
+		assert.equal("hubMemory" in body.machines.find((m) => m.hostId === "mac-wolves")!, false);
+	});
+
 	it("says whether this console relays through the hub and which machine it runs on, so the Wolves section knows which wolves it can reach", async () => {
 		const routes = { "/v1/inventory": { status: 200, body: { entries: [] } }, "/v1/machines/keys": { status: 200, body: { keys: {} } } };
 		const mk = (env: Record<string, string>) => {

@@ -123,6 +123,9 @@ mac:
     - target: zip
       arch:
         - arm64
+  # No spaces in the file names (first release follow-up): dmg and zip share one pattern, and latest-mac.yml
+  # records the zip name, so the updater downloads exactly what is published.
+  artifactName: "Wolfpack-${version}-${arch}.${ext}"
   # Locale trim (payload wave, 2026-09-24): English-only app — cuts
   # every non-en .lproj from the frameworks (the STT/mic entitlements
   # don't depend on locales). Revisit only if localization ever lands.

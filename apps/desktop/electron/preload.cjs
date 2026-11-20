@@ -70,6 +70,11 @@ if (api.singleMac && !process.argv.includes("--wolfpack-setup")) {
 		changeKey: (key) => call("change-key", key),
 		copyDiagnostics: () => call("copy-diagnostics"),
 		reset: () => call("reset"),
+		updateChannel: {
+			get: () => call("update-channel"),
+			set: (c) => call("set-update-channel", c), // "stable" | "main"
+			checkMain: () => call("check-main"),
+		},
 		checkForUpdates: () => ipcRenderer.invoke("wolfpack:update-check"),
 		onUpdateStatus: api.onUpdateStatus,
 		installUpdate: api.installUpdate,

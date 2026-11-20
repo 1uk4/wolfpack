@@ -191,6 +191,24 @@ describe("app runtime on one Mac", () => {
     expect(thread.messages.map((m: { text: string }) => m.text)).toEqual(["my secret word is PINEAPPLE", "FAKE-REPLY-OK"]);
   }, 180_000);
 
+  it.sequential("the wolf's .env carries a work token real hubd accepts: reads, and a create in the wolf-named domain shows up in the list", async () => {
+    if (!second) throw new Error("the restart test did not produce a running supervisor");
+    const envText = readFileSync(join(root, "Wolves", "wolf", ".env"), "utf8");
+    const endpoint = /^WORK_ENDPOINT=(.+)$/m.exec(envText)?.[1] ?? "";
+    const token = /^WORK_TOKEN=(.+)$/m.exec(envText)?.[1] ?? "";
+    expect(endpoint).toBe(`${second.urls.hubd}/v1/workapi`);
+    expect(token.length).toBeGreaterThan(10);
+    expect(statSync(join(root, "Wolves", "wolf", ".env")).mode & 0o777).toBe(0o600);
+    const h = { "x-api-key": token, "content-type": "application/json" };
+    expect((await fetch(`${endpoint}/work?limit=1`, { headers: h })).status).toBe(200);
+    const made = await fetch(`${endpoint}/work`, { method: "POST", headers: h, body: JSON.stringify({ kind: "task", domain: "wolf", title: "first app task", assignee: "wolf" }) });
+    expect(made.status).toBe(201);
+    const id = ((await made.json()) as { id: string }).id;
+    const list = (await (await fetch(`${endpoint}/work?domain=wolf`, { headers: h })).json()) as { items?: { id: string }[] };
+    expect((list.items ?? []).map((i) => i.id)).toContain(id);
+    expect(readFileSync(join(root, "Wolves", "wolf", "wolf.yaml"), "utf8")).toContain("domains: [personal, wolf]");
+  }, 60_000);
+
   it.sequential("keeps everything on this Mac: loopback listeners and peers only, the fake model got the key, keys.env is 0600 and credentials.json is never written", () => {
     if (!second) throw new Error("the restart test did not produce a running supervisor");
     const addrs = sockets(secondPids, "LISTEN");

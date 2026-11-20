@@ -29,6 +29,35 @@ describe("machineCard", () => {
 	});
 });
 
+describe("machineCard own card without a subscription file", () => {
+	it("shows the default stable and manual, never unknown, while the subscription is unknown", () => {
+		const c = card({ console: true, workerds: [{ link: link("workerd", "workerd"), wolves: [] }] });
+		const v = machineCard(c, null, { mode: "unknown" }).channel;
+		assert.equal(v.value, "stable");
+		assert.equal(v.mode, "manual");
+		assert.equal(machineCard(c, "stable", { mode: "button" }).channel.mode, "manual");
+		assert.equal(machineCard(c, "main", { mode: "auto" }).channel.mode, "auto");
+		assert.equal(machineCard(c, "stable", { mode: "off" }).channel.mode, "off");
+	});
+});
+
+describe("machineCard own card is never read-only", () => {
+	it("stays editable while the subscription is pending, says so when the read failed, and leaves remote cards read-only", () => {
+		const own = card({ console: true, workerds: [{ link: link("workerd", "workerd"), wolves: [] }] });
+		assert.deepEqual(machineCard(own, null).channel, { value: "stable", editable: true, mode: "manual" });
+		assert.deepEqual(machineCard(own, null, { readFailed: true }).channel, { value: "stable", editable: true, note: "Couldn't read this machine's update settings", mode: "manual" });
+		assert.equal(machineCard(card({ workerds: [{ link: link("workerd", "workerd"), wolves: [] }] }), null).channel.note, "Change it from that machine's console");
+	});
+});
+
+describe("machineCard in the Mac app (single-Mac)", () => {
+	it("shows the derived channel and mode as a read-only badge with the Settings note", () => {
+		const own = card({ console: true, workerds: [{ link: link("workerd", "workerd"), wolves: [] }] });
+		assert.deepEqual(machineCard(own, null, { singleMac: true }).channel, { value: "stable", editable: false, note: "App updates are set in Settings → This device", mode: "manual" });
+		assert.deepEqual(machineCard(own, "main", { mode: "auto", singleMac: true }).channel, { value: "main", editable: false, note: "App updates are set in Settings → This device", mode: "auto" });
+	});
+});
+
 describe("machineCard wolves", () => {
 	it("lists each wolf by name under the Wolf runtime summary, sorted, with its own status and version", () => {
 		const inv = (id: string, version: string) => ({ machine: "sfo-01", kind: "wolfd" as const, id, parent: "workerd", version, ageS: 3, latest: null });

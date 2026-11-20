@@ -157,6 +157,12 @@ export interface ConsoleClient {
   getThreadContext?(threadId: string): Promise<ThreadContext>;
   /** Compact the thread's context now (allowed while a turn runs); the wolf announces thread-updated at start and finish. Optional. */
   compactThread?(threadId: string, instructions?: string): Promise<void>;
+  /** Close a feature thread by hand (idempotent; the work item is untouched). Rejects ProtocolError `invalid_request` (not a feature thread), NotFoundError. Optional. */
+  closeThread?(threadId: string): Promise<{ closed: boolean; closedReason?: string }>;
+  /** Reopen a closed feature thread. Rejects ProtocolError `thread_graduated` when its work item graduated or is archived. Optional. */
+  reopenThread?(threadId: string): Promise<{ closed: boolean; closedReason?: string }>;
+  /** Remove a closed feature thread. Rejects ProtocolError `thread_open` unless closed. Optional. */
+  removeThread?(threadId: string): Promise<void>;
   // --- feature progress: bind ---
   /**
    * Bind the thread's conversation to a work item (task, issue or spike). Rejects ProtocolError `invalid_request` (not

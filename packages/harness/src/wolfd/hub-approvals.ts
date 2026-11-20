@@ -3,6 +3,8 @@
  * graduation itself on owner approval; wolfd only has to close the feature thread and unbind the other holders live.
  * Reconnects with backoff; an event missed while offline is caught by `closedReasonOf` (the item is graduated/archived).
  */
+import { hubTargetFromEnv } from "@wolfpack/memory";
+
 export interface ApprovedRequest {
   requestId: string;
   itemId: string;
@@ -19,12 +21,10 @@ export interface HubEventsTarget {
 
 /** The hub behind this wolf: WOLFPACK_HUB_URL/TOKEN, else the Work endpoint (`<hub>/v1/workapi`) with the Work token. */
 export function hubEventsTargetFrom(env: NodeJS.ProcessEnv, work?: { endpoint?: string; token?: string }): HubEventsTarget | undefined {
-  const url = env.WOLFPACK_HUB_URL?.trim();
-  const token = env.WOLFPACK_HUB_TOKEN?.trim();
-  if (url && token) return { url, token };
-  const ep = (work?.endpoint ?? "").replace(/\/$/, "");
-  if (ep.endsWith("/v1/workapi") && work?.token) return { url: ep.slice(0, -"/v1/workapi".length), token: work.token };
-  return undefined;
+  // A hub URL without a token does not count (the event stream needs one): fall through to the Work endpoint.
+  const hubEnv = env.WOLFPACK_HUB_URL?.trim() && env.WOLFPACK_HUB_TOKEN?.trim() ? env : {};
+  const t = hubTargetFromEnv(hubEnv, work);
+  return t?.token ? { url: t.baseUrl, token: t.token } : undefined;
 }
 
 /** The `data:` payload of each SSE frame, in stream order. */

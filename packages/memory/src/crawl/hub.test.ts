@@ -41,6 +41,17 @@ describe("hubTargetFromEnv", () => {
   });
 });
 
+describe("hubTargetFromEnv with the Work endpoint fallback", () => {
+  it("falls back to WORK_ENDPOINT minus /v1/workapi with the Work token; the hub env wins; other endpoints give no hub", () => {
+    const work = { endpoint: "http://100.1.2.3:3150/v1/workapi", token: "wk" };
+    expect(hubTargetFromEnv({}, work)).toEqual({ baseUrl: "http://100.1.2.3:3150", token: "wk" });
+    expect(hubTargetFromEnv({}, { ...work, endpoint: `${work.endpoint}/` })).toEqual({ baseUrl: "http://100.1.2.3:3150", token: "wk" });
+    expect(hubTargetFromEnv({ WOLFPACK_HUB_URL: "http://h:1", WOLFPACK_HUB_TOKEN: "k" }, work)).toEqual({ baseUrl: "http://h:1", token: "k" });
+    expect(hubTargetFromEnv({}, { endpoint: "http://127.0.0.1:1", token: "wk" })).toBeUndefined();
+    expect(hubTargetFromEnv({}, { endpoint: work.endpoint })).toBeUndefined();
+  });
+});
+
 describe("emitCrawlToHub", () => {
   it("posts each contribution as the wolf, writes nothing to an inbox, and dedups on a resend", async () => {
     const runDir = runDirFixture();

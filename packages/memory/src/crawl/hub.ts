@@ -26,10 +26,19 @@ export interface HubTarget {
   fetch?: typeof fetch;
 }
 
-/** The hub configured in `env` (WOLFPACK_HUB_URL / WOLFPACK_HUB_TOKEN), or undefined. */
-export function hubTargetFromEnv(env: Record<string, string | undefined> = process.env): HubTarget | undefined {
+/**
+ * The hub configured in `env` (WOLFPACK_HUB_URL / WOLFPACK_HUB_TOKEN), or undefined. With `work` (the wolf's WORK_ENDPOINT / WORK_TOKEN) and no
+ * WOLFPACK_HUB_URL, falls back to the hub behind the Work endpoint: `<hub>/v1/workapi` minus that suffix, with the Work token.
+ */
+export function hubTargetFromEnv(
+  env: Record<string, string | undefined> = process.env,
+  work?: { endpoint?: string; token?: string },
+): HubTarget | undefined {
   const baseUrl = env.WOLFPACK_HUB_URL?.trim();
-  return baseUrl ? { baseUrl, token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined } : undefined;
+  if (baseUrl) return { baseUrl, token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined };
+  const ep = (work?.endpoint ?? "").trim().replace(/\/+$/, "");
+  if (ep.endsWith("/v1/workapi") && work?.token) return { baseUrl: ep.slice(0, -"/v1/workapi".length), token: work.token };
+  return undefined;
 }
 
 let warnedCreds = false;

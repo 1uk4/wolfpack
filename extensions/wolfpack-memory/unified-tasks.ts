@@ -318,8 +318,8 @@ export default function createTasksExtension(
    * Plain fetch, not WorkClient: the outbox would turn a hub outage into a "queued" success that persists nothing on the hub.
    */
   async function fileRequest(id: string, body: { kind: "graduate" | "archive" | "reassign"; preview?: unknown; target?: string }): Promise<{ requestId: string; existing: boolean }> {
-    const target = hubTargetFromEnv(env as Record<string, string | undefined>);
-    if (!target) throw new Error("No hub configured (WOLFPACK_HUB_URL is not set): the owner cannot be asked.");
+    const target = hubTargetFromEnv(env as Record<string, string | undefined>, { endpoint: env.WORK_ENDPOINT, token: env.WORK_TOKEN });
+    if (!target) throw new Error("No hub configured (set WOLFPACK_HUB_URL/WOLFPACK_HUB_TOKEN, or WORK_ENDPOINT ending in /v1/workapi with WORK_TOKEN): the owner cannot be asked.");
     let res: Response;
     try {
       res = await fetch(`${target.baseUrl.replace(/\/$/, "")}/v1/work/${encodeURIComponent(id)}/requests`, {

@@ -129,6 +129,18 @@ describe("task_graduate files an owner-approval request and never graduates", ()
     expect(items.get(f.id)!.graduated).toBeNull();
   });
 
+  it("on a wolf with only the Work env, files the request on the hub behind the Work endpoint with the Work token", async () => {
+    const f = ready();
+    vi.stubEnv("WOLFPACK_HUB_URL", "");
+    vi.stubEnv("WOLFPACK_HUB_TOKEN", "");
+    vi.stubEnv("WORK_ENDPOINT", "http://hub.test/v1/workapi");
+    vi.stubEnv("WORK_TOKEN", "work-secret");
+    const r = await run("task_graduate", { id: f.id });
+    expect(r.isError).toBeUndefined();
+    expect(r.content[0].text).toContain("Queued for the owner's approval: request req-new");
+    expect(filed).toMatchObject([{ path: `/v1/work/${f.id}/requests`, auth: "Bearer work-secret" }]);
+  });
+
   it("with no hub configured it is an error", async () => {
     const f = ready();
     vi.stubEnv("WOLFPACK_HUB_URL", "");

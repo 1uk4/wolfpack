@@ -1,7 +1,7 @@
 /**
- * THE PACK KEYS API (work-wolfpack-6EmU8pu). Behind the console's owner gate, it calls the hub with the caller's own device
+ * THE PACK KEYS API (work-wolfpack-6EmU8pu). Behind the console's device gate (a verified device token, not an owner check), it calls the hub with the caller's own device
  * token, which the gate has verified; the console never uses its own hub token here. The gate only checks that the token is
- * valid on the hub (GET /v1/wolves answers 2xx), not that it is an owner token; hubd's deviceCaller and operator checks are
+ * valid on the hub (GET /v1/wolves answers 2xx), not that it is an owner token; hubd's ownerCaller refuses a non-owner device on key ack (403, passed through); its deviceCaller and operator checks are
  * the real limits.
  *   GET  /api/pack/machines/keys             the machines with key presence (masks only) and their public keys
  * Commands (including a sealed key.set) go through the Machines route, POST /api/machines/<hostId>/commands (machines-api.ts).

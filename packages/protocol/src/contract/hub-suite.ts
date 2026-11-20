@@ -146,6 +146,26 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
         expect(rec.title).toBe("Renamed");
       });
 
+      it("PATCH honours If-Match: a stale etag is 409 conflict naming the current one, a matching or absent one is applied", async () => {
+        const c = await create();
+        const id = c.id;
+        const etagOf = async () => ((await record(id)) as unknown as { etag?: string }).etag;
+        const recordText = async () => ((await record(id)) as unknown as { record: string }).record;
+        const before = await etagOf();
+        expect(typeof before).toBe("string");
+        const patch = (body: unknown, ifMatch?: string) => send("PATCH", buildPath("hubPatchWork", { id }), body, ifMatch === undefined ? op : { ...op, "If-Match": ifMatch });
+        // Another writer changes the Record first: the etag moves.
+        expect((await patch({ section: { name: "Record", text: "first writer" } })).status).toBe(200);
+        const current = await etagOf();
+        expect(current).not.toBe(before);
+        const stale = await patch({ section: { name: "Record", text: "stale writer" } }, before);
+        expect(stale.status).toBe(409);
+        expect(await stale.json()).toMatchObject({ code: "conflict", details: { etag: current } });
+        expect(await recordText()).toContain("first writer");
+        expect((await patch({ section: { name: "Record", text: "matching writer" } }, current)).status).toBe(200);
+        expect(await recordText()).toContain("matching writer");
+      });
+
       it("a placement violation is rejected (invalid_request) and an unadvanceable stage is not_ready", async () => {
         await expectError(await send("POST", buildPath("hubCreateWork"), { kind: "initiative", domain: options.domain, title: "x", assignee: "1uk4", partOf: options.record().id }), "invalid_request");
         const c = await create(); // no success criteria

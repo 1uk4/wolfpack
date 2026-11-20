@@ -6,7 +6,7 @@
  */
 
 import type { WorkItem, CreateWorkInput, WorkQuery } from "@wolfpack/kb/client";
-import type { RollupClient } from "@wolfpack/memory";
+import { WorkConflictError, type RollupClient } from "@wolfpack/memory";
 import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
@@ -209,7 +209,7 @@ export class WorkClient {
    * One HTTP attempt. Unreachable = no answer in time, a connection error, 408/429, or a 5xx the hub did not type as a refusal
    * (read-only / permission). Every other non-2xx is an answer: the hub refused the write and will refuse it again.
    */
-  private async send(method: string, path: string, body: unknown, key?: string): Promise<Sent> {
+  private async send(method: string, path: string, body: unknown, key?: string, extraHeaders: Record<string, string> = {}): Promise<Sent> {
     let res: Response;
     try {
       res = await fetch(`${this.endpoint}/work${path}`, {
@@ -219,6 +219,7 @@ export class WorkClient {
           ...(this.wolf ? { "X-Wolf": this.wolf } : {}),
           ...(body ? { "Content-Type": "application/json" } : {}),
           ...(key ? { "Idempotency-Key": key } : {}),
+          ...extraHeaders,
         },
         body: body ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(this.timeoutMs),
@@ -534,6 +535,19 @@ export class WorkClient {
   }
 
   /**
+   * Replace the body only if the item is still at `ifMatch` (an etag from getWithBody). Sent directly, never through the outbox:
+   * a replay later would carry a stale etag. A hub 409 conflict throws WorkConflictError; an unreachable hub throws.
+   */
+  async updateBodyIfMatch(id: string, body: string, ifMatch: string): Promise<void> {
+    if (!this.configured) throw new Error("Work API not configured (WORK_ENDPOINT / WORK_TOKEN missing)");
+    const r = await this.send("PATCH", `/${id}`, { body }, undefined, { "If-Match": ifMatch });
+    if ("unreachable" in r) throw r.error;
+    if (r.ok) return;
+    if (r.status === 409 && r.data.code === "conflict") throw new WorkConflictError();
+    throw new Error(String(r.data.error ?? `HTTP ${r.status}`));
+  }
+
+  /**
    * The item and everything under it, depth first. Reads the root with get() and each level with query({ partOf }),
    * siblings in parallel: the unfiltered list is ~1.6 MB / ~4 s on the hub, over the 3 s limit, and grows with every item.
    * Scoped reads stay small however many items exist, so the limit is left alone.
@@ -601,8 +615,13 @@ export function rollupClientFor(client: WorkClient): RollupClient {
     async getBody(id) {
       return (await client.getWithBody(id)).body ?? "";
     },
-    async updateBody(id, body) {
-      await client.updateBody(id, body);
+    async getBodyWithEtag(id) {
+      const r = await client.getWithBody(id);
+      return { body: r.body ?? "", etag: (r as { etag?: string }).etag };
+    },
+    async updateBody(id, body, opts) {
+      if (opts?.ifMatch) await client.updateBodyIfMatch(id, body, opts.ifMatch);
+      else await client.updateBody(id, body);
     },
   };
 }

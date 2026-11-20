@@ -70,6 +70,7 @@ export {
   parseKeyedValue,
   sumKeys,
   rollupToParent,
+  WorkConflictError,
   hasRollupZone,
   stripRollupMarkers,
   totalsSummary,

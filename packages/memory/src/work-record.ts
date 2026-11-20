@@ -471,7 +471,7 @@ export class HttpWorkRecordStore implements WorkRecordStore {
     const res = await this.call("GET", id);
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`Work API GET ${id}: HTTP ${res.status}`);
-    const data = (await res.json()) as { item: Record<string, unknown>; body: string | null };
+    const data = (await res.json()) as { item: Record<string, unknown>; body: string | null; etag?: string };
     const it = data.item;
     return {
       id: String(it.id),
@@ -483,7 +483,7 @@ export class HttpWorkRecordStore implements WorkRecordStore {
       successCriteria: typeof it.successCriteria === "string" ? it.successCriteria : undefined,
       partOf: typeof it.partOf === "string" ? it.partOf : it.partOf === null ? null : undefined,
       body: data.body ?? "",
-      ...(typeof (data as { etag?: unknown }).etag === "string" ? { etag: (data as { etag: string }).etag } : {}),
+      ...(typeof data.etag === "string" ? { etag: data.etag } : {}),
     };
   }
 

@@ -773,7 +773,7 @@ export default function createTasksExtension(
   const forgetCompletion = (id: string) => completionChecks.get(wolfDen)?.forget(id);
 
   // The same wiring serves wolfd's graduate routes (the console's Graduate button): see graduation.ts.
-  const graduation = createGraduation({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion, onGraduated: (id) => { void memoryActionsFor(wolfDen)?.promoteForFeature?.(id)?.catch(() => {}); }, ...(appendMode ? { finalPass } : {}) });
+  const graduation = createGraduation({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), fileRequest: (id, body) => fileRequest(id, body), wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion, onGraduated: (id) => { void memoryActionsFor(wolfDen)?.promoteForFeature?.(id)?.catch(() => {}); }, ...(appendMode ? { finalPass } : {}) });
   registerGraduationActions(wolfDen, graduation.actions);
 
   /** Unbind everyone else on a just-shipped task. Never throws: the caller reports a failure apart from the ship. */

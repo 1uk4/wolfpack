@@ -1184,22 +1184,16 @@ export class WolfServer {
           "confirm",
           async () => {
             const done = await actions.confirm(params.id, token);
-            // The graduation has happened (all or nothing, archived): a thread that cannot be closed is a warning, never an error.
-            let closedThreads: string[] = [];
-            const warnings: string[] = [...(done.warnings ?? [])];
-            try {
-              closedThreads = this.closeFeatureThreads([params.id, ...done.archived]);
-            } catch (e) {
-              warnings.push(`graduated, but closing the feature thread failed: ${e instanceof Error ? e.message : String(e)}`);
-            }
+            // Filed, not graduated: the hub graduates on the owner's approval, and onApprovedRequest closes the feature threads then.
             const result: GraduationResult = {
-              graduated: true,
+              graduated: false,
+              requestId: done.requestId,
+              status: done.status,
               entries: done.entries,
               archived: done.archived,
               lateFolded: done.lateFolded,
               unbound: done.unbound,
-              closedThreads,
-              ...(warnings.length ? { warnings } : {}),
+              closedThreads: [],
             };
             return { kind: "confirm", result };
           },

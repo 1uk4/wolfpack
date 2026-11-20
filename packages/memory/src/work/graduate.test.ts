@@ -16,6 +16,7 @@ import {
   linksOf,
   confirmGraduation,
   previewGraduation,
+  prepareGraduation,
   readyToGraduate,
   renderGraduationPreview,
   type GraduationClient,
@@ -202,6 +203,18 @@ describe("graduation: preview then confirm", () => {
     await expect(confirmGraduation({ client, roots, wolf: "owner", preview: p, ship, drain: bad })).rejects.toThrow(/nothing archived.*Work API 502/);
     expect(ship).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
+    expect(sentTopics()).toEqual([]);
+  });
+
+  it("prepareGraduation (the wolf path before an approval request) ships an open item but never graduates, archives or writes the inbox", async () => {
+    const open = f; // still in_build: shipped on confirm
+    const { client, calls } = fakeClient([init, f, t1, t2], { [f.id]: PLAN + RECORD });
+    const p = await previewGraduation({ client, engine: engineOf(answer(open.id)).engine, id: open.id as string, today: "2026-10-22" });
+    const ship = vi.fn(async () => {});
+    const out = await prepareGraduation({ client, roots, preview: p, ship });
+    expect(ship).toHaveBeenCalledWith(open.id);
+    expect(out.preview.contributions.length).toBe(p.contributions.length);
+    expect(calls.filter((c) => c.startsWith("graduate ") || c.startsWith("stage "))).toEqual([]);
     expect(sentTopics()).toEqual([]);
   });
 

@@ -164,11 +164,16 @@ describe("a closed thread is announced as thread-updated, once", () => {
       preview: async () => {
         throw new Error("unused");
       },
-      confirm: async () => ({ entries: [], archived: [], lateFolded: 0, unbound: 0 }),
+      confirm: async () => ({ requestId: "req-1", status: "filed" as const, entries: [], archived: [], lateFolded: 0, unbound: 0 }),
       pendingPreview: async () => undefined,
       observations: async () => ({ total: 0, byWork: [] }),
     });
     return b;
+  }
+  /** What the hub's approval of a graduate request triggers on the wolf (onApprovedRequest): the feature thread and its archived work close. A confirm only files the request now. */
+  async function closeAsApproved(w: TestWolf, id: string): Promise<void> {
+    await new Promise((r) => setTimeout(r, 100)); // let the activity watcher subscribe first (the old confirm went over HTTP)
+    (w.wolf.server as unknown as { closeFeatureThreads(i: string[]): string[] }).closeFeatureThreads([id]);
   }
   /** Collects the thread ids of closed thread-updated events; a watcher error fails the test at until()/stop(). */
   function collect(w: TestWolf, from?: string) {
@@ -204,7 +209,7 @@ describe("a closed thread is announced as thread-updated, once", () => {
     };
   }
 
-  it("confirming a graduation announces the feature thread and its idle child at once, and a running child when it settles", async () => {
+  it("an approved graduation announces the feature thread and its idle child at once, and a running child when it settles", async () => {
     const { w, open } = await bootWork();
     const feature = await w.client.createThread!("testwolf", { kind: "feature", workItemId: "work-wolfpack-grad0005" });
     await w.client.submit(feature.id, "spawn quick", { whenBusy: "reject" });
@@ -217,7 +222,7 @@ describe("a closed thread is announced as thread-updated, once", () => {
     const slowId = ids.get("slow")!.id;
     const watcher = collect(w);
     try {
-      await w.client.startGraduationConfirm("testwolf", "work-wolfpack-grad0005", "tok");
+      await closeAsApproved(w, "work-wolfpack-grad0005");
       await watcher.until(() => watcher.closed.includes(feature.id) && watcher.closed.includes(quickId));
       expect(watcher.closed).not.toContain(slowId); // still running
       open();
@@ -250,7 +255,7 @@ describe("a closed thread is announced as thread-updated, once", () => {
     const feature = await first.w.client.createThread!("testwolf", { kind: "feature", workItemId: "work-wolfpack-grad0007" });
     const live = collect(first.w);
     try {
-      await first.w.client.startGraduationConfirm("testwolf", "work-wolfpack-grad0007", "tok");
+      await closeAsApproved(first.w, "work-wolfpack-grad0007");
       await live.until(() => live.closed.includes(feature.id));
     } finally {
       await live.stop();
@@ -261,7 +266,7 @@ describe("a closed thread is announced as thread-updated, once", () => {
     const replay = collect(second.w, `${(second.w.wolf.server as unknown as { boot: string }).boot}:1`); // the cursor a fresh boot starts at: replays everything this boot announced
     try {
       const fresh = await second.w.client.createThread!("testwolf", { kind: "feature", workItemId: "work-wolfpack-grad0008" });
-      await second.w.client.startGraduationConfirm("testwolf", "work-wolfpack-grad0008", "tok2"); // closes it live: a thread-updated, so the stream has been read
+      await closeAsApproved(second.w, "work-wolfpack-grad0008"); // closes it live: a thread-updated, so the stream has been read
       await replay.until(() => replay.threadEvents.some((e) => e.id === fresh.id));
       const before = replay.threadEvents.slice(0, replay.threadEvents.findIndex((e) => e.id === fresh.id));
       expect(before.filter((e) => e.id === feature.id && e.closed)).toEqual([]);

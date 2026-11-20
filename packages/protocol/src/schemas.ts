@@ -1591,9 +1591,16 @@ export type GraduationPreview = z.infer<typeof GraduationPreviewSchema>;
 export const GraduationConfirmBodySchema = z.object({ token: z.string().min(1) });
 export type GraduationConfirmBody = z.infer<typeof GraduationConfirmBodySchema>;
 
-/** `POST /v1/wolves/:name/work/:id/graduate/confirm`: the graduation happened (it is all or nothing). */
+/**
+ * `POST /v1/wolves/:name/work/:id/graduate/confirm` (job result): the wolf filed a graduate approval request on the hub
+ * (`requestId`, `status` filed or pending, `graduated` false; nothing is sent until the owner approves). Older wolves that
+ * graduated directly answer `graduated: true` without them.
+ */
 export const GraduationResultSchema = z.object({
-  graduated: z.literal(true),
+  graduated: z.boolean(),
+  /** The approval request filed on the hub. */
+  requestId: z.string().optional(),
+  status: z.enum(["filed", "pending"]).optional(),
   /** Den topic ids written to the KB inbox. */
   entries: z.array(z.string()),
   /** Work items archived (the item and what it contained). */

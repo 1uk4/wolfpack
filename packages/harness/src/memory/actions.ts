@@ -99,6 +99,10 @@ export interface GraduationPreviewResult {
 }
 
 export interface GraduationConfirmResult {
+  /** The approval request the wolf filed on the hub: the owner's approval graduates, nothing is sent before it. */
+  requestId: string;
+  /** `filed`: a new request; `pending`: one was already waiting. */
+  status: "filed" | "pending";
   entries: string[];
   archived: string[];
   lateFolded: number;
@@ -111,7 +115,7 @@ export interface GraduationConfirmResult {
 export interface GraduationActions {
   /** Distill and return the preview (writes the confirmation token). Throws GraduationError. */
   preview(id: string): Promise<GraduationPreviewResult>;
-  /** Check the token, fold late observations, send, graduate, archive, unbind. All or nothing. Throws GraduationError. */
+  /** Check the token, fold late observations, ship, then file a graduate approval request (the hub sends, graduates and archives on approval). Throws GraduationError. */
   confirm(id: string, token: string): Promise<GraduationConfirmResult>;
   /** The newest stored preview of this item that has not expired (its token file survives a restart), if any. */
   pendingPreview(id: string): Promise<GraduationPreviewResult | undefined>;

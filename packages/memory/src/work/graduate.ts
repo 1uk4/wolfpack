@@ -599,16 +599,23 @@ export interface ConfirmedGraduation {
   lateFolded?: number;
 }
 
+export interface PreparedGraduation {
+  /** The preview to send: the stored one, or distilled again when observations arrived after it. */
+  preview: GraduationPreview;
+  item: WorkItem;
+  all: WorkItem[];
+  lateFolded: number;
+}
+
 /**
- * Send a previewed graduation: ship the item when it is not complete yet,
- * write the contributions to the wolf's inbox, mark the item graduated and
- * archive it with what it contains. Nothing is archived unless every
- * contribution reached the inbox. Throws on failure.
+ * The wolf-side steps before a graduation is sent, shared by the direct path and the approval-request path: recheck
+ * readiness, fold late observations (distilling again when anything folded), ship the item when it is not complete yet.
+ * It writes nothing to the inbox and never graduates or archives: a wolf's worker token cannot, the owner approves.
+ * Throws on failure, with nothing sent.
  */
-export async function confirmGraduation(opts: {
+export async function prepareGraduation(opts: {
   client: GraduationClient;
   roots: KbRoots;
-  wolf: string;
   preview: GraduationPreview;
   /** Ships an item (the caller's runtime folds it into its feature's Outcomes). */
   ship: (id: string) => Promise<unknown>;
@@ -620,9 +627,8 @@ export async function confirmGraduation(opts: {
   /** Needed when the drain folds anything: the entry is distilled again from the updated Record. */
   engine?: Engine;
   today?: string;
-  session?: string;
-}): Promise<ConfirmedGraduation> {
-  const { client, roots, wolf } = opts;
+}): Promise<PreparedGraduation> {
+  const { client, roots } = opts;
   let preview = opts.preview;
   if (preview.blocked) throw new Error(`cannot send: ${preview.blocked}`);
   const all = await loadGraduationScope(client, preview.itemId);
@@ -643,6 +649,34 @@ export async function confirmGraduation(opts: {
     await opts.ship(item.id as string);
     await client.note(item.id as string, "Shipped for graduation: all tasks complete.");
   }
+  return { preview, item, all, lateFolded: late };
+}
+
+/**
+ * Send a previewed graduation directly (an owner's own session; a wolf's worker token is refused by the hub, so wolves
+ * file an approval request after prepareGraduation instead): prepare, write the contributions to the wolf's inbox,
+ * mark the item graduated and archive it with what it contains. Nothing is archived unless every contribution reached
+ * the inbox. Throws on failure.
+ */
+export async function confirmGraduation(opts: {
+  client: GraduationClient;
+  roots: KbRoots;
+  wolf: string;
+  preview: GraduationPreview;
+  /** Ships an item (the caller's runtime folds it into its feature's Outcomes). */
+  ship: (id: string) => Promise<unknown>;
+  /** Folds what was observed since the preview, before anything is sent or archived. */
+  drain?: DrainWork;
+  drainTimeoutMs?: number;
+  /** Final feature pass (features only, once: the pass carries its own marker). Runs after the drain, before the distill. Never blocks. */
+  finalPass?: (featureId: string) => Promise<unknown>;
+  /** Needed when the drain folds anything: the entry is distilled again from the updated Record. */
+  engine?: Engine;
+  today?: string;
+  session?: string;
+}): Promise<ConfirmedGraduation> {
+  const { client, roots, wolf } = opts;
+  const { preview, item, all, lateFolded: late } = await prepareGraduation(opts);
 
   // The initiative's contribution is anchored to its work id (routed by that key
   // alone), so it needs no ordering against the subjects: nothing it says can be

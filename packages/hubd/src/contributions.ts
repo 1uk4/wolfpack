@@ -168,7 +168,9 @@ export function storeContribution(dataDir: string, actor: Actor, submitted: Subm
   }
   const lb = lineBreakIn(c);
   if (lb) return reject(`${lb} contains a line break`);
-  if (c.contentHash !== contentHash(c.body)) return reject("contentHash does not match the body");
+  // An update's body is a diff; its contentHash is the hash of the full new body, which the hub never sees.
+  if (c.change !== "update" && c.contentHash !== contentHash(c.body)) return reject("contentHash does not match the body");
+  if (c.change === "update" && (!c.baseHash || !c.targets?.length)) return reject("an update needs baseHash and targets");
 
   let name: string;
   try {
@@ -198,7 +200,7 @@ export function storeContribution(dataDir: string, actor: Actor, submitted: Subm
     }
     // What intake reads must be what was submitted (a value the frontmatter cannot carry faithfully is refused, not stored altered).
     const want: Record<string, unknown> = {
-      from: c.from, denTopicId: c.denTopicId, contentHash: c.contentHash, domainHint: c.domainHint, change: c.change, prevHash: c.prevHash,
+      from: c.from, denTopicId: c.denTopicId, contentHash: c.contentHash, domainHint: c.domainHint, change: c.change, prevHash: c.prevHash, baseHash: c.baseHash,
       target: c.target, anchor: c.anchor, verbatim: c.verbatim && c.anchor ? true : undefined, host: c.host, session: c.session, origin: c.origin, sourcePath: c.sourcePath,
     };
     for (const [k, v] of Object.entries(want)) {

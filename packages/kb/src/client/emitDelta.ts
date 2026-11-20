@@ -62,7 +62,9 @@ export interface EmitDeltaInput {
   wolf: string;
   host?: string;
   denTopicId: string;
-  change: "create" | "merge";
+  change: "create" | "merge" | "update";
+  /** change "update": `body` stays the full body (hash, dedupe and the emitted copy use it); the diff is what is sent. */
+  update?: { baseHash: string; targets: string[]; diff: string };
   domainHint: string;
   summary: string;
   body: string;
@@ -137,7 +139,8 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     summary: input.summary,
     session: input.session,
     submitted: input.submitted ?? now(),
-    body,
+    body: input.update ? input.update.diff.trim() : body,
+    ...(input.update ? { baseHash: input.update.baseHash, targets: input.update.targets } : {}),
     sourceCreated: input.sourceCreated,
     sourceUpdated: input.sourceUpdated,
     dateBasis: input.dateBasis,
@@ -194,6 +197,8 @@ export function renderContribution(c: Contribution): string {
     c.host ? `host: ${c.host}` : null,
     `den_topic_id: ${c.denTopicId}`,
     `change: ${c.change}`,
+    c.baseHash ? `base_hash: ${c.baseHash}` : null,
+    c.targets?.length ? `targets: ${c.targets.join(", ")}` : null,
     `content_hash: ${c.contentHash}`,
     `prev_hash: ${c.prevHash ?? "null"}`,
     `domain_hint: ${c.domainHint}`,

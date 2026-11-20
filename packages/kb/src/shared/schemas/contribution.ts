@@ -18,7 +18,11 @@ export const ContributionSchema = z.object({
   /** The wolf's LOCAL den topic id — the join key into the registry. */
   denTopicId: z.string(),
   /** Consolidation outcome that produced this delta. */
-  change: z.enum(["create", "merge"]),
+  change: z.enum(["create", "merge", "update"]),
+  /** update only: hash of the full body the entry was last written from; `body` is then a unified diff from it. */
+  baseHash: z.string().optional(),
+  /** update only: the entries the diff applies to (from the receipt), primary first. */
+  targets: z.array(z.string().regex(/^kb-[A-Za-z0-9-]+$/)).optional(),
   /** sha256 of the topic body — idempotency + dedup. */
   contentHash: z.string(),
   /** Previous hash (null on first contribution for this topic). */

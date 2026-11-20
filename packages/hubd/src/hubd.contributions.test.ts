@@ -36,19 +36,6 @@ const contribution = (from: string, topic: string, body = "The body.") => ({
   domainHint: "wolfpack", summary: "Summary line.", submitted: "2026-10-01 12:00", body, origin: "crawl", sourcePath: "/src",
 });
 
-describe("update contributions", () => {
-  it("stores a diff body under the hash of the full new body, with its base hash and targets, readable by the intake", async () => {
-    const full = "The whole new body.\nSecond line.";
-    const c = { ...contribution("fenrir", "topic-upd", "@@ -1,2 +1,2 @@\n-old\n+The whole new body."), change: "update", contentHash: contentHash(full), baseHash: contentHash("old full"), targets: ["kb-wolfpack-AAAAAAA", "kb-wolfpack-BBBBBBB"], origin: undefined, sourcePath: undefined };
-    const res = await post(c, as("fenrir"));
-    expect(res.status).toBe(201);
-    const mine = drainInbox(hubRoots(dataDir), { lane: CONTRIBUTIONS_LANE }).filter((p) => p.denTopicId === "topic-upd");
-    expect(mine).toHaveLength(1);
-    expect(mine[0]).toMatchObject({ change: "update", contentHash: contentHash(full), baseHash: contentHash("old full"), targets: ["kb-wolfpack-AAAAAAA", "kb-wolfpack-BBBBBBB"] });
-    expect(mine[0].body).toContain("+The whole new body.");
-  });
-});
-
 describe("contributions on disk", () => {
   it("stores <dataDir>/kb/ops/contributions/<wolf>/<topic>-<hash10>.md, readable by the kb intake", async () => {
     const c = contribution("fenrir", "topic-a");
@@ -253,5 +240,18 @@ describe("crawl release against a real hubd", () => {
     // identical but for the `submitted` minute
     const strip = (t: string) => t.replace(/^submitted: .*$/m, "");
     expect(strip(readFileSync(join(contributionsDir(dataDir, "freki"), hubFile), "utf-8"))).toBe(strip(readFileSync(join(ops2, "inbox", "freki", inboxFile), "utf-8")));
+  });
+});
+
+describe("update contributions", () => {
+  it("stores a diff body under the hash of the full new body, with its base hash and targets, readable by the intake", async () => {
+    const full = "The whole new body.\nSecond line.";
+    const c = { ...contribution("fenrir", "topic-upd", "@@ -1,2 +1,2 @@\n-old\n+The whole new body."), change: "update", contentHash: contentHash(full), baseHash: contentHash("old full"), targets: ["kb-wolfpack-AAAAAAA", "kb-wolfpack-BBBBBBB"], origin: undefined, sourcePath: undefined };
+    const res = await post(c, as("fenrir"));
+    expect(res.status).toBe(201);
+    const mine = drainInbox(hubRoots(dataDir), { lane: CONTRIBUTIONS_LANE }).filter((p) => p.denTopicId === "topic-upd");
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ change: "update", contentHash: contentHash(full), baseHash: contentHash("old full"), targets: ["kb-wolfpack-AAAAAAA", "kb-wolfpack-BBBBBBB"] });
+    expect(mine[0].body).toContain("+The whole new body.");
   });
 });

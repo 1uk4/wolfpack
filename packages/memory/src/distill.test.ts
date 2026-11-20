@@ -381,8 +381,8 @@ describe("distill sees the nearest existing entries", () => {
 
 describe("re-promote of an absorbed topic", () => {
   const lines = (n: number, edit?: [number, string]) => Array.from({ length: n }, (_, i) => (edit && edit[0] === i ? edit[1] : `Fact number ${i} about how the sweep budgets one item per run.`)).join("\n");
-  const v1 = { ...clean, body: `## Design\n${lines(12)}` };
-  const v2 = { ...clean, body: `## Design\n${lines(12, [6, "Fact number 6 now says the budget is two items per run."])}` };
+  const v1 = { ...clean, body: `## Design\n${lines(40)}` };
+  const v2 = { ...clean, body: `## Design\n${lines(40, [20, "Fact number 20 now says the budget is two items per run."])}` };
   const receipt = (id: string, body: string, target: string) => {
     const dir = join(roots.opsRoot, "receipts", WOLF);
     mkdirSync(dir, { recursive: true });
@@ -403,8 +403,8 @@ describe("re-promote of an absorbed topic", () => {
     expect(c.change).toBe("update");
     expect(c.baseHash).toBe(contentHash(rec.outputs[0].body.trim()));
     expect(c.targets).toEqual(["kb-wolfpack-AAAAAAA"]);
-    expect(c.body).toContain("+Fact number 6 now says the budget is two items per run.");
-    expect(c.body).toContain("-Fact number 6 about how the sweep budgets one item per run.");
+    expect(c.body).toContain("+Fact number 20 now says the budget is two items per run.");
+    expect(c.body).toContain("-Fact number 20 about how the sweep budgets one item per run.");
     expect(c.body).not.toContain("Fact number 0 ");
     expect(c.body.length).toBeLessThan(rec.outputs[0].body.length / 2);
     // The dedupe key is the hash of the new FULL body.

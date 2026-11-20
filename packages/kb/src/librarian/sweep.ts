@@ -630,7 +630,13 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           }
         }
       } else {
-        if (aliasedFrom && !aliasMissing) {
+        // An update names its entries (from the receipt): the first one that is live takes the diff.
+        const named = c.change === "update" ? c.targets?.map(head).find((id) => readEntryMarkdown(roots, domain, id)) : undefined;
+        if (named) {
+          targetId = named;
+          routing.route = "alias";
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${named} (update diff)`);
+        } else if (aliasedFrom && !aliasMissing) {
           targetId = head(aliasedFrom);
           routing.route = "alias";
         } else if (aliasMissing) {

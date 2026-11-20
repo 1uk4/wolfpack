@@ -114,11 +114,17 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
     const { code } = store.mintPairingCode({ kind: "worker", hostId: h });
     return store.redeem(code, "rig", "worker", h);
   };
-  const operator = { Authorization: `Bearer ${store.redeem(store.mintPairingCode({ kind: "console" }).code, "rig-operator", "console").token}` };
+  const opTok = store.redeem(store.mintPairingCode({ kind: "console" }).code, "rig-operator", "console");
+  store.setOwner(opTok.tokenId, true); // registry domain writes need an owner device (hubd ownerCaller)
+  const operator = { Authorization: `Bearer ${opTok.token}` };
   const op = { ...operator, "Content-Type": "application/json" };
-  await fetch(`${hub.url}/v1/registry/domains`, { method: "POST", headers: op, body: JSON.stringify({ name: "wolfpack" }) });
+  const addDomain = async (name: string) => {
+    const r = await fetch(`${hub.url}/v1/registry/domains`, { method: "POST", headers: op, body: JSON.stringify({ name }) });
+    if (!r.ok) throw new Error(`create domain ${name} failed: ${r.status} ${await r.text()}`);
+  };
+  await addDomain("wolfpack");
   for (const name of o.kbDomains ?? []) {
-    await fetch(`${hub.url}/v1/registry/domains`, { method: "POST", headers: op, body: JSON.stringify({ name }) });
+    await addDomain(name);
     // Creating a domain writes a stub INDEX.md (the hubd registry test covers that). These tests count the files they write themselves, so start from an empty folder.
     rmSync(join(dataDir, "kb", "base", "domains", name, "INDEX.md"), { force: true });
   }

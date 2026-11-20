@@ -177,7 +177,7 @@ const PREVIEW: GraduationPreview = {
 	createdAt: "2026-10-28T12:00:00.000Z",
 	readiness: { ready: true },
 };
-const RESULT: GraduationResult = { graduated: true, entries: ["ready", "ready~two"], archived: ["ready", "r1", "r2"], lateFolded: 0, unbound: 1, closedThreads: [] };
+const RESULT: GraduationResult = { graduated: false, requestId: "req-1", status: "filed", entries: ["ready", "ready~two"], archived: ["ready", "r1", "r2"], lateFolded: 0, unbound: 1, closedThreads: [] };
 
 const OBS: GraduationObservations = { total: 5, byWork: [{ id: "r1", title: "R1", count: 3 }, { id: "r2", title: "R2", count: 2 }] };
 const job = (kind: "preview" | "confirm") => ({ jobId: `j-${kind}`, kind, state: "running" as const, startedAt: "2026-10-28T12:00:00.000Z" });
@@ -185,6 +185,9 @@ const job = (kind: "preview" | "confirm") => ({ jobId: `j-${kind}`, kind, state:
 /** A wolf that runs jobs in the background: a start answers at once, the status says running for `runningPolls` reads, then the outcome. */
 interface FakeGraduate extends GraduateClient {
 	starts: { kind: "preview" | "confirm"; wolf: string; id: string; token?: string }[];
+	/** Request ids this console approved. */
+	approved: string[];
+	approveResult: KbResult<unknown>;
 	statusCalls: number;
 	runningPolls: number;
 	/** What the first status read says before any start (a job the wolf already holds). */
@@ -198,6 +201,12 @@ const fakeGraduate = (over: Partial<FakeGraduate> = {}): FakeGraduate => {
 	const running = new Map<string, { kind: "preview" | "confirm"; polls: number }>();
 	const g: FakeGraduate = {
 		starts: [],
+		approved: [],
+		approveResult: { ok: true, data: {} },
+		approve: async (rid) => {
+			g.approved.push(rid);
+			return g.approveResult;
+		},
 		statusCalls: 0,
 		runningPolls: 1,
 		initial: { state: "none" },
@@ -553,6 +562,33 @@ describe("graduate flow from the Work list", () => {
 		assert.match(q("work-graduate-ready")!.getAttribute("title")!, /Last confirm failed: model exploded/);
 		await click(q("work-graduate-ready")!);
 		assert.match(q("graduate-last-error")!.textContent!, /Last confirm failed: model exploded/);
+	});
+	it("Confirm approves the request the wolf filed, as this console's owner device, and only then reports the graduation", async () => {
+		const g = fakeGraduate();
+		await openList(g);
+		await click(q("work-graduate-ready")!);
+		await settle();
+		await click(q("graduate-go")!);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
+		await click(q("work-graduate-ready")!);
+		await click(q("graduate-confirm")!);
+		await until("the toast", () => q("graduate-done") !== null);
+		assert.deepEqual(g.approved, ["req-1"]);
+		assert.equal(q("graduate-filed"), null);
+	});
+	it("a device that may not approve shows 'request filed, approve on an owner device': not an error, no retry", async () => {
+		const g = fakeGraduate({ approveResult: { ok: false, reason: "error", code: "forbidden", message: "only an owner device can do this" } });
+		await openList(g);
+		await click(q("work-graduate-ready")!);
+		await settle();
+		await click(q("graduate-go")!);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
+		await click(q("work-graduate-ready")!);
+		await click(q("graduate-confirm")!);
+		await until("the filed note", () => q("graduate-filed") !== null);
+		assert.match(q("graduate-filed")!.textContent!, /owner device/);
+		assert.notEqual(phase("work-graduate-ready"), "error");
+		assert.equal(q("graduate-done-dismiss") !== null, true);
 	});
 	it("another failure at confirm goes back to Review: the preview is still good", async () => {
 		const g = fakeGraduate({ confirmOutcome: { state: "error", jobId: "j", kind: "confirm", code: "engine_error", message: "graduation stopped, nothing archived" } });

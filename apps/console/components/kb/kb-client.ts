@@ -208,6 +208,11 @@ export function postGraduateConfirm(wolf: string, workId: string, token: string)
 	});
 }
 
+/** Approve a filed approval request as this console's owner device (a non-owner device is refused with 403: code "forbidden"). */
+export function postApproveRequest(requestId: string): Promise<KbResult<unknown>> {
+	return request(`/api/work/requests/${seg(requestId)}/approve`, { method: "POST" });
+}
+
 /** Where the feature's graduation job stands on this wolf (none, running, preview_ready, graduated, error). */
 export function fetchGraduateStatus(wolf: string, workId: string): Promise<KbResult<GraduationStatus>> {
 	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/status`);

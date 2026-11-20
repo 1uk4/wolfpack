@@ -40,6 +40,8 @@ export interface GraduateDone {
 	title: string;
 	wolf: string;
 	result: GraduationResult;
+	/** The wolf filed the request but this device may not approve it: it waits for an owner device (Needs-you). Not an error, nothing to retry. */
+	awaitingApproval?: boolean;
 }
 
 const POLL_MS = 2000;
@@ -261,10 +263,28 @@ export class GraduateStore {
 					return;
 				}
 				if (s.state === "graduated") {
+					// The wolf filed a graduate request (it cannot graduate itself): this console approves it as the owner device, and only then is it graduated.
+					let awaitingApproval = false;
+					if (!s.result.graduated && s.result.requestId) {
+						let ap: KbResult<unknown>;
+						try {
+							ap = await client.approve(s.result.requestId);
+						} catch (e) {
+							ap = thrown(e);
+						}
+						if (!this.current(id, g)) return;
+						if (!ap.ok) {
+							if (ap.code !== "forbidden" && ap.code !== "request_forbidden") {
+								// The request is filed and its preview token used: no retry from Review, the owner starts over or approves it in Needs-you.
+								return void this.fail(id, { wolf, title: cur.title }, "confirm", { ...ap, message: `The wolf filed the request, but approving it failed: ${ap.message} Approve it in Needs-you.` });
+							}
+							awaitingApproval = true;
+						}
+					}
 					this.set(id, undefined);
-					this.done = [...this.done.filter((d) => d.id !== id), { id, title: cur.title, wolf, result: s.result }];
+					this.done = [...this.done.filter((d) => d.id !== id), { id, title: cur.title, wolf, result: s.result, ...(awaitingApproval ? { awaitingApproval } : {}) }];
 					this.emit();
-					notifyGraduated(id);
+					if (!awaitingApproval) notifyGraduated(id);
 					return;
 				}
 				if (s.state === "error") return void this.fail(id, cur, s.kind, { ok: false, reason: "error", message: s.message, code: s.code });

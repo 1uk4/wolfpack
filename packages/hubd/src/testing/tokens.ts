@@ -9,7 +9,9 @@ import type { HubServer } from "../server.js";
 /** Mint a console (operator) token in `dataDir`. */
 export function mintOperatorToken(dataDir: string): string {
   const s = createTokenStore(dataDir);
-  return s.redeem(s.mintPairingCode({ kind: "console" }).code, "test-operator", "console").token;
+  const r = s.redeem(s.mintPairingCode({ kind: "console" }).code, "test-operator", "console");
+  s.setOwner(r.tokenId, true); // the operator in tests is the owner device
+  return r.token;
 }
 
 /** Mint a worker token bound to `hostId` in `dataDir`. */
@@ -66,7 +68,7 @@ export function seedTokens(dataDir: string, hostIds: string[] = []): void {
   const sha = (v: string) => createHash("sha256").update(v).digest("hex");
   const at = new Date().toISOString();
   const tokens: TokenRecord[] = [
-    { id: "tok-test-operator", hash: sha(OP_TOKEN), label: "test-operator", kind: "console", owner: OWNER, createdAt: at },
+    { id: "tok-test-operator", hash: sha(OP_TOKEN), label: "test-operator", kind: "console", owner: OWNER, isOwner: true, createdAt: at },
     ...hostIds.map((h): TokenRecord => ({ id: `tok-test-${h}`, hash: sha(workerTokenFor(h)), label: `test-${h}`, kind: "worker", hostId: h, owner: OWNER, createdAt: at })),
   ];
   const file = tokensFile(dataDir);

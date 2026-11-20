@@ -37,6 +37,8 @@ export const DeviceSchema = z.object({
   addedBy: z.string().nullable(),
   /** Id of that minting device (kept even if it was revoked since), null when unknown. */
   addedById: z.string().nullable(),
+  /** True for an owner device (the only kind that may acknowledge keys, change KB domains and decide approvals). */
+  isOwner: z.boolean().default(false),
 });
 export type Device = z.infer<typeof DeviceSchema>;
 export const DeviceListSchema = z.object({ devices: z.array(DeviceSchema) });

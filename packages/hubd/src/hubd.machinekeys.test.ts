@@ -66,6 +66,7 @@ describe("machine keys", () => {
 
   it("raises the key-change flag when a known machine presents another key, until acknowledged", async () => {
     const c = mint("console");
+    store.setOwner(c.tokenId, true); // acknowledging a key needs an owner device
     const m = await machine("box", { pubkey: PK1 });
     m.ws.close();
     await sleep(50);

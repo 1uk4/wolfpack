@@ -106,6 +106,7 @@ function useWorkItems(client: WorkClient, domain: string): { load: Load; reload:
 		window.addEventListener("focus", onFocus);
 		const poll = setInterval(() => void refresh(), WORK_POLL_MS);
 		return () => {
+			// eslint-disable-next-line react-hooks/exhaustive-deps -- seq is a request counter: the cleanup must bump the current value to drop in-flight reads
 			seq.current++;
 			window.removeEventListener("focus", onFocus);
 			clearInterval(poll);

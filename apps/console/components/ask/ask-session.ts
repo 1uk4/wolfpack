@@ -448,12 +448,13 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 	const serverSeen = useRef(new Map<string, Record<string, CardFieldAnswer>>());
 	useEffect(() => {
 		if (callId !== "") serverSeen.current.set(callId, seedAll(pcRef.current));
-	}, [callId, draftKey]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [callId, draftKey]);
 	useEffect(() => {
 		const id = callId;
 		const flush = flushNote;
 		return () => {
 			flush();
+			// eslint-disable-next-line react-hooks/exhaustive-deps -- the cleanup must read the latest ref values at card switch/unmount to save the cards answers
 			if (id !== "") kept.current.set(id, { draft: draftRef.current, note: noteRef.current, dirty: dirty.current, seen: serverSeen.current.get(id) ?? {} });
 		};
 	}, [callId]); // eslint-disable-line react-hooks/exhaustive-deps

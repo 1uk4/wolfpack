@@ -521,6 +521,7 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 		// Pre-mint for the next run (mitigation D) — best-effort; a keyless
 		// page just doesn't warm.
 		warmTokens.refresh();
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- flush is deliberately not a dep: this callback is created once and must stay referentially stable
 	}, []);
 
 	/** Open the Deepgram socket and wire its messages. `gen` guards staleness. */
@@ -746,6 +747,7 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 			if (hookStates.size === 0) releaseTransientClaims();
 			publishUi();
 		};
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only registration of this hook's state; kind/enabled are published by the effects that follow
 	}, []);
 	useEffect(() => {
 		const st = hookStates.get(idRef.current);

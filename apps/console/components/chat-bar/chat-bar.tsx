@@ -157,6 +157,7 @@ export function ChatBar() {
 	// the meter); clearError only sets state, so a stale copy is as good as the current one.
 	useEffect(() => {
 		publishBarDictation(dictation, shown);
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- the listed dictation fields are the ones the page reads; the dictation object itself is new every render
 	}, [dictation.phase, dictation.error, dictation.active, dictation.levelRef, dictation.toggle, dictation.stop, dictation.finish, dictation.cancel, shown]);
 	useEffect(() => () => publishBarDictation(null), []);
 
@@ -166,6 +167,7 @@ export function ChatBar() {
 	useEffect(() => setPhoneSheet?.(false), [pathname, setPhoneSheet]); // a requested sheet does not follow the owner to another page
 	useEffect(() => {
 		if (!attached) setPhoneSheet?.(false); // docked while the sheet was open: the flag must not outlive the bar
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on whether a thread is attached, not on the attached object identity
 	}, [!!attached, setPhoneSheet]);
 	useEffect(() => {
 		if (wide && minimized) setPhoneSheet?.(false); // collapsed: the request is spent, the row is all that shows
@@ -192,6 +194,7 @@ export function ChatBar() {
 			const a = live.current.attached;
 			if (t && a && a.wolf === t.wolf && a.threadId === t.threadId && live.current.onOwn && !dictation.error) live.current.dock?.();
 		}
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- fires on dictating flips only; error is read at that moment, not a trigger
 	}, [dictating]);
 
 	// Using another thread's composer docks the floating chat. Only a USER action counts: a pointerdown in a composer
@@ -304,6 +307,7 @@ export function ChatBar() {
 		const idle = (window as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
 		if (idle) idle(() => void loadComposer());
 		else setTimeout(() => void loadComposer(), 200);
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on whether a thread is attached, not on the attached object identity
 	}, [!!attached]);
 
 	// Thread pages show the attached chat as a row in the subagent strip (attached-strip-row.tsx), never a pill.
@@ -393,6 +397,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	const [sheet, setSheet] = useState(api.phoneSheet);
 	useEffect(() => {
 		if (!sheet) api.setPhoneSheet(false);
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- fires on sheet changes only; api is read at that moment and a new api object must not re-run it
 	}, [sheet]);
 	const inset = useKeyboardInset(phone);
 	const swipeFrom = useRef<{ x: number; y: number } | null>(null);
@@ -409,6 +414,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 			if (input && (document.activeElement === input || input.value.trim() !== "")) return;
 			setSheet(false);
 		}
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- wrapRef is a stable ref object
 	}, [sheet, pendingCount]);
 	const openSheet = (forCard: boolean) => {
 		openedForCard.current = forCard;
@@ -742,6 +748,7 @@ export function Switcher({ groups, current, onClose, sheet = false }: { groups: 
 		};
 		document.addEventListener("mousedown", onDown);
 		return () => document.removeEventListener("mousedown", onDown);
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only listener: it registers once and uses the onClose of the mount render
 	}, []);
 	const onKeyDown = (e: React.KeyboardEvent) => {
 		if (e.key === "Escape") {

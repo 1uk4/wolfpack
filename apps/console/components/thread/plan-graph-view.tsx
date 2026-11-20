@@ -124,7 +124,6 @@ export function PlanGraphView({
 	zoomByRef.current = zoomBy;
 	useIsoLayoutEffect(() => {
 		if (draggable) centreRef.current();
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [draggable]);
 	useEffect(() => {
 		const box = pan.ref.current;

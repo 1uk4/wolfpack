@@ -88,6 +88,7 @@ export function GraduateControl({ target, state, client, testid, showReason = fa
 	// A job the wolf already holds (a reload, a view never opened): a finished preview shows as Review.
 	useEffect(() => {
 		if (ready) void graduateStore.recover(client, target);
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- the target's id/title/assignee are the deps; the target object identity changes every render
 	}, [ready, client, target.id, target.title, target.assignee]);
 
 	if (!state.show && !job) return null;

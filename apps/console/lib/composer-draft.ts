@@ -123,6 +123,7 @@ export function useComposerDraft(
 				clearTimeout(timer.current);
 				timer.current = null;
 			}
+			// eslint-disable-next-line react-hooks/exhaustive-deps -- the cleanup must read the latest text and inert flag at unmount to persist the draft
 			if (!inert?.current) writeDraft(key, textRef.current);
 		};
 	}, [key, textRef, inert]);

@@ -149,6 +149,7 @@ export function PanelHostProvider({ wolf, slug, threadId, panels = PANELS, child
 			choose(id, props);
 			return true;
 		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- slug is derived from threadId/wolf, which are deps
 		[panels, wolf, threadId, choose],
 	);
 	const select = useCallback((id: string) => void openPanel(id, stRef.current.props[threadId]?.[id] ?? {}), [openPanel, threadId]);

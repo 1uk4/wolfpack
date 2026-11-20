@@ -219,6 +219,7 @@ export function MenuShell({
 			window.removeEventListener("scroll", rePlace, true);
 			window.removeEventListener("resize", rePlace);
 		};
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- anchor is derived from anchorRef/anchorTestid, which are the deps
 	}, [anchorRef, anchorTestid, preferredSide, align]);
 
 	// First pass: mounted hidden at the viewport's top-left so the layout

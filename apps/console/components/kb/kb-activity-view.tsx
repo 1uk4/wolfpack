@@ -297,6 +297,7 @@ export function KbActivityView({ timing }: { timing?: KbActivityTiming } = {}) {
 		mountRead.current = true;
 		refetch();
 		return () => {
+			// eslint-disable-next-line react-hooks/exhaustive-deps -- seq is a request counter: the cleanup must bump the current value to drop in-flight reads
 			seq.current++;
 			if (timer.current) clearTimeout(timer.current);
 			timer.current = null;

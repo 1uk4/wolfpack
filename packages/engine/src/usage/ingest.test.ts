@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ingestUsage } from "./ingest.js";
+import { ingestUsage, readState } from "./ingest.js";
 import { readLedger } from "./ledger.js";
 
 let tmp: string;
@@ -51,5 +51,24 @@ describe("ingestUsage scoped to one den", () => {
     const second = await ingestUsage(opts);
     expect(second.added.engine).toBe(1);
     expect(readLedger(ledgerDir)).toHaveLength(3);
+  });
+
+  it("keeps other dens' stamps when a den-scoped run finishes", async () => {
+    const ledgerDir = path.join(tmp, "ledger");
+    const mk = (name: string, output: number): string => {
+      const den = path.join(tmp, name);
+      fs.mkdirSync(path.join(den, "usage"), { recursive: true });
+      fs.writeFileSync(path.join(den, "usage", "2026-11.jsonl"), line(`2026-11-19T10:0${output}:00Z`, output) + "\n");
+      return den;
+    };
+    const base = { ledgerDir, wolvesRoot: path.join(tmp, "none"), hosts: [] };
+    const a = mk("a", 1);
+    const b = mk("b", 2);
+    await ingestUsage({ ...base, dens: [{ den: a, wolf: "a", host: "local" }] });
+    await ingestUsage({ ...base, dens: [{ den: b, wolf: "b", host: "local" }] });
+    expect(Object.keys(readState(ledgerDir).files).sort()).toEqual([
+      path.join(a, "usage", "2026-11.jsonl"),
+      path.join(b, "usage", "2026-11.jsonl"),
+    ]);
   });
 });

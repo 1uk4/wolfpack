@@ -134,8 +134,9 @@ export async function ingestUsage(opts: IngestOptions): Promise<IngestResult> {
     }
 
     appendLedger(opts.ledgerDir, fresh);
-    if (!opts.wolf) {
-      // Forget files that no longer exist (only a full run sees them all).
+    if (!opts.wolf && !opts.dens) {
+      // Forget files that no longer exist (only a full run sees them all; a
+      // den-scoped run lists just its own files and would wipe the rest).
       const live = new Set(sources.flatMap((s) => s.watch));
       for (const f of Object.keys(next.files)) if (!live.has(f)) delete next.files[f];
     }

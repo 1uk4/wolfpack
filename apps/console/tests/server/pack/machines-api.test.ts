@@ -91,6 +91,13 @@ describe("machines API", () => {
 		assert.deepEqual(await r.json(), { error: "the hub could not complete the request", code: "engine_error" });
 	});
 
+	it("answers 403 forbidden with the owner-device text when the hub refuses a non-owner device, never echoing the client text", async () => {
+		const api = createMachinesApi(source(async () => Promise.reject(Object.assign(new Error("refused SEALED-SECRET-123"), { code: "forbidden" }))));
+		const r = await api.command(post({ kind: "wolves.restart", args: {} }), "sfo-01");
+		assert.equal(r.status, 403);
+		assert.deepEqual(await r.json(), { error: "only an owner device can do this", code: "forbidden" });
+	});
+
 	it("answers 400 with a fixed message on invalid_request, and never echoes a client error text that contains the sealed value", async () => {
 		const api = createMachinesApi(source(async () => Promise.reject(Object.assign(new Error("bad body: SEALED-SECRET-123"), { code: "invalid_request" }))));
 		const r = await api.command(post({ kind: "key.set", args: {}, sealed: "SEALED-SECRET-123" }), "sfo-01");

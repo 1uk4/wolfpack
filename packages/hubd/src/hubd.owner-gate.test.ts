@@ -30,6 +30,7 @@ const call = (token: string, method: string, path: string, body?: unknown) =>
 
 const WRITES: [string, string, unknown][] = [
   ["POST", "/v1/machines/box/key/ack", { fingerprint: "x" }],
+  ["POST", "/v1/machines/box/commands", { kind: "wolves.restart" }],
   ["POST", "/v1/registry/domains", { name: "gated" }],
   ["PATCH", "/v1/registry/domains/gated", { description: "d" }],
   ["DELETE", "/v1/registry/domains/gated", undefined],

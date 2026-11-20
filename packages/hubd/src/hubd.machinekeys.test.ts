@@ -31,7 +31,9 @@ afterEach(async () => {
 
 function mint(kind: "worker" | "console", hostId?: string) {
   const { code } = store.mintPairingCode({ kind, ...(hostId ? { hostId } : {}) });
-  return store.redeem(code, "t", kind, hostId);
+  const r = store.redeem(code, "t", kind, hostId);
+  if (kind === "console") store.setOwner(r.tokenId, true); // machine commands need an owner device
+  return r;
 }
 async function machine(hostId: string, extra: Record<string, unknown> = {}) {
   const w = mint("worker", hostId);

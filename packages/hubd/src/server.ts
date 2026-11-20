@@ -924,7 +924,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         }
         case "hubMachineCommand": {
           // Console/browser tokens only; the token was verified against tokens.json on this request (a revoked device is 401 above). Body (sealed key bytes) is never logged or stored.
-          deviceCaller(identity);
+          ownerCaller(identity); // sealed key.set and restarts: an owner device, like key ack
           const body = parseBody(CommandRequestSchema, await readJson(req, { maxBytes: 128 * 1024, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
           const out = await commandHub.run(params.id!, body);
           return send(res, out.status, out.body);

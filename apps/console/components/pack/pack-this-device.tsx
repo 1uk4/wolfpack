@@ -50,6 +50,7 @@ export function MacAppGroups({ bridge }: { bridge: AppBridge }) {
 		}).catch(() => {});
 		void bridge.folders().then(setPaths).catch(() => {});
 		void bridge.loginItem.get().then(setLogin).catch(() => {});
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per bridge; checkMain is rebuilt each render and must not re-run the probes
 	}, [bridge]);
 
 	return (

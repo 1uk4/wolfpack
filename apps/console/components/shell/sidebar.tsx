@@ -34,7 +34,7 @@ type SessionItem = ChatListItem & { href: string; meta?: string; needsYou?: bool
 
 const itemHref = (c: SessionItem) => c.href;
 import { kbdEventForAction } from "@/src/core";
-import { dataStore, StoreHttpError } from "@/src/core/data-store";
+import { dataStore, StoreHttpError } from "@/src/core";
 import { fetchWolfThreads } from "@/components/kb/kb-client";
 
 /**
@@ -158,6 +158,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 			off?.();
 			mq?.removeEventListener("change", onMq);
 		};
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only; later path changes are read through pathRef in onMq
 	}, []);
 
 	// Selecting something in the list on a phone closes it (never persisted); called from the click handlers.
@@ -619,6 +620,7 @@ export function SessionsSidebar() {
 	/* Archived = graduated features (their thread is closed). They leave the main list for a collapsed section below it. */
 	const layout = useMemo(() => (chats && ranked ? sidebarLayout(chats, ranked, query.trim() !== "") : null), [chats, ranked, query]);
 	const groups = layout?.groups ?? null;
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- layout is memoized, so the ?? [] fallback is only a new array while layout is null and feeds a cheap memo
 	const archived = layout?.archived ?? [];
 	const archivedOpen = showArchived || query.trim() !== "";
 	// Home is per wolf: a feature is indented only under a Home of its own wolf.

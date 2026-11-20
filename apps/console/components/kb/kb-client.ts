@@ -8,7 +8,7 @@
  * "memory_busy", "promote_unavailable") so callers can tell 409s apart.
  */
 import type { WorkItemResponse } from "@wolfpack/protocol";
-import { dataStore, StoreHttpError } from "@/src/core/data-store";
+import { dataStore, StoreHttpError } from "@/src/core";
 import type {
 	ConsolidateResponse,
 	GraduationJob,

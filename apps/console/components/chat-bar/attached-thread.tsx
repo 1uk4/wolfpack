@@ -254,6 +254,7 @@ export function AttachedThreadProvider({
 	const working = attachedThread?.status === "busy" || sent;
 	const closedReason = attached && closedBusy?.threadId === attached.threadId ? closedBusy.reason : undefined;
 	const statusNow = attachedThread?.status;
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- runs after every render on purpose: it reconciles closedBusy against the latest attached thread and status
 	useEffect(() => {
 		if (!closedBusy) return;
 		if (!attached || attached.threadId !== closedBusy.threadId) setClosedBusy(null);

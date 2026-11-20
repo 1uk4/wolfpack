@@ -31,6 +31,8 @@ async function deadUrl(): Promise<string> {
 	await new Promise((r) => s.close(r));
 	return `http://127.0.0.1:${port}`;
 }
+/** A subscription file that does not exist: the channel is stable whatever this machine follows (the handler reads WOLFPACK_SUBSCRIPTION_FILE, else ~/.wolfpack/release-channel.json). */
+const NO_SUBSCRIPTION = { WOLFPACK_SUBSCRIPTION_FILE: join(tmpdir(), "no-such-release-channel.json") };
 const entry = (c: string, v: string) => ({ version: v, tag: `${c}/v${v}`, sha: "bfb4b5c3", publishedAt: "2026-11-09T03:21:10Z", notesUrl: `https://github.com/1uk4/wolfpack/releases/tag/${c}/v${v}` });
 
 describe("GET /api/updates", () => {
@@ -41,7 +43,7 @@ describe("GET /api/updates", () => {
 		writeFileSync(join(dir, "VERSION"), "0.1.18\n");
 		try {
 			const get = createUpdatesHandler({
-				env: { WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_HUB_URL: await deadUrl(), WOLFPACK_API_URL: workerd },
+				env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_HUB_URL: await deadUrl(), WOLFPACK_API_URL: workerd },
 				consoleDir: dir,
 				probeTimeoutMs: 1_000,
 			});
@@ -107,7 +109,7 @@ describe("GET /api/updates", () => {
 		writeFileSync(statusFile, JSON.stringify(status));
 		try {
 			const now = () => Date.parse("2026-11-09T04:05:00.000Z"); // 5 min after lastCheck: fresh, so no `stale`
-			const get = createUpdatesHandler({ env: { WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: statusFile }, consoleDir: dir, now });
+			const get = createUpdatesHandler({ env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: statusFile }, consoleDir: dir, now });
 			const by = Object.fromEntries((await get()).components.map((c) => [c.component, c.updateStatus]));
 			assert.deepEqual(by.hubd, { state: "updated", host: "sfo-01", lastCheck: "2026-11-09T04:00:00.000Z", at: "2026-11-09T03:58:00.000Z" });
 			assert.deepEqual(by.workerd, { state: "failed", host: "sfo-01", lastCheck: "2026-11-09T04:00:00.000Z", unit: "workerd-wolves", code: "unhealthy", message: "/healthz on 127.0.0.1:7143: ECONNREFUSED" });
@@ -115,7 +117,7 @@ describe("GET /api/updates", () => {
 			assert.deepEqual(by.console, { state: "idle", host: "sfo-01", lastCheck: "2026-11-09T04:00:00.000Z" });
 
 			writeFileSync(statusFile, JSON.stringify({ ...status, enabled: true, result: "disabled", disabledReason: "kill switch: /var/lib/wolfpack-auto-update/auto-update.disabled exists", units: { ...status.units, console: unit("console", "0.1.18", "0.1.19", "disabled") } }));
-			const again = await createUpdatesHandler({ env: { WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: statusFile }, consoleDir: dir, now })();
+			const again = await createUpdatesHandler({ env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: statusFile }, consoleDir: dir, now })();
 			assert.deepEqual(
 				again.components.find((c) => c.component === "console")?.updateStatus,
 				{ state: "disabled", host: "sfo-01", lastCheck: "2026-11-09T04:00:00.000Z", message: "kill switch: /var/lib/wolfpack-auto-update/auto-update.disabled exists" },
@@ -134,7 +136,7 @@ describe("GET /api/updates", () => {
 			writeFileSync(statusFile, JSON.stringify({ schema: 1, host: "sfo-01", enabled: true, lastCheck, result: "ok", units: { console: { component: "console", current: "0.1.18", target: "0.1.18", state: "idle" } } }));
 		const now = () => Date.parse("2026-11-09T12:00:00.000Z");
 		const consoleStatus = async (file: string) =>
-			(await createUpdatesHandler({ env: { WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: file }, consoleDir: dir, now })()).components.find((c) => c.component === "console")?.updateStatus;
+			(await createUpdatesHandler({ env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: file }, consoleDir: dir, now })()).components.find((c) => c.component === "console")?.updateStatus;
 		try {
 			write("2026-11-09T09:00:00.000Z"); // 3 h: the timer has missed 6 runs
 			assert.deepEqual(await consoleStatus(statusFile), { state: "idle", host: "sfo-01", lastCheck: "2026-11-09T09:00:00.000Z", stale: true });
@@ -153,7 +155,7 @@ describe("GET /api/updates", () => {
 		const statusFile = join(dir, "status.json");
 		writeFileSync(statusFile, JSON.stringify({ schema: 1, host: "hal", enabled: false, lastCheck: "2026-11-01T09:00:00.000Z", result: "ok", units: { console: { component: "console", current: "0.1.18", target: "0.1.18", state: "idle" } } }));
 		try {
-			const body = await createUpdatesHandler({ env: { WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: statusFile }, consoleDir: dir, now: () => Date.parse("2026-11-09T12:00:00.000Z") })();
+			const body = await createUpdatesHandler({ env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: statusFile }, consoleDir: dir, now: () => Date.parse("2026-11-09T12:00:00.000Z") })();
 			assert.deepEqual(body.components[0]?.updateStatus, { state: "idle", host: "hal", lastCheck: "2026-11-01T09:00:00.000Z", manual: true });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -173,7 +175,7 @@ describe("GET /api/updates", () => {
 		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
 		writeFileSync(join(dir, "VERSION"), "0.1.18\n");
 		try {
-			const get = createUpdatesHandler({ env: { WOLFPACK_UPDATE_MANIFEST_URL: url }, consoleDir: dir });
+			const get = createUpdatesHandler({ env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: url }, consoleDir: dir });
 			await get();
 			await get();
 			assert.equal(hits, 1);
@@ -188,7 +190,7 @@ describe("GET /api/updates", () => {
 		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
 		writeFileSync(join(dir, "VERSION"), "0.1.17\n");
 		try {
-			const body = await createUpdatesHandler({ env: { WOLFPACK_UPDATE_MANIFEST_URL: `${await deadUrl()}/stable.json` }, consoleDir: dir })();
+			const body = await createUpdatesHandler({ env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: `${await deadUrl()}/stable.json` }, consoleDir: dir })();
 			assert.equal(body.outdated, false);
 			const { updateStep: _step, ...row } = body.components[0] ?? {};
 			assert.deepEqual(row, { component: "console", running: "0.1.17", latest: null, outdated: null, notesUrl: null });

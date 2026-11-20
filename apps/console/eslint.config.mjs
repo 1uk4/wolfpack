@@ -2,6 +2,7 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import nextPlugin from "@next/eslint-plugin-next";
 import tsParser from "@typescript-eslint/parser";
 import importPlugin from "eslint-plugin-import";
+import reactHooks from "eslint-plugin-react-hooks";
 
 // Layering rules only (see docs/architecture.md); this is not a style linter.
 //   components/  -> only the "@/src/core" barrel
@@ -18,10 +19,11 @@ export default defineConfig([
 			parser: tsParser,
 			parserOptions: { ecmaVersion: "latest", sourceType: "module" },
 		},
-		plugins: { "@next/next": nextPlugin, import: importPlugin },
+		plugins: { "@next/next": nextPlugin, import: importPlugin, "react-hooks": reactHooks },
 		settings: { "import/resolver": { typescript: { alwaysTryTypes: true } } },
 		rules: {
 			...nextPlugin.configs.recommended.rules,
+			"react-hooks/exhaustive-deps": "error",
 			"import/no-restricted-paths": [
 				"error",
 				{

@@ -2,7 +2,7 @@
  * Browser fetch helper for the KB activity route. Same KbResult contract as kb-client.ts: resolves, never throws; 409 = "unavailable".
  */
 import type { KbActivityResponse } from "@/src/core";
-import { dataStore, StoreHttpError } from "@/src/core/data-store";
+import { dataStore, StoreHttpError } from "@/src/core";
 import type { KbFailureReason } from "./kb-client";
 
 /** `unauthorized`: the browser has no (or a revoked) hub token. */

@@ -9,7 +9,7 @@
  * it returns is stored, never the code. The hub's refusal message is shown inline.
  */
 import { useEffect, useRef, useState } from "react";
-import { saveHubToken, tokenFromHash, tokenFromPairingInput } from "@/src/core/ui/hub-auth";
+import { saveHubToken, tokenFromHash, tokenFromPairingInput } from "@/src/core";
 
 export default function PairPage() {
 	const [stored, setStored] = useState<boolean | undefined>();

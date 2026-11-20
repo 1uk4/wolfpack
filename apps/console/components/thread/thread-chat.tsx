@@ -18,7 +18,7 @@ import { FEATURE_PROGRESS_RESERVE, FeatureProgressPanel, useFeatureProgress } fr
 import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread/thread-compaction-divider";
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/thread/subagent-message";
-import { parseSubagentMessage } from "@/src/core/thread/subagent-message";
+import { parseSubagentMessage } from "@/src/core";
 import { TurnTimer, useTurnStart } from "@/components/thread/turn-timer";
 import { useOwnAsk } from "@/components/thread/thread-ask";
 import { submitToThread } from "@/components/chat-bar/chat-bar-io";

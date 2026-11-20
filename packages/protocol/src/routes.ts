@@ -64,6 +64,7 @@ import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from
 import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
 import { RebuildApplyRequestSchema, RebuildApplyResponseSchema, RebuildListResponseSchema, RebuildPreviewRequestSchema, RebuildPreviewResponseSchema, RebuildRestoreRequestSchema, RebuildRestoreResponseSchema } from "./kb-rebuild.js";
+import { ApprovalListResponseSchema, ApprovalResponseSchema, CreateApprovalRequestBodySchema } from "./work-approvals.js";
 import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
 
 export { ATTACHMENT_NAME_HEADER } from "./attachments.js";
@@ -547,6 +548,18 @@ export const ROUTES = {
   hubClaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/claim", body: ClaimWorkBodySchema, response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   hubUnclaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/unclaim", body: ClaimWorkBodySchema, response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   hubGraduateWork: { scope: "hub", method: "POST", path: "/v1/work/:id/graduate", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
+  /**
+   * Owner approvals (hubd): graduate, archive and reassign by an agent need the owner. A worker token files a request (POST) and may read one;
+   * only a non-worker token lists, approves or rejects (worker: 403 `request_forbidden`). One pending request per item: a second POST is
+   * 409 `request_pending` (`details.requestId`). Approve appends the audit line to the Record, runs the action (graduate sends the STORED
+   * preview set), marks the request approved and emits `work-request-changed`; reject marks it rejected. No expiry.
+   * `hubListApprovals`: `?status=pending|approved|rejected` (default pending), `?workId=`.
+   */
+  hubCreateApproval: { scope: "hub", method: "POST", path: "/v1/work/:id/requests", body: CreateApprovalRequestBodySchema, response: { kind: "json", schema: ApprovalResponseSchema }, status: [201], error: err },
+  hubListApprovals: { scope: "hub", method: "GET", path: "/v1/work/requests", response: { kind: "json", schema: ApprovalListResponseSchema }, status: [200], error: err },
+  hubGetApproval: { scope: "hub", method: "GET", path: "/v1/work/requests/:rid", response: { kind: "json", schema: ApprovalResponseSchema }, status: [200], error: err },
+  hubApproveApproval: { scope: "hub", method: "POST", path: "/v1/work/requests/:rid/approve", response: { kind: "json", schema: ApprovalResponseSchema }, status: [200], error: err },
+  hubRejectApproval: { scope: "hub", method: "POST", path: "/v1/work/requests/:rid/reject", response: { kind: "json", schema: ApprovalResponseSchema }, status: [200], error: err },
   /**
    * KB commit (hubd): a batch of create/update/delete changes to entries/*.md, _registry.md, _digest.json and INDEX.md of declared
    * domains, each with contentHash and prevHash. All-or-nothing under the KB writer lock: entry schema, declared domain (domains.yaml),

@@ -12,6 +12,7 @@ import {
   type Contribution,
   contentHash,
   inboxDir,
+  receiptsDir,
   now,
   safeSegment,
   hashTag,
@@ -100,6 +101,18 @@ export interface EmitDeltaInput {
   force?: boolean;
 }
 
+/** True when the sweep rejected an update of exactly this body because its targets are gone: the whole body must be sent again. */
+function updateTargetGone(roots: KbRoots, wolf: string, denTopicId: string, hash: string): boolean {
+  try {
+    const p = join(receiptsDir(roots, wolf), `${safeSegment(denTopicId, "den topic id")}-${hashTag(hash)}.md`);
+    if (!existsSync(p)) return false;
+    const raw = readFileSync(p, "utf-8");
+    return /^outcome:\s*reject\s*$/m.test(raw) && raw.includes("update_target_gone");
+  } catch {
+    return false;
+  }
+}
+
 /** The file name of a contribution: `<denTopicId>-<10 hex of the content hash>.md`. */
 export function contributionFileName(denTopicId: string, hash: string): string {
   return `${safeSegment(denTopicId, "den topic id")}-${hashTag(hash)}.md`;
@@ -126,7 +139,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
   const hash = contentHash(body);
   const emitted = readEmittedMap(roots);
   const prevHash = emitted[input.denTopicId] ?? null;
-  if (prevHash === hash && !input.force) return null; // unchanged re-promotion → no-op
+  if (prevHash === hash && !input.force && !updateTargetGone(roots, wolf, input.denTopicId, hash)) return null; // unchanged re-promotion → no-op
 
   const contribution: Contribution = {
     from: wolf,

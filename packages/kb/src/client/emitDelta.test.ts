@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, readdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { contentHash, type KbRoots } from "../shared/index.js";
-import { emitDelta } from "./emitDelta.js";
+import { contributionFileName, emitDelta } from "./emitDelta.js";
 import { parseContribution } from "../librarian/intake.js";
 
 const WOLF = "w1";
@@ -28,6 +28,13 @@ describe("emitDelta force", () => {
     expect(emitDelta(input("body"))).toBeNull();
     expect(existsSync(join(roots.opsRoot, "inbox", WOLF))).toBe(true);
     expect(inbox()).toEqual([]);
+  });
+
+  it("an unchanged body is re-sent whole after the sweep rejected its update with update_target_gone", () => {
+    emitDelta(input("body"));
+    mkdirSync(join(roots.opsRoot, "receipts", WOLF), { recursive: true });
+    writeFileSync(join(roots.opsRoot, "receipts", WOLF, contributionFileName("t", contentHash("body"))), "---\nfrom: w1\nden_topic_id: t\noutcome: reject\n---\n\nupdate_target_gone: kb-x-1\n");
+    expect(emitDelta(input("body"))).toMatchObject({ denTopicId: "t", change: "create", body: "body" });
   });
 
   it("a forced resend re-writes the inbox file and still updates emitted.json and emitted-bodies", () => {

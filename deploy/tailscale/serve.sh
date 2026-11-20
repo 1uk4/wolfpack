@@ -30,13 +30,14 @@ while (($#)); do
 done
 [[ -n $CMD ]] || die "usage: serve.sh [--dry-run] on|status|off [--hub-upstream URL] [--console-upstream URL]"
 # Default hub upstream: this host's tailnet IP (hubd binds it), port 3150. --dry-run without tailscale falls back to a documentation address.
-if [[ -z $HUB ]]; then
+# Only `on` needs it: status and off must work when the lookup is empty.
+if [[ $CMD == on && -z $HUB ]]; then
   TSIP=$("$TS" ip -4 2>/dev/null | head -n1 || true)
   if [[ -z $TSIP ]] && ((DRY)); then TSIP=100.64.0.1; fi
   [[ -n $TSIP ]] || die "cannot determine the tailnet IP; pass --hub-upstream http://<tailscale ip>:3150"
   HUB=http://$TSIP:3150
 fi
-[[ $HUB =~ ^http://(127\.0\.0\.1|100\.[0-9]+\.[0-9]+\.[0-9]+):[0-9]+$ ]] || die "--hub-upstream must be http://127.0.0.1:PORT or http://<tailscale ip>:PORT"
+[[ -z $HUB || $HUB =~ ^http://(127\.0\.0\.1|100\.[0-9]+\.[0-9]+\.[0-9]+):[0-9]+$ ]] || die "--hub-upstream must be http://127.0.0.1:PORT or http://<tailscale ip>:PORT"
 [[ $CONSOLE =~ ^http://127\.0\.0\.1:[0-9]+$ ]] || die "--console-upstream must be http://127.0.0.1:PORT"
 ((DRY)) || command -v "$TS" >/dev/null 2>&1 || die "tailscale not found"
 

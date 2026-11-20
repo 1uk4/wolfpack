@@ -41,6 +41,12 @@ describe("stack plist", () => {
 		expect(x).toContain("<key>PATH</key>\n\t\t<string>/n/bin:/usr/bin</string>");
 		expect(x).toContain("<key>StandardErrorPath</key>\n\t<string>/Users/me/wolves/local/logs/stack.log</string>");
 	});
+	it("gives workerd the Mac's Pack key file, the one the console at :3230 reads, so Pack > Keys can send to this machine", () => {
+		expect(cfg.keyFile).toBe("/Users/me/.wolfpack/preview/keys.env");
+		expect(stack.resolveConfig({ WOLFPACK_HOME: "/w" }, "/Users/me", 501).keyFile).toBe("/w/preview/keys.env");
+		const x = stack.buildPlist(cfg, "/n/bin/node", "/n/bin:/usr/bin");
+		expect(x).toContain("<key>WORKERD_KEY_FILE</key>\n\t\t<string>/Users/me/.wolfpack/preview/keys.env</string>");
+	});
 	it("escapes xml and honours overrides", () => {
 		const c = stack.resolveConfig({ STACK_WOLVES: "/a&b", STACK_PORT: "7199", STACK_LABEL: "x.y" }, "/h", 1);
 		expect(stack.buildPlist(c, "/n", "/p")).toContain("/a&amp;b");

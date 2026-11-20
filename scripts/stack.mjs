@@ -61,6 +61,9 @@ export function resolveConfig(env = process.env, home = os.homedir(), uid = proc
 	return {
 		home, uid, label, port, wolves, runtime,
 		envFile: path.join(packHome(env, home), ".env"),
+		// The Mac's Pack key file. workerd stores keys sent from Pack > Keys here and reports its slots only when told this path
+		// (there is no default). Same file the console at :3230 reads (runtime-preview-console.mjs sets WOLFPACK_KEY_FILE to it).
+		keyFile: path.join(packHome(env, home), "preview/keys.env"),
 		workerdJs: path.join(runtime, "packages/workerd/dist/bin/workerd.js"),
 		log: env.STACK_LOG || path.join(wolves, "logs/stack.log"),
 		plist: path.join(plistDir, `${label}.plist`),
@@ -102,7 +105,8 @@ ${kv("WorkingDirectory", cfg.runtime)}\t<key>EnvironmentVariables</key>
 \t<dict>
 \t\t<key>HOME</key>
 ${item(cfg.home)}\t\t<key>PATH</key>
-${item(pathEnv)}\t</dict>
+${item(pathEnv)}\t\t<key>WORKERD_KEY_FILE</key>
+${item(cfg.keyFile)}\t</dict>
 \t<key>RunAtLoad</key>
 \t<true/>
 \t<key>KeepAlive</key>

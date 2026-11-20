@@ -697,7 +697,7 @@ function useApprovalEntries(enabled: boolean): ApprovalEntry[] {
 }
 
 /** Another thread has a card waiting: count + that thread's color dot. One tap attaches the bar to the oldest waiting one (no toast, no auto-switch). */
-function NeedsYouBadge({ waiting, all, approvals }: { waiting: (BarThread & { wolf: string })[]; all: BarThread[]; approvals: ApprovalEntry[] }) {
+export function NeedsYouBadge({ waiting, all, approvals }: { waiting: (BarThread & { wolf: string })[]; all: BarThread[]; approvals: ApprovalEntry[] }) {
 	const api = useAttachedThread()!;
 	const router = useRouter();
 	const first = waiting[0];

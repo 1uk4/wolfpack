@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { PAIR_PATH } from "@/src/core/ui/hub-auth";
+import { PAIR_PATH } from "@/src/core";
 
 /**
  * Single-Mac mode on the client (work-wolfpack-TdmbaV4). The desktop preload exposes `window.wolfpack.singleMac === true` when the

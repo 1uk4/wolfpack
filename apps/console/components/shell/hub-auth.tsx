@@ -4,7 +4,7 @@
  * Installs the hub sign-in fetch wrapper (src/core/ui/hub-auth.ts) on `window.fetch` at MODULE LOAD, not in an effect: children's effects
  * run before a parent's, so an effect would let the first /api requests go out without the token. Idempotent (HMR-safe).
  */
-import { syncHubCookie, withHubAuth } from "@/src/core/ui/hub-auth";
+import { syncHubCookie, withHubAuth } from "@/src/core";
 import { leaveOnUnauthorized } from "@/components/shell/single-mac";
 
 const MARK = Symbol.for("wolfpack.console.hub-auth");

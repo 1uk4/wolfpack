@@ -44,3 +44,8 @@ export * from "./pack/domains-api.ts";
 export * from "./pack/keys-api.ts";
 export * from "./pack/model-options.ts";
 export * from "./work/approvals-api.ts";
+// Named re-exports so app/ route handlers import through the barrel (import/no-restricted-paths).
+export { attachmentLimit } from "./thread/attachment-limit.ts";
+export { createSubscriptionHandler } from "./pack/subscription-api.ts";
+export { hubPublicUrl } from "./pack/hub-public-url.ts";
+export { createUpdatesHandler } from "./pack/updates-api.ts";

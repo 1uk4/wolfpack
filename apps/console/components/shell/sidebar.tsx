@@ -34,7 +34,7 @@ type SessionItem = ChatListItem & { href: string; meta?: string; needsYou?: bool
 
 const itemHref = (c: SessionItem) => c.href;
 import { kbdEventForAction } from "@/src/core";
-import { dataStore, StoreHttpError } from "@/src/core/data-store";
+import { dataStore, StoreHttpError } from "@/src/core";
 import { fetchWolfThreads } from "@/components/kb/kb-client";
 
 /**

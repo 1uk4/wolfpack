@@ -4,7 +4,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { fetchWolves } from "@/components/kb/kb-client";
-import { dataStore } from "@/src/core/data-store";
+import { dataStore } from "@/src/core";
 import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 
 export function WolfHomeView({ wolves }: { wolves: readonly { name: string }[] }) {

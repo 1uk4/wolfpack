@@ -68,7 +68,7 @@ const respond = (res: ServerResponse, status: number, body: unknown): void => {
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text) });
   res.end(text);
 };
-const STATUS: Record<string, number> = { invalid_request: 400, forbidden: 403, not_found: 404, unauthorized: 401, busy: 503 };
+const STATUS: Record<string, number> = { request_forbidden: 403, invalid_request: 400, forbidden: 403, not_found: 404, unauthorized: 401, busy: 503 };
 /** Typed write failures (HubError details.code, see ERRNO_TABLE in work-writes.ts): the status is decided by the typed code, not the protocol code. */
 const TYPED_STATUS: Record<string, number> = { [WORK_STORE_READ_ONLY]: 503, [WORK_STORE_PERMISSION_DENIED]: 500, [PARENT_CLOSED]: 409, [RECORD_CLOSED]: 409, [LOG_FULL]: 409 };
 
@@ -90,6 +90,10 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
     const actorOf = (): Actor => (actorMemo ??= d.wolfActor(tokenActor, named));
     const forbid = (m: string): never => {
       throw new HubError("forbidden", m);
+    };
+    /** Owner rule (work-wolfpack-OEPh0RF): a wolf never graduates, archives or reassigns on its own; it files a request. */
+    const needsApproval = (): never => {
+      throw new HubError("request_forbidden", "file an approval request (POST /work/:id/requests)");
     };
     const NO_ASSIGNEE = "this item has no assignee; only the owner can change it";
     const gate = (item: { assignee?: unknown }, w: string): void => {
@@ -179,6 +183,7 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
       const parsed = (isBatch ? PatchWorkBatchSchema : PatchWorkOpSchema).safeParse(raw);
       if (!parsed.success) throw new HubError("invalid_request", parsed.error.issues.map((i) => `${i.path.map(String).join(".") || "body"}: ${i.message}`).join("; "));
       const ops = normalisePatch(parsed.data as never);
+      if (worker && ops.some((o) => o.op === "assign" || (o.op === "stage" && o.to === "archived"))) needsApproval();
       const actor = actorOf();
       // The item, the gate and the handoff lookup run INSIDE the write queue: a reassignment that lands between check and write is seen.
       return await once(actor, 200, () => {
@@ -223,6 +228,7 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
     if (rest.length === 2 && rest[1] === "graduate" && method === "POST") {
       const id = rest[0]!;
       writeItemOf(id);
+      if (worker) needsApproval();
       const actor = actorOf();
       return await once(actor, 200, () => {
         if (worker) gate(writeItemOf(id), actor.id); // re-read inside the queue
@@ -234,7 +240,7 @@ export async function handleWorkProxy(d: WorkProxyDeps, req: IncomingMessage, re
   } catch (e) {
     const err = e instanceof HubError ? e : mapWorkError(e, { write: req.method !== "GET" });
     const typed = err.details?.code;
-    if (!res.headersSent) respond(res, (typed ? TYPED_STATUS[typed] : undefined) ?? STATUS[err.code] ?? 500, { error: err.message, ...(typed && TYPED_STATUS[typed] ? { code: typed } : {}) });
+    if (!res.headersSent) respond(res, (typed ? TYPED_STATUS[typed] : undefined) ?? STATUS[err.code] ?? 500, { error: err.message, ...(typed && TYPED_STATUS[typed] ? { code: typed } : {}), ...(err.code === "request_forbidden" ? { code: err.code } : {}) });
     else res.end();
   }
 }

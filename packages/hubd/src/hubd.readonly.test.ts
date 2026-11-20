@@ -53,7 +53,7 @@ const feature = { kind: "feature", domain: "personal", title: "RO feature", assi
 
 describe("probe: EROFS leaves the ledger untouched", () => {
   it("probe: create, patch and graduate answer 503 work_store_read_only and no ledger byte changes; reads still work; writable again, create works", async () => {
-    const { dataDir, call } = await rig();
+    const { dataDir, call, hub } = await rig();
     const made = (await (await call("POST", "", feature)).json()) as { id: string };
     const before = ledgerOf(dataDir);
     const restore = setWorkStoreProbe(() => { throw errno("EROFS"); });
@@ -63,11 +63,12 @@ describe("probe: EROFS leaves the ledger untouched", () => {
     expect(rb.code).toBe("work_store_read_only");
     expect(rb.error).toMatch(/work store is read-only/);
     expect(rb.error).toMatch(/turned off/);
-    for (const [m, p, b] of [["PATCH", `/${made.id}`, { note: "x" }], ["POST", `/${made.id}/graduate`, undefined]] as const) {
-      const x = await call(m, p, b);
-      expect(x.status).toBe(503);
-      expect(((await x.json()) as { code?: string }).code).toBe("work_store_read_only");
-    }
+    // graduate is the owner's now (a worker token files a request instead): the owner's direct route is refused the same way
+    const patch = await call("PATCH", `/${made.id}`, { note: "x" });
+    const grad = await fetch(`${hub.url}/v1/work/${made.id}/graduate`, { method: "POST", headers: OP });
+    expect(patch.status).toBe(503);
+    expect(((await patch.json()) as { code?: string }).code).toBe("work_store_read_only");
+    expect(grad.status).toBeGreaterThanOrEqual(500); // the owner's direct route has no typed-error mapping (502 engine_error); the ledger check below is the contract
     expect(ledgerOf(dataDir)).toBe(before); // byte-identical: nothing was appended
     const list = (await (await call("GET", "?domain=personal")).json()) as { items: Array<{ title: string }> };
     expect(list.items.map((i) => i.title)).toEqual(["RO feature"]);

@@ -71,6 +71,8 @@ import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
 import { createLinkContributions, type LinkContributions } from "./link-contributions.js";
 import { createLink, type Link, type LinkTimers } from "./link.js";
+import { createApprovalStore } from "./work-approvals.js";
+import { CreateApprovalRequestBodySchema } from "@wolfpack/protocol";
 import { CommandRequestSchema, INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES, InventoryReportBodySchema, LINK_PATH, MachineKeyAckBodySchema, wolfForRoute } from "@wolfpack/protocol";
 import { createInventory, type Inventory } from "./inventory.js";
 import { createCommandHub, type CommandHub } from "./commands.js";
@@ -374,6 +376,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   const writeWork = writer.write;
   const workIdempotency = new WorkIdempotency(join(opts.dataDir, "link", "work-idempotency.jsonl"), { now: opts.now });
   let registry: ReturnType<typeof createRegistry>;
+  const approvals = createApprovalStore({ roots, dataDir: opts.dataDir, inboxRoot: opts.inboxRoot ?? contributionsRoot(opts.dataDir), now: () => new Date(opts.now?.() ?? Date.now()), knownWolf: (n) => (registry.list("wolves") as { name: string; status?: string }[]).some((w) => w.name === n && w.status === "active") });
   try {
     registry = createRegistry({
       dataDir: opts.dataDir,
@@ -1019,6 +1022,42 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
           const item = await writeWork(actor, () => graduateItem(roots, params.id));
           return send(res, 200, { item });
+        }
+        case "hubCreateApproval": {
+          const tokenActor = writeActor(req);
+          if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
+          const body = parseBody(CreateApprovalRequestBodySchema, await readBody(req));
+          const actor = wolfActorFor(tokenActor, body.wolf);
+          const worker = identity?.kind === "worker";
+          const made = await writeWork(actor, () => {
+            if (worker) {
+              const item = loadWorkState(roots).get(params.id as never);
+              if (item && String(item.assignee ?? "") !== actor.id) throw new HubError("forbidden", `assigned to ${String(item.assignee ?? "nobody")}; only that wolf or the owner can ask for this`);
+            }
+            return approvals.create(params.id, body, { wolf: body.wolf ?? actor.id, ...(body.thread ? { thread: body.thread } : {}) });
+          });
+          bus.emit({ type: "work-request-changed", requestId: made.id, itemId: made.workId, kind: made.kind, status: "pending" });
+          return send(res, 201, { request: made });
+        }
+        case "hubListApprovals": {
+          if (identity?.kind === "worker") throw new HubError("request_forbidden", "a worker token can only file approval requests");
+          const status = url.searchParams.get("status") ?? "pending";
+          if (!["pending", "approved", "rejected"].includes(status)) throw new HubError("invalid_request", "status must be pending, approved or rejected");
+          return send(res, 200, { requests: approvals.list({ status, workId: url.searchParams.get("workId") ?? undefined }) });
+        }
+        case "hubGetApproval": {
+          const r = approvals.get(params.rid);
+          if (identity?.kind === "worker" && !(registry.list("wolves") as { name: string; host?: string }[]).some((w) => w.name === r.requestedBy.wolf && w.host === identity.hostId)) throw new HubError("request_forbidden", "not your request");
+          return send(res, 200, { request: r });
+        }
+        case "hubApproveApproval":
+        case "hubRejectApproval": {
+          if (identity?.kind === "worker") throw new HubError("request_forbidden", "only the owner can decide an approval request");
+          const actor = writeActor(req);
+          const by = { actor: actor.id, device: identity?.tokenId ?? "unknown" };
+          const done = await writeWork(actor, () => (m.name === "hubApproveApproval" ? approvals.approve(params.rid, by) : approvals.reject(params.rid, by)));
+          bus.emit({ type: "work-request-changed", requestId: done.id, itemId: done.workId, kind: done.kind, status: done.status });
+          return send(res, 200, { request: done });
         }
         default: {
           const reg = registryRoute(m.name);

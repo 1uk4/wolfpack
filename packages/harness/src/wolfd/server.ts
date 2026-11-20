@@ -160,6 +160,8 @@ export interface ThreadConversations {
 export const WOLFD_VERSION_STAMPS = [new URL("./VERSION", import.meta.url), new URL("../../VERSION", import.meta.url), new URL("../../../../VERSION", import.meta.url)];
 const WOLFD_VERSION = stampedVersion(WOLFD_VERSION_STAMPS, new URL("../../package.json", import.meta.url));
 const WOLF_EVENT_BUFFER = 256;
+/** A second approved-graduation event for the same item inside this window (hub replay) is not passed to memory again. */
+const APPROVAL_DEDUPE_MS = 10 * 60_000;
 const MEMORY_KEEPALIVE_MS = 20_000;
 const MEMORY_STREAM_MAX_BUFFER = 1_000_000;
 
@@ -479,10 +481,22 @@ export class WolfServer {
       try { unbindOnGraduation(this.opts.den, { id: r.itemId, title, archived: [r.itemId, ...archived] }); } catch (e) { this.opts.onError?.(e); }
     }
     this.closeFeatureThreads([r.itemId, ...archived]);
+    // The hub may replay the event on reconnect: tell memory once per item within the window.
+    const now = Date.now();
+    for (const [k, at] of this.approvedSeen) if (now - at > APPROVAL_DEDUPE_MS) this.approvedSeen.delete(k);
+    if (this.approvedSeen.has(r.itemId)) return;
+    this.approvedSeen.set(r.itemId, now);
+    const hook = this.opts.den ? memoryActionsFor(this.opts.den)?.onGraduationApproved : undefined;
+    if (hook) {
+      // Fire and forget: a slow promote must not delay the close, and a failure is logged, never thrown.
+      void Promise.resolve().then(() => hook(r.itemId, archived)).catch((e) => this.opts.onError?.(e));
+    }
   }
+  private readonly approvedSeen = new Map<string, number>();
 
   /** Graduation jobs by `<wolf>:<work id>`: preview and confirm run in the background, a second start returns the running job. */
   private readonly graduationJobs = new GraduationJobs();
+
 
   /** The wolf's graduation actions, after the checks every graduate route shares. */
   private graduationFor(params: Record<string, string>, validated?: () => void) {

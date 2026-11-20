@@ -119,6 +119,49 @@ describe("a graduated feature's thread is read-only history", () => {
   });
 });
 
+describe("listThreads and settled subagents", () => {
+  /** The home thread spawns one child that finishes at once; the child's own turns answer plainly. */
+  async function wolfWithDoneChild(): Promise<TestWolf> {
+    const { fauxToolCall } = await import("./scripted-model.js");
+    const step: FauxResponseStep = async (ctx) => {
+      const system = JSON.stringify(ctx.messages.filter((m) => m.role === "system"));
+      const last = ctx.messages[ctx.messages.length - 1];
+      if (last.role === "toolResult") return fauxAssistantMessage("ok");
+      if (system.includes("You are the sub-agent")) return fauxAssistantMessage("child done");
+      const text = typeof last.content === "string" ? last.content : (last.content as Array<{ type: string; text?: string }>).map((b) => (b.type === "text" ? (b.text ?? "") : "")).join("");
+      if (!text.startsWith("spawn it")) return fauxAssistantMessage("noted");
+      return fauxAssistantMessage(fauxToolCall("subagent", { agent: "tester", task: "do it", name: "kid" }), { stopReason: "toolUse" });
+    };
+    const slots = mkdtempSync(join(tmpdir(), "threads-slots-"));
+    const w = await startTestWolf({ script: Array.from({ length: 10 }, () => step), env: { WOLFPACK_SUBAGENT_SLOT_POLL_MS: "50", WOLFPACK_SUBAGENT_SLOTS: slots } });
+    mkdirSync(join(w.root, "agent", "agents"), { recursive: true });
+    writeFileSync(join(w.root, "agent", "agents", "tester.md"), "---\nname: tester\ndescription: A scripted test agent\nmodel: fast\ntools: read, grep\n---\n\nYou are a test agent.\n");
+    await w.client.submit(w.home, "spawn it", { whenBusy: "reject" });
+    await drain(w, w.home);
+    await vi.waitFor(async () => expect((await w.client.listChildren!(w.home)).map((c) => c.state)).toEqual(["done"]), { timeout: 8000 });
+    return w;
+  }
+
+  it("omits done subagent threads by default and lists them with all", async () => {
+    tw = await wolfWithDoneChild();
+    expect((await tw.client.listThreads("testwolf")).map((t) => t.kind)).toEqual(["home"]);
+    expect((await tw.client.listThreads("testwolf", { all: true })).map((t) => [t.kind, t.state])).toEqual([["home", undefined], ["subagent", "done"]]);
+  }, 20000);
+
+  it("looks up the git workspace for the parent thread only, never for a settled subagent", async () => {
+    const { GitInfo } = await import("./workspace-info.js");
+    tw = await wolfWithDoneChild();
+    const spy = vi.spyOn(GitInfo.prototype, "workspaceOf");
+    try {
+      const all = await tw.client.listThreads("testwolf", { all: true });
+      expect(all).toHaveLength(2);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  }, 20000);
+});
+
 describe("feature threads survive a restart", () => {
   it("a new WolfServer on the same den re-attaches the persisted threads", async () => {
     const den = mkdtempSync(join(tmpdir(), "wolfd-threads-"));

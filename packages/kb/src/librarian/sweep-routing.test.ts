@@ -127,6 +127,16 @@ describe("sweep: routing decisions", () => {
     expect(routingOf().target).toBe("kb-wp-CCCCCCC");
   });
 
+  it("an update contribution merges its diff into the entry it targets, and tells the model it is a diff", async () => {
+    entry("wp", "kb-wp-AAAAAAA");
+    drop("wp", "change: update\nbase_hash: sha256:abcd\ntargets: kb-wp-AAAAAAA\n");
+    const res = await run([]);
+    expect(res.merged).toBe(1);
+    expect(res.created).toBe(0);
+    expect(routingOf().target).toBe("kb-wp-AAAAAAA");
+    expect(calls.find((c) => c.step === "produce")!.prompt).toContain("unified diff of changes");
+  });
+
   it("a target hint the subject check rejects creates a new entry", async () => {
     entry("wp", "kb-wp-CCCCCCC");
     subjectAnswer = () => ({ match: "new", reason: "not it" });

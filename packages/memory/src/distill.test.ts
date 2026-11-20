@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { LlmInfraError, type Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
 import { promoteTopics, subscribedDomain, envDomains, resetNoDomainsWarning, distillTopic, existingFor, readDistillRecord, DistillOutputSchema, type PromoteTopic } from "./distill.js";
+import { drainInbox } from "@wolfpack/kb/librarian";
 import { writeDenTopic, readDenTopics } from "./den.js";
 import { denTopicStates, isAbsorbed } from "./den-reconcile.js";
 
@@ -375,5 +376,47 @@ describe("distill sees the nearest existing entries", () => {
     expect(readFileSync(join(roots.opsRoot, "inbox", WOLF, f), "utf-8")).toContain("target: kb-wolfpack-AbC1234");
     rmSync(join(roots.kbBase), { recursive: true, force: true });
     expect(existingFor(roots, "wolfpack", { title: "x", summary: "y" })).toEqual([]);
+  });
+});
+
+describe("re-promote of an absorbed topic", () => {
+  const lines = (n: number, edit?: [number, string]) => Array.from({ length: n }, (_, i) => (edit && edit[0] === i ? edit[1] : `Fact number ${i} about how the sweep budgets one item per run.`)).join("\n");
+  const v1 = { ...clean, body: `## Design\n${lines(12)}` };
+  const v2 = { ...clean, body: `## Design\n${lines(12, [6, "Fact number 6 now says the budget is two items per run."])}` };
+  const receipt = (id: string, body: string, target: string) => {
+    const dir = join(roots.opsRoot, "receipts", WOLF);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${id}-${contentHash(body.trim()).slice(7, 17)}.md`), `---\nfrom: ${WOLF}\nden_topic_id: ${id}\noutcome: merge\nprocessed: 2026-10-22 10:00\nrouting: ${JSON.stringify({ targets: [target] })}\n---\n\n${target}\n`);
+  };
+  const first = async () => {
+    await promoteTopics([topic("t", "raw v1")], opts(engineOf({ contributions: [v1] }).engine));
+    const rec = readDistillRecord(roots, "t")!;
+    receipt("t", rec.outputs[0].body, "kb-wolfpack-AAAAAAA");
+    for (const f of inbox()) rmSync(join(roots.opsRoot, "inbox", WOLF, f)); // the sweep drained it
+    return rec;
+  };
+
+  it("sends only the changed lines, as an update of the entry the receipt names", async () => {
+    const rec = await first();
+    await promoteTopics([topic("t", "raw v2")], opts(engineOf({ contributions: [v2] }).engine));
+    const [c] = drainInbox(roots);
+    expect(c.change).toBe("update");
+    expect(c.baseHash).toBe(contentHash(rec.outputs[0].body.trim()));
+    expect(c.targets).toEqual(["kb-wolfpack-AAAAAAA"]);
+    expect(c.body).toContain("+Fact number 6 now says the budget is two items per run.");
+    expect(c.body).toContain("-Fact number 6 about how the sweep budgets one item per run.");
+    expect(c.body).not.toContain("Fact number 0 ");
+    expect(c.body.length).toBeLessThan(rec.outputs[0].body.length / 2);
+    // The dedupe key is the hash of the new FULL body.
+    expect(c.contentHash).toBe(contentHash(readDistillRecord(roots, "t")!.outputs[0].body.trim()));
+  });
+
+  it("sends the whole body when there is no snapshot of what was sent before", async () => {
+    await first();
+    rmSync(join(roots.denLocal, "distill", "t.json"));
+    await promoteTopics([topic("t", "raw v2")], opts(engineOf({ contributions: [v2] }).engine));
+    const [c] = drainInbox(roots);
+    expect(c.change).toBe("create");
+    expect(c.body).toContain("Fact number 0 ");
   });
 });

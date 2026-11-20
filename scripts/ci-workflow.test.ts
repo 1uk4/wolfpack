@@ -10,6 +10,7 @@ const raw = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url)
 const ci = parse(raw) as { jobs: Record<string, Job>; env?: Record<string, string> };
 const pm = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).packageManager as string;
 const runs = Object.entries(ci.jobs).flatMap(([job, j]) => (j.steps ?? []).filter((s) => s.run).map((s) => ({ job, step: s.name ?? s.run!.split("\n")[0], run: s.run! })));
+const installers = Object.entries(ci.jobs).filter(([, j]) => (j.steps ?? []).some((s) => s.run && /\bpnpm install\b/.test(s.run))).map(([n]) => n);
 // comment lines may mention npm; only real commands count
 const code = (s: string) => s.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
 
@@ -19,37 +20,60 @@ describe("ci.yml uses pnpm", () => {
 		expect(bad).toEqual([]);
 	});
 
-	it("every vitest invocation in the verify job selects the default project (no evals or live tests in CI verify)", () => {
-		const lines = runs.filter((r) => r.job === "verify").flatMap((r) => code(r.run).split("\n")).filter((l) => /\bvitest run\b/.test(l));
+	it("every vitest invocation in the vitest job selects the default project and a shard (no evals or live tests, no file run twice)", () => {
+		const lines = runs.filter((r) => r.job === "vitest").flatMap((r) => code(r.run).split("\n")).filter((l) => /\bvitest run\b/.test(l));
 		expect(lines.length).toBeGreaterThanOrEqual(2);
 		expect(lines.filter((l) => !/--project default\b/.test(l))).toEqual([]);
+		expect(lines.filter((l) => !/--shard "\$SHARD"/.test(l))).toEqual([]);
 	});
 
-	it("the verify job installs with a frozen pnpm lockfile", () => {
-		expect(runs.some((r) => r.job === "verify" && /pnpm install --frozen-lockfile/.test(r.run))).toBe(true);
+	it("every job that installs uses a frozen pnpm lockfile", () => {
+		const bad = runs.filter((r) => /\bpnpm install\b/.test(code(r.run)) && !/pnpm install --frozen-lockfile/.test(r.run)).map((r) => r.job);
+		expect(bad).toEqual([]);
+		expect(installers).toEqual(expect.arrayContaining(["checks", "vitest", "console-tests", "eval"]));
 	});
 
 	it("the console tests run through pnpm --filter", () => {
 		const r = runs.find((x) => x.step === "console tests");
+		expect(r?.job).toBe("console-tests");
 		expect(r?.run).toMatch(/pnpm --filter @wolfpack\/console (run )?test/);
 	});
 
-	it("pnpm is set up before setup-node, from the packageManager field, and the store is cached", () => {
-		const steps = ci.jobs.verify.steps!;
-		const setup = steps.findIndex((s) => s.uses?.startsWith("pnpm/action-setup@"));
-		const node = steps.findIndex((s) => s.uses?.startsWith("actions/setup-node@"));
-		expect(setup).toBeGreaterThanOrEqual(0);
-		expect(setup).toBeLessThan(node);
-		expect(steps[setup].with?.version).toBeUndefined(); // reads packageManager (= ${pm})
-		expect(steps[node].with?.cache).toBe("pnpm");
+	it("in every installing job pnpm is set up before setup-node, from the packageManager field, and the store is cached", () => {
+		for (const name of installers) {
+			const steps = ci.jobs[name].steps!;
+			const setup = steps.findIndex((s) => s.uses?.startsWith("pnpm/action-setup@"));
+			const node = steps.findIndex((s) => s.uses?.startsWith("actions/setup-node@"));
+			expect(setup, name).toBeGreaterThanOrEqual(0);
+			expect(setup, name).toBeLessThan(node);
+			expect(steps[setup].with?.version, name).toBeUndefined(); // reads packageManager (= ${pm})
+			expect(steps[node].with?.cache, name).toBe("pnpm");
+		}
 		expect(pm).toMatch(/^pnpm@/);
 	});
 
-	it("the verify job runs the lockfile guard right after the install", () => {
-		const steps = ci.jobs.verify.steps!;
+	it("the vitest matrix is exactly shards 1/2 and 2/2 and does not fail fast", () => {
+		const strategy = (ci.jobs.vitest as Job & { strategy?: { "fail-fast"?: boolean; matrix?: { shard?: string[] } } }).strategy;
+		expect(strategy?.matrix?.shard).toEqual(["1/2", "2/2"]);
+		expect(strategy?.["fail-fast"]).toBe(false);
+	});
+
+	it("the ci aggregate needs every other job, so a new test or check job cannot go unrequired", () => {
+		const needs = [ci.jobs.ci.needs].flat() as string[];
+		expect([...needs].sort()).toEqual(Object.keys(ci.jobs).filter((n) => n !== "ci").sort());
+	});
+
+	it("no job raised timeout-minutes above 30 (release-smoke keeps its 40)", () => {
+		const over = Object.entries(ci.jobs).filter(([n, j]) => ((j as { "timeout-minutes"?: number })["timeout-minutes"] ?? 0) > (n === "release-smoke" ? 40 : 30)).map(([n]) => n);
+		expect(over).toEqual([]);
+	});
+
+	it("the checks job runs the lockfile guard right after the install", () => {
+		const steps = ci.jobs.checks.steps!;
 		const install = steps.findIndex((s) => s.run && /pnpm install --frozen-lockfile/.test(s.run));
 		const guard = steps.findIndex((s) => s.run && /pnpm check:lockfiles/.test(s.run));
-		expect(guard).toBeGreaterThan(install);
+		expect(install).toBeGreaterThanOrEqual(0);
+		expect(guard).toBe(install + 1);
 		expect(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts["check:lockfiles"]).toBe("node scripts/check-lockfiles.mjs .");
 	});
 

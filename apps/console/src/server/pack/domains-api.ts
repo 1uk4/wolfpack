@@ -90,7 +90,8 @@ export function createDomainsApi(d: DomainsApiDeps) {
 		}
 		if (r.status === 404) return { ok: false, res: fail(404, `There is no domain named ${name}.`, "not_found") };
 		if (r.status === 400) return { ok: false, res: fail(400, message || "The hub did not accept those values.", "invalid_request") };
-		if (r.status === 401 || r.status === 403) return { ok: false, res: fail(502, "The hub does not allow this console to change domains (its token is not an operator token).", "hub_forbidden") };
+		if (r.status === 403) return { ok: false, res: fail(403, message || "only an owner device can do this", "forbidden") }; // the hub's words, unchanged
+		if (r.status === 401) return { ok: false, res: fail(502, "The hub does not allow this console to change domains (its token is not an operator token).", "hub_forbidden") };
 		return { ok: false, res: fail(502, "The hub failed on this request. Try again in a moment.", "failed") };
 	}
 

@@ -109,7 +109,12 @@ export function createKeysApi(d: KeysApiDeps) {
 				// The body names the fingerprint the owner looked at; the hub refuses (409) when the key has changed again.
 				const r = await hub(req, "POST", `/v1/machines/${encodeURIComponent(hostId)}/key/ack`, body);
 				if (!r) return noHub(req);
-				return new Response(await r.text(), { status: r.status, headers: { "content-type": "application/json", ...NO_STORE } });
+				const text = await r.text();
+				if (r.status === 403) {
+					const m = (() => { try { return (JSON.parse(text) as { message?: unknown }).message; } catch { return undefined; } })();
+					return fail(403, typeof m === "string" && m ? m : "only an owner device can do this", "forbidden"); // the hub's words, unchanged
+				}
+				return new Response(text, { status: r.status, headers: { "content-type": "application/json", ...NO_STORE } });
 			} catch {
 				return down();
 			}

@@ -78,7 +78,7 @@ import { createInventory, type Inventory } from "./inventory.js";
 import { createCommandHub, type CommandHub } from "./commands.js";
 import { createMachineKeys, type MachineKeys } from "./machine-keys.js";
 import { createRelay, type Relay } from "./relay.js";
-import { DOMAIN_RE, listWorkItems, readWorkRecordFor } from "./work-reads.js";
+import { assertIfMatch, DOMAIN_RE, ifMatchOf, listWorkItems, readWorkRecordFor } from "./work-reads.js";
 import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
 import { WorkIdempotency } from "./work-idempotency.js";
 import { buildHubSettings } from "./settings.js";
@@ -854,7 +854,11 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const isBatch = typeof raw === "object" && raw !== null && "ops" in raw;
           const ops = normalisePatch(isBatch ? parseBody(PatchWorkBatchSchema, raw) : parseBody(PatchWorkOpSchema, raw));
           if (ops.some(isOwnerOnlyOp)) actor = writeActor(req, { ownerOnly: true });
-          const item = await writeWork(actor, () => applyOps(roots, params.id, ops));
+          const ifMatch = ifMatchOf(req.headers["if-match"]);
+          const item = await writeWork(actor, () => {
+            assertIfMatch(roots, params.id, ifMatch);
+            return applyOps(roots, params.id, ops);
+          });
           return send(res, 200, { item });
         }
         case "hubDeleteWork": {

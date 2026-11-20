@@ -1499,6 +1499,8 @@ export const WorkRecordResponseSchema = z.object({
   successCriteria: z.string().optional(),
   plan: z.string(),
   record: z.string(),
+  /** Opaque version of the item's body; send it back as `If-Match` on a PATCH to refuse the write when the item changed since. */
+  etag: z.string().optional(),
   /** The newest ledger entries ("**when** — what", oldest first, at most 10). Omitted when the item has none. */
   log: z.array(z.string()).optional(),
   /** The item's `updated` date as the Work API reports it (YYYY-MM-DD). */

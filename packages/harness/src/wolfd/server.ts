@@ -497,7 +497,6 @@ export class WolfServer {
   /** Graduation jobs by `<wolf>:<work id>`: preview and confirm run in the background, a second start returns the running job. */
   private readonly graduationJobs = new GraduationJobs();
 
-
   /** The wolf's graduation actions, after the checks every graduate route shares. */
   private graduationFor(params: Record<string, string>, validated?: () => void) {
     this.checkWolf(params.name);

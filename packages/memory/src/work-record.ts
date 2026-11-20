@@ -386,6 +386,8 @@ export interface WorkRecordItem {
   assignee?: string;
   /** The working document ("" when none written yet). */
   body: string;
+  /** Opaque version of the item as read; pass it to `setRecord` as `ifMatch` so a write that lost a race is refused (409 conflict). */
+  etag?: string;
 }
 
 /** A Work API refusal: the HTTP status and the hub's own message. */
@@ -421,7 +423,7 @@ export interface WorkRecordStore {
   /** The item and its document; null when it no longer exists. Throws on any other failure (the run stays pending). */
   get(id: string): Promise<WorkRecordItem | null>;
   /** Replace ONLY the Record section; `record` is the full section starting at its heading. Throws WorkApiError on a refusal. */
-  setRecord(id: string, record: string): Promise<void>;
+  setRecord(id: string, record: string, opts?: { ifMatch?: string }): Promise<void>;
   /** Atomically append lines to the item's Record (hub `recordAppend`). Never throws on a refusal; a resend with the same key (default: derived from item + line ids) adds nothing. */
   appendRecord(id: string, lines: RecordAppendLine[], opts?: { idempotencyKey?: string; group?: string }): Promise<AppendRecordResult>;
   /** The Work API answers a list call. Absent: a successful get is taken as proof of health. */
@@ -481,6 +483,7 @@ export class HttpWorkRecordStore implements WorkRecordStore {
       successCriteria: typeof it.successCriteria === "string" ? it.successCriteria : undefined,
       partOf: typeof it.partOf === "string" ? it.partOf : it.partOf === null ? null : undefined,
       body: data.body ?? "",
+      ...(typeof (data as { etag?: unknown }).etag === "string" ? { etag: (data as { etag: string }).etag } : {}),
     };
   }
 
@@ -506,10 +509,10 @@ export class HttpWorkRecordStore implements WorkRecordStore {
     return { ok: false, code: "error", message };
   }
 
-  async setRecord(id: string, record: string): Promise<void> {
+  async setRecord(id: string, record: string, opts: { ifMatch?: string } = {}): Promise<void> {
     // The hub adds the `## Record` heading itself; the text must not hold a level-2 heading.
     const text = record.startsWith(RECORD_HEADING) ? record.slice(RECORD_HEADING.length).replace(/^\s+/, "") : record;
-    const res = await this.call("PATCH", id, { section: { name: "Record", text } });
+    const res = await this.call("PATCH", id, { section: { name: "Record", text } }, opts.ifMatch ? { "If-Match": opts.ifMatch } : {});
     if (res.ok) return;
     let message = `Work API PATCH ${id}: HTTP ${res.status}`;
     let code: string | undefined;
@@ -526,13 +529,22 @@ export class HttpWorkRecordStore implements WorkRecordStore {
 export class InMemoryWorkRecordStore implements WorkRecordStore {
   constructor(public items: Record<string, WorkRecordItem> = {}) {}
 
-  async get(id: string): Promise<WorkRecordItem | null> {
-    return this.items[id] ?? null;
+  /** Stand-in for the hub's etag: any change of the body changes it. */
+  private etagOf(body: string): string {
+    let h = 5381;
+    for (let i = 0; i < body.length; i++) h = ((h * 33) ^ body.charCodeAt(i)) >>> 0;
+    return `${body.length}-${h.toString(16)}`;
   }
 
-  async setRecord(id: string, record: string): Promise<void> {
+  async get(id: string): Promise<WorkRecordItem | null> {
+    const it = this.items[id];
+    return it ? { ...it, etag: this.etagOf(it.body) } : null;
+  }
+
+  async setRecord(id: string, record: string, opts: { ifMatch?: string } = {}): Promise<void> {
     const it = this.items[id];
     if (!it) throw new WorkApiError(404, "not found");
+    if (opts.ifMatch !== undefined && opts.ifMatch !== this.etagOf(it.body)) throw new WorkApiError(409, "work item changed since it was read", "conflict");
     it.body = replaceRecordSection(it.body, record);
   }
 

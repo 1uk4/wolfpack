@@ -447,6 +447,21 @@ describe("the Record follows the item", () => {
     expect(patch.section.text.startsWith("### Findings")).toBe(true);
   });
 
+  it("the HTTP store returns the item's etag from get and sends it as If-Match on setRecord only when given", async () => {
+    const calls: Array<{ method: string; headers: Record<string, string> }> = [];
+    const fetchImpl = (async (_u: string, init: { method: string; headers: Record<string, string> }) => {
+      calls.push({ method: init.method, headers: init.headers });
+      return new Response(init.method === "GET" ? JSON.stringify({ item: { id: "t", kind: "task", stage: "in_build", title: "T" }, body: "", etag: "abc123" }) : "{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const store = new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa");
+    expect((await store.get("t"))?.etag).toBe("abc123");
+    await store.setRecord("t", "- x", { ifMatch: "abc123" });
+    await store.setRecord("t", "- y");
+    const patches = calls.filter((c) => c.method === "PATCH");
+    expect(patches[0]!.headers["If-Match"]).toBe("abc123");
+    expect(patches[1]!.headers["If-Match"]).toBeUndefined();
+  });
+
   it("the HTTP store reports a refused write as a WorkApiError with the status and the hub's message", async () => {
     const fetchImpl = (async () => new Response(JSON.stringify({ error: "assigned to hal; only hal or the owner can change it" }), { status: 403 })) as unknown as typeof fetch;
     const store = new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa");

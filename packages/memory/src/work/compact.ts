@@ -20,7 +20,7 @@
  */
 import { z } from "zod";
 import { WORK_COMPACT_SYSTEM, buildWorkCompactPrompt, parseWorkCompactOutput, type Engine } from "@wolfpack/engine";
-import { APPEND_CAP_FEATURE, APPEND_CAP_TASK, RECORD_HEADING, extractRecord, type AppendRecordResult, type RecordAppendLine, type WorkRecordStore } from "../work-record.js";
+import { APPEND_CAP_FEATURE, APPEND_CAP_TASK, RECORD_HEADING, WorkApiError, extractRecord, type AppendRecordResult, type RecordAppendLine, type WorkRecordStore } from "../work-record.js";
 import { noComments } from "../record-sources.js";
 
 export type CompactResult = { ok: true; before: number; after: number; mode: "model" | "trim" } | { ok: false; reason: string };
@@ -128,6 +128,22 @@ export async function compactRecord(opts: {
   cap: number;
   src: string;
 }): Promise<CompactResult> {
+  // A write refused because the item changed since the re-read (hub 409 conflict) is retried once on the fresh Record.
+  const first = await compactOnce(opts);
+  if (first !== "conflict") return first;
+  const second = await compactOnce(opts);
+  if (second !== "conflict") return second;
+  console.warn(`compactRecord: ${opts.id}: Record changed under two compaction writes; left as is`);
+  return { ok: false, reason: "conflict" };
+}
+
+async function compactOnce(opts: {
+  store: WorkRecordStore;
+  engine: Pick<Engine, "call">;
+  id: string;
+  cap: number;
+  src: string;
+}): Promise<CompactResult | "conflict"> {
   const { store, engine, id, cap } = opts;
   try {
     const item = await store.get(id);
@@ -158,10 +174,11 @@ export async function compactRecord(opts: {
 
     const again = await store.get(id);
     if (!again || extractRecord(again.body) !== before) return { ok: false, reason: "changed" };
-    // Known window: no hub compare-and-set, so a recordAppend landing between the re-read above and this write is overwritten.
-    await store.setRecord(id, rendered);
+    // Compare-and-set on the re-read's etag: a recordAppend landing after it makes the hub answer 409 (the caller retries once).
+    await store.setRecord(id, rendered, again.etag ? { ifMatch: again.etag } : {});
     return { ok: true, before: before.length, after: rendered.length, mode };
   } catch (err) {
+    if (err instanceof WorkApiError && err.status === 409 && err.code === "conflict") return "conflict";
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };
   }
 }

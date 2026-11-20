@@ -38,10 +38,16 @@ const liveLoad: Load = async () => {
 	}
 };
 
-/** Why a machine cannot be a sealing target: the editor and the phone list's plain rows say the same words. */
+/**
+ * Why a machine cannot be a sealing target: the editor and the phone list's plain rows say the same words.
+ * No pubkey: the hub never saw a sealing key, so its workerd predates Pack keys. Pubkey but no slots (canSetKeys false): the workerd is
+ * current but runs without a key file (WORKERD_KEY_FILE is explicit, never inferred), which is a setup gap, not a version gap.
+ */
 const NO_KEYS_TEXT = "can't take keys (update its workerd)";
+const NO_FILE_TEXT = "no key file on this machine (set WORKERD_KEY_FILE for its workerd)";
 const CHANGED_TEXT = "its key changed";
-const whyNotTarget = (m: KeyMachine | undefined): string | null => (!m || !m.canSetKeys || !m.pubkey ? NO_KEYS_TEXT : m.keyChanged ? CHANGED_TEXT : null);
+const whyNotTarget = (m: KeyMachine | undefined): string | null =>
+	!m || !m.pubkey ? NO_KEYS_TEXT : !m.canSetKeys ? NO_FILE_TEXT : m.keyChanged ? CHANGED_TEXT : null;
 
 export type MachineOutcome = { state: "idle" | "sending" } | { state: "done"; result: CommandResult };
 

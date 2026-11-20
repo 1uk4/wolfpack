@@ -67,6 +67,8 @@ export interface ServerEvents {
 		thread: import("./subagents.ts").ChildThread & { wolf?: string; kind?: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; closedReason?: string };
 		chatId?: undefined;
 	};
+	/** An owner-approval request was filed or decided (hub `work-request-changed`, written to each connection by its own hub bridge; NEVER on the bus). Consumers refetch the pending requests. */
+	"work-request-changed": { requestId: string; itemId: string; kind: "graduate" | "archive" | "reassign"; status: "pending" | "approved" | "rejected"; chatId?: undefined };
 	/** NEVER emit on the bus; per-connection only. (Listed here because the browser's SSE dispatch and useServerEvent are typed by this map.)
 	 *  A hub event the KB activity page follows (sweep_started / sweep_progress / sweep_item / sweep_finished / kb.changed / resync). NOT on the bus: each SSE
 	 *  connection's own hub bridge writes it to that connection only (server/events-stream.ts), so one device's frames never reach another.
@@ -90,6 +92,7 @@ export const SERVER_EVENT_TYPES = [
 	"needs-you-changed",
 	"thread-updated",
 	"hub-event",
+	"work-request-changed",
 ] as const satisfies readonly ServerEventType[];
 
 /** One notification: the type discriminates the payload. */

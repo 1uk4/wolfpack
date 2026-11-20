@@ -115,6 +115,17 @@ describe("needs-you list", () => {
 		assert.equal(body.items.length, 2);
 	});
 
+	it("a pending approval request is listed keyed by its work item, with no live thread", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		const approvals = async () => [
+			{ id: "r1", workId: "work-wolfpack-abc1234", kind: "graduate" as const, requestedBy: { wolf: "1uk4" }, requestedAt: "2026-11-20T10:00:00.000Z", preview: { contributions: [] }, target: null, status: "pending" as const, title: "Ship the thing" },
+		];
+		const res = await createNeedsYouApi(() => client, { approvals }).list();
+		const body = (await res.json()) as { items: NeedsYouItem[]; approvals: { requestId: string; workId: string; label: string; href: string }[] };
+		assert.equal(body.items.length, 0);
+		assert.deepEqual(body.approvals, [{ requestId: "r1", workId: "work-wolfpack-abc1234", kind: "graduate", label: "graduate approval: Ship the thing", href: "/kb/work/work-wolfpack-abc1234", raisedAt: "2026-11-20T10:00:00.000Z" }]);
+	});
+
 	it("an unpaired browser gets 401 + the hub-auth marker, so the client goes to /pair", async () => {
 		const client = new MockConsoleClient({ delayMs: 0 });
 		client.listWolves = async () => {

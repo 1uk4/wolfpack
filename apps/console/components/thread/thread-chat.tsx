@@ -72,6 +72,7 @@ import {
 } from "@/src/core";
 import { useThreadColor } from "@/components/thread/use-thread-color";
 import type { CardAnswers } from "@wolfpack/client";
+import { ApprovalThreadCard } from "@/components/work/approval-request";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
@@ -843,6 +844,7 @@ function ThreadChatInner({
 										)}
 									</Fragment>
 								))}
+								<ApprovalThreadCard wolf={wolf} threadId={threadId} />
 								{status === "submitted" && (
 									<span className="flex items-center gap-2 font-ui text-xs font-medium uppercase tracking-wide text-muted-foreground">
 										<BrailleSpinner label="Thinking" />

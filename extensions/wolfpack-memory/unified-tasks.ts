@@ -307,6 +307,36 @@ export default function createTasksExtension(
     const hub = new HttpConsoleClient({ baseUrl: safe, hub: { baseUrl: safe, token: target.token } });
     return { hub, url: target.baseUrl, key: target.token };
   }
+  /**
+   * File an owner-approval request on the hub (POST <hub>/v1/work/:id/requests). Never acts on the item. Returns the request id and
+   * whether it was already pending; throws on anything else, so a tool can only say "queued" when the hub holds the request.
+   * Plain fetch, not WorkClient: the outbox would turn a hub outage into a "queued" success that persists nothing on the hub.
+   */
+  async function fileRequest(id: string, body: { kind: "graduate" | "archive" | "reassign"; preview?: unknown; target?: string }): Promise<{ requestId: string; existing: boolean }> {
+    const target = hubTargetFromEnv(env as Record<string, string | undefined>);
+    if (!target) throw new Error("No hub configured (WOLFPACK_HUB_URL is not set): the owner cannot be asked.");
+    let res: Response;
+    try {
+      res = await fetch(`${target.baseUrl.replace(/\/$/, "")}/v1/work/${encodeURIComponent(id)}/requests`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${target.token}`, "Content-Type": "application/json", "X-Wolf": wolfName },
+        body: JSON.stringify({ ...body, wolf: wolfName }),
+        signal: AbortSignal.timeout(WORK_TIMEOUT_MS * 5),
+      });
+    } catch (err) {
+      throw new Error(`could not reach the hub: ${err instanceof Error ? err.message : err}`);
+    }
+    let data: { request?: { id?: string }; error?: string; details?: { requestId?: string } } = {};
+    try { data = (await res.json()) as typeof data; } catch { /* not JSON */ }
+    if (res.status === 201 && data.request?.id) return { requestId: data.request.id, existing: false };
+    if (res.status === 409 && data.details?.requestId) return { requestId: data.details.requestId, existing: true };
+    throw new Error(`the hub refused the request (HTTP ${res.status}${data.error ? `: ${data.error}` : ""})`);
+  }
+  const QUEUE_TAIL = "Nothing is sent until the owner approves it from the thread card, the Work page or Needs-you.";
+  const queuedText = (rid: string, existing: boolean, id: string, what: string): string =>
+    existing
+      ? `Already queued for the owner's approval: request ${rid} for ${id} is pending (${what}). ${QUEUE_TAIL} Do not file it again.`
+      : `Queued for the owner's approval: request ${rid} for ${id}, ${what}. ${QUEUE_TAIL}`;
   const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
 
   // ── Ship confirmation ───────────────────────────────────────────────────
@@ -327,8 +357,6 @@ export default function createTasksExtension(
 
   /** First line of a successful ship result; the spent-yes check reads it back. */
   const shippedLine = (id: string) => `Shipped: ${id}`;
-  /** First line of a successful graduation result; the spent-yes check reads it back. */
-  const graduatedLine = (id: string) => `Graduated: ${id}`;
 
   /** Single-id card: its one field label is the exact key; it carries the id and the title at ask time. */
   const shipLabel = (title: string, id: string) => `Ship "${title}" (${id})?`;
@@ -375,8 +403,6 @@ export default function createTasksExtension(
   /** Open fold window per conversation: the ids (-> title) the leader call will put on its card. */
   const folding = new Map<string, Map<string, string>>();
 
-  /** task_graduate: open fold windows (`grad:conversation:item`). */
-  const gradFolding = new Set<string>();
 
   type ShipState = "approved" | "declined" | "pending" | "none";
 
@@ -707,12 +733,15 @@ export default function createTasksExtension(
     if (item.kind === "feature") await finalPass(id);
     return item;
   };
-  /** Move an item to a stage; archiving a task distills it like a ship (flush first). */
+  /** Move an item to a stage. Archiving is the owner's call: it only flushes and distills (as before), the caller files the request. */
   const stageItem = async (id: string, to: string) => {
-    if (to === "archived") await flushLog(id);
-    const item = await client.stage(id, to);
-    if (to === "archived") await distillTask(id, item.kind);
-    return item;
+    if (to === "archived") {
+      await flushLog(id);
+      const item = await client.get(id);
+      await distillTask(id, item.kind);
+      return item;
+    }
+    return client.stage(id, to);
   };
 
   const ID_NOTE = " Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).";
@@ -787,7 +816,7 @@ export default function createTasksExtension(
             if (!realFeature) {
               // A shipped loose task is complete: nobody stays bound to it. Graduating it is still the owner's call.
               if (readyToGraduate(shippedItem, all)) {
-                result.push(`🎓 "${shippedItem.title}" is done and ready to graduate on its own (task_graduate previews it; the user decides). Tell the user.`);
+                result.push(`🎓 "${shippedItem.title}" is done and ready to graduate on its own (task_graduate files an approval request; the owner decides). Tell the user.`);
               }
               if (await clearBinding(ctx)) clearCache(binding.taskId);
               else result.push(STAYS_BOUND);
@@ -812,10 +841,10 @@ export default function createTasksExtension(
                 if (refused) {
                   if (await clearBinding(ctx)) clearCache(binding.taskId);
                   result.push(`Not bound to the feature [${realFeature.id}]: ${refused}`);
-                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
+                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate files an approval request; the owner decides). Tell the user.`);
                 } else {
                   await writeCache(realFeature);
-                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
+                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate files an approval request; the owner decides). Tell the user.`);
                   result.push(readyBoundReply(realFeature));
                 }
               } else if (await clearBinding(ctx)) {
@@ -1403,7 +1432,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       defineTool({
         name: "task_stage",
         description:
-          "Advance the active task to a new stage. Moving an item to in_build binds it when nothing is bound." + ID_NOTE,
+          "Advance the active task to a new stage. Moving an item to in_build binds it when nothing is bound. Moving to archived does not archive: it files an owner-approval request, approved from the thread card, the Work page or Needs-you." + ID_NOTE,
         parameters: Type.Object({
           to: Type.String({ description: "Target stage: idea, plan, feasibility, approved, in_build, shipped, live, archived" }),
           id: Type.Optional(Type.String({ description: "Work item to move (default: the bound one)" })),
@@ -1419,6 +1448,11 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           }
 
           try {
+            if (args.to === "archived") {
+              await stageItem(target, args.to);
+              const { requestId, existing } = await fileRequest(target, { kind: "archive" });
+              return text(queuedText(requestId, existing, target, "archive"));
+            }
             const moved = args.to === "shipped" ? await ship(target) : await stageItem(target, args.to);
             if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
             let reply = `${target} → ${args.to}`;
@@ -1656,96 +1690,24 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       // ─── task_graduate ───────────────────────────────────────────────────
       defineTool({
         name: "task_graduate",
-        raisesCard: true,
         description:
-          "Graduate a finished work item into the knowledge base. Only the owner's yes on a card sends it: " +
-          "task_graduate(id) distills the item and raises a confirmation card showing what would be sent; your turn ends there and nothing is sent. " +
-          "When the owner answers, call task_graduate(id) once more: it sends only if they said yes, and does nothing if they said no. " +
-          "There is no token or confirm argument; you cannot graduate on your own. Where no card can be answered (no owner in this conversation) it only previews and the owner graduates from the console. " +
+          "Ask the owner to graduate a finished work item into the knowledge base. You cannot graduate on your own: task_graduate(id) distills the item, previews what would be sent, and files an approval request on the hub. " +
+          "Nothing is sent until the owner approves it from the thread card, the Work page or Needs-you. The reply names the request id; report it to the owner and move on, there is nothing to call again. " +
+          "If it returns an error, no request exists and the owner has not been asked: say so plainly. " +
           "Eligible: a feature whose tasks are all done, a loose Inbox task, an initiative whose features have all graduated.",
         parameters: Type.Object({
           id: Type.String({ description: "Work item to graduate" }),
         }),
-        async execute(args: { id: string }, ctx: ToolContext): Promise<ToolResult> {
-          const fail = (text: string): ToolResult => ({ content: [{ type: "text", text }], isError: true });
+        async execute(args: { id: string }): Promise<ToolResult> {
           try {
-            const canCard = await canAsk(ctx);
-            const found = canCard
-              ? await ctx.conversation!.latestCard!("task_graduate", (c) => c.fields.length === 1 && c.fields[0].kind === "confirm" && c.fields[0].label.endsWith(`(${args.id})?`))
-              : undefined;
-            const answered = found?.status === "answered" ? (found.answers?.[found.card.fields[0].id] as { value?: unknown } | undefined)?.value : undefined;
-            if (found?.status === "pending") {
-              return { content: [{ type: "text", text: `The owner was already asked whether to graduate ${args.id}; their answer is pending. Do not ask again: your turn ends here.` }], endTurn: true };
-            }
-            const spent = !!found && found.laterResults.some((m) => textLines(m).includes(graduatedLine(args.id)));
-            // A no is final for that card (shipState would re-ask; here the card itself is the answer, so only a newer card changes it).
-            if (answered === false && found) {
-              return { content: [{ type: "text", text: `The owner declined graduating ${args.id}. Nothing was sent. Do not ask again unless they bring it up; they can also use the Graduate button in the console.` }] };
-            }
-            // The owner's yes, not yet used: send only the exact preview shown on the card (its token rides in the field description).
-            const shownToken = found ? /Preview ([0-9a-f]{12})/.exec(found.card.fields[0].description ?? "")?.[1] : undefined;
-            const latest = answered === true && !spent ? await graduation.actions.pendingPreview(args.id) : undefined;
-            // No stored preview (expired or restarted) or a different one (replaced since the card): not what the owner approved, so ask again.
-            const approved = latest && shownToken && latest.token === shownToken ? latest : undefined;
-            let staleNote = "";
-            if (answered === true && !spent && !approved) staleNote = "The preview changed since the owner's yes (or expired), so that yes no longer applies. ";
-            if (!approved) {
-              const round = `grad:${ctx.conversationId}:${args.id}`;
-              if (canCard) {
-                // Parallel calls of one round fold into one card: check and set with no await between.
-                if (gradFolding.has(round)) {
-                  return { content: [{ type: "text", text: `Folded into the graduation question raised by another task_graduate call of this round (${args.id}). Do not ask again: your turn ends here.` }], endTurn: true };
-                }
-                gradFolding.add(round);
-                await new Promise((r) => setTimeout(r, FOLD_MS));
-                gradFolding.delete(round);
-              }
-              const preview = await graduation.preview(args.id);
-              const text = renderGraduationPreview(preview);
-              if (preview.blocked) return { content: [{ type: "text", text: `${text}\n\nNothing can be sent from this preview. Tell the owner and try again later.` }] };
-              if (!canCard) {
-                return { content: [{ type: "text", text: `${text}\n\nNOTHING HAS BEEN SENT. Nobody can answer a card in this conversation: tell the owner to graduate it with the Graduate button in the console. You cannot confirm it yourself.` }] };
-              }
-              const summary = preview.contributions.slice(0, 4).map((c, i) => `${i + 1}. ${c.title}`);
-              return {
-                content: [{ type: "text", text: `${staleNote}${text}\n\nNOTHING HAS BEEN SENT. Asked the owner whether to graduate ${args.id}. Your turn ends here. When they answer, call task_graduate(id ${args.id}) again: it sends only on their yes.` }],
-                card: pagedCard(
-                  confirmCard({
-                    tool: "task_graduate",
-                    question: `Graduate "${preview.title}" (${args.id})?`,
-                    description: `Preview ${preview.token}. ${preview.kind} ${args.id}: ${preview.contributions.length} contribution(s) to the KB${summary.length ? ` (${summary.join("; ")})` : ""}. Sends to the KB and archives the item; this can't be undone from the card.`,
-                    confirmLabel: "Graduate",
-                    rejectLabel: "Not yet",
-                  }),
-                ),
-              };
-            }
-
-            // Nothing more goes to a graduated feature: every holder unbinds, this conversation by the clearBinding below.
-            const { preview, done } = await graduation.confirm(args.id, approved.token, { exceptRoot: (await resolveBindingRoot(ctx)).root });
-
-            // Raw read: the self-check would already see the item archived and leave a notice the result line replaces.
-            const stored = isSubagent() ? null : (await readConversationBinding(ctx)).binding;
-            const binding = stored ? { taskId: stored.workId, featureId: stored.featureId } : null;
-            const result = [graduatedLine(args.id), `Graduated "${preview.title}": ${done.sent.length} contribution(s) sent to Dewey; ${done.archived.length} item(s) archived.`];
-            if (done.lateFolded) result.push(`${done.lateFolded} late observation(s) were folded in and included.`);
-            if (binding && (done.archived.includes(binding.taskId) || (binding.featureId && done.archived.includes(binding.featureId)))) {
-              if (await clearBinding(ctx)) {
-                clearCache(binding.taskId);
-                result.push(completeLine(preview.title, args.id));
-              } else result.push(STAYS_BOUND);
-            }
-            try {
-              const all = await client.query({ domain: preview.domain });
-              const item = all.find((i) => i.id === args.id);
-              const parent = item ? initiativeOf(item, all) : undefined;
-              if (readyToGraduate(parent, all)) result.push(`🎓 All features of "${parent.title}" have graduated: it can be completed too. Tell the user.`);
-            } catch { /* advisory */ }
-            return { content: [{ type: "text", text: result.join("\n") }] };
+            const preview = await graduation.preview(args.id);
+            const shown = renderGraduationPreview(preview);
+            if (preview.blocked) return text(`${shown}\n\nNothing can be requested from this preview. Tell the owner and try again later.`, true);
+            const { requestId, existing } = await fileRequest(args.id, { kind: "graduate", preview: { contributions: preview.contributions } });
+            return text(`${queuedText(requestId, existing, args.id, `${preview.contributions.length} contributions`)}\n\n${shown}`);
           } catch (err) {
-            // Queued mid-graduation (the hub went away after the KB send): the rest replays in order once it is back.
-            if (err instanceof WorkQueuedError) return failed(err);
-            return fail(`Graduation failed: ${err instanceof Error ? err.message : err}`);
+            // Never the outbox "queued" success: only a request the hub holds counts.
+            return text(`Graduation request failed, the owner has not been asked: ${err instanceof Error ? err.message : err}`, true);
           }
         },
       }),

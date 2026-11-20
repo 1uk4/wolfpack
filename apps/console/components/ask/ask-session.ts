@@ -70,7 +70,7 @@ export const offersSendAnyway = (p: Pick<PendingCard, "source">): boolean => p.s
 
 /**
  * The paged cards waiting on this thread, in wolfd's order (oldest first): its own questionnaires, its subagents', and tool
- * confirmations (`source.kind === "tool"`: crawl_run, crawl_release, task_done, task_graduate), which are paged ask cards too.
+ * confirmations (`source.kind === "tool"`: crawl_run, crawl_release, task_done), which are paged ask cards too.
  */
 export function askQueue(pending: readonly PendingCard[]): PendingCard[] {
 	return pending.filter((p) => p.card.paged === true);

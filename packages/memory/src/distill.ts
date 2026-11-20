@@ -18,6 +18,8 @@
  * unchanged topic costs no LLM call.
  */
 import { refuseTagged } from "./tag-guard.js";
+import { absorbedTargets } from "./den-reconcile.js";
+import { unifiedLineDiff } from "./line-diff.js";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -511,12 +513,20 @@ export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOpti
 
     let failed = false;
     for (const o of outputs) {
+      // The previous record holds the body last sent (the snapshot). When the KB absorbed exactly that body, send only what changed.
+      const prevSent = rec && !rec.held ? rec.outputs.find((p) => p.id === o.id)?.body.trim() : undefined;
+      const was = prevSent ? absorbedTargets(roots, wolf, o.id, prevSent) : null;
+      const diff = prevSent && was ? unifiedLineDiff(prevSent, o.body.trim()) : "";
+      const h1 = /^#[ \t]+.+$/m.exec(o.body)?.[0];
+      const sentDiff = diff ? `${h1 ? `${h1}\n\n` : ""}${diff}` : "";
+      const update = sentDiff && prevSent && was && sentDiff.length < o.body.trim().length ? { baseHash: contentHash(prevSent), targets: was, diff: sentDiff } : undefined;
       const emitted = tryEmitDelta(
         {
           roots,
           wolf,
           denTopicId: o.id,
-          change: topic.change,
+          change: update ? "update" : topic.change,
+          ...(update ? { update } : {}),
           domainHint: domain,
           ...(allowedDomains.length ? { allowedDomains } : {}),
           summary: o.summary,

@@ -1,5 +1,5 @@
 /**
- * THE PACK PANEL'S DOMAINS API (work-wolfpack-I2AysMu). Each call goes through the console's owner gate (the same one as restart)
+ * THE PACK PANEL'S DOMAINS API (work-wolfpack-I2AysMu). Each call goes through the console's device gate (the same one as restart; a verified device token, not an owner check: hubd's ownerCaller refuses non-owner devices with 403, passed through)
  * and then makes a real call to hubd /v1/registry/domains with the caller's own device token, which the gate has verified; the
  * console never uses its own hub token here. The gate only checks that the token is valid on the hub (GET /v1/wolves answers
  * 2xx), not that it is an owner token; hubd's deviceCaller and operator checks are the real limits.
@@ -7,7 +7,7 @@
  *   POST   /api/pack/domains          {name, label?, description?, color?}   201 {domain}
  *   PATCH  /api/pack/domains/<name>   {label?, description?, color?}         200 {domain}   (the name cannot change)
  *   DELETE /api/pack/domains/<name>   200 {deleted}   (the hub keeps the domain's KB folder and entries)
- * Reserved names are refused by the hub (400, its words are shown). Errors are {error: <plain words>, code, wolves?}: 400 invalid input (checked here, before the hub) | 401/429 the owner gate |
+ * Reserved names are refused by the hub (400, its words are shown). Errors are {error: <plain words>, code, wolves?}: 400 invalid input (checked here, before the hub) | 401/429 the device gate | 403 the hub's owner check |
  * 404 no such domain | 409 duplicate, or still subscribed (wolves named) | 501 no hub configured | 502 the hub refuses this console
  * or failed | 503 the hub is not answering. Subscriptions are not managed here (wolf settings).
  */
@@ -21,7 +21,7 @@ const MAX_TEXT = 200;
 const MAX_DESCRIPTION = 1000;
 
 export interface DomainsApiDeps {
-	/** The owner gate: who asked, or the 401/429 Response. */
+	/** The device gate: who asked, or the 401/429 Response. */
 	gate: (req: Request) => Promise<string | Response>;
 	env?: Record<string, string | undefined>;
 	fetch?: typeof fetch;
@@ -90,7 +90,8 @@ export function createDomainsApi(d: DomainsApiDeps) {
 		}
 		if (r.status === 404) return { ok: false, res: fail(404, `There is no domain named ${name}.`, "not_found") };
 		if (r.status === 400) return { ok: false, res: fail(400, message || "The hub did not accept those values.", "invalid_request") };
-		if (r.status === 401 || r.status === 403) return { ok: false, res: fail(502, "The hub does not allow this console to change domains (its token is not an operator token).", "hub_forbidden") };
+		if (r.status === 403) return { ok: false, res: fail(403, message || "only an owner device can do this", "forbidden") }; // the hub's words, unchanged
+		if (r.status === 401) return { ok: false, res: fail(502, "The hub does not allow this console to change domains (its token is not an operator token).", "hub_forbidden") };
 		return { ok: false, res: fail(502, "The hub failed on this request. Try again in a moment.", "failed") };
 	}
 
@@ -147,7 +148,7 @@ export function createDomainsApi(d: DomainsApiDeps) {
 
 const KEY = Symbol.for("wolfpack.console.packDomains");
 
-/** The process-wide API, behind the same owner gate as restart (health-api.ts). */
+/** The process-wide API, behind the same device gate as restart (health-api.ts). */
 export function domainsApi(env: Record<string, string | undefined> = process.env): ReturnType<typeof createDomainsApi> {
 	const h = globalThis as { [KEY]?: ReturnType<typeof createDomainsApi> };
 	return (h[KEY] ??= createDomainsApi({

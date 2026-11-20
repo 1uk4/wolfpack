@@ -80,6 +80,13 @@ function readReceipt(path: string): Receipt | null {
   return { outcome: field("outcome"), processed: field("processed"), detail: m[2].trim(), targets };
 }
 
+/** The entries the KB absorbed this exact body into (primary first), or null when no create/merge receipt names any. */
+export function absorbedTargets(roots: KbRoots, wolf: string, id: string, body: string): string[] | null {
+  const r = readReceiptFor(receiptsDir(roots, wolf), id, body);
+  const a = r ? asAbsorbed(r) : null;
+  return a && a.entryIds.length ? a.entryIds : null;
+}
+
 function readEmittedMap(roots: KbRoots): Record<string, string> {
   try {
     return JSON.parse(readFileSync(join(roots.denLocal, "emitted.json"), "utf-8")) ?? {};

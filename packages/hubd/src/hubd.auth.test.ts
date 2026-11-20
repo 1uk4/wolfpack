@@ -2,7 +2,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, utimesSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedFixture, FIXTURE_DOMAIN } from "./testing/fixture.js";
 import { main, parseArgs } from "./cli.js";
 import { createTokenStore, PAIRING_TTL_MS, tryBreakStaleLock } from "./auth.js";
@@ -152,6 +152,21 @@ describe("hubd token auth", () => {
     // a valid code is refused too while limited, and works after the window
     clock += 61_000;
     expect((await pairVia({ label: "x", kind: "console" })).status).toBe(200);
+  });
+
+  it("a refused redeem is logged with the reason (never the code); the 429 branch is logged too", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect((await pairVia({ label: "x", kind: "browser" }, "secret-code-123")).status).toBe(401);
+      const lines = log.mock.calls.map((c) => String(c[0]));
+      expect(lines.find((l) => l.startsWith("hubd: pairing redeem refused"))).toMatch(/reason=unknown, used or expired pairing code kind=browser remote=\S+/);
+      expect(lines.join("\n")).not.toContain("secret-code-123");
+      for (let i = 0; i < 9; i++) await pairVia({ label: "x", kind: "browser" }, `bad-${i}`);
+      expect((await pairVia({ label: "x", kind: "browser" }, "bad-more")).status).toBe(429);
+      expect(log.mock.calls.map((c) => String(c[0])).some((l) => /^hubd: pairing redeem rate-limited remote=\S+/.test(l))).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("an unauthenticated wrong method is 401, not 405", async () => {

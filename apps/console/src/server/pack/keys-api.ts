@@ -1,7 +1,7 @@
 /**
- * THE PACK KEYS API (work-wolfpack-6EmU8pu). Behind the console's owner gate, it calls the hub with the caller's own device
+ * THE PACK KEYS API (work-wolfpack-6EmU8pu). Behind the console's device gate (a verified device token, not an owner check), it calls the hub with the caller's own device
  * token, which the gate has verified; the console never uses its own hub token here. The gate only checks that the token is
- * valid on the hub (GET /v1/wolves answers 2xx), not that it is an owner token; hubd's deviceCaller and operator checks are
+ * valid on the hub (GET /v1/wolves answers 2xx), not that it is an owner token; hubd's ownerCaller refuses a non-owner device on key ack (403, passed through); its deviceCaller and operator checks are
  * the real limits.
  *   GET  /api/pack/machines/keys             the machines with key presence (masks only) and their public keys
  * Commands (including a sealed key.set) go through the Machines route, POST /api/machines/<hostId>/commands (machines-api.ts).
@@ -109,7 +109,12 @@ export function createKeysApi(d: KeysApiDeps) {
 				// The body names the fingerprint the owner looked at; the hub refuses (409) when the key has changed again.
 				const r = await hub(req, "POST", `/v1/machines/${encodeURIComponent(hostId)}/key/ack`, body);
 				if (!r) return noHub(req);
-				return new Response(await r.text(), { status: r.status, headers: { "content-type": "application/json", ...NO_STORE } });
+				const text = await r.text();
+				if (r.status === 403) {
+					const m = (() => { try { return (JSON.parse(text) as { message?: unknown }).message; } catch { return undefined; } })();
+					return fail(403, typeof m === "string" && m ? m : "only an owner device can do this", "forbidden"); // the hub's words, unchanged
+				}
+				return new Response(text, { status: r.status, headers: { "content-type": "application/json", ...NO_STORE } });
 			} catch {
 				return down();
 			}

@@ -48,7 +48,8 @@ export function createWorkClient(): WorkClient {
 		assign: (id, wolf) => patchWorkItem(id, { assignee: wolf }),
 		move: (id, to) => patchWorkItem(id, { moveTo: to }),
 		async domains() {
-			const res = await fetchKbGraph();
+			// The domain list barely changes: accept a stored or in-flight graph (maxAgeMs > 0 joins) instead of forcing a second request.
+			const res = await fetchKbGraph({}, 30_000);
 			return res.ok ? res.data.domains.map((d) => ({ name: d.name, label: d.label })) : [];
 		},
 		peek(domain) {

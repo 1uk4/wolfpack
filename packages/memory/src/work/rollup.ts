@@ -491,7 +491,18 @@ export interface RollupClient {
     container?: boolean;
   }>>;
   getBody(id: string): Promise<string>;
-  updateBody(id: string, body: string): Promise<void>;
+  /** The body with the etag it was read at. Absent: the write is unconditional (no compare-and-set). */
+  getBodyWithEtag?(id: string): Promise<{ body: string; etag?: string }>;
+  /** `ifMatch`: refuse the write with a WorkConflictError when the item changed since that etag. */
+  updateBody(id: string, body: string, opts?: { ifMatch?: string }): Promise<void>;
+}
+
+/** The hub refused a write because the item changed since it was read (409 conflict). */
+export class WorkConflictError extends Error {
+  constructor(message = "work item changed since it was read") {
+    super(message);
+    this.name = "WorkConflictError";
+  }
 }
 
 /**
@@ -506,7 +517,7 @@ export interface RollupClient {
 export async function rollupToParent(
   client: RollupClient,
   taskId: string
-): Promise<"written" | "no-parent" | "no-content"> {
+): Promise<"written" | "no-parent" | "no-content" | "conflict"> {
   const items = await client.query({ ids: [taskId] });
   const task = items[0];
   if (!task) return "no-parent";
@@ -534,15 +545,22 @@ export async function rollupToParent(
   };
 
   if (build(await client.getBody(parent.id)) === "no-content") return "no-content";
-  // The write replaces the whole body, so a line the hub appended since the read above would be lost. Re-read
-  // right before writing and rebuild from that: the window shrinks to one round trip (a hub-side upsert op
-  // would close it; none exists).
-  const original = await client.getBody(parent.id);
-  const built = build(original);
-  if (built !== "no-content" && built.next !== original) {
-    await client.updateBody(parent.id, built.next);
+  // The write replaces the whole body, so a line the hub appended since the read would be lost. Re-read, rebuild,
+  // and write with the re-read's etag: a hub 409 means something landed meanwhile, so rebuild once on the fresh
+  // body; a second 409 gives up ("conflict", logged) rather than overwrite.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const read = client.getBodyWithEtag ? await client.getBodyWithEtag(parent.id) : { body: await client.getBody(parent.id), etag: undefined };
+    const built = build(read.body);
+    if (built === "no-content" || built.next === read.body) return "written";
+    try {
+      await client.updateBody(parent.id, built.next, read.etag ? { ifMatch: read.etag } : undefined);
+      return "written";
+    } catch (err) {
+      if (!(err instanceof WorkConflictError)) throw err;
+    }
   }
-  return "written";
+  console.warn(`rollupToParent: ${parent.id}: body changed under two rollup writes; left as is`);
+  return "conflict";
 }
 
 /** The task's own `## Rollup` section, or "" when it has none. */

@@ -12,6 +12,7 @@ import {
   type Contribution,
   contentHash,
   inboxDir,
+  receiptsDir,
   now,
   safeSegment,
   hashTag,
@@ -62,7 +63,9 @@ export interface EmitDeltaInput {
   wolf: string;
   host?: string;
   denTopicId: string;
-  change: "create" | "merge";
+  change: "create" | "merge" | "update";
+  /** change "update": `body` stays the full body (hash, dedupe and the emitted copy use it); the diff is what is sent. */
+  update?: { baseHash: string; targets: string[]; diff: string };
   domainHint: string;
   summary: string;
   body: string;
@@ -98,6 +101,18 @@ export interface EmitDeltaInput {
   force?: boolean;
 }
 
+/** True when the sweep rejected an update of exactly this body because its targets are gone: the whole body must be sent again. */
+function updateTargetGone(roots: KbRoots, wolf: string, denTopicId: string, hash: string): boolean {
+  try {
+    const p = join(receiptsDir(roots, wolf), `${safeSegment(denTopicId, "den topic id")}-${hashTag(hash)}.md`);
+    if (!existsSync(p)) return false;
+    const raw = readFileSync(p, "utf-8");
+    return /^outcome:\s*reject\s*$/m.test(raw) && raw.includes("update_target_gone");
+  } catch {
+    return false;
+  }
+}
+
 /** The file name of a contribution: `<denTopicId>-<10 hex of the content hash>.md`. */
 export function contributionFileName(denTopicId: string, hash: string): string {
   return `${safeSegment(denTopicId, "den topic id")}-${hashTag(hash)}.md`;
@@ -124,7 +139,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
   const hash = contentHash(body);
   const emitted = readEmittedMap(roots);
   const prevHash = emitted[input.denTopicId] ?? null;
-  if (prevHash === hash && !input.force) return null; // unchanged re-promotion → no-op
+  if (prevHash === hash && !input.force && !updateTargetGone(roots, wolf, input.denTopicId, hash)) return null; // unchanged re-promotion → no-op
 
   const contribution: Contribution = {
     from: wolf,
@@ -137,7 +152,8 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     summary: input.summary,
     session: input.session,
     submitted: input.submitted ?? now(),
-    body,
+    body: input.update ? input.update.diff.trim() : body,
+    ...(input.update ? { baseHash: input.update.baseHash, targets: input.update.targets } : {}),
     sourceCreated: input.sourceCreated,
     sourceUpdated: input.sourceUpdated,
     dateBasis: input.dateBasis,
@@ -194,6 +210,8 @@ export function renderContribution(c: Contribution): string {
     c.host ? `host: ${c.host}` : null,
     `den_topic_id: ${c.denTopicId}`,
     `change: ${c.change}`,
+    c.baseHash ? `base_hash: ${c.baseHash}` : null,
+    c.targets?.length ? `targets: ${c.targets.join(", ")}` : null,
     `content_hash: ${c.contentHash}`,
     `prev_hash: ${c.prevHash ?? "null"}`,
     `domain_hint: ${c.domainHint}`,

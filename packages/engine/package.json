@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
+    "@earendil-works/pi-ai": "^1.1.0",
     "@wolfpack/protocol": "*",
     "yaml": "^2.6.0",
     "zod": "^3.24.0"

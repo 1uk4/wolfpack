@@ -78,7 +78,7 @@ import { createInventory, type Inventory } from "./inventory.js";
 import { createCommandHub, type CommandHub } from "./commands.js";
 import { createMachineKeys, type MachineKeys } from "./machine-keys.js";
 import { createRelay, type Relay } from "./relay.js";
-import { DOMAIN_RE, listWorkItems, readWorkRecordFor } from "./work-reads.js";
+import { assertIfMatch, DOMAIN_RE, ifMatchOf, listWorkItems, readWorkRecordFor } from "./work-reads.js";
 import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
 import { WorkIdempotency } from "./work-idempotency.js";
 import { buildHubSettings } from "./settings.js";
@@ -542,9 +542,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     commandHub = createCommandHub({ presence: (h) => link.presence(h), advertised: (h) => link.commands(h), epoch: (h) => link.epoch(h), send: (h, f) => link.sendToHost(h, f), timeoutMs: opts.commandTimeoutMs });
     relay = createRelay({ link, registry, bodyTimeoutMs: opts.bodyTimeoutMs });
     revokeListeners.add((id) => link.closeByToken(id));
-    async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: RegRoute, params: Record<string, string>): Promise<void> {
+    async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: RegRoute, params: Record<string, string>, identity?: AuthIdentity): Promise<void> {
       if (r.op === "list") return send(res, 200, { [r.c]: registry.list(r.c) });
       if (r.op === "get") return send(res, 200, { [singular(r.c)]: registry.get(r.c, params.name!) });
+      if (r.c === "domains") ownerCaller(identity); // KB domain changes need an owner device (reads stay open)
       const actor = writeActor(req);
       if (actor.kind !== "operator") throw new HubError("forbidden", "registry writes need an operator actor");
       if (r.op === "create") {
@@ -728,6 +729,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const t = (opts.now ?? Date.now)();
           // NOTE: the failure bucket is keyed on the socket peer. Behind a local reverse proxy (tailscale serve) every request is 127.0.0.1, so the bucket is GLOBAL (see RUNBOOK 5b).
           if (pairFailureCount(addr, t) >= PAIR_FAILS_PER_MIN) {
+            console.log(`hubd: pairing redeem rate-limited remote=${addr}`);
             res.setHeader("Retry-After", "60");
             return send(res, 429, { code: "busy", message: "too many failed pairing attempts; retry in a minute", retryable: true } satisfies ErrorEnvelope);
           }
@@ -738,6 +740,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
             return send(res, 200, { token: out.token, tokenId: out.tokenId, ...(out.hostId ? { hostId: out.hostId } : {}) });
           } catch (e) {
             if (e instanceof HubError && e.code === "unauthorized") recordPairFailure(addr, t);
+            if (e instanceof HubError) console.log(`hubd: pairing redeem refused reason=${e.message} kind=${body.kind ?? "console"} remote=${addr}`); // never the code
             throw e;
           }
         }
@@ -745,7 +748,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const caller = deviceCaller(identity);
           const all = tokens.list();
           const labelOf = new Map(all.map((t) => [t.id, t.label]));
-          const devices = all.filter((t) => t.kind !== "worker").map((t) => ({ id: t.id, label: t.label, kind: t.kind as "console" | "browser", createdAt: t.createdAt, lastUsedAt: t.lastUsedAt, self: t.id === caller.tokenId, addedBy: (t.mintedBy && labelOf.get(t.mintedBy)) || null, addedById: t.mintedBy ?? null }));
+          const devices = all.filter((t) => t.kind !== "worker").map((t) => ({ id: t.id, label: t.label, kind: t.kind as "console" | "browser", createdAt: t.createdAt, lastUsedAt: t.lastUsedAt, self: t.id === caller.tokenId, addedBy: (t.mintedBy && labelOf.get(t.mintedBy)) || null, addedById: t.mintedBy ?? null, isOwner: !!t.isOwner }));
           return send(res, 200, { devices });
         }
         case "hubRevokeDevice": {
@@ -852,7 +855,11 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const isBatch = typeof raw === "object" && raw !== null && "ops" in raw;
           const ops = normalisePatch(isBatch ? parseBody(PatchWorkBatchSchema, raw) : parseBody(PatchWorkOpSchema, raw));
           if (ops.some(isOwnerOnlyOp)) actor = writeActor(req, { ownerOnly: true });
-          const item = await writeWork(actor, () => applyOps(roots, params.id, ops));
+          const ifMatch = ifMatchOf(req.headers["if-match"]);
+          const item = await writeWork(actor, () => {
+            assertIfMatch(roots, params.id, ifMatch);
+            return applyOps(roots, params.id, ops);
+          });
           return send(res, 200, { item });
         }
         case "hubDeleteWork": {
@@ -906,7 +913,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           return send(res, 200, { keys: machineKeys.all() });
         }
         case "hubMachineKeyAck": {
-          const caller = deviceCaller(identity);
+          const caller = ownerCaller(identity);
           const body = parseBody(MachineKeyAckBodySchema, await readJson(req, { maxBytes: 1024, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
           const acked = machineKeys.ack(params.id!, body.fingerprint);
           if (acked === "unknown") throw new HubError("not_found", "no key recorded for this machine");
@@ -917,7 +924,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         }
         case "hubMachineCommand": {
           // Console/browser tokens only; the token was verified against tokens.json on this request (a revoked device is 401 above). Body (sealed key bytes) is never logged or stored.
-          deviceCaller(identity);
+          ownerCaller(identity); // sealed key.set and restarts: an owner device, like key ack
           const body = parseBody(CommandRequestSchema, await readJson(req, { maxBytes: 128 * 1024, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
           const out = await commandHub.run(params.id!, body);
           return send(res, out.status, out.body);
@@ -1053,6 +1060,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "hubApproveApproval":
         case "hubRejectApproval": {
           if (identity?.kind === "worker") throw new HubError("request_forbidden", "only the owner can decide an approval request");
+          ownerCaller(identity);
           const actor = writeActor(req);
           const by = { actor: actor.id, device: identity?.tokenId ?? "unknown" };
           const done = await writeWork(actor, () => (m.name === "hubApproveApproval" ? approvals.approve(params.rid, by) : approvals.reject(params.rid, by)));
@@ -1061,7 +1069,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         }
         default: {
           const reg = registryRoute(m.name);
-          if (reg) return registryDispatch(req, res, reg, params);
+          if (reg) return registryDispatch(req, res, reg, params, identity);
           // Wolf-scoped routes (threads, memory, KB, graduation, ...) belong to the wolf hosts: tunnelled over the host's link (relay.ts).
           // A worker token must not reach into any host's wolves; console/browser tokens may.
           const wolf = wolfForRoute(params);

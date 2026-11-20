@@ -223,6 +223,14 @@ export function writePiSettings(wolfDir: string, keys: string[], main?: Resolved
   settings.packages = [...localNpm, ...dirs];
 
   if (main) setPiModelDefaults(settings, main);
+  else {
+    // No resolved tier (pack has no models: block yet): keep what the wolf has,
+    // else the subscription default, so the file always lands on a working model.
+    settings.defaultProvider ??= FALLBACK_MAIN_PROVIDER;
+    settings.defaultModel ??= FALLBACK_MAIN_MODEL;
+  }
+  // Thinking blocks stay hidden unless the wolf's owner chose otherwise.
+  settings.hideThinkingBlock ??= true;
 
   // Inline images under a multiplexer: pi's `auto` protocol detection fails
   // through Herdr/tmux (they report TERM=xterm-256color), so diagrams never
@@ -259,6 +267,10 @@ export function writePiModelDefaults(wolfDir: string, main: ResolvedTier): void 
   setPiModelDefaults(settings, main);
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 }
+
+/** Main model used when the pack has no `models:` block to resolve (the subscription default). */
+const FALLBACK_MAIN_PROVIDER = "claude-stateless";
+const FALLBACK_MAIN_MODEL = "claude-opus-5-5";
 
 /** pi's model defaults from the main tier: `<provider>/<id>` split in two. */
 function setPiModelDefaults(settings: Record<string, unknown>, main: ResolvedTier): void {

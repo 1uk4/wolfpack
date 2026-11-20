@@ -187,7 +187,7 @@ describe("sandbox over a snapshot", () => {
     expect(() => createMemoryExtension({}, ctx(goodEnv))).not.toThrow();
     expect(() => createMemoryExtension({}, ctx({ ...goodEnv, KB_OPS: join(live.root, "ops") }))).toThrow(/kbOps .* outside the dev root/);
     expect(() => createMemoryExtension({}, ctx({ ...goodEnv, KB_OPS: undefined }))).toThrow(/not set/);
-    expect(() => createMemoryExtension({}, ctx({ ...goodEnv, WORK_ENDPOINT: "http://100.120.154.69:3141" }))).toThrow(/loopback/);
+    expect(() => createMemoryExtension({}, ctx({ ...goodEnv, WORK_ENDPOINT: "http://100.64.0.1:3141" }))).toThrow(/loopback/);
     expect(() => createMemoryExtension({}, ctx(goodEnv, join(live.root, "den")))).toThrow(/den .* outside the dev root/);
     expect(() => createMemoryExtension({}, { ...ctx(goodEnv), wolfConfig: { sandbox: true } })).toThrow(/no resolved dev root/);
   });

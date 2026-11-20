@@ -630,7 +630,26 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           }
         }
       } else {
-        if (aliasedFrom && !aliasMissing) {
+        // An update names its entries (from the receipt): the first one that is live takes the diff.
+        const named = c.change === "update" ? c.targets?.map(head).find((id) => readEntryMarkdown(roots, domain, id)) : undefined;
+        if (c.change === "update" && !named) {
+          // Every target is deleted or renamed with no live successor. The body is a diff: never route it to alias/create/merge,
+          // or the model builds an entry from diff fragments. The receipt is a reject (not an absorb), so the client sends the whole body next time.
+          const reason = `update_target_gone: ${(c.targets ?? []).join(",") || "no targets"}`;
+          await w.writeReceipt(roots, c.from, c, "reject", reason);
+          await w.markProcessed(c);
+          result.rejected++;
+          const decision: DecisionSummary = { outcome: "reject", reason, routing: routingSummary(routing) };
+          await recordDecision(decision);
+          itemEvent = { outcome: "reject", decision };
+          outcome = "rejected (update target gone)";
+          return null;
+        }
+        if (named) {
+          targetId = named;
+          routing.route = "alias";
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${named} (update diff)`);
+        } else if (aliasedFrom && !aliasMissing) {
           targetId = head(aliasedFrom);
           routing.route = "alias";
         } else if (aliasMissing) {

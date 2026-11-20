@@ -1,6 +1,6 @@
 /**
  * OWNER APPROVALS (work-wolfpack-WITFT19): the console's door to the hub's approval requests for graduate, archive and reassign.
- * Behind the console's owner gate, every call goes to the hub with the caller's OWN device token (the gate has verified it); the
+ * Behind the console's device gate (a verified device token; the owner check is hubd's ownerCaller), every call goes to the hub with the caller's OWN device token (the gate has verified it); the
  * console never uses its own hub token here. hubd decides who may approve: a worker token gets 403, which is passed through.
  *   GET  /api/work/requests               pending requests (hub GET /v1/work/requests?status=pending)
  *   POST /api/work/requests/<rid>/approve | /reject

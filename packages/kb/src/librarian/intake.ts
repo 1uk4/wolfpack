@@ -122,7 +122,9 @@ export function parseContribution(filePath: string, from: string): ParsedContrib
     from,
     host: fields.host ? String(fields.host) : undefined,
     denTopicId,
-    change: (fields.change as "create" | "merge") ?? "merge",
+    change: (fields.change as "create" | "merge" | "update") ?? "merge",
+    baseHash: fields.base_hash ? String(fields.base_hash) : undefined,
+    targets: list(fields.targets)?.filter((t) => /^kb-[A-Za-z0-9-]+$/.test(t)),
     contentHash: hash,
     prevHash:
       fields.prev_hash && String(fields.prev_hash) !== "null"

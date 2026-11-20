@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { readBindingFile, writeBindingFile } from "@wolfpack/memory";
 import type { ServerResponse } from "node:http";
-import { registerGraduationActions } from "../memory/actions.js";
+import { registerGraduationActions, registerMemoryActions, unregisterMemoryActions, type MemoryActions } from "../memory/actions.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -324,5 +324,42 @@ describe("an approved hub request closes the feature thread live", () => {
     await vi.waitFor(async () => expect((await w.client.getThread(a.id)).closed).toBe(true), { timeout: 5000 });
     expect((await w.client.getThread(a.id)).closedReason).toBe(GRADUATED);
     expect(readBindingFile(den, 4242)).toBeNull();
+  });
+
+  it("tells the memory extension once per approval (replays ignored), and a throwing hook doesn't stop the close", async () => {
+    hub = createServer((req, res) => {
+      if (!(req.url ?? "").startsWith("/v1/events")) { res.statusCode = 404; return void res.end(); }
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(": open\n\n");
+      streams.add(res);
+    });
+    work = createServer((req, res) => {
+      const id = decodeURIComponent((req.url ?? "").split("?")[0]!.split("/").pop() ?? "");
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ item: { id, stage: "build", domain: "wolfpack", title: "T" }, items: [], body: "" }));
+    });
+    await new Promise<void>((r) => hub!.listen(0, "127.0.0.1", r));
+    await new Promise<void>((r) => work!.listen(0, "127.0.0.1", r));
+    const { w } = await boot(undefined, {
+      WOLFPACK_HUB_URL: `http://127.0.0.1:${(hub.address() as AddressInfo).port}`,
+      WOLFPACK_HUB_TOKEN: "h",
+      WORK_ENDPOINT: `http://127.0.0.1:${(work.address() as AddressInfo).port}`,
+      WORK_TOKEN: "t",
+    });
+    const calls: Array<[string, string[]]> = [];
+    const actions = {
+      promoteEnabled: true, isBusy: () => false, consolidate: async () => ({}), promote: () => ({ status: "already_running", jobId: "x" }),
+      onGraduationApproved: async (id: string, archived: string[]) => { calls.push([id, archived]); throw new Error("promote exploded"); },
+    } as unknown as MemoryActions;
+    registerMemoryActions(w.wolf.config.den, actions);
+    const b = await w.client.createThread!("testwolf", { kind: "feature", workItemId: "work-wolfpack-appr0002" });
+    await vi.waitFor(() => expect(streams.size).toBe(1), { timeout: 5000 });
+    push({ type: "work-request-changed", id: 1, requestId: "r2", itemId: "work-wolfpack-appr0002", kind: "graduate", status: "approved" });
+    await vi.waitFor(async () => expect((await w.client.getThread(b.id)).closed).toBe(true), { timeout: 5000 });
+    push({ type: "work-request-changed", id: 2, requestId: "r2", itemId: "work-wolfpack-appr0002", kind: "graduate", status: "approved" });
+    push({ type: "work-request-changed", id: 3, requestId: "r9", itemId: "work-wolfpack-appr0009", kind: "graduate", status: "approved" });
+    await vi.waitFor(() => expect(calls.length).toBe(2), { timeout: 5000 });
+    expect(calls).toEqual([["work-wolfpack-appr0002", []], ["work-wolfpack-appr0009", []]]);
+    unregisterMemoryActions(w.wolf.config.den, actions);
   });
 });

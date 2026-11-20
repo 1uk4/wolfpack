@@ -37,7 +37,7 @@ import { registerMemoryActions, unregisterMemoryActions, type MemoryActions, typ
 import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { memoryEmitter } from "./memory-events.js";
 import { crawlMode, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
-import { readBoundTask } from "./unified-tasks.js";
+import { forgetCompletions, readBoundTask } from "./unified-tasks.js";
 import { sharedFeature, subagentReportTag } from "./observation-tag.js";
 import { durableSubagent, knownChildren, featureResolver, FINAL_ONLY_AGENTS, SUBAGENT_OBSERVE_EVERY_TURNS, SUBAGENT_OBSERVE_TOKENS, type SubagentTag } from "./subagent-tag.js";
 import { WorkClient } from "./work-client.js";
@@ -855,6 +855,7 @@ export default function createMemoryExtension(
   // ─── Actions (consolidate / promote) ──────────────────────────────────────
   let promoting: string | null = null;
   let jobSeq = 0;
+  const promotedFeatures = new Map<string, number>();
   if (!kbRoots) console.log("[memory] promote disabled: no KB roots (KB_BASE/KB_OPS); interval ticks only consolidate into session topics");
   const actions: MemoryActions = {
     promoteEnabled: kbRoots !== null,
@@ -862,7 +863,23 @@ export default function createMemoryExtension(
     promotingJob: () => promoting,
     // A manual Consolidate ignores the retry backoff; the timer/threshold path keeps it.
     consolidate: () => consolidateToSessions({ minObservations: 1, ignoreBackoff: true }),
-    promoteForFeature: async (featureId: string) => { if (kbRoots) await serialized(() => runPass({ kind: "graduation", featureId })); },
+    // The in-agent confirm (onGraduated) and the hub's approval event (onGraduationApproved) can both name the same feature: promote it once per 10 min.
+    promoteForFeature: async (featureId: string) => {
+      if (!kbRoots) return;
+      const now = Date.now();
+      for (const [k, at] of promotedFeatures) if (now - at > 10 * 60_000) promotedFeatures.delete(k);
+      if (promotedFeatures.has(featureId)) return;
+      promotedFeatures.set(featureId, now);
+      await serialized(() => runPass({ kind: "graduation", featureId }));
+    },
+    onGraduationApproved: async (featureId: string, archivedIds: string[]) => {
+      try {
+        forgetCompletions(wolfDen, [featureId, ...archivedIds]);
+        await actions.promoteForFeature?.(featureId);
+      } catch (err) {
+        console.log(`[memory] promote after approved graduation of ${featureId} failed: ${err instanceof Error ? err.message : err}`);
+      }
+    },
     promote(popts) {
       if (promoting) return { status: "already_running", jobId: promoting };
       const jobId = `promote-${Date.now().toString(36)}-${++jobSeq}`;

@@ -51,6 +51,7 @@ export { createAdapter, registerAdapter, type AdapterFactory } from "./adapters/
 // Usage tracking
 export { UsageTracker, type UsageSummary } from "./usage.js";
 export * from "./usage-log.js";
+export * from "./usage/index.js";
 
 // Pipeline — parse, search, commit, index
 export * from "./pipeline/index.js";

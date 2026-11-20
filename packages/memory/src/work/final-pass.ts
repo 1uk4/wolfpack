@@ -12,7 +12,7 @@
  */
 import { z } from "zod";
 import { WORK_TIDY_SYSTEM, buildWorkTidyPrompt, parseWorkTidyOutput, type Engine } from "@wolfpack/engine";
-import { extractRecord, RECORD_HEADING, APPEND_CAP_FEATURE, type WorkRecordStore } from "../work-record.js";
+import { extractRecord, RECORD_HEADING, APPEND_CAP_FEATURE, WorkApiError, type WorkRecordStore } from "../work-record.js";
 import { outcomesText } from "./rollup.js";
 import { appendCompacting } from "./compact.js";
 import { sweepPendingDistills, type SweepClient } from "./ship-distill.js";
@@ -45,14 +45,26 @@ function parseRecord(body: string): Parsed[] {
   return out;
 }
 
-export async function finalFeaturePass(opts: {
+type PassOpts = {
   store: WorkRecordStore;
   engine: Pick<Engine, "call">;
   featureId: string;
   /** Plain label for the lines' source (the acting wolf). */
   src: string;
   now?: () => Date;
-}): Promise<FinalPassResult> {
+};
+
+/** A write refused with 409 conflict (the Record changed after the re-read) is retried once on the fresh Record; a second one is `{ok:false, reason:"conflict"}`. */
+export async function finalFeaturePass(opts: PassOpts): Promise<FinalPassResult> {
+  const first = await finalPassOnce(opts);
+  if (first !== "conflict") return first;
+  const second = await finalPassOnce(opts);
+  if (second !== "conflict") return second;
+  console.warn(`finalFeaturePass: ${opts.featureId}: Record changed under two final-pass writes; left as is`);
+  return { ok: false, reason: "conflict" };
+}
+
+async function finalPassOnce(opts: PassOpts): Promise<FinalPassResult | "conflict"> {
   const { store, engine, featureId } = opts;
   try {
     const feature = await store.get(featureId);
@@ -116,10 +128,11 @@ export async function finalFeaturePass(opts: {
       .map(([g, ls]) => `### ${g}\n\n${ls.map((l) => `- ${hhmm} [${opts.src}\u00b7${GROUP_KIND[g] ?? "change"}] ${l.text}${l.ids.length ? ` <!-- src:${l.ids.join(",")} -->` : ""}`).join("\n")}`);
     const record = [RECORD_HEADING, ...parts].join("\n\n");
     if (record.length > APPEND_CAP_FEATURE) return markerOnly(before);
-    // Known window: no hub compare-and-set, so a recordAppend landing between the re-read above and this write is overwritten.
-    await store.setRecord(featureId, record);
+    // Compare-and-set on the re-read's etag: an append landing after it makes the hub answer 409 (the caller retries once).
+    await store.setRecord(featureId, record, again.etag ? { ifMatch: again.etag } : {});
     return { ok: true, status: "tidied", before, after };
   } catch (err) {
+    if (err instanceof WorkApiError && err.status === 409 && err.code === "conflict") return "conflict";
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };
   }
 }

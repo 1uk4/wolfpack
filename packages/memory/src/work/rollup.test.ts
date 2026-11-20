@@ -6,6 +6,7 @@ import {
   parseKeyedValue,
   sumKeys,
   rollupToParent,
+  WorkConflictError,
   hasRollupZone,
   stripRollupMarkers,
   totalsSummary,
@@ -251,6 +252,35 @@ describe("rollupToParent (orchestrator)", () => {
     expect(await rollupToParent(client, "task-1")).toBe("written");
     expect(store.body).toContain("appended mid-rollup");
     expect(store.body).toContain("## Outcomes");
+  });
+
+  it("a line appended between the re-read and the write makes the write 409; rollup rebuilds once on the fresh body and keeps the line", async () => {
+    const store = { body: "# W\n\n## Record\n\n- 09:00 [x·Changes] before <!-- src:a -->\n", rev: 0 };
+    const writes: Array<string | undefined> = [];
+    const mk = (conflicts: number): RollupClient => ({
+      async query({ ids }) {
+        return [
+          { id: "task-1", kind: "task", title: "T", partOf: "feat-1", updated: "2026-10-16" },
+          { id: "feat-1", kind: "feature", title: "W", partOf: null, updated: "2026-10-15" },
+        ].filter((i) => (ids ?? []).includes(i.id));
+      },
+      async getBody(id) { return id === "task-1" ? "# T\n" : store.body; },
+      async getBodyWithEtag(id) { return { body: id === "task-1" ? "# T\n" : store.body, etag: String(store.rev) }; },
+      async updateBody(_id, body, opts) {
+        writes.push(opts?.ifMatch);
+        if (writes.length <= conflicts) { store.body += "- 10:00 [hal·Changes] appended mid-rollup <!-- src:b -->\n"; store.rev++; }
+        if (opts?.ifMatch !== undefined && opts.ifMatch !== String(store.rev)) throw new WorkConflictError();
+        store.body = body; store.rev++;
+      },
+    });
+    expect(await rollupToParent(mk(1), "task-1")).toBe("written");
+    expect(writes).toEqual(["0", "1"]);
+    expect(store.body).toContain("appended mid-rollup");
+    expect(store.body).toContain("## Outcomes");
+    // a second conflict gives up without throwing
+    store.body = "# W\n\n## Record\n\n- x\n"; writes.length = 0;
+    expect(await rollupToParent(mk(2), "task-1")).toBe("conflict");
+    expect(writes).toHaveLength(2);
   });
 
   it("a feature without a zone gets an ## Outcomes section: the task's one line", async () => {

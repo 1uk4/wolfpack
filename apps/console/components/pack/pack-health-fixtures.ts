@@ -138,10 +138,10 @@ export function fixtureSnapshot(name: HealthFixture, now: number): HealthSnapsho
 		case "mac":
 		case "two-hosts-mac-view": {
 			// A Mac console: its live-stack workerd and wolves on loopback, the hub on sfo-01 over the tailnet (restartable false: no systemd).
-			const hubHost = name === "mac" ? "100.120.154.69" : "sfo-01";
+			const hubHost = name === "mac" ? "100.64.0.1" : "sfo-01";
 			const mac = links
 				.filter((l) => l.id !== "workerd-wolves")
-				.map((l): HealthLink => (l.kind === "hubd" ? { ...l, host: hubHost, restartable: false } : { ...l, host: "luka-air", restartable: false, ...(l.kind === "wolfd" ? { via: "workerd" } : {}) }));
+				.map((l): HealthLink => (l.kind === "hubd" ? { ...l, host: hubHost, restartable: false } : { ...l, host: "dev-laptop", restartable: false, ...(l.kind === "wolfd" ? { via: "workerd" } : {}) }));
 			mac.push({ ...mac.find((l) => l.kind === "wolfd")!, id: "wolfd@ada" });
 			if (name === "mac") {
 				// An older hub: no `host`, no `hosts`. The card it is on (the IP) is sfo-01's by the hub rule (pack-hosts.ts).

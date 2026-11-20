@@ -31,6 +31,8 @@ export interface MemoryActions {
   promote(opts?: { ids?: string[] }): PromoteStart;
   /** A feature graduated: run the promote pass for the topics sourced from it. Optional; never throws into the graduation. */
   promoteForFeature?(featureId: string): Promise<void>;
+  /** The hub approved a graduation: forget cached completion for the feature and its archived descendants, then promote for it. Never throws into wolfd. */
+  onGraduationApproved?(featureId: string, archivedIds: string[]): Promise<void> | void;
 }
 
 // On globalThis, keyed by Symbol.for (as the event buses are): the memory extension and wolfd's server must see one

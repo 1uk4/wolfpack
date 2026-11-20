@@ -38,6 +38,10 @@ export interface TestWolfOptions {
   modelRelease?: (sessionId: string) => void;
   /** Replaces the librarian sweep's tick (a librarian wolf only). */
   sweepTick?: StartWolfOptions["sweepTick"];
+  usageIngest?: StartWolfOptions["usageIngest"];
+  usageIngestDebounceMs?: number;
+  usageLedgerDir?: string;
+  log?: (line: string) => void;
 }
 
 export interface TestWolf {
@@ -91,6 +95,10 @@ export async function startTestWolf(opts: TestWolfOptions): Promise<TestWolf> {
       models: scripted.models,
       ...(opts.modelRelease ? { modelRelease: opts.modelRelease } : {}),
       ...(opts.sweepTick ? { sweepTick: opts.sweepTick } : {}),
+      ...(opts.usageIngest ? { usageIngest: opts.usageIngest } : {}),
+      ...(opts.usageIngestDebounceMs !== undefined ? { usageIngestDebounceMs: opts.usageIngestDebounceMs } : {}),
+      ...(opts.usageLedgerDir ? { usageLedgerDir: opts.usageLedgerDir } : {}),
+      ...(opts.log ? { log: opts.log } : {}),
       extraExtensions: (rt) => {
         const extra = opts.hooks?.extensions;
         return [recorder, ...(typeof extra === "function" ? extra(rt) : (extra ?? []))];

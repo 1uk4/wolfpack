@@ -133,7 +133,9 @@ export function createThreadApi(source: ClientSource) {
 
 		async threads(wolf: string, opts: { all?: boolean } = {}): Promise<Response> {
 			try {
-				return json({ threads: await source().listThreads(wolf, opts.all ? { all: true } : undefined) });
+				const threads = await source().listThreads(wolf, opts.all ? { all: true } : undefined);
+				// The sidebar only reads `workspace.branch`; the rest of the git workspace (paths, repo, base) stays out of the default list.
+				return json({ threads: opts.all ? threads : threads.map((t) => (t.workspace ? { ...t, workspace: { branch: t.workspace.branch } } : t)) });
 			} catch (err) {
 				return failure(err);
 			}

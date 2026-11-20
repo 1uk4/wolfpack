@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import createTasksExtension, { readBoundTask as readBound } from "./unified-tasks.js";
+import createMemoryExtension from "./unified.js";
+import { memoryActionsFor, unregisterMemoryActions } from "./memory-actions.js";
 import { bindingFile, readBindingFile, writeBindingFile } from "./conversation-binding.js";
 import { unbindCompleted, unbindOnGraduation, writeUnboundNotice } from "@wolfpack/memory";
 
@@ -196,6 +198,30 @@ describe("completing a work item unbinds its conversations", () => {
     expect(readBindingFile(den, 6)?.workId).toBe("work-t2");
     expect(readBindingFile(den, 5)?.workId).toBe("work-other");
     expect(await sectionText("active_task", 3)).toContain(NOTICE("Feat"));
+  });
+
+  it("a hub-approved graduation forgets the cached completion of the feature and its children, and promotes once", async () => {
+    createMemoryExtension({ live: true, engine: { call: async () => { throw new Error("unused"); } } } as never, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {}, env: {} });
+    const actions = memoryActionsFor(den)!;
+    const promote = vi.fn(async () => {});
+    actions.promoteForFeature = promote;
+    try {
+      const f = add({ kind: "feature", title: "F" });
+      const t = add({ kind: "task", title: "T", partOf: f.id });
+      bind(1, f.id, f.id);
+      bind(2, t.id, f.id);
+      expect((await readBoundTask(den))?.taskId).toBe(f.id); // not complete yet: the lookup is now cached
+      items.get(f.id)!.stage = "archived";
+      items.get(t.id)!.stage = "archived";
+      await actions.onGraduationApproved!(f.id, [t.id]);
+      expect(await readBoundTask(den)).toBeNull(); // re-read, not the cached "open" (no time has passed)
+      expect(readBindingFile(den, 2)?.workId).toBe(t.id);
+      expect(await readBound({ wolfDen: den, conversationId: 2 })).toBeNull();
+      expect(promote).toHaveBeenCalledTimes(1);
+      expect(promote).toHaveBeenCalledWith(f.id);
+    } finally {
+      unregisterMemoryActions(den, actions);
+    }
   });
 
   it("the binding guidance says when unbinding happens", async () => {

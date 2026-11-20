@@ -112,12 +112,12 @@ describe("pack health by host", () => {
 			intervalMs: 5000,
 			hosts: [
 				{ id: "luka-air", label: "Mac", isThisConsole: true, platform: "darwin" },
-				{ id: "100.120.154.69", label: "100.120.154.69", isThisConsole: false },
+				{ id: "100.64.0.1", label: "100.64.0.1", isThisConsole: false },
 				{ id: "sfo-01", label: "sfo-01", isThisConsole: false, hubId: "sfo" },
 				{ id: "sfo-010", label: "sfo-010", isThisConsole: false, hubId: "x" },
 			],
 			links: [
-				link("hubd", "100.120.154.69"),
+				link("hubd", "100.64.0.1"),
 				link("workerd", "luka-air"),
 				link("hub-link@sfo", "sfo-01", { source: "hub" }),
 				link("wolfd@hal", "sfo-01", { via: "hub-link@sfo", source: "hub" }),

@@ -144,6 +144,8 @@ export interface WolfServerOptions {
   tierProviders?: Partial<Record<ThreadTier, string>>;
   /** Called with faults the pump cannot surface over HTTP. */
   onError?: (error: unknown) => void;
+  /** Called after every finished turn on any thread (wolfd uses it to feed the usage ledger). Must not throw. */
+  onTurnEnd?: () => void;
 }
 
 /** How feature threads get their engine conversations (new ones, and the persisted ones again after a restart). */
@@ -158,6 +160,8 @@ export interface ThreadConversations {
 export const WOLFD_VERSION_STAMPS = [new URL("./VERSION", import.meta.url), new URL("../../VERSION", import.meta.url), new URL("../../../../VERSION", import.meta.url)];
 const WOLFD_VERSION = stampedVersion(WOLFD_VERSION_STAMPS, new URL("../../package.json", import.meta.url));
 const WOLF_EVENT_BUFFER = 256;
+/** A second approved-graduation event for the same item inside this window (hub replay) is not passed to memory again. */
+const APPROVAL_DEDUPE_MS = 10 * 60_000;
 const MEMORY_KEEPALIVE_MS = 20_000;
 const MEMORY_STREAM_MAX_BUFFER = 1_000_000;
 
@@ -367,6 +371,11 @@ export class WolfServer {
       ...(this.opts.den && this.opts.work?.endpoint ? { taskNotice: (cid: string) => pendingTaskNotice(this.opts.den as string, cid, workApiReader(this.opts.work ?? {})) } : {}),
     });
     this.threads.set(summary.id, t);
+    if (this.opts.onTurnEnd) {
+      t.observe((ev) => {
+        if (ev.type === "turn-end") this.opts.onTurnEnd?.();
+      });
+    }
     this.subagents?.watchShips(t);
     return t;
   }
@@ -472,7 +481,18 @@ export class WolfServer {
       try { unbindOnGraduation(this.opts.den, { id: r.itemId, title, archived: [r.itemId, ...archived] }); } catch (e) { this.opts.onError?.(e); }
     }
     this.closeFeatureThreads([r.itemId, ...archived]);
+    // The hub may replay the event on reconnect: tell memory once per item within the window.
+    const now = Date.now();
+    for (const [k, at] of this.approvedSeen) if (now - at > APPROVAL_DEDUPE_MS) this.approvedSeen.delete(k);
+    if (this.approvedSeen.has(r.itemId)) return;
+    this.approvedSeen.set(r.itemId, now);
+    const hook = this.opts.den ? memoryActionsFor(this.opts.den)?.onGraduationApproved : undefined;
+    if (hook) {
+      // Fire and forget: a slow promote must not delay the close, and a failure is logged, never thrown.
+      void Promise.resolve().then(() => hook(r.itemId, archived)).catch((e) => this.opts.onError?.(e));
+    }
   }
+  private readonly approvedSeen = new Map<string, number>();
 
   /** Graduation jobs by `<wolf>:<work id>`: preview and confirm run in the background, a second start returns the running job. */
   private readonly graduationJobs = new GraduationJobs();

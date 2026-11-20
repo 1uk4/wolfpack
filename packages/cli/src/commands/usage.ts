@@ -22,6 +22,7 @@ import { aggregate, isGroupBy, parseSince, GROUP_BYS, type UsageReport, type Usa
 import type { SourceReport } from "../usage/collect.js";
 import type { ContextGroup } from "../usage/context.js";
 import { collectContext } from "../usage/context-read.js";
+import { appendIngestLog } from "@wolfpack/engine";
 import { formatIngest, ingestUsage, type IngestResult } from "../usage/ingest.js";
 import { defaultLedgerDir, readLedger } from "../usage/ledger.js";
 import { installUsageSchedule, uninstallUsageSchedule } from "../usage-schedule.js";
@@ -108,7 +109,9 @@ export async function ingestUsageQuietly(): Promise<void> {
     const r = await ingest(defaultLedgerDir());
     console.log(c.dim(`  ${formatIngest(r).split("\n")[0]}`));
   } catch (err) {
-    console.log(c.dim(`  usage ingest skipped: ${err instanceof Error ? err.message : err}`));
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(c.dim(`  usage ingest skipped: ${msg} (see ~/.wolfpack/logs/usage-ingest.log)`));
+    appendIngestLog(msg);
   }
 }
 

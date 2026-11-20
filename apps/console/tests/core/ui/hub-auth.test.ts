@@ -64,16 +64,14 @@ describe("withHubAuth", () => {
 		await pending;
 		assert.equal(readHubToken(storage), "new");
 	});
-	it("tokenFromPairingInput takes a raw token or the token after #token= in a pairing link, nothing else", () => {
-		assert.equal(tokenFromPairingInput("  abc123_-.~  "), "abc123_-.~");
-		assert.equal(tokenFromPairingInput("http://127.0.0.1:3231/pair#token=abc123"), "abc123");
-		assert.equal(tokenFromPairingInput("https://c.example/pair#x=1&token=a%2Bb&y=2"), "a+b");
-		assert.equal(tokenFromPairingInput("#token=abc123"), "abc123");
-		assert.equal(tokenFromPairingInput("http://127.0.0.1:3231/pair"), undefined, "a link without a token");
-		assert.equal(tokenFromPairingInput("http://x/pair#token="), undefined);
-		assert.equal(tokenFromPairingInput("not a token!"), undefined, "spaces and punctuation");
-		assert.equal(tokenFromPairingInput("   "), undefined);
-		assert.equal(tokenFromPairingInput(""), undefined);
+	it("tokenFromPairingInput tells a typed pairing code (16 base64url chars, '_' and '-' allowed) from a token or link, and rejects garbage", () => {
+		assert.deepEqual(tokenFromPairingInput("  Ab_d-fGh1JkLmN_p  "), { kind: "code", code: "Ab_d-fGh1JkLmN_p" });
+		assert.deepEqual(tokenFromPairingInput("http://127.0.0.1:3231/pair#token=abc123"), { kind: "token", token: "abc123" });
+		assert.deepEqual(tokenFromPairingInput("https://c.example/pair#x=1&token=a%2Bb&y=2"), { kind: "token", token: "a+b" });
+		assert.deepEqual(tokenFromPairingInput("#token=abc123"), { kind: "token", token: "abc123" });
+		assert.deepEqual(tokenFromPairingInput("abc123_-.~"), { kind: "token", token: "abc123_-.~" }, "a raw token with token-only characters");
+		assert.deepEqual(tokenFromPairingInput("A".repeat(43)), { kind: "token", token: "A".repeat(43) }, "a 43-char hub token is not a code");
+		for (const bad of ["http://127.0.0.1:3231/pair", "http://x/pair#token=", "not a token!", "   ", ""]) assert.deepEqual(tokenFromPairingInput(bad), { kind: "invalid" }, JSON.stringify(bad));
 	});
 	it("helpers: fragment token, bearer parsing, clear", () => {
 		assert.equal(tokenFromHash("#token=a%2Bb"), "a+b");

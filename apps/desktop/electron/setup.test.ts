@@ -3,6 +3,7 @@
  * Needs `node apps/desktop/scripts/build-runtime.mjs` first; WOLFPACK_DESKTOP_TEST_NODE=1 runs the children under this Node (see supervisor.test.ts).
  */
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -127,6 +128,10 @@ describe("first-run setup", () => {
       const reg = JSON.parse(readFileSync(join(stateDir, "hub", "registry", "registry.json"), "utf8"));
       // The wolf-named default domain ("retry") is created on the hub after the start, for its work items.
       expect(reg.domains.map((d: { name: string }) => d.name)).toEqual(["personal", "recipes", "retry"]);
+      // The app is its own hub's owner: the hub token (creates that domain) and the console token (key acks, approvals) are owner devices.
+      const listed = spawnSync(nodeBin, [join(runtimeDir, "hubd.mjs"), "tokens", "list", "--data-dir", join(stateDir, "hub")], { encoding: "utf8" }).stdout;
+      const ownerLabels = listed.split("\n").filter((l) => /isOwner=true/.test(l)).map((l) => l.split(/\s+/)[2]);
+      expect(ownerLabels).toEqual(["wolf", "console"]);
     } finally {
       await sup.stop();
     }

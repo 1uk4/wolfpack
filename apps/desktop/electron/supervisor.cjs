@@ -259,7 +259,7 @@ function createSupervisor(opts) {
 	const healthy = (url) => async () => (await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(2000) })).ok; // a squatter that accepts but never answers must not hang the wait
 
 	/**
-	 * A single-use pairing code for a console token, from the hubd CLI (file based: hubd is not up yet). Null when a token is already stored.
+	 * A single-use pairing code for an OWNER console token (this app is its own hub's owner: domain writes, key acks and approvals need one), from the hubd CLI (file based: hubd is not up yet). Null when a token is already stored.
 	 * Safe to run again on a start retry: a token file that was redeemed is skipped, and a fresh code is minted only while none is stored.
 	 */
 	function mintHubToken(hubDir, fileName = HUB_TOKEN_FILE, label = "wolf") {
@@ -272,7 +272,7 @@ function createSupervisor(opts) {
 			fs.renameSync(file, `${file}.bad-${Date.now()}`);
 			log(`${fileName} was unreadable: set aside, minting a new token`);
 		}
-		const r = spawnSync(nodeBin, [path.join(runtimeDir, "hubd.mjs"), "pair", "--kind", "console", "--label", label, "--data-dir", hubDir], { env: base({}), encoding: "utf8" });
+		const r = spawnSync(nodeBin, [path.join(runtimeDir, "hubd.mjs"), "pair", "--kind", "console", "--owner", "--label", label, "--data-dir", hubDir], { env: base({}), encoding: "utf8" });
 		const m = /pairing code: (\S+)/.exec(`${r.stdout}`);
 		if (!m) throw new Error(`could not mint the ${label}'s hub token: ${redact(String(r.stderr || r.stdout).split("\n")[0])}`);
 		return m[1];

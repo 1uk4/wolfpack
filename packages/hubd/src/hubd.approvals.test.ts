@@ -99,6 +99,27 @@ describe("owner approvals", () => {
     expect(sent.length).toBe(2);
   });
 
+  it("approving a graduate archives the feature and its not-yet-archived tasks, leaves archived ones, and counts them in the audit line", async () => {
+    const r = await rig();
+    const mk = async (stage: string) => {
+      const t = ((await (await r.work(OP_TOKEN, "POST", "", { kind: "task", domain: "personal", title: `T-${stage}`, assignee: "wa", partOf: r.id, successCriteria: "ok", body: "x" })).json()) as { id: string }).id;
+      expect((await r.work(OP_TOKEN, "PATCH", `/${t}`, { stage })).status).toBe(200);
+      return t;
+    };
+    const shipped = await mk("shipped");
+    const building = await mk("in_build");
+    const gone = await mk("archived");
+    const stageOf = async (i: string) => ((await (await r.work(OP_TOKEN, "GET", `/${i}`)).json()) as { item: { stage: string } }).item.stage;
+    const q = ((await (await r.file({ kind: "graduate", preview })).json()) as Req).request;
+    expect((await r.api(OP_TOKEN, "POST", `/v1/work/requests/${q.id}/approve`)).status).toBe(200);
+    expect((await r.item()).graduated).toBeTruthy();
+    expect((await r.item()).stage).toBe("archived");
+    expect(await stageOf(shipped)).toBe("archived");
+    expect(await stageOf(building)).toBe("archived");
+    expect(await stageOf(gone)).toBe("archived");
+    expect(JSON.stringify(await r.record())).toContain("archived 3");
+  });
+
   it("approving a reassign changes the assignee", async () => {
     const r = await rig();
     const q = ((await (await r.file({ kind: "reassign", target: "wb" })).json()) as Req).request;

@@ -106,7 +106,9 @@ export function createApprovalStore(d: ApprovalDeps) {
       probeWorkStore(d.roots, String(item.domain));
       const at = now().toISOString();
       const contributions: GraduationContribution[] = req.kind === "graduate" ? (req.preview?.contributions ?? []) : [];
-      const outcome = req.kind === "graduate" ? `sent: ${contributions.length} contributions` : req.kind === "archive" ? "stage archived" : `assignee ${req.target}`;
+      // Graduating archives the item and every descendant not archived yet (the retired direct path did the same). Deepest first, so a parent never archives before its children.
+      const toArchive = req.kind === "graduate" ? archiveOrder(d.roots, req.workId) : [];
+      const outcome = req.kind === "graduate" ? `sent: ${contributions.length} contributions, archived ${toArchive.length}` : req.kind === "archive" ? "stage archived" : `assignee ${req.target}`;
       const audit: ApprovalAuditLine = { requestId: rid, kind: req.kind, actor: by.actor, device: by.device, at, outcome };
       // (a) The audit line, BEFORE the action: archiving closes the Record.
       applyOps(d.roots, req.workId, [{
@@ -117,6 +119,15 @@ export function createApprovalStore(d: ApprovalDeps) {
       if (req.kind === "graduate") {
         deliverContributions(d, req, item as { domain: unknown }, contributions, at);
         graduateItem(d.roots, req.workId);
+        for (const id of toArchive) {
+          try {
+            applyOps(d.roots, id, [{ op: "stage", to: "archived" }]);
+          } catch (e) {
+            // A descendant that refuses (guard error) is skipped; the rest, and the item, still archive.
+            if (id === req.workId) throw e;
+            console.warn(`[work-approvals] ${rid}: could not archive ${id}: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
       } else if (req.kind === "archive") {
         applyOps(d.roots, req.workId, [{ op: "stage", to: "archived" }]);
       } else {
@@ -141,6 +152,24 @@ export function createApprovalStore(d: ApprovalDeps) {
     },
   };
   return store;
+}
+
+/** The item and its not-yet-archived descendants, children before parents (post-order). */
+function archiveOrder(roots: KbRoots, rootId: string): string[] {
+  const items = [...loadWorkState(roots).values()] as Array<{ id: unknown; partOf?: unknown; stage?: unknown }>;
+  const childrenOf = new Map<string, string[]>();
+  for (const c of items) if (c.partOf) childrenOf.set(String(c.partOf), [...(childrenOf.get(String(c.partOf)) ?? []), String(c.id)]);
+  const stageOf = new Map(items.map((i) => [String(i.id), i.stage]));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const walk = (id: string): void => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    for (const c of childrenOf.get(id) ?? []) walk(c);
+    if (stageOf.get(id) !== "archived") out.push(id);
+  };
+  walk(rootId);
+  return out;
 }
 
 /** The stored preview set goes to the hub's contribution lane under the requesting wolf (the lane its own confirm would have used). */

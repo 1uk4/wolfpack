@@ -2,6 +2,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { readBindingFile, writeBindingFile } from "@wolfpack/memory";
+import type { ServerResponse } from "node:http";
 import { registerGraduationActions } from "../memory/actions.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -267,5 +269,60 @@ describe("a closed thread is announced as thread-updated, once", () => {
     } finally {
       await replay.stop();
     }
+  });
+});
+
+/** The hub graduates on owner approval and says so on /v1/events; wolfd closes the thread and unbinds the other holders. */
+describe("an approved hub request closes the feature thread live", () => {
+  const GRADUATED = "This feature has graduated; its thread is read-only history. Start a new feature or use home.";
+  const streams = new Set<ServerResponse>();
+  let hub: Server | undefined;
+  let work: Server | undefined;
+  afterEach(async () => {
+    for (const s of streams) s.end();
+    streams.clear();
+    for (const s of [hub, work]) if (s) await new Promise<void>((r) => { s.closeAllConnections(); s.close(() => r()); });
+    hub = work = undefined;
+  });
+  const push = (ev: object) => { for (const s of streams) s.write(`id: 1\ndata: ${JSON.stringify(ev)}\n\n`); };
+
+  it("closes on an approved graduate, unbinds other holders, and leaves an approved archive open", async () => {
+    hub = createServer((req, res) => {
+      if (!(req.url ?? "").startsWith("/v1/events")) { res.statusCode = 404; return void res.end(); }
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(": open\n\n");
+      streams.add(res);
+    });
+    work = createServer((req, res) => {
+      const id = decodeURIComponent((req.url ?? "").split("?")[0]!.split("/").pop() ?? "");
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ item: { id, stage: "build", domain: "wolfpack", title: "T" }, items: [], body: "" }));
+    });
+    await new Promise<void>((r) => hub!.listen(0, "127.0.0.1", r));
+    await new Promise<void>((r) => work!.listen(0, "127.0.0.1", r));
+    const { w } = await boot(undefined, {
+      WOLFPACK_HUB_URL: `http://127.0.0.1:${(hub.address() as AddressInfo).port}`,
+      WOLFPACK_HUB_TOKEN: "h",
+      WORK_ENDPOINT: `http://127.0.0.1:${(work.address() as AddressInfo).port}`,
+      WORK_TOKEN: "t",
+    });
+    const a = await w.client.createThread!("testwolf", { kind: "feature", workItemId: "work-wolfpack-appr0001" });
+    const b = await w.client.createThread!("testwolf", { kind: "feature", workItemId: "work-wolfpack-appr0002" });
+    const den = w.wolf.config.den;
+    writeBindingFile(den, 4242, { workId: "work-wolfpack-appr0001", domain: "wolfpack", boundAt: new Date().toISOString() });
+    await vi.waitFor(() => expect(streams.size).toBe(1), { timeout: 5000 });
+
+    // archive approved for A: nothing closes. Then graduate approved for B: once B is closed, A's earlier event has been handled too.
+    push({ type: "work-request-changed", id: 1, requestId: "r1", itemId: "work-wolfpack-appr0001", kind: "archive", status: "approved" });
+    push({ type: "work-request-changed", id: 2, requestId: "r2", itemId: "work-wolfpack-appr0002", kind: "graduate", status: "approved" });
+    await vi.waitFor(async () => expect((await w.client.getThread(b.id)).closed).toBe(true), { timeout: 5000 });
+    expect((await w.client.getThread(b.id)).closedReason).toBe(GRADUATED);
+    expect((await w.client.getThread(a.id)).closed).toBeFalsy();
+    expect(readBindingFile(den, 4242)?.workId).toBe("work-wolfpack-appr0001");
+
+    push({ type: "work-request-changed", id: 3, requestId: "r3", itemId: "work-wolfpack-appr0001", kind: "graduate", status: "approved" });
+    await vi.waitFor(async () => expect((await w.client.getThread(a.id)).closed).toBe(true), { timeout: 5000 });
+    expect((await w.client.getThread(a.id)).closedReason).toBe(GRADUATED);
+    expect(readBindingFile(den, 4242)).toBeNull();
   });
 });

@@ -74,10 +74,11 @@ import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, hasOriginalIdentity, overr
 import type { PromptBlock } from "./context.js";
 import { readOnlyCatalog, type ToolInfo } from "./prompt-catalog.js";
 import { GraduationJobs } from "./graduation-jobs.js";
+import { watchApprovals, type ApprovedRequest, type HubEventsTarget } from "./hub-approvals.js";
 import { GitInfo } from "./workspace-info.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
 import { SubagentManager, type SubagentOptions } from "./subagents.js";
-import { readFeatureClosed, writeThreadAutoShip } from "@wolfpack/memory";
+import { readFeatureClosed, unbindOnGraduation, writeThreadAutoShip } from "@wolfpack/memory";
 import { bindFeature, featureInfo, featureThreadId, findBindingHolder, loadHomeSettings, loadThreads, removeThread, saveHomeSettings, saveThread, setThreadSettings, settingsOfSaved, unbindConversation } from "./threads.js";
 
 export interface WolfServerOptions {
@@ -111,6 +112,8 @@ export interface WolfServerOptions {
   memoryConfig?: MemoryReadConfig;
   /** The Work API client settings (effective WORK_ENDPOINT / WORK_TOKEN) behind the work Record route. */
   work?: { endpoint?: string; token?: string };
+  /** The hub's event stream: an approved graduation request closes the feature thread live. Unset: closing waits for closedReasonOf. */
+  hubEvents?: HubEventsTarget;
   // ---- header git tree ----
   /** The wolf.yaml this wolfd runs from: the /settings routes read and edit it. Unset: they answer 404. */
   configFile?: string;
@@ -309,6 +312,7 @@ export class WolfServer {
       this.http.listen(port, "127.0.0.1", () => resolve());
     });
     this.lag ??= createLagMonitor();
+    this.startApprovalWatch();
     this.baseUrl = `http://127.0.0.1:${(this.http.address() as AddressInfo).port}`;
     return this.baseUrl;
   }
@@ -321,6 +325,7 @@ export class WolfServer {
       this.http.listen(path, () => resolve());
     });
     this.lag ??= createLagMonitor();
+    this.startApprovalWatch();
     this.socketPath = path;
     this.baseUrl = `unix:${path}`;
     return this.baseUrl;
@@ -328,6 +333,7 @@ export class WolfServer {
 
   async close(): Promise<void> {
     this.closing = true;
+    this.stopApprovalWatch?.();
     this.lag?.stop();
     this.http.closeAllConnections();
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
@@ -431,6 +437,41 @@ export class WolfServer {
       }
     }
     return closed;
+  }
+
+  private stopApprovalWatch: (() => void) | undefined;
+  private startApprovalWatch(): void {
+    const target = this.opts.hubEvents;
+    if (!target || this.stopApprovalWatch) return;
+    this.stopApprovalWatch = watchApprovals(target, (r) => this.onApprovedRequest(r), (l) => this.opts.onError?.(new Error(l)));
+  }
+
+  /**
+   * The hub graduated an item on owner approval: close its feature thread (and those of its archived descendants) and unbind
+   * every conversation bound to it, as confirmGraduation does. Archive and reassign requests leave threads alone.
+   */
+  private async onApprovedRequest(r: ApprovedRequest): Promise<void> {
+    if (r.kind !== "graduate") return;
+    const work = this.opts.work ?? {};
+    const archived: string[] = [];
+    const rec = await fetchWorkItem(r.itemId, work);
+    const domain = r.domain ?? (rec.kind === "ok" ? rec.item.domain : undefined);
+    if (domain) {
+      const reader = workApiReader(work);
+      let level = [r.itemId];
+      for (let depth = 0; depth < 3 && level.length; depth++) {
+        const next: string[] = [];
+        for (const id of level) {
+          for (const k of await reader.children(domain, id).catch(() => [])) if (k.stage === "archived" && !archived.includes(k.id)) { archived.push(k.id); next.push(k.id); }
+        }
+        level = next;
+      }
+    }
+    if (this.opts.den) {
+      const title = rec.kind === "ok" ? rec.item.title ?? r.itemId : r.itemId;
+      try { unbindOnGraduation(this.opts.den, { id: r.itemId, title, archived: [r.itemId, ...archived] }); } catch (e) { this.opts.onError?.(e); }
+    }
+    this.closeFeatureThreads([r.itemId, ...archived]);
   }
 
   /** Graduation jobs by `<wolf>:<work id>`: preview and confirm run in the background, a second start returns the running job. */

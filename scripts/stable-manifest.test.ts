@@ -83,6 +83,13 @@ describe("writeManifest with --check-releases", () => {
 		expect(m.components.workerd?.tag).toBe("workerd/v0.1.7");
 	});
 
+	it("fails naming a tag at HEAD that has no published release, writing no file", () => {
+		const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "stable-manifest-")), "stable.json");
+		const run = () => writeManifest({ repo: REPO, tags: workerdTags, components: ["workerd"], now: at, checkReleases: true, out, sleep: noWait, headTags: ["workerd/v0.1.7"], gh: ghStub({ "workerd/v0.1.7": [notFound], "workerd/v0.1.6": [published] }) });
+		expect(run).toThrow(/workerd\/v0\.1\.7.*no published release/);
+		expect(fs.existsSync(out)).toBe(false);
+	});
+
 	it("fails with the tag and gh's error, writing no file, when gh keeps failing", () => {
 		const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "stable-manifest-")), "stable.json");
 		const run = () => writeManifest({ repo: REPO, tags: workerdTags, components: ["workerd"], now: at, checkReleases: true, out, sleep: noWait, gh: ghStub({ "workerd/v0.1.7": [unavailable], "workerd/v0.1.6": [published] }) });

@@ -9,7 +9,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { c } from "../render.js";
-import { formatPlan, planRelease, pushTagsSeparately, type Bump, type ReleaseDeps } from "../release.js";
+import { formatPlan, planRelease, pushTagsAtomically, type Bump, type ReleaseDeps } from "../release.js";
 
 export interface ReleaseCmdOptions {
   only: string[];
@@ -41,6 +41,7 @@ export async function releaseCmd(opts: ReleaseCmdOptions): Promise<void> {
     changedFiles: (base) => aff.changedFiles(base, head, root),
     affected: (files) => aff.computeAffected(files, workspaces).components,
     headTags: () => git(root, "tag", "--points-at", head).split("\n").filter(Boolean),
+    onSkip: (c, t) => console.log(`skipping ${c}: already tagged ${t} at HEAD`),
     commits: (base) => git(root, "log", "--no-merges", "--format=%h %s", base ? `${base}..HEAD` : "HEAD").split("\n").filter(Boolean),
   };
   const items = planRelease({ components, only: opts.only, bump: opts.bump, version: opts.version }, deps);
@@ -61,6 +62,6 @@ export async function releaseCmd(opts: ReleaseCmdOptions): Promise<void> {
   }
   for (const i of items) git(root, "tag", "-a", i.tag, "-m", `${i.component} ${i.version}`, head);
   // Only the tags, never a branch.
-  pushTagsSeparately((...a) => git(root, ...a), opts.remote ?? "origin", items.map((i) => i.tag));
+  pushTagsAtomically((...a) => git(root, ...a), opts.remote ?? "origin", items.map((i) => i.tag));
   for (const i of items) console.log(`pushed ${i.tag}`);
 }

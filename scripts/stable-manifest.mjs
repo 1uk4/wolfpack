@@ -93,8 +93,10 @@ export function ghReleased(repo, tag, { gh = runGh, sleep = sleepSync } = {}) {
  * Builds the manifest from `tags` (see gitTags) and writes it to `out` (when given); returns the manifest. With `checkReleases`
  * each candidate tag is checked through `gh` (see runGh).
  */
-export function writeManifest({ repo, tags, components, checkReleases = false, out, now, gh = runGh, sleep, channel, ref, sha } = {}) {
+export function writeManifest({ repo, tags, components, checkReleases = false, out, now, gh = runGh, sleep, channel, ref, sha, headTags = [] } = {}) {
 	const isReleased = checkReleases ? (tag) => ghReleased(repo, tag, { gh, sleep }) : undefined;
+	// A tag at the released commit with no published release is an orphan (its push or build failed): fail loudly, never skip it quietly.
+	if (checkReleases) for (const tag of headTags) if (components.includes(tag.split("/")[0]) && !isReleased(tag)) throw new Error(`tag ${tag} is at HEAD but has no published release (orphan tag from a failed release? delete it or rerun the build)`);
 	const manifest = buildManifest(tags, { repo, components, now, isReleased, channel, ref, sha });
 	if (out) fs.writeFileSync(out, `${JSON.stringify(manifest, null, 2)}\n`);
 	return manifest;
@@ -120,6 +122,6 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import
 	const components = Object.keys(catalog).filter((k) => !k.startsWith("_"));
 	const out = arg("--out");
 	// A gh failure throws here, before anything is written: node exits non-zero, the step fails and the upload step never runs.
-	const manifest = writeManifest({ repo, tags: gitTags(root), components, checkReleases: process.argv.includes("--check-releases"), out, channel, ref: arg("--ref"), sha: channel === "main" ? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim() : undefined });
+	const manifest = writeManifest({ repo, tags: gitTags(root), components, checkReleases: process.argv.includes("--check-releases"), headTags: execFileSync("git", ["tag", "--points-at", arg("--ref") ?? "HEAD"], { cwd: root, encoding: "utf8" }).split("\n").filter(Boolean), out, channel, ref: arg("--ref"), sha: channel === "main" ? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim() : undefined });
 	if (!out) process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
 }

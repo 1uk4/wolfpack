@@ -161,6 +161,27 @@ describe("panel host", () => {
 		assert.equal(q('[data-testid="panel-host"]')!.getAttribute("data-open"), "false");
 	});
 
+	it("openPanel asks available() with the current slug after the slug prop changes", async () => {
+		const seen: (string | undefined)[] = [];
+		const spy: PanelDef = { ...note("spy"), available: (c) => (seen.push(c.slug), true) };
+		const panels = [note("memory"), spy];
+		const tree = (slug: string) => (
+			<MemoryEventsProvider connect={quietSource}>
+				<PanelHostProvider wolf="w" slug={slug} threadId="t1" panels={panels}>
+					<Probe />
+				</PanelHostProvider>
+			</MemoryEventsProvider>
+		);
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(tree("a")));
+		await act(async () => root!.render(tree("b")));
+		seen.length = 0;
+		await act(async () => void api.openPanel("spy"));
+		assert.ok(seen.length > 0 && seen.every((s) => s === "b"), `available() saw ${JSON.stringify(seen)}`);
+	});
+
 	it("openPanel refuses unknown and unavailable panels", async () => {
 		await mount([note("memory"), note("off", false)]);
 		assert.equal(api.openPanel("off"), false);

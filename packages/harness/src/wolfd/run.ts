@@ -47,6 +47,7 @@ import { startLibrarianSweep, startSweepTimer } from "../sweep-host.js";
 import type { SweepManager, SweepWorkerConfig } from "../sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { patchProcessEnv, startSandbox, type RunningSandbox, type StartWorkServer } from "./sandbox.js";
+import { hubEventsTargetFrom } from "./hub-approvals.js";
 import { hubKbFromEnv, startHubKb, type RunningHubKb } from "./hub-kb.js";
 import { prepareSocketPath } from "./socket.js";
 import { loadHomeSettings, loadThreads, setThreadWorkspace, settingsOfSaved } from "./threads.js";
@@ -338,6 +339,7 @@ async function startConfigured(
         consolidation: { threshold: config.memory.consolidation.threshold, poolTarget: config.memory.consolidation.poolTarget, trigger: config.memory.consolidation.trigger, interval: effectiveConsolidationInterval(config.memory.consolidation.interval) },
       },
       work: { endpoint: env.WORK_ENDPOINT, token: env.WORK_TOKEN },
+      ...hubEventsOpt(env),
       onError: (e) => log(`server error: ${String(e)}`),
     });
     await server.attach();
@@ -419,6 +421,12 @@ function librarianSweepFor(config: WolfConfig, env: NodeJS.ProcessEnv, table: Mo
 }
 
 /** Is the memory extension among what was installed (configured, or injected by a test)? */
+/** The hub event stream wolfd follows for approved graduations, when this wolf reaches a hub. */
+function hubEventsOpt(env: NodeJS.ProcessEnv): { hubEvents: NonNullable<ReturnType<typeof hubEventsTargetFrom>> } | Record<string, never> {
+  const target = hubEventsTargetFrom(env, { endpoint: env.WORK_ENDPOINT, token: env.WORK_TOKEN });
+  return target ? { hubEvents: target } : {};
+}
+
 function memoryExtensionInstalled(installed: readonly Extension[]): boolean {
   return installed.some((e) => e.name === "wolfpack-memory");
 }

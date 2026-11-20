@@ -176,7 +176,7 @@ describe("resolveSandbox / assertSandboxed", () => {
     const ok = resolveSandbox(root, { workEndpoint: "http://127.0.0.1:1/work" });
     expect(() => assertSandboxed(root, { ...ok, kbOps: join(live, "ops") })).toThrow(SandboxError);
     expect(() => assertSandboxed(root, { ...ok, den: undefined })).toThrow(/not set/);
-    expect(() => assertSandboxed(root, { ...ok, workEndpoint: "http://100.120.154.69:3141/work" })).toThrow(/loopback/);
+    expect(() => assertSandboxed(root, { ...ok, workEndpoint: "http://100.64.0.1:3141/work" })).toThrow(/loopback/);
     mkdirSync(root, { recursive: true });
     symlinkSync(live, join(root, "den"));
     expect(() => assertSandboxed(root, ok)).toThrow(/outside the dev root/);

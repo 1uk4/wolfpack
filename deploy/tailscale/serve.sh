@@ -14,7 +14,7 @@
 # streaming unbuffered, and bare `/hub` arriving as `/`. hubd's pair page derives its POST path from location.pathname, so it works with the
 # prefix stripped and with or without a trailing slash; the console (at /) never sees /hub/*, because the longest matching path wins.
 set -euo pipefail
-DRY=0 CMD="" HUB=http://100.120.154.69:3150 CONSOLE=http://127.0.0.1:3200
+DRY=0 CMD="" HUB="" CONSOLE=http://127.0.0.1:3200
 TS=${TAILSCALE:-tailscale}
 die() { echo "serve.sh: $*" >&2; exit 1; }
 run() { if ((DRY)); then printf 'DRY-RUN:'; printf ' %q' "$@"; printf '\n'; else "$@"; fi; }
@@ -29,6 +29,13 @@ while (($#)); do
   shift
 done
 [[ -n $CMD ]] || die "usage: serve.sh [--dry-run] on|status|off [--hub-upstream URL] [--console-upstream URL]"
+# Default hub upstream: this host's tailnet IP (hubd binds it), port 3150. --dry-run without tailscale falls back to a documentation address.
+if [[ -z $HUB ]]; then
+  TSIP=$("$TS" ip -4 2>/dev/null | head -n1 || true)
+  if [[ -z $TSIP ]] && ((DRY)); then TSIP=100.64.0.1; fi
+  [[ -n $TSIP ]] || die "cannot determine the tailnet IP; pass --hub-upstream http://<tailscale ip>:3150"
+  HUB=http://$TSIP:3150
+fi
 [[ $HUB =~ ^http://(127\.0\.0\.1|100\.[0-9]+\.[0-9]+\.[0-9]+):[0-9]+$ ]] || die "--hub-upstream must be http://127.0.0.1:PORT or http://<tailscale ip>:PORT"
 [[ $CONSOLE =~ ^http://127\.0\.0\.1:[0-9]+$ ]] || die "--console-upstream must be http://127.0.0.1:PORT"
 ((DRY)) || command -v "$TS" >/dev/null 2>&1 || die "tailscale not found"

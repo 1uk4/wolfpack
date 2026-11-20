@@ -16,7 +16,7 @@ import { loadRebuildEntries } from "../dist/librarian/rebuild.js";
 type Vec = number[];
 interface Prop { categories: { name: string; ids: string[] }[]; doesntFit: string[] }
 const arg = (n: string, d: string) => { const i = argv.indexOf("--" + n); return i >= 0 ? argv[i + 1] : d; };
-const SCRATCH = "/Users/lukaflores/wolves/local/1uk4/scratch/kb-rebuild-20261111";
+const SCRATCH = "/Users/owner/wolves/local/1uk4/scratch/kb-rebuild-20261111";
 const DATA = arg("data", "/tmp/whatif-data");
 const OUT = arg("out", join(SCRATCH, "whatif"));
 const PLAN = join(SCRATCH, "data2/rebuild-plans/wolfpack-2026-11-11T03-18-41Z.json");

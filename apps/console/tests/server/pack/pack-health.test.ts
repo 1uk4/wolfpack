@@ -131,7 +131,7 @@ describe("pack health: GET /api/health", () => {
 			"http://sfo-01.tail9c2.ts.net:3150/healthz": { ok: true, service: "hubd" },
 			"http://127.0.0.1:7141/healthz": { ok: true, service: "workerd", host: "Build-Box.local", wolves: [{ name: "hal", state: "online" }] },
 			"http://127.0.0.1:7151/healthz": { ok: true, service: "workerd", wolves: [] },
-			"http://100.120.154.69:7200/healthz": { ok: true, service: "wolfd" },
+			"http://100.64.0.1:7200/healthz": { ok: true, service: "wolfd" },
 			"http://127.0.0.1:7300/healthz": { ok: true, service: "wolfd", host: "sfo-010" },
 		};
 		const refused = new Set<string>();
@@ -142,8 +142,8 @@ describe("pack health: GET /api/health", () => {
 		const env = {
 			WOLFPACK_HEALTH_HUB_URL: "http://sfo-01.tail9c2.ts.net:3150",
 			WOLFPACK_HEALTH_WORKERDS: "workerd=http://127.0.0.1:7141,workerd-old=http://127.0.0.1:7151",
-			WOLFPACK_HEALTH_WOLVES: "ada=http://100.120.154.69:7200,bob=http://127.0.0.1:7300",
-			WOLFPACK_HEALTH_HOST_LABELS: "100.120.154.69=ada box",
+			WOLFPACK_HEALTH_WOLVES: "ada=http://100.64.0.1:7200,bob=http://127.0.0.1:7300",
+			WOLFPACK_HEALTH_HOST_LABELS: "100.64.0.1=ada box",
 		};
 		const health = createPackHealth({ targets: healthTargets(env), fetch: fakeFetch, now: () => T0, consoleHost: "Luka-Air.local", platform: "darwin", hostLabels: env.WOLFPACK_HEALTH_HOST_LABELS, log: () => {} });
 		const snap = await health.tick();
@@ -151,12 +151,12 @@ describe("pack health: GET /api/health", () => {
 			hubd: "sfo-01",
 			workerd: "build-box",
 			"workerd-old": "luka-air",
-			"wolfd@ada": "100.120.154.69",
+			"wolfd@ada": "100.64.0.1",
 			"wolfd@bob": "sfo-010",
 			"wolfd@hal": "build-box",
 		});
 		assert.deepEqual([...snap.hosts].sort((a, b) => a.id.localeCompare(b.id)), [
-			{ id: "100.120.154.69", label: "ada box", isThisConsole: false },
+			{ id: "100.64.0.1", label: "ada box", isThisConsole: false },
 			{ id: "build-box", label: "build-box", isThisConsole: false },
 			{ id: "luka-air", label: "Mac", isThisConsole: true, platform: "darwin" },
 			{ id: "sfo-01", label: "sfo-01", isThisConsole: false },

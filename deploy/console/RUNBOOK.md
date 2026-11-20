@@ -10,7 +10,7 @@ Files: `deploy/console/{setup.sh,console.service,console.env.example}`, `deploy/
 |---|---|
 | `CONSOLE_HOST` / `CONSOLE_PORT` | bind; the unit refuses anything but 127.0.0.1; port 1024-65535, not 3141/3150 |
 | `WOLFPACK_CONSOLE_PUBLIC_ORIGIN` | `https://<host>.ts.net`, required; decides the `__Host-` cookie names (the unit refuses a non-https value) |
-| `WOLFPACK_HUB_URL` | where the **server** reaches hubd (today `http://100.120.154.69:3150`) |
+| `WOLFPACK_HUB_URL` | where the **server** reaches hubd (today `http://<tailnet-ip>:3150`) |
 | `HUBD_PUBLIC_URL` | `https://<host>.ts.net/hub`, for the `/pair` link and the Devices panel's pairing link. Read **at runtime** (`/api/hub-url`, `src/server/pack/hub-public-url.ts`); `NEXT_PUBLIC_WOLFPACK_HUB_URL` is no longer needed at build time (still honoured as a last fallback) |
 | `WOLFPACK_DATA_DIR` | `/var/lib/console/data`: the console's own state (settings, KB graph cache). `setup.sh` creates it `console:console 0700` if missing (the `/var/lib/console` home is created the same way) |
 | `WOLFPACK_HEALTH_HUB_URL` | optional; hubd's `/healthz` for pack health. Its origin is also where the restart's live token check goes. Default: the origin of `WOLFPACK_HUB_URL` |
@@ -36,7 +36,7 @@ hubd's own `/etc/wolfpack/hubd.env` gets the same two public values: `HUBD_PUBLI
 
 **(b) `tailscale serve`** (tailnet only; never `funnel`)
 1. `tailscale version`, `tailscale serve --help` (confirm `--bg --https --set-path` exist; HTTPS needs MagicDNS + HTTPS certificates enabled in the tailnet admin console, owner action).
-2. `bash deploy/tailscale/serve.sh --dry-run on`, then `... on`, then `... status`. The routes: `/hub` → `http://100.120.154.69:3150` and `/` → `http://127.0.0.1:3200`.
+2. `bash deploy/tailscale/serve.sh --dry-run on`, then `... on`, then `... status`. The routes: `/hub` → `http://<tailnet-ip>:3150` and `/` → `http://127.0.0.1:3200`.
 3. Acceptance from a tailnet device (all **UNVERIFIED** until run):
    - `curl -sI https://<host>.ts.net/` → 200 from the console.
    - `curl -s -o /dev/null -w '%{http_code}' https://<host>.ts.net/hub/v1/wolves` → 401 (hubd answered; the `/hub` prefix was stripped, since hubd has no `/hub/...` routes).
@@ -51,18 +51,18 @@ hubd's own `/etc/wolfpack/hubd.env` gets the same two public values: `HUBD_PUBLI
 - Rollback: revoke the device (Settings → Devices, or `hubd devices revoke`). No infrastructure change.
 
 **(d) Mac workerd link** (only if wanted)
-Nothing has to move: the Mac's workerd links to `http://100.120.154.69:3150`, which stays valid while hubd keeps its tailnet bind. Move to `https://<host>.ts.net/hub` only if you want TLS on the link or are about to do (e); it needs the WebSocket upgrade through serve (**UNVERIFIED**, test with `wscat`/workerd against a throw-away device first). Change the hub URL in the Mac workerd config (`hub.json`, restart workerd). 
-- Rollback: set the URL back to `http://100.120.154.69:3150`, restart workerd.
+Nothing has to move: the Mac's workerd links to `http://<tailnet-ip>:3150`, which stays valid while hubd keeps its tailnet bind. Move to `https://<host>.ts.net/hub` only if you want TLS on the link or are about to do (e); it needs the WebSocket upgrade through serve (**UNVERIFIED**, test with `wscat`/workerd against a throw-away device first). Change the hub URL in the Mac workerd config (`hub.json`, restart workerd). 
+- Rollback: set the URL back to `http://<tailnet-ip>:3150`, restart workerd.
 
 **(e) "Close hubd's public port"**
-"Public" needs care: hubd binds the **tailnet IP** `100.120.154.69:3150` (`HUBD_HOST`), not `0.0.0.0` (the unit refuses wildcards), so it is not on the public internet. It is reachable by every device the tailnet ACLs allow, over **plain HTTP** (tailnet traffic is WireGuard-encrypted, so not cleartext on the wire). After (b) it is also reachable at `https://<host>.ts.net/hub`. To check what else is exposed, on the host: `ss -ltnp` (expect 3150 on the tailnet IP, 3200 on 127.0.0.1, sshd, nothing on `0.0.0.0` that you did not choose) and `tailscale serve status` / `tailscale funnel status` (funnel must be empty). Firewall state on sfo-01 was not inspected.
+"Public" needs care: hubd binds the **tailnet IP** `<tailnet-ip>:3150` (`HUBD_HOST`), not `0.0.0.0` (the unit refuses wildcards), so it is not on the public internet. It is reachable by every device the tailnet ACLs allow, over **plain HTTP** (tailnet traffic is WireGuard-encrypted, so not cleartext on the wire). After (b) it is also reachable at `https://<host>.ts.net/hub`. To check what else is exposed, on the host: `ss -ltnp` (expect 3150 on the tailnet IP, 3200 on 127.0.0.1, sshd, nothing on `0.0.0.0` that you did not choose) and `tailscale serve status` / `tailscale funnel status` (funnel must be empty). Firewall state on sfo-01 was not inspected.
 - Recommendation: **do not move hubd to 127.0.0.1 in this phase.** What would break if you did (`HUBD_HOST=127.0.0.1`, restart hubd, and serve upstream `http://127.0.0.1:3150` via `serve.sh on --hub-upstream http://127.0.0.1:3150`):
   - the Mac's workerd (links to the tailnet IP) → must move to `https://<host>.ts.net/hub` first (step d, needs the WebSocket check);
   - workerd on sfo-01 (and `workerd-wolves`, wolfd links, anything with `hubUrl` = the tailnet IP in `hub.json`) → change to `http://127.0.0.1:3150` and restart;
   - the console's `WOLFPACK_HUB_URL` → `http://127.0.0.1:3150`;
-  - any phone/browser or script using `http://100.120.154.69:3150` directly.
+  - any phone/browser or script using `http://<tailnet-ip>:3150` directly.
   Do it only after all links are listed and moved, one at a time (hub.json edits, restart, confirm the link is up in the console), hubd last.
-- Rollback: `HUBD_HOST=100.120.154.69` in `hubd.env`, restart hubd, point the links back (`serve.sh on --hub-upstream http://100.120.154.69:3150`).
+- Rollback: `HUBD_HOST=<tailnet-ip>` in `hubd.env`, restart hubd, point the links back (`serve.sh on --hub-upstream http://<tailnet-ip>:3150`).
 
 ## Operate
 

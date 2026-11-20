@@ -7,7 +7,8 @@ const PERSONAL = [
   ["100", "120", "154", "69"].join("\\."),
   ["tail4f", "0118"].join(""),
   ["luka", "flores"].join(""),
-  ["audemears", "@proton"].join("|"),
+  ["audemea", "rs"].join(""),
+  ["@proton", "mail"].join(""),
 ];
 
 describe("repo hygiene", () => {

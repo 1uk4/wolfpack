@@ -32,6 +32,8 @@ interface InvEntry {
 	parent?: string;
 	busy?: boolean;
 	transport?: "api" | "subscription";
+	/** hubd entry only: how hubd's curator reaches Claude. */
+	memoryTransport?: "subscription" | "api" | "none";
 	keys?: { slot: string; present: boolean; masked?: string; source?: "pack" | "env"; shadowsEnv?: boolean }[];
 }
 
@@ -69,7 +71,10 @@ export function createKeysApi(d: KeysApiDeps) {
 				const pub = keys.ok ? ((await keys.json()) as { keys: Record<string, { pubkey: string; fingerprint: string; changed: boolean }> }).keys : {};
 				const machines = entries.map((e) => {
 					const k = pub[e.id];
+					// The hubd entry on the same machine (if any) says how hubd's own memory work authenticates.
+					const hubMemory = all.find((h) => h.kind === "hubd" && h.machine === e.machine)?.memoryTransport;
 					return {
+						...(hubMemory ? { hubMemory } : {}),
 						hostId: e.id,
 						machine: e.machine,
 						// Online = the workerd reported within its TTL (the hub keeps stale entries listed with their age).

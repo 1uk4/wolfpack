@@ -178,7 +178,7 @@ export function etagOfBody(body: string): string {
   return createHash("sha256").update(body).digest("hex").slice(0, 16);
 }
 
-/** The current etag of a work item, or undefined when the item is unknown. */
+/** The current etag of an already-loaded work item. */
 export function etagOfItem(roots: KbRoots, item: WorkItem): string {
   return etagOfBody(recordBody(roots, item as Item));
 }

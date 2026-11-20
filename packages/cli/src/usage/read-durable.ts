@@ -1,1 +1,1 @@
-export * from "@wolfpack/engine";
+export { readDurableStore } from "@wolfpack/engine";

@@ -52,7 +52,7 @@ const submit = (host: HTMLElement, value: string) => {
 describe("pair page sign-in box", () => {
 	it("labels one input, stores a pasted pairing link's token and opens the console home", async () => {
 		const { host, root } = await mount();
-		assert.match(host.innerHTML, /Pairing token or link/);
+		assert.match(host.innerHTML, /Pairing code, token or link/);
 		assert.equal(host.querySelectorAll("input").length, 1);
 		submit(host, "http://127.0.0.1:3231/pair#token=tok123");
 		assert.equal(store.get(HUB_TOKEN_KEY), "tok123");

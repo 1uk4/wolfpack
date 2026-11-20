@@ -728,6 +728,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const t = (opts.now ?? Date.now)();
           // NOTE: the failure bucket is keyed on the socket peer. Behind a local reverse proxy (tailscale serve) every request is 127.0.0.1, so the bucket is GLOBAL (see RUNBOOK 5b).
           if (pairFailureCount(addr, t) >= PAIR_FAILS_PER_MIN) {
+            console.log(`hubd: pairing redeem rate-limited remote=${addr}`);
             res.setHeader("Retry-After", "60");
             return send(res, 429, { code: "busy", message: "too many failed pairing attempts; retry in a minute", retryable: true } satisfies ErrorEnvelope);
           }
@@ -738,6 +739,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
             return send(res, 200, { token: out.token, tokenId: out.tokenId, ...(out.hostId ? { hostId: out.hostId } : {}) });
           } catch (e) {
             if (e instanceof HubError && e.code === "unauthorized") recordPairFailure(addr, t);
+            if (e instanceof HubError) console.log(`hubd: pairing redeem refused reason=${e.message} kind=${body.kind ?? "console"} remote=${addr}`); // never the code
             throw e;
           }
         }

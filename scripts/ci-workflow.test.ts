@@ -52,9 +52,9 @@ describe("ci.yml uses pnpm", () => {
 		expect(pm).toMatch(/^pnpm@/);
 	});
 
-	it("the vitest matrix is exactly shards 1/2 and 2/2 and does not fail fast", () => {
+	it("the vitest matrix is exactly shards 1/3, 2/3 and 3/3 and does not fail fast", () => {
 		const strategy = (ci.jobs.vitest as Job & { strategy?: { "fail-fast"?: boolean; matrix?: { shard?: string[] } } }).strategy;
-		expect(strategy?.matrix?.shard).toEqual(["1/2", "2/2"]);
+		expect(strategy?.matrix?.shard).toEqual(["1/3", "2/3", "3/3"]);
 		expect(strategy?.["fail-fast"]).toBe(false);
 	});
 

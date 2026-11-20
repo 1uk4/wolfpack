@@ -748,7 +748,7 @@ export function Switcher({ groups, current, onClose, sheet = false }: { groups: 
 		};
 		document.addEventListener("mousedown", onDown);
 		return () => document.removeEventListener("mousedown", onDown);
-	// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only listener: it registers once and uses the onClose of the mount render
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only listener: the parent's closeSwitcher is a useCallback with [] deps, so the mount-render onClose never goes stale
 	}, []);
 	const onKeyDown = (e: React.KeyboardEvent) => {
 		if (e.key === "Escape") {

@@ -521,7 +521,7 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 		// Pre-mint for the next run (mitigation D) — best-effort; a keyless
 		// page just doesn't warm.
 		warmTokens.refresh();
-	// eslint-disable-next-line react-hooks/exhaustive-deps -- flush is deliberately not a dep: this callback is created once and must stay referentially stable
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- flush is a useCallback with [] deps (it only reads refs and module state), so it never changes; cleanup stays stable
 	}, []);
 
 	/** Open the Deepgram socket and wire its messages. `gen` guards staleness. */
@@ -747,7 +747,7 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 			if (hookStates.size === 0) releaseTransientClaims();
 			publishUi();
 		};
-	// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only registration of this hook's state; kind/enabled are published by the effects that follow
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only registration of this hook's state; the effect below keeps kind, enabled, phase and error in sync
 	}, []);
 	useEffect(() => {
 		const st = hookStates.get(idRef.current);
@@ -755,8 +755,9 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 		st.phase = phase;
 		st.error = error;
 		st.enabled = enabled;
+		st.kind = kind;
 		publishUi();
-	}, [phase, error, enabled]);
+	}, [phase, error, enabled, kind]);
 
 	// Unmounting mid-run ends it at once (no wait for Deepgram): the mic, worklet nodes and socket die with the owner. The
 	// finals already received are not thrown away: they go to `onOrphan` (the owner's draft store), never to the dead

@@ -204,8 +204,7 @@ export function CommandPalette() {
 				setBusy(false);
 			}
 		},
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- openWork is rebuilt each render; the handler re-creates only when router or wolf change
-		[router, wolf],
+		[router, wolf, openWork],
 	);
 
 	const emptyText =

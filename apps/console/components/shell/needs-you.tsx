@@ -140,6 +140,7 @@ export function NeedsYouNotifier(): null {
 		};
 	}, [load]);
 	useServerEvent("needs-you-changed", schedule);
+	useServerEvent("work-request-changed", () => schedule());
 	useServerResync(() => void load());
 
 	// Electron: a clicked OS notification focuses the window and asks us to open its thread.

@@ -55,8 +55,8 @@ export function ApprovalSummary({ request, compact = false }: { request: Approva
 					<ul className={compact ? "max-h-40 list-disc space-y-0.5 overflow-y-auto pl-5" : "list-disc space-y-0.5 pl-5"}>
 						{set.map((c, i) => (
 							<li key={i}>
-								<span className="font-medium">{(c as { title?: string }).title ?? "Untitled"}</span>
-								{firstLine(String((c as { body?: string; content?: string }).body ?? (c as { content?: string }).content ?? "")) && <span className="text-muted-foreground"> {firstLine(String((c as { body?: string; content?: string }).body ?? (c as { content?: string }).content ?? ""))}</span>}
+								<span className="font-medium">{c.title || c.id}</span>
+								{(firstLine(c.summary) || firstLine(c.body)) && <span className="text-muted-foreground"> {firstLine(c.summary) || firstLine(c.body)}</span>}
 							</li>
 						))}
 					</ul>

@@ -180,6 +180,8 @@ export function planRelease(opts: ReleaseOptions, deps: ReleaseDeps): ReleaseIte
 /**
  * Push all tags in ONE `git push --atomic`: all land or none, so a rejected ref leaves no orphan tag on the remote. Never a branch.
  * On failure the local tags (created by the caller just before) are deleted and the error names the rejected ref from git's output.
+ * Build rule: CI builds through workflow_call (release-main.yml, release-stable.yml), so the tag trigger is not needed there. GitHub fires no
+ * tag-triggered workflow when one push carries more than 3 tags, so the manual CLI dispatches release.yml per tag in that case (dispatchTagBuilds).
  */
 export function pushTagsAtomically(git: (...args: string[]) => unknown, remote: string, tags: string[]): void {
   try {
@@ -196,6 +198,32 @@ export function pushTagsAtomically(git: (...args: string[]) => unknown, remote: 
     const rejected = out.split("\n").filter((l) => /rejected|\[remote|failed/i.test(l) || l.includes("!")).join("; ").trim();
     throw new Error(`atomic tag push to ${remote} failed, local tags removed (${tags.join(", ")}): ${rejected || out.trim()}`);
   }
+}
+
+export interface DispatchResult {
+  dispatched: string[];
+  failed: string[];
+  commands: string[];
+}
+
+/**
+ * After a manual push of more than 3 tags (GitHub starts no tag-triggered build for those), run `gh workflow run release.yml -f tag=<tag>` per tag.
+ * With 3 or fewer tags the tag trigger fires, so nothing is dispatched (it would build twice). A failure never stops the loop; the failed tags
+ * come back with the exact command to run by hand. The tags stay on the remote.
+ */
+export function dispatchTagBuilds(gh: (...args: string[]) => unknown, tags: string[]): DispatchResult {
+  const res: DispatchResult = { dispatched: [], failed: [], commands: [] };
+  if (tags.length <= 3) return res;
+  for (const tag of tags) {
+    try {
+      gh("workflow", "run", "release.yml", "-f", `tag=${tag}`);
+      res.dispatched.push(tag);
+    } catch {
+      res.failed.push(tag);
+      res.commands.push(`gh workflow run release.yml -f tag=${tag}`);
+    }
+  }
+  return res;
 }
 
 export function formatPlan(items: ReleaseItem[]): string {

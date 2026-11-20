@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs, no types
 import { computeAffected } from "../../../scripts/affected.mjs";
-import { bumpVersion, formatPlan, lastTag, parseTag, parseVersion, planRelease, pushTagsAtomically, type ReleaseDeps } from "./release.js";
+import { bumpVersion, formatPlan, lastTag, parseTag, parseVersion, planRelease, dispatchTagBuilds, pushTagsAtomically, type ReleaseDeps } from "./release.js";
 
 const COMPONENTS = ["wolfd", "workerd", "hubd"];
 function deps(tags: string[], affected: Record<string, string[]>): ReleaseDeps {
@@ -158,6 +158,32 @@ describe("release filter: only files a component ships make a tag", () => {
   });
   it("lockfile, root package.json or release-build.sh tag everything", () => {
     for (const f of ["package-lock.json", "pnpm-lock.yaml", "package.json", "scripts/release-build.sh", "scripts/release-components.json", "infra/release/Dockerfile"]) expect(tagsFor([f]).sort()).toEqual([...all].sort());
+  });
+});
+
+describe("dispatching builds after a manual push", () => {
+  const four = ["wolfd/v0.1.5", "hubd/v1.0.10", "console/v0.2.1", "workerd/v0.3.1"];
+  it("dispatches release.yml once per tag, in order, when more than 3 tags were pushed", () => {
+    const calls: string[][] = [];
+    const r = dispatchTagBuilds((...a) => void calls.push(a), four);
+    expect(calls).toEqual(four.map((t) => ["workflow", "run", "release.yml", "-f", `tag=${t}`]));
+    expect(r.failed).toEqual([]);
+    expect(r.dispatched).toEqual(four);
+  });
+  it("dispatches nothing for 3 tags, the tag trigger builds those", () => {
+    const calls: string[][] = [];
+    const r = dispatchTagBuilds((...a) => void calls.push(a), four.slice(0, 3));
+    expect(calls).toEqual([]);
+    expect(r.dispatched).toEqual([]);
+  });
+  it("on a dispatch failure keeps going and returns every undispatched tag with its gh command", () => {
+    const run = (...a: string[]) => {
+      if (a[4] === "tag=hubd/v1.0.10") throw new Error("gh: not found");
+    };
+    const r = dispatchTagBuilds(run, four);
+    expect(r.dispatched).toEqual(["wolfd/v0.1.5", "console/v0.2.1", "workerd/v0.3.1"]);
+    expect(r.failed).toEqual(["hubd/v1.0.10"]);
+    expect(r.commands).toEqual(["gh workflow run release.yml -f tag=hubd/v1.0.10"]);
   });
 });
 

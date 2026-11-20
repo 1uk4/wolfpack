@@ -49,14 +49,26 @@ describe("Keys grid model", () => {
 		assert.equal(b!.state, "env");
 	});
 
-	it("a machine whose wolves are all subscription shows 'subscription' in Chat, never 'Needs a key'; a mixed machine still needs the key; Memory still wants it", () => {
+	it("a machine whose wolves are all subscription shows 'subscription' in Chat, never 'Needs a key'; a mixed machine still needs the key", () => {
 		const sub = (n: string) => ({ name: n, transport: "subscription" as const });
 		const api = (n: string) => ({ name: n, transport: "api" as const });
 		const g = buildGrid([m("bridge", { wolves: [sub("hal")] }), m("mixed", { wolves: [sub("hal"), api("dewey")] }), m("plain", { wolves: [api("x")] })]);
 		const chat = g.find((x) => x.capability === "chat")!.rows[0]!.cells;
 		assert.deepEqual(chat.map((c) => [c.state, c.missing]), [["subscription", false], ["none", true], ["none", true]]);
 		const memory = g.find((x) => x.capability === "memory")!.rows[0]!.cells;
-		assert.equal(memory[0]!.state, "none");
+		assert.equal(memory[1]!.state, "none");
+	});
+
+	it("Memory shows 'subscription' when all wolves are subscription and hubd is on the OAuth token or absent; hubd on an API key shows the key slot; hubd with neither needs a key", () => {
+		const sub = [{ name: "hal", transport: "subscription" as const }];
+		const g = buildGrid([
+			m("oauth", { wolves: sub, hubMemory: "subscription" }),
+			m("nohub", { wolves: sub }),
+			m("api", { wolves: sub, hubMemory: "api", slots: [{ slot: "anthropic", present: true, masked: "••••abcd", source: "env" }] }),
+			m("none", { wolves: sub, hubMemory: "none" }),
+		]);
+		const memory = g.find((x) => x.capability === "memory")!.rows[0]!.cells;
+		assert.deepEqual(memory.map((c) => [c.state, c.missing]), [["subscription", false], ["subscription", false], ["env", false], ["none", true]]);
 	});
 
 	it("apiWolves lists only the API-key wolves of a machine", () => {

@@ -144,6 +144,8 @@ export interface WolfServerOptions {
   tierProviders?: Partial<Record<ThreadTier, string>>;
   /** Called with faults the pump cannot surface over HTTP. */
   onError?: (error: unknown) => void;
+  /** Called after every finished turn on any thread (wolfd uses it to feed the usage ledger). Must not throw. */
+  onTurnEnd?: () => void;
 }
 
 /** How feature threads get their engine conversations (new ones, and the persisted ones again after a restart). */
@@ -367,6 +369,11 @@ export class WolfServer {
       ...(this.opts.den && this.opts.work?.endpoint ? { taskNotice: (cid: string) => pendingTaskNotice(this.opts.den as string, cid, workApiReader(this.opts.work ?? {})) } : {}),
     });
     this.threads.set(summary.id, t);
+    if (this.opts.onTurnEnd) {
+      t.observe((ev) => {
+        if (ev.type === "turn-end") this.opts.onTurnEnd?.();
+      });
+    }
     this.subagents?.watchShips(t);
     return t;
   }

@@ -16,6 +16,9 @@
  * `usage context` reads live session files (not the ledger): per tool, how
  * much result text landed in the main agent's context, vs subagent sessions.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { loadConfig, LOCAL_HOST } from "../config.js";
 import { c } from "../render.js";
 import { aggregate, isGroupBy, parseSince, GROUP_BYS, type UsageReport, type UsageRow } from "../usage/aggregate.js";
@@ -108,7 +111,15 @@ export async function ingestUsageQuietly(): Promise<void> {
     const r = await ingest(defaultLedgerDir());
     console.log(c.dim(`  ${formatIngest(r).split("\n")[0]}`));
   } catch (err) {
-    console.log(c.dim(`  usage ingest skipped: ${err instanceof Error ? err.message : err}`));
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(c.dim(`  usage ingest skipped: ${msg} (see ~/.wolfpack/logs/usage-ingest.log)`));
+    try {
+      const dir = path.join(os.homedir(), ".wolfpack", "logs");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(path.join(dir, "usage-ingest.log"), `${new Date().toISOString()} ${msg}\n`);
+    } catch {
+      /* logging must never fail the caller */
+    }
   }
 }
 

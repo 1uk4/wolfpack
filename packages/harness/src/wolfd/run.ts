@@ -50,6 +50,7 @@ import { patchProcessEnv, startSandbox, type RunningSandbox, type StartWorkServe
 import { hubEventsTargetFrom } from "./hub-approvals.js";
 import { hubKbFromEnv, startHubKb, type RunningHubKb } from "./hub-kb.js";
 import { prepareSocketPath } from "./socket.js";
+import { createUsageIngester, type UsageIngestCall } from "./usage-ingest.js";
 import { loadHomeSettings, loadThreads, setThreadWorkspace, settingsOfSaved } from "./threads.js";
 
 export interface StartWolfOptions {
@@ -80,6 +81,12 @@ export interface StartWolfOptions {
   startWorkServer?: StartWorkServer;
   /** @internal test seam: replaces the librarian sweep's tick (see SweepWorkerConfig.sweepTick). */
   sweepTick?: SweepWorkerConfig["sweepTick"];
+  /** @internal test seam: replaces the per-den usage ingest wolfd runs after a finished turn. */
+  usageIngest?: (call: UsageIngestCall) => Promise<unknown>;
+  /** @internal test seam: the ingest debounce (default 5000 ms). */
+  usageIngestDebounceMs?: number;
+  /** @internal test seam: the ledger dir (default ~/.wolfpack/usage). */
+  usageLedgerDir?: string;
 }
 
 export interface ExtensionRuntime {
@@ -269,7 +276,17 @@ async function startConfigured(
     await reconcile(conversation, withTier(desired, homeTier), dropProviderSession(conversation));
 
     const stallEnv = Number(env.WOLFPACK_STALL_TIMEOUT_MS);
+    // Finished turns feed the usage ledger (nothing else does since wolfd replaced the pi launcher).
+    const ingester = createUsageIngester({
+      den: config.den,
+      wolf: config.identity.name,
+      log,
+      ...(opts.usageIngest ? { ingest: opts.usageIngest } : {}),
+      ...(opts.usageIngestDebounceMs !== undefined ? { debounceMs: opts.usageIngestDebounceMs } : {}),
+      ...(opts.usageLedgerDir ? { ledgerDir: opts.usageLedgerDir } : {}),
+    });
     const server = new WolfServer({
+      onTurnEnd: () => ingester.trigger(),
       name: config.identity.name,
       wolfHome: dirname(config.file),
       ...(config.identity.file ? { identityFile: config.identity.file } : {}),
@@ -357,6 +374,7 @@ async function startConfigured(
       ...(sandbox ? { sandbox } : {}),
       close: async () => {
         if (sweepTimer) clearInterval(sweepTimer);
+        ingester.stop();
         await server.close();
         await engine.close();
         wolfModels.dispose();

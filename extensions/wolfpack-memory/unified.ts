@@ -37,7 +37,7 @@ import { registerMemoryActions, unregisterMemoryActions, type MemoryActions, typ
 import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { memoryEmitter } from "./memory-events.js";
 import { crawlMode, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
-import { readBoundTask } from "./unified-tasks.js";
+import { forgetCompletions, readBoundTask } from "./unified-tasks.js";
 import { sharedFeature, subagentReportTag } from "./observation-tag.js";
 import { durableSubagent, knownChildren, featureResolver, FINAL_ONLY_AGENTS, SUBAGENT_OBSERVE_EVERY_TURNS, SUBAGENT_OBSERVE_TOKENS, type SubagentTag } from "./subagent-tag.js";
 import { WorkClient } from "./work-client.js";
@@ -863,6 +863,14 @@ export default function createMemoryExtension(
     // A manual Consolidate ignores the retry backoff; the timer/threshold path keeps it.
     consolidate: () => consolidateToSessions({ minObservations: 1, ignoreBackoff: true }),
     promoteForFeature: async (featureId: string) => { if (kbRoots) await serialized(() => runPass({ kind: "graduation", featureId })); },
+    onGraduationApproved: async (featureId: string, archivedIds: string[]) => {
+      try {
+        forgetCompletions(wolfDen, [featureId, ...archivedIds]);
+        await actions.promoteForFeature?.(featureId);
+      } catch (err) {
+        console.log(`[memory] promote after approved graduation of ${featureId} failed: ${err instanceof Error ? err.message : err}`);
+      }
+    },
     promote(popts) {
       if (promoting) return { status: "already_running", jobId: promoting };
       const jobId = `promote-${Date.now().toString(36)}-${++jobSeq}`;

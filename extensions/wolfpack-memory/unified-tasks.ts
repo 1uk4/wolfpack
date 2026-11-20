@@ -142,6 +142,11 @@ async function readBinding(scope: BindingScope): Promise<ActiveBinding | null> {
  */
 const completionChecks = new Map<string, { check: (id: string) => Promise<string | null>; forget: (id: string) => void }>();
 
+/** Drop the cached completion lookup of these items on this den (a graduation happened outside the wolf). */
+export function forgetCompletions(wolfDen: string, ids: string[]): void {
+  for (const id of ids) completionChecks.get(wolfDen)?.forget(id);
+}
+
 /**
  * The stored binding for this conversation, with self-detection: when the bound item has completed (someone else
  * shipped or graduated it) this conversation unbinds itself, leaves the once-only notice, and reads as unbound.

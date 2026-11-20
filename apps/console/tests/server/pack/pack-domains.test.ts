@@ -86,9 +86,9 @@ describe("pack domains API", () => {
 		const asArray = await setup({ status: 409, body: { code: "conflict", message: "x", details: { wolves: ["alpha", "beta"] } } }).api.remove(req("DELETE"), "docs");
 		assert.deepEqual((await json(asArray)).wolves, ["alpha", "beta"]);
 
-		const forbidden = await setup({ status: 403, body: { code: "forbidden", message: "registry writes need an operator actor", retryable: false } }).api.create(req("POST", { name: "docs" }));
-		assert.equal(forbidden.status, 502);
-		assert.equal((await json(forbidden)).error, "The hub does not allow this console to change domains (its token is not an operator token).");
+		const forbidden = await setup({ status: 403, body: { code: "forbidden", message: "only an owner device can do this", retryable: false } }).api.create(req("POST", { name: "docs" }));
+		assert.equal(forbidden.status, 403);
+		assert.equal((await json(forbidden)).error, "only an owner device can do this");
 
 		const gone = await setup({ status: 404, body: { code: "not_found", message: "domain x not found", retryable: false } }).api.remove(req("DELETE"), "x");
 		assert.equal(gone.status, 404);

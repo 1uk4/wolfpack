@@ -107,6 +107,23 @@ describe("hub work proxy", () => {
     expect((await call(OP_TOKEN, "POST", `/${id}/graduate`)).status).toBe(200);
   });
 
+  it("GET /work/:id carries an etag; PATCH with a stale If-Match is 409 conflict naming the current etag, a matching or absent one is applied", async () => {
+    const { call, hub, A } = await rig();
+    const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
+    const etag = async () => ((await (await call(A, "GET", `/${id}`)).json()) as { etag?: string }).etag;
+    const patch = (body: unknown, ifMatch?: string) =>
+      fetch(`${hub.url}/v1/workapi/work/${id}`, { method: "PATCH", headers: { "X-API-Key": A, "Content-Type": "application/json", ...(ifMatch ? { "If-Match": ifMatch } : {}) }, body: JSON.stringify(body) });
+    const first = await etag();
+    expect(typeof first).toBe("string");
+    expect((await patch({ section: { name: "Record", text: "- one" } })).status).toBe(200);
+    const current = await etag();
+    expect(current).not.toBe(first);
+    const stale = await patch({ section: { name: "Record", text: "- stale" } }, first);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ code: "conflict", details: { etag: current } });
+    expect((await patch({ section: { name: "Record", text: "- two" } }, current)).status).toBe(200);
+  });
+
   it("answers 409 parent_closed (create and move) for a graduated parent, with the message", async () => {
     const { call, A } = await rig();
     const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;

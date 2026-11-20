@@ -179,6 +179,10 @@ export function etagOfBody(body: string): string {
 }
 
 /** The current etag of a work item, or undefined when the item is unknown. */
+export function etagOfItem(roots: KbRoots, item: WorkItem): string {
+  return etagOfBody(recordBody(roots, item as Item));
+}
+
 export function workEtag(roots: KbRoots, id: string): string | undefined {
   const item = loadWorkState(roots).get(id as never);
   return item ? etagOfBody(recordBody(roots, item as Item)) : undefined;

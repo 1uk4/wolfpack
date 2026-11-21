@@ -24,7 +24,7 @@ import { SECTION_TREE, parseFrontmatter } from "@wolfpack/engine";
 import type { Engine } from "@wolfpack/engine";
 import type { KbRoots } from "../shared/index.js";
 import type { Section, SectionId, DomainId } from "../schema/knowledge.js";
-import { enforceBranchingFactor, placeEntry } from "./section-tree.js";
+import { placeEntry } from "./section-tree.js";
 import type { EntryVector } from "./embed.js";
 import type { EntryWithVector } from "./hierarchy.js";
 import { collapseGuardFires } from "./rebuild-commit.js";
@@ -32,7 +32,7 @@ import { judgeSplit, memorySplitCache, type Partitioner, type SplitCache, type S
 import { anchorOf, groupOf } from "./anchors.js";
 import { labelSection, sectionSummary, type SectionMember } from "./summarize.js";
 import {
-  DEFAULT_RULES, cosine, findMisplaced, hashSectionId, restatesParent, unit, meanVec,
+  DEFAULT_RULES, cosine, findMisplaced, hashSectionId, restatesParent, unit, meanVec, splitThresholdFor,
   type TreeRules,
 } from "./tree-rules.js";
 
@@ -103,11 +103,11 @@ export interface RebuildPlan {
   reused: Set<string>;
   /** Subset of `reused` that also kept the old title and summary (overlap >= reuseKeepLabelJaccard). */
   labelKept: Set<string>;
-  /** Sections the branching cap created to group siblings. */
-  capWrappers: Set<string>;
+  /** New sections the namer could not name (fallback title): never kept as a split child. */
+  noSubject: Set<string>;
   /** Every section the split rule looked at, in order, with the outcome. */
   judged: Array<{
-    id: string; n: number; outcome: "split" | "kept" | "below-threshold";
+    id: string; n: number; outcome: "split" | "kept" | "below-threshold" | "max-depth";
     /** Who proposed the grouping: the LLM (vectors validated it), k-means (fallback), or nobody. */
     source?: "llm" | "kmeans" | "none";
     /** Set when the LLM proposal failed and k-means decided instead. */
@@ -336,16 +336,17 @@ function verdictNotes(v: SplitVerdict, byEntry: Map<string, RebuildEntry>): stri
 
 export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
   const { domain, namer, notify } = opts;
-  const rules = opts.rules ?? DEFAULT_RULES;
   // Grouped entries (with a holder in the plan) are not clustered, counted or judged; they are pinned at the end.
   const holderIds = new Set(opts.entries.map((e) => e.id));
   const grouped = new Map([...(opts.grouped ?? new Map())].filter(([g, h]) => holderIds.has(h) && !(opts.grouped ?? new Map()).has(h) && g !== h));
   const entries = opts.entries.filter((e) => !grouped.has(e.id)).sort((a, b) => (a.id < b.id ? -1 : 1));
+  // The split threshold scales with the domain size unless the caller passes its own rules.
+  const rules = opts.rules ?? { ...DEFAULT_RULES, splitAbove: splitThresholdFor(entries.length) };
   const oldDomain = (opts.oldSections ?? []).filter((s) => String(s.domain) === domain);
   const plan: RebuildPlan = {
     domain, entries, state: { sections: [], assignment: new Map() },
     moves: [], crossMoves: [], unmatchedApprovals: [], blockedApprovals: [], rejected: [], leftovers: new Map(), splitChildren: new Map(), unnamed: [],
-    grouped, reused: new Set(), labelKept: new Set(), capWrappers: new Set(), judged: [], initialTitles: new Map(),
+    grouped, reused: new Set(), labelKept: new Set(), noSubject: new Set(), judged: [], initialTitles: new Map(),
     from: opts.start ? "current" : "scratch",
     oldSectionCount: opts.oldSections ? oldDomain.length : undefined,
   };
@@ -392,6 +393,8 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
       await new Promise<void>((r) => setImmediate(r)); // a fast-failing engine must not starve the host's event loop
       const members = t.direct(id);
       if (members.length <= rules.splitAbove) { plan.judged.push({ id, n: members.length, outcome: "below-threshold" }); continue; }
+      // Roots are depth 0 and route.ts descends only while depth < maxDepth: a child at depth >= maxDepth is never created.
+      if (sec.depth + 1 >= SECTION_TREE.maxDepth) { plan.judged.push({ id, n: members.length, outcome: "max-depth" }); continue; }
       const verdict = await judgeSplit(judgeDeps, {
         domain, parentTitle: sec.title,
         members: members.map((m) => ({ id: m, title: byEntry.get(m)!.title, summary: byEntry.get(m)!.summary, vector: vec.get(m)! })),
@@ -438,11 +441,21 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
   plan.crossMoves.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   notify?.(`top-down build: ${state.sections.length} sections, refinement moved ${plan.moves.length} entries`);
 
-  // 3. the seeded branching cap is the only other structural rule
-  const beforeCap = new Set(state.sections.map((s) => String(s.id)));
-  enforceBranchingFactor(state.sections, domain, SECTION_TREE);
-  t.normalize();
-  for (const s of state.sections) if (!beforeCap.has(String(s.id))) plan.capWrappers.add(String(s.id));
+  // 3. width: no wrapper sections. A parent with more than hardMaxChildren child sections undoes its smallest
+  //    split child (members return to the parent as direct entries) until it fits; wider than maxChildrenPerSection is only noted.
+  for (let guard = 0; guard < 1000; guard++) {
+    const wide = state.sections.find((s) => t.kids(String(s.id)).length > SECTION_TREE.hardMaxChildren && t.kids(String(s.id)).some((k) => plan.splitChildren.has(String(k.id))));
+    if (!wide) break;
+    const pick = t.kids(String(wide.id)).filter((k) => plan.splitChildren.has(String(k.id)))
+      .sort((a, b) => t.subtree(String(a.id)).length - t.subtree(String(b.id)).length || (String(a.id) < String(b.id) ? -1 : 1))[0];
+    foldBack(plan, t, wide, pick);
+    plan.rejected.push({ sectionId: String(wide.id), n: t.subtree(String(wide.id)).length, reason: "too-wide", detail: { children: t.kids(String(wide.id)).length + 1 } });
+    t.normalize();
+  }
+  for (const s of state.sections) {
+    const w = t.kids(String(s.id)).length;
+    if (w > SECTION_TREE.maxChildrenPerSection) notify?.(`${s.id} has ${w} child sections (soft limit ${SECTION_TREE.maxChildrenPerSection})`);
+  }
 
   // 4. id continuity: sections matching an old one by member overlap keep its id, title and summary
   if (opts.oldSections) reuseOldSections(plan, t, opts.oldSections, entries, rules);
@@ -459,7 +472,20 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
   return plan;
 }
 
-function autoTitle(m: SectionMember[]): string {
+/** Members of a section removed from the tree go back to `parent` as direct entries. */
+function foldBack(plan: RebuildPlan, t: Tree, parent: Section, k: Section): void {
+  for (const id of t.descendantIds(String(k.id))) {
+    for (const [e, s] of plan.state.assignment) if (s === id) plan.state.assignment.set(e, String(parent.id));
+    t.remove(id);
+    plan.splitChildren.delete(id);
+    plan.reused.delete(id);
+    plan.labelKept.delete(id);
+    plan.noSubject.delete(id);
+  }
+}
+
+/** Only for sections that already exist (reused): a new section without a real name is not split off. */
+function fallbackTitle(m: SectionMember[]): string {
   return m.slice(0, 3).map((x) => {
     const s = x.title.split(":")[0].split("—")[0].trim();
     return s.length > 40 ? s.slice(0, 37) + "..." : s;
@@ -505,7 +531,7 @@ function reuseOldSections(plan: RebuildPlan, t: Tree, oldSections: Section[], en
   for (const r of plan.rejected) r.sectionId = R(r.sectionId);
   for (const j of plan.judged) j.id = R(j.id);
   plan.initialTitles = new Map([...plan.initialTitles].map(([k, v]) => [R(k), v]));
-  plan.capWrappers = new Set([...plan.capWrappers].map(R));
+  plan.noSubject = new Set([...plan.noSubject].map(R));
   for (const m of [...plan.moves, ...plan.crossMoves]) { m.from = R(m.from); m.to = R(m.to); }
   for (const b of plan.blockedApprovals) b.from = R(b.from);
   for (const oid of map.values()) {
@@ -557,13 +583,16 @@ async function labelTree(
     const ask = async (sec: Section, forbidden?: string[]) => {
       const members = sample(sec);
       await new Promise<void>((r) => setImmediate(r));
+      plan.noSubject.delete(String(sec.id));
       try {
         if (sec.depth > SECTION_TREE.llmNamingMaxDepth) throw new Error("auto");
         const r = await namer({ members, depth: sec.depth, maxDepth, domain: plan.domain, parentTitle: parent?.title, siblingSummaries: done.slice(), forbidden, fixedTitle: forbidden ? undefined : plan.initialTitles.get(String(sec.id)) });
-        sec.title = r.title.trim() || autoTitle(members);
+        sec.title = r.title.trim() || fallbackTitle(members);
+        if (!r.title.trim()) plan.noSubject.add(String(sec.id));
         sec.summary = r.summary;
       } catch (err) {
-        sec.title = autoTitle(members);
+        sec.title = fallbackTitle(members);
+        plan.noSubject.add(String(sec.id));
         if ((err as Error).message !== "auto") { plan.unnamed.push(String(sec.id)); notify?.(`label failed for ${sec.id}: ${(err as Error).message}`); }
       }
       sec.dirty = false;
@@ -574,64 +603,43 @@ async function labelTree(
       done.push(sec.summary || sec.title);
     }
     // A split child whose label restates the parent is re-asked once with the parent's title forbidden;
-    // if it still restates, only that child folds back (all of them if fewer than two would remain).
+    // if it still restates, only that child folds back. A split child the namer could not name (no subject) folds back too.
+    // If fewer than three split children would remain, all of them fold.
     if (parent) {
       const splitKids = sibs.filter((s) => plan.splitChildren.get(String(s.id)) === String(parent.id));
       const bad: Section[] = [];
+      const reasonOf = new Map<string, string>();
       for (const k of splitKids) {
+        if (plan.noSubject.has(String(k.id))) {
+          notify?.(`split child ${k.id} has no subject (the namer failed); folding it back`);
+          bad.push(k); reasonOf.set(String(k.id), "child-has-no-subject");
+          continue;
+        }
         if (!restatesParent(k.title, parent.title, rules)) continue;
         notify?.(`label "${k.title}" restates parent "${parent.title}"; asking again`);
         const first = k.title;
         plan.labelKept.delete(String(k.id));
         await ask(k, [parent.title, first]);
-        if (restatesParent(k.title, parent.title, rules)) {
+        if (plan.noSubject.has(String(k.id))) {
+          bad.push(k); reasonOf.set(String(k.id), "child-has-no-subject");
+        } else if (restatesParent(k.title, parent.title, rules)) {
           notify?.(`split rejected for ${k.id}: "${k.title}" still restates "${parent.title}"`);
           bad.push(k);
         }
       }
       if (bad.length) {
-        const fold = splitKids.length - bad.length >= 2 ? bad : splitKids;
+        const fold = splitKids.length - bad.length >= SECTION_TREE.minCoherentGroups ? bad : splitKids;
         for (const k of fold) {
-          for (const id of t.descendantIds(String(k.id))) {
-            for (const [e, s] of plan.state.assignment) if (s === id) plan.state.assignment.set(e, String(parent.id));
-            t.remove(id);
-            plan.splitChildren.delete(id);
-            plan.reused.delete(id);
-            plan.labelKept.delete(id);
-          }
+          const reason = reasonOf.get(String(k.id)) ?? (bad.includes(k) ? "child-label-restates-parent" : "too-few-children-left");
+          foldBack(plan, t, parent, k);
           plan.rejected.push({
-            sectionId: String(parent.id), n: t.subtree(String(parent.id)).length, reason: "child-label-restates-parent",
+            sectionId: String(parent.id), n: t.subtree(String(parent.id)).length, reason,
             detail: { parent: parent.title, child: k.title },
           });
         }
         if (fold === splitKids) plan.leftovers.delete(String(parent.id));
         t.normalize();
         sibs = sibs.filter((s) => !fold.includes(s));
-      }
-    }
-    // A branching-cap wrapper is judged like a split child: re-ask once, and if its title still restates the
-    // parent the wrapper is dissolved (its children go back up to the parent) and the adopted children are named.
-    if (parent) {
-      const adopted: Section[] = [];
-      for (const w of sibs.filter((x) => plan.capWrappers.has(String(x.id)))) {
-        if (!restatesParent(w.title, parent.title, rules)) continue;
-        notify?.(`wrapper "${w.title}" restates parent "${parent.title}"; asking again`);
-        const first = w.title;
-        plan.labelKept.delete(String(w.id));
-        await ask(w, [parent.title, first]);
-        if (!restatesParent(w.title, parent.title, rules)) continue;
-        notify?.(`wrapper ${w.id} dissolved: "${w.title}" still restates "${parent.title}"`);
-        for (const k of t.kids(String(w.id))) { k.parent = parent.id; adopted.push(k); }
-        t.remove(String(w.id));
-        plan.capWrappers.delete(String(w.id));
-        plan.reused.delete(String(w.id));
-        plan.rejected.push({ sectionId: String(parent.id), n: adopted.length, reason: "wrapper-label-restates-parent", detail: { parent: parent.title, wrapper: w.title } });
-        t.normalize();
-        sibs = sibs.filter((x) => x !== w);
-      }
-      for (const k of adopted) {
-        if (!plan.labelKept.has(String(k.id))) await ask(k);
-        sibs.push(k);
       }
     }
     for (const sec of sibs) {
@@ -669,7 +677,7 @@ export function renderProposal(plan: RebuildPlan): string {
     const direct = t.direct(String(s.id));
     const total = t.subtree(String(s.id)).length;
     const left = plan.leftovers.get(String(s.id));
-    lines.push(`${indent}- **${s.title || s.id}** \`${s.id}\` ${plan.labelKept.has(String(s.id)) ? "[reused]" : plan.reused.has(String(s.id)) ? "[id reused, re-named]" : "[new]"}${plan.capWrappers.has(String(s.id)) ? " [cap wrapper]" : ""} — ${total} entries${t.kids(String(s.id)).length ? ` (${direct.length} direct${left ? `, ${left.length} leftover` : ""})` : ""}`);
+    lines.push(`${indent}- **${s.title || s.id}** \`${s.id}\` ${plan.labelKept.has(String(s.id)) ? "[reused]" : plan.reused.has(String(s.id)) ? "[id reused, re-named]" : "[new]"} — ${total} entries${t.kids(String(s.id)).length ? ` (${direct.length} direct${left ? `, ${left.length} leftover` : ""})` : ""}`);
     for (const k of t.kids(String(s.id))) walk(k, indent + "  ");
   };
   for (const r of plan.state.sections.filter((s) => s.parent === null)) walk(r, "");

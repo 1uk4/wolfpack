@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   rng, hashSeed, centre, kmeansPP, chooseSplit, isSplit, extractLeftovers, findMisplaced,
-  hashSectionId, restatesParent, ari, DEFAULT_RULES, joinLeftovers, type Vec,
+  hashSectionId, restatesParent, ari, DEFAULT_RULES, joinLeftovers, validatePartition, splitThresholdFor, type Vec,
 } from "./tree-rules.js";
 
 const DIM = 24;
@@ -48,6 +48,27 @@ describe("centre / kmeansPP", () => {
     const a = kmeansPP(X, 3, 9), b = kmeansPP(X, 3, 9);
     expect(a.labels).toEqual(b.labels);
     expect(ari(a.labels, [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2])).toBeCloseTo(1, 6);
+  });
+});
+
+describe("splitThresholdFor", () => {
+  it("scales the split threshold with domain size, clamped to 12..24", () => {
+    expect([8, 30, 350, 2000].map(splitThresholdFor)).toEqual([12, 13, 19, 22]);
+    expect(splitThresholdFor(10_000_000)).toBe(24);
+  });
+});
+
+describe("validatePartition gates", () => {
+  it("rejects a partition with only two coherent groups", () => {
+    const X = clustered([6, 6, 6]);
+    const d = validatePartition(X, { names: ["a", "b"], members: [[0, 1, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11]], doesntFit: [12, 13, 14, 15, 16, 17] });
+    expect(isSplit(d as never)).toBe(false);
+    expect((d as { reason: string }).reason).toBe("fewer-than-three-groups");
+  });
+  it("accepts three coherent groups", () => {
+    const X = clustered([6, 6, 6]);
+    const d = validatePartition(X, { names: ["a", "b", "c"], members: [[0, 1, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11], [12, 13, 14, 15, 16, 17]], doesntFit: [] });
+    expect((d as { k: number }).k).toBe(3);
   });
 });
 

@@ -49,16 +49,16 @@ describe("validatePartition (vectors validate, never assign)", () => {
     if (isPartition(d)) { expect(d.leftovers).toEqual([idx(1)[0]]); expect(d.k).toBe(3); }
   });
   it("a category mixing two clusters is dropped and its members become leftovers", () => {
-    const es = make([6, 6, 6, 6]);
-    const idx = (c: number) => es.flatMap((e, i) => (cluster(e.id, [6, 6, 6, 6]) === c ? [i] : []));
-    // two "categories" that both mix clusters 2 and 3: neither is coherent against the other
-    const mixA = [...idx(2).slice(0, 3), ...idx(3).slice(0, 3)], mixB = [...idx(2).slice(3), ...idx(3).slice(3)];
-    const d = validatePartition(es.map((e) => e.vector), { names: ["A", "B", "Mix 1", "Mix 2"], members: [idx(0), idx(1), mixA, mixB], doesntFit: [] });
+    const es = make([6, 6, 6, 6, 6]);
+    const idx = (c: number) => es.flatMap((e, i) => (cluster(e.id, [6, 6, 6, 6, 6]) === c ? [i] : []));
+    // two "categories" that both mix clusters 3 and 4: neither is coherent against the other
+    const mixA = [...idx(3).slice(0, 3), ...idx(4).slice(0, 3)], mixB = [...idx(3).slice(3), ...idx(4).slice(3)];
+    const d = validatePartition(es.map((e) => e.vector), { names: ["A", "B", "C", "Mix 1", "Mix 2"], members: [idx(0), idx(1), idx(2), mixA, mixB], doesntFit: [] });
     expect(isPartition(d)).toBe(true);
     if (isPartition(d)) {
-      expect(d.k).toBe(2);
-      expect(d.categories.map((c) => c.kept)).toEqual([true, true, false, false]);
-      expect(d.categories[2].why === "low-share" || d.categories[2].why === "too-few-coherent").toBe(true);
+      expect(d.k).toBe(3);
+      expect(d.categories.map((c) => c.kept)).toEqual([true, true, true, false, false]);
+      expect(d.categories[3].why === "low-share" || d.categories[3].why === "too-few-coherent").toBe(true);
       expect(d.leftovers.sort((a, b) => a - b)).toEqual([...mixA, ...mixB].sort((a, b) => a - b));
     }
   });
@@ -149,19 +149,19 @@ describe("judgeSplit", () => {
   });
 
   it("leftovers get one more grouping pass, asked about the leftovers alone and validated like the first", async () => {
-    const S4 = [6, 6, 6, 6];
+    const S4 = [6, 6, 6, 3, 3];
     const e4 = make(S4);
     const of = (k: number) => e4.filter((e) => cluster(e.id, S4) === k).map((e) => e.id);
     const asked: string[][] = [];
     const part: Partitioner = async ({ members: m }) => {
       asked.push(m.map((x) => x.id));
-      if (m.length === 24) return { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1) }], doesntFit: [...of(2), ...of(3)] };
-      return { categories: [{ name: "C", ids: of(2) }, { name: "D", ids: of(3) }], doesntFit: [] };
+      if (m.length === 24) return { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1) }, { name: "C", ids: of(2) }], doesntFit: [...of(3), ...of(4)] };
+      return { categories: [{ name: "D", ids: of(3) }, { name: "E", ids: of(4) }], doesntFit: [] };
     };
     const v = await judgeSplit({ partitioner: part }, { domain: "wp", parentTitle: "P", members: members(e4) });
     expect(asked).toHaveLength(2);
-    expect(asked[1]).toEqual([...of(2), ...of(3)].sort());
-    expect(v.decision?.names).toEqual(["A", "B", "C", "D"]);
+    expect(asked[1]).toEqual([...of(3), ...of(4)].sort());
+    expect(v.decision?.names).toEqual(["A", "B", "C", "D", "E"]);
     expect(v.decision?.leftovers).toEqual([]);
   });
 
@@ -188,102 +188,104 @@ describe("judgeSplit", () => {
   });
 
   it("a failed or malformed leftover pass keeps the first pass's result", async () => {
-    const S4 = [6, 6, 6, 6];
+    const S4 = [6, 6, 6, 3, 3];
     const e4 = make(S4);
     const of = (k: number) => e4.filter((e) => cluster(e.id, S4) === k).map((e) => e.id);
-    const first: SplitProposal = { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1) }], doesntFit: [...of(2), ...of(3)] };
+    const first: SplitProposal = { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1) }, { name: "C", ids: of(2) }], doesntFit: [...of(3), ...of(4)] };
     for (const second of [() => { throw new Error("boom"); }, () => ({ categories: null, doesntFit: [] })]) {
       const notes: string[] = [];
       const part = (async ({ members: m }) => (m.length === 24 ? first : second())) as Partitioner;
       const v = await judgeSplit({ partitioner: part, notify: (x) => notes.push(x) }, { domain: "wp", parentTitle: "P", members: members(e4) });
-      expect(v.decision?.names).toEqual(["A", "B"]);
-      expect(v.decision?.leftovers).toHaveLength(12);
+      expect(v.decision?.names).toEqual(["A", "B", "C"]);
+      expect(v.decision?.leftovers).toHaveLength(6);
       expect(notes.some((x) => /leftover grouping failed/.test(x))).toBe(true);
     }
   });
 
   it("the leftover pass is cached under its own key: a second run asks nothing, and is reported cached", async () => {
-    const S4 = [6, 6, 6, 6];
+    const S4 = [6, 6, 6, 3, 3];
     const e4 = make(S4);
     const of = (k: number) => e4.filter((e) => cluster(e.id, S4) === k).map((e) => e.id);
     const part = vi.fn<Parameters<Partitioner>, ReturnType<Partitioner>>(async ({ members: m }) => (m.length === 24
-      ? { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1) }], doesntFit: [...of(2), ...of(3)] }
-      : { categories: [{ name: "C", ids: of(2) }, { name: "D", ids: of(3) }], doesntFit: [] }));
+      ? { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1) }, { name: "C", ids: of(2) }], doesntFit: [...of(3), ...of(4)] }
+      : { categories: [{ name: "D", ids: of(3) }, { name: "E", ids: of(4) }], doesntFit: [] }));
     const cache = memorySplitCache();
     const a = await judgeSplit({ partitioner: part, cache }, { domain: "wp", parentTitle: "P", members: members(e4) });
     const b = await judgeSplit({ partitioner: part, cache }, { domain: "wp", parentTitle: "P", members: members(e4) });
     expect(part).toHaveBeenCalledTimes(2);
     expect([a.cached, b.cached]).toEqual([false, true]);
-    expect(b.decision?.names).toEqual(["A", "B", "C", "D"]);
+    expect(b.decision?.names).toEqual(["A", "B", "C", "D", "E"]);
   });
 
   it("a leftover-pass category that reuses a first-pass group's name does not hide that the first-pass group was dropped (checked by members)", async () => {
-    const S4 = [6, 9, 6, 6];
+    const S4 = [9, 6, 9, 3];
     const e4 = make(S4);
     const of = (k: number) => e4.filter((e) => cluster(e.id, S4) === k).map((e) => e.id);
     const part: Partitioner = async ({ members: m }) => (m.length === 27
-      ? { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1).slice(0, 3) }], doesntFit: [...of(1).slice(3), ...of(2), ...of(3)] }
+      ? { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1).slice(0, 3) }, { name: "C", ids: of(2) }], doesntFit: [...of(1).slice(3), ...of(3)] }
       // the second "B" lies on top of the first one, so the joint validation drops the old B (its members no longer beat the new B)
-      : { categories: [{ name: "B", ids: of(1).slice(3) }, { name: "C", ids: of(2) }, { name: "D", ids: of(3) }], doesntFit: [] });
+      : { categories: [{ name: "B", ids: of(1).slice(3) }, { name: "D", ids: of(3) }], doesntFit: [] });
     const v = await judgeSplit({ partitioner: part, rules: NO_JOIN }, { domain: "wp", parentTitle: "P", members: members(e4) });
-    expect(v.decision?.names).toEqual(["A", "B"]);
-    expect(v.decision?.leftovers).toHaveLength(18);
+    expect(v.decision?.names).toEqual(["A", "B", "C"]);
+    expect(v.decision?.leftovers).toHaveLength(6);
   });
 
   describe("the join bar, on a worked example", () => {
-    // 2-D unit vectors at these angles. They are antipodal in pairs, so the mean is zero and centring leaves them as they are.
+    // 2-D unit vectors at these angles. Each set of three is 120 deg apart, so the mean is zero and centring leaves them as they are.
     //   m0..m2 = A at 0, 20, -20 deg      (A's centroid is 0 deg; its bar is cos 30 = 0.866: the weakest member leaves a mean 30 deg away)
-    //   m3..m5 = B at 180, 200, 160 deg   (centroid 180 deg, bar 0.866)
-    //   m6 = 10 deg  -> cos 10 = 0.985 to A, -0.985 to B: clears A's bar, joins A
-    //   m7 = 190 deg -> joins B the same way
-    //   m8 = 90, m9 = 270 deg -> cos 0 to both centroids, below joinFloor 0.05: stay loose
-    const ANGLES = [0, 20, -20, 180, 200, 160, 10, 190, 90, 270];
-    const ms: JudgeMember[] = ANGLES.map((deg, i) => ({ id: `m${i}`, title: `m${i}`, summary: "", vector: [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)] }));
+    //   m3..m5 = B at 120, 140, 100 deg   (centroid 120 deg, bar 0.866)
+    //   m6..m8 = C at 240, 260, 220 deg   (centroid 240 deg, bar 0.866)
+    //   m9 = 10, m10 = 130, m11 = 250 deg -> cos 10 = 0.985 to their group: clear its bar, join A, B, C
+    //   m12 = 60, m13 = 180, m14 = 300 deg -> each is 60 deg from two centroids: below the bar and no margin over the runner-up, stay loose
+    const ANGLES = [0, 20, -20, 120, 140, 100, 240, 260, 220, 10, 130, 250, 60, 180, 300];
+    const ms: JudgeMember[] = ANGLES.map((deg, i) => ({ id: `m${String(i).padStart(2, "0")}`, title: `m${i}`, summary: "", vector: [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)] }));
     const ids = (a: number, b: number) => ms.slice(a, b).map((m) => m.id);
-    const EXPECTED = [0, 0, 0, 1, 1, 1, 0, 1, -1, -1];
+    const EXPECTED = [0, 0, 0, 1, 1, 1, 2, 2, 2, 0, 1, 2, -1, -1, -1];
 
     it("joins each leftover that clears the bar to the group it sits closest to, and leaves the rest loose", async () => {
       const calls: string[] = [];
       const v = await judgeSplit({ ignoreSize: true, partitioner: async ({ parentTitle, members: asked }) => {
         calls.push(parentTitle);
-        // the second pass (over the 4 leftovers) finds nothing new
-        return asked.length === 10 ? { categories: [{ name: "A", ids: ids(0, 3) }, { name: "B", ids: ids(3, 6) }], doesntFit: ids(6, 10) } : { categories: [], doesntFit: asked.map((m) => m.id) };
+        // the second pass (over the 6 leftovers) finds nothing new
+        return asked.length === 15 ? { categories: [{ name: "A", ids: ids(0, 3) }, { name: "B", ids: ids(3, 6) }, { name: "C", ids: ids(6, 9) }], doesntFit: ids(9, 15) } : { categories: [], doesntFit: asked.map((m) => m.id) };
       } }, { domain: "wp", parentTitle: "P", members: ms });
       expect(calls).toHaveLength(2);
       expect(v.decision?.labels).toEqual(EXPECTED);
-      expect(v.decision?.leftovers).toEqual([8, 9]);
-      expect(v.joined).toBe(2);
+      expect(v.decision?.leftovers).toEqual([12, 13, 14]);
+      expect(v.joined).toBe(3);
     });
 
     it("joins after the second pass when only one first-pass category survived", async () => {
       const v = await judgeSplit({ ignoreSize: true, partitioner: async ({ members: asked }) =>
-        asked.length === 10 ? { categories: [{ name: "A", ids: ids(0, 3) }], doesntFit: ids(3, 10) }
-          // the 7 leftovers: B is found, m6..m9 stay out
-          : { categories: [{ name: "B", ids: ids(3, 6) }], doesntFit: ids(6, 10) },
+        asked.length === 15 ? { categories: [{ name: "A", ids: ids(0, 3) }], doesntFit: ids(3, 15) }
+          // the 12 leftovers: B and C are found, m9..m14 stay out
+          : { categories: [{ name: "B", ids: ids(3, 6) }, { name: "C", ids: ids(6, 9) }], doesntFit: ids(9, 15) },
       }, { domain: "wp", parentTitle: "P", members: ms });
-      expect(v.decision?.names).toEqual(["A", "B"]);
+      expect(v.decision?.names).toEqual(["A", "B", "C"]);
       expect(v.decision?.labels).toEqual(EXPECTED);
-      expect(v.joined).toBe(2);
+      expect(v.joined).toBe(3);
     });
   });
 
   it("a category dropped for incoherence is reported, and its members are leftovers", async () => {
-    const e4 = make([6, 6, 6, 6]);
-    const c2 = e4.filter((e) => cluster(e.id, [6, 6, 6, 6]) === 2), c3 = e4.filter((e) => cluster(e.id, [6, 6, 6, 6]) === 3);
+    const S5 = [10, 10, 10, 6, 6];
+    const e4 = make(S5);
+    const c2 = e4.filter((e) => cluster(e.id, S5) === 3), c3 = e4.filter((e) => cluster(e.id, S5) === 4);
     const mixed = [...c2.slice(0, 3), ...c3.slice(0, 3)];
     const rest = [...c2.slice(3), ...c3.slice(3)];
     const part: Partitioner = async () => ({
       categories: [
-        { name: "A", ids: e4.filter((e) => cluster(e.id, [6, 6, 6, 6]) === 0).map((e) => e.id) },
-        { name: "B", ids: e4.filter((e) => cluster(e.id, [6, 6, 6, 6]) === 1).map((e) => e.id) },
+        { name: "A", ids: e4.filter((e) => cluster(e.id, S5) === 0).map((e) => e.id) },
+        { name: "B", ids: e4.filter((e) => cluster(e.id, S5) === 1).map((e) => e.id) },
+        { name: "C", ids: e4.filter((e) => cluster(e.id, S5) === 2).map((e) => e.id) },
         { name: "Mixed bag", ids: mixed.map((e) => e.id) },
         { name: "Other mixed bag", ids: rest.map((e) => e.id) },
       ],
       doesntFit: [],
     });
     const v = await judgeSplit({ partitioner: part }, { domain: "wp", parentTitle: "P", members: members(e4) });
-    expect(v.decision?.k).toBe(2);
-    expect(v.decision?.names).toEqual(["A", "B"]);
+    expect(v.decision?.k).toBe(3);
+    expect(v.decision?.names).toEqual(["A", "B", "C"]);
     expect(v.categories?.find((c) => c.name === "Mixed bag")?.kept).toBe(false);
     expect(v.decision?.leftovers).toHaveLength(12);
   });

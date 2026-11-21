@@ -91,8 +91,6 @@ export const SWEEP = {
 export const HIERARCHY = {
   /** Below this cosine to any child centroid → park in _unplaced. */
   fitThreshold: 0.78,
-  /** Section members over this count → split (BIRCH-style overflow). */
-  splitAt: 8,
   /** Section under this count → fold back into parent. */
   mergeBelow: 3,
   /** Cap tree descent depth. */
@@ -195,7 +193,6 @@ export const SECTION_TREE = {
   /**
    * When a section exceeds this many entries, split into parent + child.
    * The larger cluster stays as parent, smaller becomes child.
-   * (Same as HIERARCHY.splitAt but used by the new algorithm.)
    */
   splitThreshold: 8,
 
@@ -205,8 +202,27 @@ export const SECTION_TREE = {
    * children centroids. Keeps the tree navigable (Miller's number: 3-7).
    *
    * k = ceil(numChildren / maxChildrenPerSection)
+   *
+   * The rebuild planner no longer wraps wide parents (no cap-wrapper sections); there this is a
+   * soft notify threshold. The hard width is `hardMaxChildren`.
    */
   maxChildrenPerSection: 6,
+
+  /** Rebuild planner: a parent never keeps more child sections than this; the smallest split under it is undone. */
+  hardMaxChildren: 12,
+
+  // Rebuild planner split rules (work-wolfpack-Fs0BlY6). Proposals, kept as named constants to tune.
+  /** Intended leaf size. */
+  leafTarget: 9,
+  /** Leaf size band. */
+  leafBandMin: 6,
+  leafBandMax: 12,
+  /** A split must cover at least this share of the section's members (after leftovers join). */
+  minCoverage: 0.7,
+  /** A split needs at least this many coherent groups. */
+  minCoherentGroups: 3,
+  /** Planner depth limit: roots are depth 0 and route.ts descends only while depth < maxDepth, so no section is created at depth >= maxDepth. */
+  maxDepth: 4,
 
   /**
    * When splitting, how to choose which cluster becomes the parent:

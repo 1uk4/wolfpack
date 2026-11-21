@@ -20,8 +20,8 @@ export const MAX_CANDIDATES_EXAMINED = 50;
 /** A domain rebuilt less than this long ago is left alone (the rebuild just placed everything). */
 export const REPLACE_AFTER_REBUILD_MS = 24 * 60 * 60 * 1000;
 
-/** One parent section over the split threshold. */
-export interface OversizeSection { id: string; domain: string; count: number }
+/** One parent section over the split threshold (`threshold` is the domain-scaled value it was measured against, when known). */
+export interface OversizeSection { id: string; domain: string; count: number; threshold?: number }
 
 /** Host hook: a domain has sections whose direct entries outgrew the split threshold. Fire and forget (never fails the sweep). */
 export type SplitDueHook = (domain: string, sections: { id: string; count: number }[]) => void | Promise<void>;
@@ -42,7 +42,8 @@ export function notifySplitDue(
   threshold: number = DEFAULT_RULES.splitAbove,
 ): Promise<void>[] {
   if (!big.length) return [];
-  notify?.(`sweep: ${big.length} parent section(s) hold more than ${threshold} direct entries (${big.map((b) => `${b.id} (${b.count})`).join(", ")}); a rebuild is due`);
+  const thresholds = [...new Set(big.map((b) => b.threshold ?? threshold))].sort((a, b) => a - b);
+  notify?.(`sweep: ${big.length} parent section(s) hold more than ${thresholds.join("/")} direct entries (${big.map((b) => `${b.id} (${b.count})`).join(", ")}); a rebuild is due`);
   if (!hook) return [];
   const byDomain = new Map<string, { id: string; count: number }[]>();
   for (const b of big) {

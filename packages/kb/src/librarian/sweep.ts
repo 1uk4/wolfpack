@@ -35,6 +35,7 @@ import { survivorOf } from "./alias.js";
 import { lookupAlias, applyAliasRoute } from "./sweep-alias.js";
 import { maxMergeTargetCharsFor, mergeSizeLimit, exemptFromSizeGuard, notifyKeptOversize, shouldRoutePlacement } from "./sweep-size.js";
 import { exceedsSplitAbove, notifySplitDue, replaceMisfits, type OversizeSection, type SplitDueHook } from "./sweep-replace.js";
+import { splitThresholdFor } from "./tree-rules.js";
 import { produceEntry, produceVerbatim, type ProduceEntryInput } from "./produce.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
@@ -360,6 +361,7 @@ export async function oversizedParents(roots: KbRoots, sections: Section[], timi
     const withKids = new Set(sections.filter((s) => String(s.domain) === domain && s.parent).map((s) => String(s.parent)));
     if (!withKids.size) continue;
     const counts = new Map<string, number>();
+    let domainSize = 0; // ungrouped entries: the split threshold scales with the domain (splitThresholdFor)
     const dir = join(roots.kbBase, "domains", domain, "entries");
     if (!existsSync(dir)) continue;
     for (const f of listEntryFiles(dir)) {
@@ -369,10 +371,12 @@ export async function oversizedParents(roots: KbRoots, sections: Section[], timi
       const t0 = performance.now();
       try { e = readEntryCached(join(dir, f)); } catch { continue; } finally { timings?.add("oversized", performance.now() - t0); }
       if (!e || e.group()) continue;
+      domainSize++;
       const sec = String(e.fields.section ?? "");
       if (sec && withKids.has(sec)) counts.set(sec, (counts.get(sec) ?? 0) + 1);
     }
-    for (const [id, n] of [...counts].sort()) if (exceedsSplitAbove(n)) out.push({ id, domain, count: n });
+    const threshold = splitThresholdFor(domainSize);
+    for (const [id, n] of [...counts].sort()) if (exceedsSplitAbove(n, threshold)) out.push({ id, domain, count: n, threshold });
   }
   return out;
 }

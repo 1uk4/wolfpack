@@ -782,13 +782,16 @@ export async function repairPath(
   const t = new Tree(state, vec, domain);
   const created: string[] = [];
   const queue = [leafId];
-  const deps = { partitioner: ctx.partitioner, cache: ctx.cache, rules, notify: ctx.notify };
+  // The threshold scales with the domain size (the same splitThresholdFor the planner uses) when the caller gives it.
+  const run = ctx.domainSize !== undefined ? { ...rules, splitAbove: splitThresholdFor(ctx.domainSize) } : rules;
+  const deps = { partitioner: ctx.partitioner, cache: ctx.cache, rules: run, notify: ctx.notify };
   while (queue.length) {
     const id = queue.shift()!;
     const sec = state.sections.find((s) => String(s.id) === id);
     if (!sec) continue;
     const members = t.direct(id);
-    if (members.length <= rules.splitAbove) continue;
+    if (members.length <= run.splitAbove) continue;
+    if (sec.depth + 1 >= SECTION_TREE.maxDepth) continue; // same depth rule as the planner
     const v = await judgeSplit(deps, {
       domain, parentTitle: sec.title,
       members: members.map((m) => ({ id: m, title: ctx.info?.get(m)?.title ?? m, summary: ctx.info?.get(m)?.summary, vector: vec.get(m)! })),
@@ -814,6 +817,8 @@ export async function repairPath(
 
 /** What the insert path needs besides vectors: a partitioner and cache (else k-means), and titles for the proposer. */
 export interface RepairContext {
+  /** Entries in the domain: the split threshold is splitThresholdFor(domainSize). Without it rules.splitAbove is used. */
+  domainSize?: number;
   partitioner?: Partitioner;
   cache?: SplitCache;
   info?: Map<string, { title: string; summary?: string }>;

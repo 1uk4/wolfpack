@@ -212,12 +212,10 @@ export const SECTION_TREE = {
   hardMaxChildren: 12,
 
   // Rebuild planner split rules (work-wolfpack-Fs0BlY6). Proposals, kept as named constants to tune.
-  /** Intended leaf size. */
-  leafTarget: 9,
-  /** Leaf size band. */
-  leafBandMin: 6,
-  leafBandMax: 12,
-  /** A split must cover at least this share of the section's members (after leftovers join). */
+  /**
+   * A split must cover at least this share of the section's members. The LLM path measures it after leftovers join their
+   * closest group; the k-means fallback has no join step, so it measures the share of members in a surviving group.
+   */
   minCoverage: 0.7,
   /** A split needs at least this many coherent groups. */
   minCoherentGroups: 3,

@@ -290,6 +290,32 @@ describe("judgeSplit", () => {
     expect(v.decision?.leftovers).toHaveLength(12);
   });
 
+  it("three groups that cover only half the members are no split (low-coverage)", async () => {
+    const S6 = [6, 6, 6, 6, 6, 6];
+    const e6 = make(S6);
+    const of = (k: number) => e6.filter((e) => cluster(e.id, S6) === k).map((e) => e.id);
+    const part: Partitioner = async ({ members: m }) => (m.length === 36
+      ? { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1) }, { name: "C", ids: of(2) }], doesntFit: [...of(3), ...of(4), ...of(5)] }
+      : { categories: [], doesntFit: m.map((x) => x.id) });
+    const v = await judgeSplit({ partitioner: part, rules: NO_JOIN }, { domain: "wp", parentTitle: "P", members: members(e6) });
+    expect(v.decision).toBeUndefined();
+    expect(v.reason).toBe("low-coverage");
+  });
+
+  it("two surviving groups: the leftover pass can find the third, and without it the split is rejected", async () => {
+    const first = (e: RebuildEntry[]) => {
+      const of = (k: number) => e.filter((x) => cluster(x.id, SIZES) === k).map((x) => x.id);
+      return { of, proposal: { categories: [{ name: "A", ids: of(0) }, { name: "B", ids: of(1) }], doesntFit: of(2) } as SplitProposal };
+    };
+    const e3 = make(SIZES);
+    const { of, proposal } = first(e3);
+    const found = await judgeSplit({ partitioner: async ({ members: m }) => (m.length === 18 ? proposal : { categories: [{ name: "C", ids: of(2) }], doesntFit: [] }) }, { domain: "wp", parentTitle: "P", members: members(e3) });
+    expect(found.decision?.names).toEqual(["A", "B", "C"]);
+    const missed = await judgeSplit({ partitioner: async ({ members: m }) => (m.length === 18 ? proposal : { categories: [], doesntFit: m.map((x) => x.id) }) }, { domain: "wp", parentTitle: "P", members: members(e3) });
+    expect(missed.decision).toBeUndefined();
+    expect(missed.reason).toBe("fewer-than-three-groups");
+  });
+
   it("everything a leftover: no split, with the reason", async () => {
     const part: Partitioner = async () => ({ categories: [], doesntFit: es.map((e) => e.id) });
     const v = await judgeSplit({ partitioner: part }, { domain: "wp", parentTitle: "P", members: members(es) });

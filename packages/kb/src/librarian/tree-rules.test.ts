@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   rng, hashSeed, centre, kmeansPP, chooseSplit, isSplit, extractLeftovers, findMisplaced,
-  hashSectionId, restatesParent, ari, DEFAULT_RULES, joinLeftovers, validatePartition, splitThresholdFor, type Vec,
+  hashSectionId, restatesParent, ari, DEFAULT_RULES, joinLeftovers, validatePartition, isPartition, splitThresholdFor, type Vec,
 } from "./tree-rules.js";
 
 const DIM = 24;
@@ -62,13 +62,23 @@ describe("validatePartition gates", () => {
   it("rejects a partition with only two coherent groups", () => {
     const X = clustered([6, 6, 6]);
     const d = validatePartition(X, { names: ["a", "b"], members: [[0, 1, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11]], doesntFit: [12, 13, 14, 15, 16, 17] });
-    expect(isSplit(d as never)).toBe(false);
-    expect((d as { reason: string }).reason).toBe("fewer-than-three-groups");
+    expect(isPartition(d)).toBe(false);
+    expect("reason" in d ? d.reason : undefined).toBe("fewer-than-three-groups");
   });
   it("accepts three coherent groups", () => {
     const X = clustered([6, 6, 6]);
     const d = validatePartition(X, { names: ["a", "b", "c"], members: [[0, 1, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11], [12, 13, 14, 15, 16, 17]], doesntFit: [] });
-    expect((d as { k: number }).k).toBe(3);
+    expect(isPartition(d) ? d.k : -1).toBe(3);
+  });
+});
+
+describe("chooseSplit coverage", () => {
+  it("rejects a clustering whose surviving groups cover under 70% of the members (low-coverage)", () => {
+    // five clusters (7/7/7/5/5); with minGroup 6 the two 5-member groups become leftovers: 21 of 31 = 68% covered
+    const X = clustered([7, 7, 7, 5, 5]);
+    const d = chooseSplit(X, ids(31), { ...DEFAULT_RULES, minGroup: 6 });
+    expect(isSplit(d)).toBe(false);
+    expect("reason" in d ? d.reason : undefined).toBe("low-coverage");
   });
 });
 

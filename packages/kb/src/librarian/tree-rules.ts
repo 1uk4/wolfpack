@@ -494,7 +494,8 @@ export function validatePartition(
     };
   };
   if (survivors.length < SECTION_TREE.minCoherentGroups) {
-    const one = survivors.length === 1 ? decide(survivors) : undefined;
+    // One or two survivors: the rest may still hide in the leftovers, so a second pass can try to complete the set.
+    const one = survivors.length >= 1 ? decide(survivors) : undefined;
     return { split: null, reason: survivors.length === 0 ? "no-coherent-category" : "fewer-than-three-groups", categories: reports, single: one };
   }
   return decide(survivors);

@@ -104,7 +104,59 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
     expect(plan.rejected.some((r) => r.reason === "child-has-no-subject")).toBe(true);
     expect(plan.state.sections).toHaveLength(1);
     expect(plan.state.assignment.size).toBe(es.length);
-    expect(plan.state.sections.some((s) => s.title.includes(", "))).toBe(false);
+    expect(plan.state.sections.map((s) => s.title)).toEqual(["Platform Services"]); // no fallback title built from entry titles
+  }, 600_000);
+
+  it("folds every split child back when fewer than three would remain named", async () => {
+    const es = clustersFixture();
+    const namer: Namer = async (c) => {
+      if (!c.parentTitle) return { title: "Platform Services", summary: "root" };
+      const cl = Number(c.members[0].title.split(" ")[1]);
+      if (cl >= 2) throw new Error("namer down"); // 6 of 8 children cannot be named; only 2 remain
+      return { title: `Named ${cl}`, summary: "s" };
+    };
+    const plan = await planRebuild({ domain: "wp", entries: es, namer });
+    expect(plan.rejected.filter((r) => r.reason === "child-has-no-subject" || r.reason === "too-few-children-left")).toHaveLength(8);
+    expect(plan.state.sections).toHaveLength(1);
+    expect(plan.state.assignment.size).toBe(es.length);
+  }, 600_000);
+
+  it("a parent with 13 clusters is cut to 12 children: the smallest split is undone, no entry is lost", async () => {
+    const r = rng(11);
+    const es: RebuildEntry[] = [];
+    for (let c = 0; c < 13; c++) for (let k = 0; k < (c === 5 ? 7 : 10); k++) {
+      const v = Array.from({ length: DIM }, (_, d) => (d === 0 ? 3 : 0) + (d === 3 + c ? 1.6 : 0) + (r() + r() + r() - 1.5) * 0.1);
+      const norm = Math.hypot(...v);
+      es.push({ id: `c${String(c).padStart(2, "0")}-${String(k).padStart(2, "0")}`, title: `cluster ${c} entry ${k}`, summary: `topic ${c}`, vector: v.map((x) => x / norm) });
+    }
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: unique });
+    const root = plan.state.sections.find((s) => s.parent === null)!;
+    expect(plan.state.sections.filter((s) => String(s.parent) === String(root.id))).toHaveLength(12);
+    expect(plan.rejected.some((x) => x.reason === "too-wide")).toBe(true);
+    expect(plan.state.assignment.size).toBe(es.length);
+    const direct = [...plan.state.assignment].filter(([id, s]) => id.startsWith("c05-") && s === String(root.id)).length;
+    expect(direct).toBe(7); // the 7-entry cluster went back to the parent as direct entries
+  }, 600_000);
+
+  it("insert-path repair uses the per-domain threshold: 12 entries in a 300-entry domain are not split", async () => {
+    const es = clustersFixture();
+    const pick = [0, 1, 2].flatMap((c) => es.filter((e) => clusterOf(e.id) === c).slice(0, 4));
+    const vec = new Map(pick.map((e) => [e.id, e.vector]));
+    const mk = (): RebuildState => ({
+      sections: [{ id: "sec-wp-root00", domain: "wp", parent: null, depth: 0, label: "r", title: "Root", centroid: [], memberCount: pick.length, childIds: [], summary: "", summaryHash: "", dirty: true, memberCountAtLastLabel: 0, created: "x", updated: "x" } as any],
+      assignment: new Map(pick.map((e) => [e.id, "sec-wp-root00"])),
+    });
+    expect(await repairPath(mk(), "sec-wp-root00", vec, "wp", undefined, { domainSize: 300 })).toEqual([]);
+    expect((await repairPath(mk(), "sec-wp-root00", vec, "wp")).length).toBe(3); // default threshold 10: 12 members are judged and split
+  }, 600_000);
+
+  it("judges a section at depth 2 (children land at depth 3) but not at depth 3", async () => {
+    const es = clustersFixture();
+    const base = (await planRebuild({ domain: "wp", entries: es, namer: unique })).state.sections[0];
+    const chainTo = (last: number) => [...Array(last + 1).keys()].map((d) => ({ ...structuredClone(base), id: `sec-wp-chain${d}`, depth: d, parent: d ? `sec-wp-chain${d - 1}` : null, childIds: d < last ? [`sec-wp-chain${d + 1}`] : [] })) as any[];
+    const at2 = await planRebuild({ domain: "wp", entries: es, namer: unique, start: { sections: chainTo(2), assignment: new Map(es.map((e) => [e.id, "sec-wp-chain2"])) } });
+    expect(at2.judged.find((j) => j.id === "sec-wp-chain2")!.outcome).toBe("split");
+    expect(Math.max(...at2.state.sections.map((s) => s.depth))).toBe(3);
   }, 600_000);
 
   it("never judges a section whose children would sit at or below maxDepth", async () => {

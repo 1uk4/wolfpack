@@ -652,6 +652,11 @@ export async function prepareGraduation(opts: {
   return { preview, item, all, lateFolded: late };
 }
 
+/** The date the work finished: when it last shipped, else its last update (items folded before `shipped` existed). */
+function finishDateOf(item: WorkItem): string {
+  return String(item.shipped ?? item.updated ?? item.created).slice(0, 10);
+}
+
 /**
  * Send a previewed graduation directly (an owner's own session; a wolf's worker token is refused by the hub, so wolves
  * file an approval request after prepareGraduation instead): prepare, write the contributions to the wolf's inbox,
@@ -684,10 +689,9 @@ export async function confirmGraduation(opts: {
   // A standing feature's entry is anchored to its item, stored as written and
   // grouped under the initiative's entry, ordered by the date the work was finished.
   const initiative = initiativeOf(item, all);
-  // Origin dates for the KB merge: when the work began and when it last changed (the model has no shipped date,
-  // so `updated` is the finish date). Without them the contribution would count as changed today.
+  // Origin dates for the KB merge: when the work began and when it finished. Without them the contribution would count as changed today.
   const sourceCreated = String(item.created).slice(0, 10);
-  const sourceUpdated = String(item.updated ?? item.created).slice(0, 10);
+  const sourceUpdated = finishDateOf(item);
   const sent: string[] = [];
   for (const c of preview.contributions) {
     let failure: string | undefined;

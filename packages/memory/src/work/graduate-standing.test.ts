@@ -63,7 +63,7 @@ describe("graduating a feature of a standing initiative", () => {
     dir = mkdtempSync(join(tmpdir(), "grad-standing-"));
     roots = { kbBase: join(dir, "kb"), opsRoot: join(dir, "ops"), denLocal: join(dir, "den") };
     init = w("initiative", "Area", null, { standing: true, successCriteria: "Keep going", stage: "in_build" });
-    f = w("feature", "Period one", init.id, { created: "2026-10-14", updated: "2026-10-20" });
+    f = w("feature", "Period one", init.id, { created: "2026-10-14", shipped: "2026-10-20", updated: "2026-10-23" });
     t1 = w("task", "Do a", f.id);
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -115,7 +115,7 @@ describe("graduating a feature of a standing initiative", () => {
     expect(feature).toMatch(new RegExp(`^group: ${init.id}$`, "m"));
     expect(feature).toMatch(/^group_date: 2026-10-20$/m); // when the work finished, not when it was created
     expect(feature).toMatch(/^source_created: 2026-10-14$/m);
-    expect(feature).toMatch(/^source_updated: 2026-10-20$/m);
+    expect(feature).toMatch(/^source_updated: 2026-10-20$/m); // the ship date, not the later update
     expect(feature).toMatch(/^change: merge$/m);
     const initiative = fileOf(init.id as string);
     expect(initiative).toMatch(new RegExp(`^anchor: ${init.id}$`, "m"));

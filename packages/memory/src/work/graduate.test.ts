@@ -302,6 +302,16 @@ describe("graduation: preview then confirm", () => {
     }
   });
 
+  it("source_updated is the ship date, not the later update a note made (the 'Shipped for graduation' note)", async () => {
+    const dated = { created: "2026-11-03", shipped: "2026-11-18", updated: "2026-11-21" };
+    const { client } = fakeClient([{ ...init, ...dated } as WorkItem, { ...f, ...dated } as WorkItem, t1, t2], { [f.id]: PLAN + RECORD });
+    const p = await previewGraduation({ client, engine: engineOf(answer(f.id)).engine, id: f.id as string, today: "2026-11-21" });
+    await confirmGraduation({ client, roots, wolf: "owner", preview: p, ship: async () => {} });
+    const files = readdirSync(inbox()).map((x) => readFileSync(join(inbox(), x), "utf8"));
+    expect(files.length).toBe(2);
+    for (const file of files) expect(file).toMatch(/^source_updated: 2026-11-18$/m);
+  });
+
   it("a forgotten initiative flag is recovered by slug or title; a missing initiative contribution is asked for once", async () => {
     const { client } = fakeClient([init, f, t1, t2], { [f.id]: PLAN });
     const noFlag = answer(f.id);

@@ -107,6 +107,16 @@ describe("hub work proxy", () => {
     expect((await call(OP_TOKEN, "POST", `/${id}/graduate`)).status).toBe(200);
   });
 
+  it("GET /work/:id carries the ship date the fold recorded, which a later note does not move (what graduation reads)", async () => {
+    const { call, A, hub } = await rig();
+    const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
+    const ev = (e: object) => JSON.stringify({ id, ...e }) + "\n";
+    appendFileSync(workLedgerFile(hubRoots(hub.dataDir)), ev({ type: "work.staged", at: "2026-11-18 09:00", to: "shipped" }) + ev({ type: "work.noted", at: "2026-11-21 09:00", text: "Shipped for graduation: all tasks complete." }));
+    const got = (await (await call(A, "GET", `/${id}`)).json()) as { item: { shipped?: string; updated: string } };
+    expect(got.item.shipped).toBe("2026-11-18");
+    expect(got.item.updated).toBe("2026-11-21");
+  });
+
   it("GET /work/:id carries an etag; PATCH with a stale If-Match is 409 conflict naming the current etag, a matching or absent one is applied", async () => {
     const { call, hub, A } = await rig();
     const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;

@@ -97,6 +97,8 @@ export const WorkItem = z.object({
   log: z.array(WorkLogEntry).default([]),
   created: IsoDate,
   updated: IsoDate,
+  /** Date of the last transition into `shipped` (a later move away does not clear it); absent until the item ships. */
+  shipped: IsoDate.optional(),
 });
 export type WorkItem = z.infer<typeof WorkItem>;
 
@@ -221,6 +223,7 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
           log: [],
           created: dateOf(e.at),
           updated: dateOf(e.at),
+          ...(e.stage === "shipped" ? { shipped: dateOf(e.at) } : {}),
         })
       );
       continue;
@@ -233,6 +236,7 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
     switch (e.type) {
       case "work.staged":
         next.stage = e.to;
+        if (e.to === "shipped") next.shipped = dateOf(e.at);
         break;
       case "work.assigned":
         next.assignee = e.assignee;

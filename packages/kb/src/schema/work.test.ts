@@ -94,6 +94,26 @@ describe("foldWork", () => {
     expect(foldWork(orphan).size).toBe(0);
   });
 
+  it("an item created directly in shipped is shipped on its creation date", () => {
+    const born = { ...events[1], at: "2026-11-05 08:00", stage: "shipped" } as WorkEvent;
+    expect(projectWork([born], task)!.shipped).toBe("2026-11-05");
+  });
+
+  it("records the date of the last transition into shipped, which later notes and stages do not move", () => {
+    const more: WorkEvent[] = [
+      { type: "work.staged", id: task, at: "2026-11-10 09:00", to: "shipped" },
+      { type: "work.staged", id: task, at: "2026-11-12 09:00", to: "in_build" },
+      { type: "work.staged", id: task, at: "2026-11-18 09:00", to: "shipped" },
+      { type: "work.noted", id: task, at: "2026-11-21 09:00", text: "Shipped for graduation: all tasks complete." },
+      { type: "work.staged", id: task, at: "2026-11-22 09:00", to: "archived" },
+    ];
+    const t = projectWork([...events, ...more.slice(0, 4)], task)!;
+    expect(t.shipped).toBe("2026-11-18");
+    expect(t.updated).toBe("2026-11-21");
+    expect(projectWork([...events, ...more], task)!.shipped).toBe("2026-11-18");
+    expect(projectWork(events, task)!.shipped).toBeUndefined();
+  });
+
   it("projectWork returns one item or null", () => {
     expect(projectWork(events, task)?.title).toBe("wire referral codes");
     expect(projectWork(events, id("work-snapjack-NoSuch0"))).toBeNull();

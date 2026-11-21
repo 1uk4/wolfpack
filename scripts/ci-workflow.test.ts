@@ -83,6 +83,16 @@ describe("ci.yml uses pnpm", () => {
 		expect(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts["check:lockfiles"]).toBe("node scripts/check-lockfiles.mjs .");
 	});
 
+	it("the checks job lints the console and the final fail step accounts for it", () => {
+		const steps = effective(ci.jobs.checks);
+		const lint = steps.find((s) => s.run && /pnpm --filter @wolfpack\/console lint\b/.test(s.run)) as (Step & { "continue-on-error"?: boolean }) | undefined;
+		expect(lint, "console lint step").toBeDefined();
+		expect(lint!["continue-on-error"]).toBe(true);
+		const fail = steps.find((s) => s.name === "fail if any check failed")!;
+		expect(fail.env?.LINT).toBe(`\${{ steps.${lint!.id}.outcome }}`);
+		expect(fail.run).toMatch(/\$LINT" != success/);
+	});
+
 	it("every installing job gets its setup from the one composite action (jobs enumerated from the YAML)", () => {
 		expect(installers).toEqual(expect.arrayContaining(["checks", "vitest", "console-tests", "eval"]));
 		const bad = installers.filter((n) => !(ci.jobs[n].steps ?? []).some((s) => s.uses === ACTION));

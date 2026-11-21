@@ -82,7 +82,7 @@ jobs:
   # verify was one serialized job (install+build, tsc, vitest, console tests). It is now three parallel jobs (checks, vitest x2 shards, console-tests) behind the single `ci` aggregate.
   # Each job repeats the same setup (install, test env, tsc --build of the affected projects: the tests import workspace packages from dist).
   checks:
-    # lockfile guard + tsc --build (typecheck of the affected projects). There is no lint step today, so none is added.
+    # lockfile guard + console lint + tsc --build (typecheck of the affected projects). No other workspace has a real lint script (they echo "no lint configured").
     needs: detect
     if: needs.detect.outputs.any == 'true' && needs.detect.outputs.coveredByPr != 'true'
     runs-on: ubuntu-24.04
@@ -100,6 +100,10 @@ jobs:
         id: lock
         continue-on-error: true
         run: pnpm check:lockfiles
+      - name: lint (console, eslint)
+        id: lint
+        continue-on-error: true
+        run: pnpm --filter @wolfpack/console lint
       - name: tsc --build (affected projects)
         id: tsc
         continue-on-error: true
@@ -111,10 +115,11 @@ jobs:
         if: always()
         env:
           LOCK: ${{ steps.lock.outcome }}
+          LINT: ${{ steps.lint.outcome }}
           TSC: ${{ steps.tsc.outcome }}
         run: |
-          echo "lockfile guard: $LOCK; tsc --build: $TSC"
-          if [ "$LOCK" != success ] || [ "$TSC" != success ]; then exit 1; fi
+          echo "lockfile guard: $LOCK; console lint: $LINT; tsc --build: $TSC"
+          if [ "$LOCK" != success ] || [ "$LINT" != success ] || [ "$TSC" != success ]; then exit 1; fi
 
   vitest:
     # same affected-packages command as the old verify job plus vitest's --shard, applied after the file filter, so the shards together run every file once

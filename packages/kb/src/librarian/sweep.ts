@@ -29,10 +29,12 @@ import { anchorIndex, anchorOf, groupOf, oldHubFor } from "./anchors.js";
 import { syncDelivered } from "./groups.js";
 import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
-import { DEFAULT_RULES } from "./tree-rules.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
-import { resolveAliasedEntry, survivorOf } from "./alias.js";
+import { survivorOf } from "./alias.js";
+import { lookupAlias, applyAliasRoute } from "./sweep-alias.js";
+import { maxMergeTargetCharsFor, mergeSizeLimit, exemptFromSizeGuard, notifyKeptOversize, shouldRoutePlacement } from "./sweep-size.js";
+import { exceedsSplitAbove, notifySplitDue } from "./sweep-replace.js";
 import { produceEntry, produceVerbatim, type ProduceEntryInput } from "./produce.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
@@ -366,7 +368,7 @@ export async function oversizedParents(roots: KbRoots, sections: Section[], timi
       const sec = String(e.fields.section ?? "");
       if (sec && withKids.has(sec)) counts.set(sec, (counts.get(sec) ?? 0) + 1);
     }
-    for (const [id, n] of [...counts].sort()) if (n > DEFAULT_RULES.splitAbove) out.push(`${id} (${n})`);
+    for (const [id, n] of [...counts].sort()) if (exceedsSplitAbove(n)) out.push(`${id} (${n})`);
   }
   return out;
 }
@@ -438,7 +440,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   let sections: Section[] = timed("sections", () => readSections(roots));
   {
     const big = await oversizedParents(roots, sections, T);
-    if (big.length) ctx.notify?.(`sweep: ${big.length} parent section(s) hold more than ${DEFAULT_RULES.splitAbove} direct entries (${big.join(", ")}); a rebuild is due`);
+    notifySplitDue(ctx.notify, big);
   }
 
   const batch: KbEvent[] = [];
@@ -473,9 +475,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // The contribution gets the whole run budget. The merge threshold derives from
   // it: budget * mergeBudgetFraction / msPerMergeChar (600s -> 24,000 chars).
   const itemBudgetMs = budgetMs;
-  const maxMergeTargetChars = Math.floor(
-    (itemBudgetMs * SWEEP.mergeBudgetFraction) / SWEEP.msPerMergeChar
-  );
+  const maxMergeTargetChars = maxMergeTargetCharsFor(itemBudgetMs);
 
   for (const c of contributions) {
     if (ctx.signal?.aborted) {
@@ -577,28 +577,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       let targetId: string | undefined;
       // An alias is an explicit routing decision: the entry is looked up in ITS
       // OWN domain, even when the contribution's domain hint differs.
-      let aliasedFrom: string | undefined;
-      let aliasMissing: string | undefined;
-      if (!c.anchor) {
-        for (const topic of reg.values()) {
-          const alias = topic.aliases.find((a) => a.wolf === c.from && a.denTopicId === c.denTopicId);
-          if (!alias) continue;
-          aliasedFrom = topic.entries[0];
-          const hit = aliasedFrom ? resolveAliasedEntry(roots, log, aliasedFrom, topic.domain || domain) : null;
-          if (hit) {
-            if (hit.followedFrom) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → alias ${hit.followedFrom} was retired, following it to ${hit.id}`);
-            if (hit.domain !== domain) {
-              ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → alias ${hit.id} is in domain ${hit.domain}, contribution says ${domain}: merging into the alias`);
-              routing.domainMismatch = { hint: domain, entry: hit.domain };
-              domain = hit.domain;
-            }
-            aliasedFrom = hit.id;
-          } else {
-            aliasMissing = aliasedFrom;
-          }
-          break;
-        }
-      }
+      const aliasLookup = lookupAlias(roots, log, reg, c, domain, routing, ctx.notify);
+      const { aliasedFrom, aliasMissing } = aliasLookup;
+      domain = aliasLookup.domain;
       // A decision another entry supersedes is history: contributions go to the
       // newest decision in the chain, never to the old one.
       const superseded = supersededIds(roots, domain);
@@ -649,17 +630,13 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           targetId = named;
           routing.route = "alias";
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${named} (update diff)`);
-        } else if (aliasedFrom && !aliasMissing) {
-          targetId = head(aliasedFrom);
-          routing.route = "alias";
-        } else if (aliasMissing) {
-          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry, WARNING: aliased entry ${aliasMissing} has no file and no survivor`);
-          routing.warning = `aliased entry ${aliasMissing} has no file and no survivor`;
+        } else if (aliasedFrom || aliasMissing) {
+          targetId = applyAliasRoute(aliasLookup, c, routing, head, ctx.notify) ?? targetId;
         }
       }
       // The size limit also keeps an oversized entry out of the candidates:
       // the merge rewrites the whole entry.
-      const sizeLimit = Number(process.env.KB_MAX_MERGE_TARGET_CHARS) || maxMergeTargetChars;
+      const sizeLimit = mergeSizeLimit(maxMergeTargetChars);
       if (!targetId && !c.anchor) {
         const ranked: Array<{ id: string; score: number; title: string; summary: string }> = [];
         for (const e of entryVectors) {
@@ -738,7 +715,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // (Similarity candidates were already filtered by size above; this
       // catches an alias match.)
       // (A verbatim anchored entry is replaced whole, not merged: no guard.)
-      if (targetId && !(c.anchor && c.verbatim)) {
+      if (targetId && !exemptFromSizeGuard(c)) {
         const size = readEntryMarkdown(roots, domain, targetId)?.length ?? 0;
         if (size > sizeLimit) {
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (target ${targetId} is ${size} chars, budget allows ${sizeLimit})`);
@@ -901,7 +878,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       const entry = withSourceProperties(produced, c.source, existingMarkdown);
       if (lint?.retried) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → produce retried for lint: ${lint.before.map((f) => f.code).join(",")}`);
       if (lint?.sizePass) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → size pass on ${entry.id}`);
-      if (lint?.oversizeChars) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → kept oversize: ${entry.id} ${lint.oversizeChars}`);
+      notifyKeptOversize(ctx.notify, c, entry.id, lint?.oversizeChars);
       if (lint?.after.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entry.id} kept with lint findings: ${lint.after.map((f) => f.code).join(",")}`);
       if (lint?.strippedLinks?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → stripped ${lint.strippedLinks.length} link(s) to no entry from ${entry.id}: ${lint.strippedLinks.join(", ")}`);
       if (deduped?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → collapsed ${deduped.length} duplicate paragraph/line(s) in ${entry.id}`);
@@ -993,7 +970,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       return { entry, action, domain, overflow, route: routing.route, decision };
       };
 
-      const placed = await place(c, domain, routing, !c.denTopicId.includes("~split-"));
+      const placed = await place(c, domain, routing, shouldRoutePlacement(c));
       if (!placed) return;
       const { entry, action } = placed;
       // A second subject the produce step split out: committed after the main

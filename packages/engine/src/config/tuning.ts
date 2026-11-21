@@ -50,21 +50,7 @@ export const SWEEP = {
   nearMissScore: 0.8,
   /** Candidates (best first) shown to the LLM subject check. */
   mergeCandidates: 3,
-  /**
-   * Estimated milliseconds per character of LLM output during merge operations.
-   * Used to compute the merge threshold from the run budget.
-   * Calibrate from observed sweep times (12KB entry merged in 145s = ~12ms/char).
-   */
-  msPerMergeChar: 15,
-  
-  /**
-   * Fraction of the run budget allocated to the merge LLM call.
-   * The rest covers embedding, routing, and overhead.
-   * maxMergeChars = (runBudgetMs * mergeBudgetFraction) / msPerMergeChar
-   */
-  mergeBudgetFraction: 0.6,
-  
-  /** Failed attempts (across ticks) before a contribution is parked. */
+    /** Failed attempts (across ticks) before a contribution is parked. */
   maxAttempts: 3,
   /** Time budget for a tick's one contribution: past it the item is retried
    *  once, then parked, so a tick always ends (and writes its ledger).

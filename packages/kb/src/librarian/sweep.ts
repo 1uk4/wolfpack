@@ -482,8 +482,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // registry and git commit are done by then).
   const itemEvents: SweepEvent[] = [];
 
-  // The contribution gets the whole run budget. The merge threshold derives from
-  // it: budget * mergeBudgetFraction / msPerMergeChar (600s -> 24,000 chars).
+  // The contribution gets the whole run budget. The merge target limit is a fixed 2x BODY_CAP (sweep-size.ts).
   const itemBudgetMs = budgetMs;
   const maxMergeTargetChars = maxMergeTargetCharsFor();
 

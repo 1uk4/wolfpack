@@ -34,7 +34,7 @@ import { createOracles } from "./oracles.js";
 import { survivorOf } from "./alias.js";
 import { lookupAlias, applyAliasRoute } from "./sweep-alias.js";
 import { maxMergeTargetCharsFor, mergeSizeLimit, exemptFromSizeGuard, notifyKeptOversize, shouldRoutePlacement } from "./sweep-size.js";
-import { exceedsSplitAbove, notifySplitDue, replaceMisfits, type SplitDueHook } from "./sweep-replace.js";
+import { exceedsSplitAbove, notifySplitDue, replaceMisfits, type OversizeSection, type SplitDueHook } from "./sweep-replace.js";
 import { produceEntry, produceVerbatim, type ProduceEntryInput } from "./produce.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
@@ -104,7 +104,7 @@ export interface SweepContext {
   timings?: Timings;
   /** Host hook: a domain has parent sections over the split threshold. Called once per domain per sweep, never awaited; a throw is logged and ignored. */
   onSplitDue?: SplitDueHook;
-  /** Re-placement of misfit entries (replaceMisfits) only logs the planned moves. */
+  /** Re-placement of misfit entries (replaceMisfits): default TRUE = only log the planned moves; false writes them. */
   replaceDryRun?: boolean;
 }
 
@@ -353,9 +353,9 @@ export function emptyResult(): SweepResult {
  * stay-in-parent rule keeps leftovers there and the sweep never reorganises, so this is the signal a rebuild is due.
  * Called once per sweep. Grouped entries follow their holder and are not counted.
  */
-export async function oversizedParents(roots: KbRoots, sections: Section[], timings?: Timings): Promise<string[]> {
+export async function oversizedParents(roots: KbRoots, sections: Section[], timings?: Timings): Promise<OversizeSection[]> {
   let seen = 0;
-  const out: string[] = [];
+  const out: OversizeSection[] = [];
   for (const domain of new Set(sections.map((s) => String(s.domain)))) {
     const withKids = new Set(sections.filter((s) => String(s.domain) === domain && s.parent).map((s) => String(s.parent)));
     if (!withKids.size) continue;
@@ -372,7 +372,7 @@ export async function oversizedParents(roots: KbRoots, sections: Section[], timi
       const sec = String(e.fields.section ?? "");
       if (sec && withKids.has(sec)) counts.set(sec, (counts.get(sec) ?? 0) + 1);
     }
-    for (const [id, n] of [...counts].sort()) if (exceedsSplitAbove(n)) out.push(`${id} (${n})`);
+    for (const [id, n] of [...counts].sort()) if (exceedsSplitAbove(n)) out.push({ id, domain, count: n });
   }
   return out;
 }
@@ -444,7 +444,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   let sections: Section[] = timed("sections", () => readSections(roots));
   {
     const big = await oversizedParents(roots, sections, T);
-    notifySplitDue(ctx.notify, big, ctx.onSplitDue, sections);
+    void notifySplitDue(ctx.notify, big, ctx.onSplitDue);
   }
 
   const batch: KbEvent[] = [];
@@ -1090,7 +1090,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // ── RE-PLACEMENT (end of the placement phase): re-home misfit entries, bounded; never fails the sweep ──
   if (touchedDomains.size > 0 && !ctx.signal?.aborted) {
     try {
-      await replaceMisfits({ roots, sections, domains: [...touchedDomains], loadEntryVectors: ctx.loadEntryVectors, writer: w, notify: ctx.notify, dryRun: ctx.replaceDryRun });
+      await replaceMisfits({ roots, sections, domains: [...touchedDomains], loadEntryVectors: ctx.loadEntryVectors, writer: w, notify: ctx.notify, dryRun: ctx.replaceDryRun !== false, ledger: log });
     } catch (err) {
       ctx.notify?.(`sweep: re-placement failed (skipped): ${cleanError(err)}`);
     }

@@ -56,6 +56,8 @@ export interface SweepTickOptions {
   onEvent?: (event: SweepEvent) => void;
   /** Host hook for sections over the split threshold (see SweepContext.onSplitDue). */
   onSplitDue?: SweepContext["onSplitDue"];
+  /** Re-placement of misfit entries: default true = dry run (log planned moves only); false writes them. */
+  replaceDryRun?: boolean;
   /** Test seam: replaces the tick's embedder (default: the KB's cached embedder). */
   getEmbedder?: () => CachedEmbedder;
   /**
@@ -269,7 +271,7 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
 
   // Past the run budget plus slack the sweep is aborted (it stops at the next item boundary) and the tick waits for it to end.
   const swept = await sweepWithin(opts.outerBudgetMs ?? SWEEP.runBudgetMs + SWEEP.embedTimeoutMs * 4, { graceMs: opts.abortGraceMs ?? ABORT_GRACE_MS, repeatMs: opts.abortRepeatMs ?? ABORT_REPEAT_MS, capMs: opts.abortCapMs ?? ABORT_CAP_MS, warn: (m) => void opts.alert?.(m), onStuck: opts.onSweepStuck }, (signal) =>
-    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs, onEvent: opts.onEvent, onSplitDue: opts.onSplitDue, lane: opts.lane, writer: opts.writer, timings, readLog, signal }),
+    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs, onEvent: opts.onEvent, onSplitDue: opts.onSplitDue, replaceDryRun: opts.replaceDryRun, lane: opts.lane, writer: opts.writer, timings, readLog, signal }),
   );
 
   let reorged: ReorgResult | undefined;

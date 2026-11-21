@@ -274,14 +274,24 @@ describe("secrets", () => {
 		expect(fs.existsSync(path.join(den, "vehicles/notes.dat"))).toBe(true);
 	});
 
-	it("fails loudly when the built scanner is stale or out of date", async () => {
+	it("fails loudly when the built scanner is missing or out of date", async () => {
 		const root = path.join(tmp, "repo");
 		put(root, "packages/memory/dist/work/secrets.js", "export const scanSecrets = () => ({ text: '', findings: [] });");
 		await expect(loadScanner(root)).rejects.toThrow(/canary/);
-		put(root, "packages/memory/src/work/secrets.ts", "// newer");
-		fs.utimesSync(path.join(root, "packages/memory/dist/work/secrets.js"), 1, 1);
-		await expect(loadScanner(root)).rejects.toThrow(/stale/);
 		await expect(loadScanner(path.join(tmp, "nope"))).rejects.toThrow(/not built/);
+	});
+
+	it("loads a live build whose mtime is older than src (cache restore)", async () => {
+		const root = path.join(tmp, "cached");
+		put(
+			root,
+			"packages/memory/dist/work/secrets.js",
+			"export const scanSecrets = (t) => ({ text: t, findings: /[0-9]+:A{35}|sk-a{24}|BEGIN PRIVATE/.test(t) ? [{ kind: 'x', count: 1 }] : [] });",
+		);
+		put(root, "packages/memory/src/work/secrets.ts", "// checked out later");
+		fs.utimesSync(path.join(root, "packages/memory/dist/work/secrets.js"), 1, 1);
+		const scan = await loadScanner(root);
+		expect(scan(`sk-${"a".repeat(24)}`).findings.length).toBe(1);
 	});
 
 	it("the built scanner agrees with src on the Telegram token", async () => {

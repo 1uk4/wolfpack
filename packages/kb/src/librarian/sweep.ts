@@ -886,7 +886,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       const entry = withSourceProperties(produced, c.source, existingMarkdown);
       if (lint?.retried) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → produce retried for lint: ${lint.before.map((f) => f.code).join(",")}`);
       if (lint?.sizePass) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → size pass on ${entry.id}`);
-      notifyKeptOversize(ctx.notify, c, entry.id, lint?.oversizeChars);
+      for (const part of notifyKeptOversize(ctx.notify, c, entry.id, lint?.oversizeChars, entry.detail)) requeueOverflow(roots, part, lane);
       if (lint?.after.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entry.id} kept with lint findings: ${lint.after.map((f) => f.code).join(",")}`);
       if (lint?.strippedLinks?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → stripped ${lint.strippedLinks.length} link(s) to no entry from ${entry.id}: ${lint.strippedLinks.join(", ")}`);
       if (deduped?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → collapsed ${deduped.length} duplicate paragraph/line(s) in ${entry.id}`);

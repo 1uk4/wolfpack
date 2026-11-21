@@ -9,7 +9,8 @@ import { type DerivedFacts, LlmOpinion, assembleEntry, DomainId, EntryId, IsoDat
 import { contentHash as hashContent } from "../shared/hash.js";
 import { anchorOf, groupDateOf, groupOf } from "./anchors.js";
 import { entryHashText } from "./entry-hash.js";
-import { existingRelations } from "./preserve.js";
+import { addCitedHistory, existingRelations, preserveHistory } from "./preserve.js";
+import { ANCHOR_BODY_CAP, foldHistory } from "./sweep-size.js";
 import type { ProduceEntryInput, ProduceEntryResult } from "./produce.js";
 
 
@@ -30,21 +31,35 @@ export function verbatimParts(c: Pick<ParsedContribution, "body" | "summary" | "
  * contribution to the anchor's existing entry replaces its whole text and keeps
  * its identity (id, anchor, group, creation date, relations).
  */
-export function produceVerbatim(input: ProduceEntryInput): ProduceEntryResult {
+export function produceVerbatim(input: ProduceEntryInput): ProduceEntryResult & { historyChild?: { id: string; title: string; summary: string; body: string } } {
   const { contribution, domain, section, placement, entryId, existingMarkdown, existingCreated, resolve } = input;
   const previous = existingMarkdown;
   const action: ProduceEntryResult["action"] = entryId ? "merge" : "create";
   const parts = verbatimParts(contribution);
+  const id = EntryId.parse(entryId ?? mkEntryId(domain));
+  const timestamp = IsoDate.parse(now().slice(0, 10));
+
+  // Same guards as produceEntry: the entry's History lines are never lost, graduated work's cited lines always land.
+  let detail = parts.detail;
+  if (entryId && previous) detail = preserveHistory(previous, detail).detail;
+  detail = addCitedHistory(detail, contribution.body ?? "").detail;
+
+  // Over the anchor cap: the History moves to a child entry (never an anchor) and the parent keeps a pointer.
+  // Still over after the fold: kept as authored and reported as oversize; anchors are never auto-split.
+  let historyChild: { id: string; title: string; summary: string; body: string } | undefined;
+  if (detail.length > ANCHOR_BODY_CAP) {
+    const folded = foldHistory(detail, { parentTitle: parts.title, childId: `${id}~history`, date: timestamp });
+    detail = folded.detail;
+    historyChild = folded.child;
+  }
+  const oversizeChars = detail.length > ANCHOR_BODY_CAP ? detail.length : undefined;
   const opinion = LlmOpinion.parse({
     title: parts.title,
     kind: "fact",
     summary: parts.summary,
-    detail: parts.detail,
+    detail,
     confidence: "high",
   });
-
-  const id = EntryId.parse(entryId ?? mkEntryId(domain));
-  const timestamp = IsoDate.parse(now().slice(0, 10));
   const kept = IsoDate.safeParse(
     existingCreated ?? (previous ? String(parseFrontmatter(previous).fields.created ?? "") : "")
   );
@@ -74,5 +89,10 @@ export function produceVerbatim(input: ProduceEntryInput): ProduceEntryResult {
       return { entry, action, unchanged: true };
     }
   }
-  return { entry, action };
+  return {
+    entry,
+    action,
+    ...(historyChild ? { historyChild } : {}),
+    ...(oversizeChars ? { lint: { retried: false, before: [], after: [], oversizeChars } } : {}),
+  };
 }

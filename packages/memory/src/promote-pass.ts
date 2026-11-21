@@ -11,11 +11,46 @@
  * confirmed it, inactive 8 active hours. A still-active topic stays local even when promoted. Nothing closes threads.
  */
 import { existsSync, mkdirSync, renameSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { activeHoursSince } from "./active-hours.js";
 import { readPromoteState, updateTopicState } from "./promote-state.js";
 import { recordReject, recordRouting, routingHint } from "./routing-index.js";
 import { readTopics, writeTopic, type TopicFile } from "./session/memory.js";
+import { readDenTopics } from "./den.js";
+
+/**
+ * The topics a promote pass works on. The den topic files are the source of truth (merge-*, new-* and hand-edited
+ * ones included): their title, summary and body win. The session copy only lends metadata (keep_local, sources,
+ * activity clock, routing hint, state). A session topic with no den file yet is still included. A den topic marked
+ * `promotable: false` is held back and not promoted.
+ */
+function promoteSources(den: string, root: string): TopicFile[] {
+  const session = new Map(readTopics(root).map((t) => [t.id, t]));
+  const out: TopicFile[] = [];
+  const seen = new Set<string>();
+  const state = readPromoteState(den).topics;
+  for (const d of readDenTopics(den)) {
+    seen.add(d.id);
+    if (!d.promotable) continue;
+    const s = session.get(d.id);
+    // A den-only topic has no session file for retireTopic to move: its retired mark (or its own keep_local flag) is what stops it.
+    if (!s && (state[d.id]?.retiredAt || state[d.id]?.state === "parked")) continue; // parked den-only: its state lives in promote state
+    out.push({
+      ...(s ?? {}),
+      id: d.id,
+      title: d.title,
+      summary: d.summary,
+      updated: d.updated || s?.updated || "",
+      body: d.body,
+      filename: s?.filename ?? basename(d.filePath),
+      ...(s ? {} : { ...(d.domain ? { domain: d.domain } : {}), ...(d.keepLocal ? { keepLocal: true } : {}) }),
+      ...(d.work ? { work: d.work } : {}),
+      ...(d.feature ? { feature: d.feature } : {}),
+    });
+  }
+  for (const s of session.values()) if (!seen.has(s.id)) out.push(s);
+  return out;
+}
 
 export const QUIET_ACTIVE_HOURS = 8;
 export const RETIRED_DIR = "retired";
@@ -86,7 +121,7 @@ export function retireTopic(root: string, t: TopicFile, now: Date): void {
   const dest = join(root, RETIRED_DIR);
   mkdirSync(dest, { recursive: true });
   const target = existsSync(join(dest, t.filename)) ? join(dest, t.filename.replace(/\.md$/, `-${now.getTime().toString(36)}.md`)) : join(dest, t.filename);
-  renameSync(join(root, t.filename), target);
+  if (existsSync(join(root, t.filename))) renameSync(join(root, t.filename), target); // a den-only topic has no session file
 }
 
 export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
@@ -94,7 +129,9 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
   const now = opts.now ?? new Date();
   const result: PassResult = { promoted: [], retired: [], parked: [], held: [] };
 
-  const chosen = readTopics(root).filter((t) => selects(den, t, trigger));
+  // Listed once, before promote: a topic promote marks promotable:false must still reach the held branch below.
+  const sources = promoteSources(den, root);
+  const chosen = sources.filter((t) => selects(den, t, trigger));
   if (chosen.length) {
     // A routing hint is resolved now; a hint whose entry is gone is dropped from the topic.
     const targets: Record<string, string> = {};
@@ -109,7 +146,7 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
   }
 
   const chosenIds = new Set(chosen.map((t) => t.id));
-  for (const t of readTopics(root)) {
+  for (const t of sources) {
     if (chosenIds.has(t.id)) {
       const out = opts.outcomeOf(t);
       if (out.kind === "create" || out.kind === "merge") {
@@ -122,7 +159,8 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
         result.retired.push(t.id);
         continue;
       } else if (out.kind === "parked") {
-        if (t.state !== "parked") writeTopic(root, { ...t, updated: t.updated, lastNote: t.lastNote, keepLocal: t.keepLocal, state: "parked" });
+        // A den-only topic has no session file: its parked mark lives in promote state only (below), never a new session file.
+        if (t.state !== "parked" && existsSync(join(root, t.filename))) writeTopic(root, { ...t, updated: t.updated, lastNote: t.lastNote, keepLocal: t.keepLocal, state: "parked" });
         updateTopicState(den, t.id, { state: "parked" });
         result.parked.push(t.id);
         continue;

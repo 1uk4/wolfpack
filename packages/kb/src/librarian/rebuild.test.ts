@@ -498,7 +498,9 @@ describe("id continuity and label re-ask", () => {
     expect(forbiddenSeen.length).toBeGreaterThanOrEqual(2);
     expect(forbiddenSeen[0]).toContain("Console Chat Tools");
     expect(plan.rejected.filter((r) => r.reason === "child-label-restates-parent")).toHaveLength(1);
-    expect(plan.splitChildren.size).toBe(2); // two kept, one folded back
+    // one child folded back for restating; the two left are fewer than minCoherentGroups (3), so they fold too
+    expect(plan.rejected.filter((r) => r.reason === "too-few-children-left")).toHaveLength(2);
+    expect(plan.splitChildren.size).toBe(0);
     expect(plan.state.assignment.size).toBe(28);
     for (const sid of plan.state.assignment.values()) expect(plan.state.sections.some((s) => String(s.id) === sid)).toBe(true);
   });

@@ -332,7 +332,8 @@ describe("hub curator: failures", () => {
     writeSections(hubRoots(dir), [sec("sec-wp-aaaaaa", null, ["sec-wp-bbbbbb"]), sec("sec-wp-bbbbbb", "sec-wp-aaaaaa", [])] as never);
     const eDir = join(dir, "kb", "base", "domains", "wp", "entries");
     mkdirSync(eDir, { recursive: true });
-    for (let i = 0; i < 11; i++) writeFileSync(join(eDir, `kb-wp-seed${String(i).padStart(3, "0")}.md`), `---\nid: kb-wp-seed${String(i).padStart(3, "0")}\ndomain: wp\nsection: sec-wp-aaaaaa\n---\nseed\n`);
+    // splitThresholdFor(13 entries) = 12: 13 direct entries under sec-wp-aaaaaa is over the domain-scaled threshold
+    for (let i = 0; i < 13; i++) writeFileSync(join(eDir, `kb-wp-seed${String(i).padStart(3, "0")}.md`), `---\nid: kb-wp-seed${String(i).padStart(3, "0")}\ndomain: wp\nsection: sec-wp-aaaaaa\n---\nseed\n`);
   };
 
   it("onSplitDue is NOT fired when the tick throws mid-sweep", async () => {

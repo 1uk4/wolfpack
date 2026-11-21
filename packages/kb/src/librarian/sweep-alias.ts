@@ -2,6 +2,7 @@
  * sweep-alias — the alias route, split out of sweep.ts: a den topic already bound to an entry in the registry.
  */
 import type { KbEvent, KbRoots, ParsedContribution } from "../shared/index.js";
+import { contentHash } from "../shared/hash.js";
 import { resolveAliasedEntry } from "./alias.js";
 import type { foldRegistry } from "./ledger.js";
 import type { RoutingRecord } from "./sweep.js";
@@ -11,11 +12,17 @@ export function normalizeClaim(body: string): string {
   return body.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+/** The two hashes the aliased event records: normalized body, and normalized body with digits stripped. No raw body is stored. */
+export function claimHashes(body: string): { bodyHash: string; bodyShapeHash: string } {
+  const n = normalizeClaim(body);
+  return { bodyHash: contentHash(n), bodyShapeHash: contentHash(n.replace(/\d+/g, "")) };
+}
+
 /**
  * Claim-level dedupe for the alias route (seenHashes only catches byte-identical bodies).
  *  - "skip": the normalized body equals the one this den topic last merged: nothing new, ledger reason 'no-new-claim'.
  *  - "update-in-place": equal once digits are stripped too: the same claim with new figures; merge once, replacing figures.
- *  - "merge": anything else, or no prior body recorded (records written before lastBody existed).
+ *  - "merge": anything else, or no prior hashes recorded (records written before claim hashes existed, or by a backfill).
  */
 export type AliasClaim = "skip" | "update-in-place" | "merge";
 
@@ -26,11 +33,10 @@ export function aliasClaim(
   for (const topic of reg.values()) {
     const alias = topic.aliases.find((a) => a.wolf === c.from && a.denTopicId === c.denTopicId);
     if (!alias) continue;
-    if (!alias.lastBody) return "merge";
-    const a = normalizeClaim(c.body);
-    const b = normalizeClaim(alias.lastBody);
-    if (a === b) return "skip";
-    if (a.replace(/\d+/g, "") === b.replace(/\d+/g, "")) return "update-in-place";
+    if (!alias.bodyHash || !alias.bodyShapeHash) return "merge";
+    const h = claimHashes(c.body);
+    if (h.bodyHash === alias.bodyHash) return "skip";
+    if (h.bodyShapeHash === alias.bodyShapeHash) return "update-in-place";
     return "merge";
   }
   return "merge";

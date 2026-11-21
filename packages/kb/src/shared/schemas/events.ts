@@ -124,8 +124,10 @@ export const KbEventSchema = z.discriminatedUnion("t", [
     denTopicId: z.string(),
     canonicalId: z.string(),
     hash: z.string(),
-    /** The contribution body this alias last merged (claim-level dedupe); absent on old events. */
-    body: z.string().optional(),
+    /** Claim-level dedupe: hash of the merged body, normalized (lowercase, whitespace collapsed). Absent on old events. */
+    bodyHash: z.string().optional(),
+    /** Same, with digits stripped too: equal shape and different bodyHash means the same claim with new figures. */
+    bodyShapeHash: z.string().optional(),
   }),
   z.object({
     ...base,

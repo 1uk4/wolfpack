@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { sweep } from "./sweep.js";
-import { aliasClaim } from "./sweep-alias.js";
+import { aliasClaim, claimHashes } from "./sweep-alias.js";
 import { readLedger, appendLedger, foldRegistry } from "./ledger.js";
 import { ev } from "../shared/index.js";
 import type { KbRoots } from "../shared/index.js";
@@ -240,6 +240,29 @@ describe("sweep: missing alias target creates fresh entry", () => {
     expect(receiptContent).toContain("outcome: merge");
     expect(receiptContent).toContain(existingEntryId);
   });
+  it("an identical alias re-send is rejected with no-new-claim: receipt written, file processed, no aliased event, no produce call", async () => {
+    const id = "kb-wp-CLAIM01";
+    writeFileSync(join(entries(), `${id}.md`), `---\nid: ${id}\nsection: sec-wp-bbbbbb\ntitle: Lint\n---\n\nLint content.\n`);
+    appendLedger(roots, [ev.entryWritten(id, id, "create"), ev.aliased("w1", "t9", id, "h0")]);
+    const vec = [{ entryId: id, domain: "wp", vector: [0.5, 0.5, 0.0] }];
+
+    drop("t9", "aaa111", "react-hooks lint: 42 findings");
+    expect((await run(vec)).merged).toBe(1); // no hashes recorded yet: merges, and records them
+    const produces = () => (engine.call as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === "produce").length;
+    const before = { produce: produces(), aliased: readLedger(roots).filter((e) => e.t === "aliased").length };
+
+    drop("t9", "bbb222", "React-hooks  lint: 42 findings");
+    const r = await run(vec);
+    expect(r).toMatchObject({ merged: 0, created: 0, rejected: 1, errors: 0 });
+    expect(produces()).toBe(before.produce);
+    expect(readLedger(roots).filter((e) => e.t === "aliased")).toHaveLength(before.aliased);
+    expect(readLedger(roots).some((e) => e.t === "decision" && (e as { reason?: string }).reason === "no-new-claim")).toBe(true);
+    expect(existsSync(join(inbox(), "_processed", "t9-bbb222.md"))).toBe(true);
+    expect(existsSync(join(inbox(), "t9-bbb222.md"))).toBe(false);
+    const receipt = require("fs").readdirSync(receipts()).map((f: string) => readFileSync(join(receipts(), f), "utf-8")).find((t: string) => t.includes("no-new-claim"));
+    expect(receipt).toContain("outcome: reject");
+  });
+
   it("a den topic re-pointed from a graduated entry to a live one merges into the later one", async () => {
     const grad = "kb-wp-GRAD001";
     const live = "kb-wp-LIVE001";
@@ -270,25 +293,25 @@ describe("aliasClaim (claim-level dedupe on the alias route)", () => {
   const P29 = "react-hooks lint: 29 findings across 3 files.";
 
   it("skips a paragraph identical to the last merged one, after lowercase and whitespace collapse", () => {
-    const reg = foldRegistry([ev.aliased("hal", "topic-lint", "canon-1", "h1", P42)]);
+    const reg = foldRegistry([ev.aliased("hal", "topic-lint", "canon-1", "h1", claimHashes(P42))]);
     expect(aliasClaim(reg, c("react-hooks lint: 42 findings\nacross 7 files."))).toBe("skip");
   });
 
   it("merges once in place when only the digits differ (42 vs 29 findings)", () => {
-    const reg = foldRegistry([ev.aliased("hal", "topic-lint", "canon-1", "h1", P42)]);
+    const reg = foldRegistry([ev.aliased("hal", "topic-lint", "canon-1", "h1", claimHashes(P42))]);
     expect(aliasClaim(reg, c(P29))).toBe("update-in-place");
   });
 
   it("a third send identical to the second is skipped (the second body is the new baseline)", () => {
     const reg = foldRegistry([
-      ev.aliased("hal", "topic-lint", "canon-1", "h1", P42),
-      ev.aliased("hal", "topic-lint", "canon-1", "h2", P29),
+      ev.aliased("hal", "topic-lint", "canon-1", "h1", claimHashes(P42)),
+      ev.aliased("hal", "topic-lint", "canon-1", "h2", claimHashes(P29)),
     ]);
     expect(aliasClaim(reg, c(P29))).toBe("skip");
   });
 
   it("merges a different claim, and an alias record without lastBody", () => {
-    const withBody = foldRegistry([ev.aliased("hal", "topic-lint", "canon-1", "h1", P42)]);
+    const withBody = foldRegistry([ev.aliased("hal", "topic-lint", "canon-1", "h1", claimHashes(P42))]);
     expect(aliasClaim(withBody, c("Lint is now enforced in CI on every pull request."))).toBe("merge");
     const old = foldRegistry([ev.aliased("hal", "topic-lint", "canon-1", "h1")]);
     expect(aliasClaim(old, c(P42))).toBe("merge");

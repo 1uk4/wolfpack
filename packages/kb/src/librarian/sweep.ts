@@ -32,7 +32,7 @@ import { placeEntry } from "./section-tree.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
 import { survivorOf } from "./alias.js";
-import { lookupAlias, applyAliasRoute, aliasClaim } from "./sweep-alias.js";
+import { lookupAlias, applyAliasRoute, aliasClaim, claimHashes } from "./sweep-alias.js";
 import { maxMergeTargetCharsFor, mergeSizeLimit, exemptFromSizeGuard, notifyKeptOversize, shouldRoutePlacement } from "./sweep-size.js";
 import { exceedsSplitAbove, notifySplitDue, replaceMisfits, type OversizeSection, type SplitDueHook } from "./sweep-replace.js";
 import { splitThresholdFor } from "./tree-rules.js";
@@ -589,6 +589,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // OWN domain, even when the contribution's domain hint differs.
       const aliasLookup = lookupAlias(roots, log, reg, c, domain, routing, ctx.notify);
       const { aliasedFrom, aliasMissing } = aliasLookup;
+      const claim = aliasClaim(reg, c); // once per item: the skip and the updateInPlace flag both read it
       domain = aliasLookup.domain;
       // A decision another entry supersedes is history: contributions go to the
       // newest decision in the chain, never to the old one.
@@ -642,7 +643,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${named} (update diff)`);
         } else if (aliasedFrom || aliasMissing) {
           targetId = applyAliasRoute(aliasLookup, c, routing, head, ctx.notify) ?? targetId;
-          if (targetId && routing.route === "alias" && aliasClaim(reg, c) === "skip") {
+          if (targetId && routing.route === "alias" && claim === "skip") {
             const reason = "no-new-claim";
             ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${targetId} already holds this claim, skipped (${reason})`);
             await w.writeReceipt(roots, c.from, c, "reject", reason);
@@ -892,7 +893,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         liveIds,
         resolveLinks: (links) => links.map((id) => liveSurvivor(log, liveIds, id)).filter((id): id is string => !!id),
         allowOverflow: overflowOk,
-        updateInPlace: routing.route === "alias" && !!targetId && aliasClaim(reg, c) === "update-in-place",
+        updateInPlace: routing.route === "alias" && !!targetId && claim === "update-in-place",
       };
       // Verbatim: the anchored entry is the contribution as authored, no model call.
       const childId0 = historyChildIdOf(existingMarkdown);
@@ -945,7 +946,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           fit: placement.fit,
         }));
       }
-      pend.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash, c.body));
+      pend.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash, claimHashes(c.body)));
       // The intent (same events) goes to disk BEFORE the entry is live; replayed at the next tick if we crash before the append.
       const patched = unchanged && existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry) ? patchSourceProperties(existingMarkdown, entry) : undefined;
       const expectText = !unchanged ? renderEntry(entry) : patched;

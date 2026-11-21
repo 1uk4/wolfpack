@@ -476,7 +476,7 @@ WRITING RULES:
   keep the old and the new side by side. Keep what the contribution does not
   touch.
 - DATES: the prompt's CONTEXT line gives the ORIGIN DATE (when the
-  contribution's facts date from), the ENTRY UPDATED date and a flag, computed
+  contribution's facts date from), the ENTRY FACTS AS OF date and a flag, computed
   in code, that says whether the CONTRIBUTION IS OLDER THAN THE ENTRY. Never
   work the flag out yourself. When it is "yes", the entry already holds newer
   facts: do NOT change any existing fact, sentence or figure in the body; the
@@ -492,7 +492,7 @@ WRITING RULES:
   <YYYY-MM-DD> is the date the superseded fact was last known true: when the
   contribution is newer, the CONTRIBUTION DATE given in the prompt; when the
   contribution is older than the entry (the incoming fact is the older one),
-  the ENTRY UPDATED date. Omit the
+  the ENTRY FACTS AS OF date. Omit the
   "because" clause when the reason is not known. Keep each line to at most two
   sentences. Keep every existing History line exactly as written (never rewrite
   them) and do not add a line for a change already recorded. History lines

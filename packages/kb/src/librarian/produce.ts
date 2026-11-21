@@ -64,32 +64,76 @@ export interface ProduceEntryInput {
   resolveLinks?: (links: string[]) => string[];
   /** YYYY-MM-DD the contribution's facts date from; derived from the contribution when not given (see deriveOriginDate). */
   originDate?: string;
-  /** YYYY-MM-DD of the existing entry's `updated:`; read from existingMarkdown when not given. */
-  entryUpdated?: string;
+  /** YYYY-MM-DD the existing entry's facts were last known true (`factsAsOf:`); derived from existingMarkdown when not given (see factsAsOfOf). */
+  entryFactsAsOf?: string;
   /** The alias route found the same claim with new figures: replace the figures in place, add nothing new. */
   updateInPlace?: boolean;
 }
 
-const DATE_RE = /\b(\d{4}-\d{2}-\d{2})\b/g;
+const ISO = /^\d{4}-\d{2}-\d{2}/;
+
+/** Dates a line states about itself: one at line start (a Record line), or in parentheses. A date inside an "Until/by/before …" phrase is a deadline or a past bound, not the line's own date. */
+function ownDates(line: string): string[] {
+  const out: string[] = [];
+  const start = /^\s*(?:[-*]\s+)?(\d{4}-\d{2}-\d{2})\b/.exec(line);
+  if (start) out.push(start[1]!);
+  for (const m of line.matchAll(/\((\d{4}-\d{2}-\d{2})\)/g)) {
+    const before = line.slice(0, m.index).toLowerCase();
+    if (/\b(until|by|before)\s*$/.test(before)) continue;
+    out.push(m[1]!);
+  }
+  return out;
+}
 
 /**
- * The date a contribution's facts date from, in order: the latest date in its own text (summary, body / Record lines),
- * else sourceUpdated, groupDate, sourceCreated (the feature's shipped/created dates graduation sets), else `submitted`.
+ * The date a contribution's facts date from, in order: sourceUpdated, groupDate, sourceCreated (graduation sets these from
+ * the feature's dates), submitted, and only then dates the text states about its own lines (see ownDates), ignoring any date
+ * after `today`.
  */
-export function deriveOriginDate(c: Pick<ParsedContribution, "summary" | "body" | "sourceUpdated" | "groupDate" | "sourceCreated" | "submitted">): string | undefined {
-  const inText = [...`${c.summary ?? ""}\n${c.body ?? ""}`.matchAll(DATE_RE)].map((m) => m[1]!).sort();
-  if (inText.length) return inText[inText.length - 1];
+export function deriveOriginDate(
+  c: Pick<ParsedContribution, "summary" | "body" | "sourceUpdated" | "groupDate" | "sourceCreated" | "submitted">,
+  today: string = now().slice(0, 10),
+): string | undefined {
   for (const d of [c.sourceUpdated, c.groupDate, c.sourceCreated, c.submitted]) {
-    const m = /^\d{4}-\d{2}-\d{2}/.exec(d ?? "");
+    const m = ISO.exec(d ?? "");
     if (m) return m[0];
   }
-  return undefined;
+  const dates = `${c.summary ?? ""}\n${c.body ?? ""}`.split("\n").flatMap(ownDates).filter((d) => d <= today).sort();
+  return dates[dates.length - 1];
 }
 
-/** The entry's detail (body minus H1 and lede) split from its History; used by the older-contribution guard. */
-function detailMainLines(body: string): string[] {
-  return splitHistory(body).main.split("\n").map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+/**
+ * When the entry's facts were last known true: its `factsAsOf:` field; for entries without it, the newest date in its
+ * History lines, else `updated:`. (`updated:` alone is "last touched": History-only merges advance it.)
+ */
+export function factsAsOfOf(markdown: string): string | undefined {
+  const f = parseFrontmatter(markdown).fields;
+  const own = ISO.exec(String(f.factsAsOf ?? ""))?.[0];
+  if (own) return own;
+  const hist = historyLines(markdown).flatMap((l) => [...l.matchAll(/\d{4}-\d{2}-\d{2}/g)].map((m) => m[0])).sort();
+  if (hist.length) return hist[hist.length - 1];
+  return ISO.exec(String(f.updated ?? ""))?.[0];
 }
+
+const squash = (s: string): string => s.replace(/\s+/g, " ").trim();
+
+/** An entry body as the model sees it: lede (summary) and detail without History, wrapper heading and H1. Same shape for the old body and the model's answer. */
+function bodyParts(markdown: string, fallbackSummary: string): { summary: string; main: string; history: string } {
+  const body = markdown.replace(/^---\n[\s\S]*?\n---\n?/, "").replace(/^\s+/, "");
+  const { main, history } = splitHistory(body);
+  const h1 = /^# [^\n]*\n+/.exec(main);
+  if (!h1) return { summary: fallbackSummary, main: stripDetailHeading(main).trim(), history };
+  const rest = main.slice(h1[0].length);
+  const lede = /^([^\n#][^\n]*(?:\n(?!\s*\n)[^\n]*)*)(?:\n\s*\n|$)/.exec(rest);
+  return lede
+    ? { summary: lede[1]!, main: stripDetailHeading(rest.slice(lede[0].length)).trim(), history }
+    : { summary: fallbackSummary, main: stripDetailHeading(rest).trim(), history };
+}
+
+/** The same text apart from line wrapping and spacing. */
+const sameText = (a: { summary: string; main: string }, b: { summary: string; main: string }): boolean =>
+  squash(`${a.summary}\n${a.main}`) === squash(`${b.summary}\n${b.main}`);
+
 
 /** A second subject the model split out of the contribution, to be routed as its own contribution. */
 export interface ProduceOverflow {
@@ -151,10 +195,9 @@ export async function produceEntry(
   const previous = existingMarkdown;
   const action: ProduceEntryResult["action"] = entryId ? "merge" : "create";
   const originDate = input.originDate ?? deriveOriginDate(contribution);
-  const prevFields = previous ? parseFrontmatter(previous).fields : {};
-  const entryUpdated = input.entryUpdated ?? (/^\d{4}-\d{2}-\d{2}/.exec(String(prevFields.updated ?? ""))?.[0]);
+  const entryFactsAsOf = input.entryFactsAsOf ?? (previous ? factsAsOfOf(previous) : undefined);
   if (previous && !originDate) console.warn(`produce: no origin date for ${contribution.from}/${contribution.denTopicId}, treating the contribution as newer`);
-  const contributionIsOlder = !!(previous && originDate && entryUpdated && originDate < entryUpdated);
+  const contributionIsOlder = !!(previous && originDate && entryFactsAsOf && originDate < entryFactsAsOf);
 
   // Build LLM prompt (bounded, context-aware)
   const prompt = [
@@ -166,7 +209,7 @@ export async function produceEntry(
     contribution.body,
     existingMarkdown ? `\nEXISTING ENTRY (${entryId}):\n${hideSourceProperties(existingMarkdown)}` : "",
     `\nCONTRIBUTION DATE: ${originDate ?? contribution.sourceUpdated ?? now().slice(0, 10)}`,
-    ...(previous ? [`CONTEXT: ORIGIN DATE ${originDate ?? "unknown"}; ENTRY UPDATED ${entryUpdated ?? "unknown"}; CONTRIBUTION IS OLDER THAN THE ENTRY: ${contributionIsOlder ? "yes" : "no"}`] : []),
+    ...(previous ? [`CONTEXT: ORIGIN DATE ${originDate ?? "unknown"}; ENTRY FACTS AS OF ${entryFactsAsOf ?? "unknown"}; CONTRIBUTION IS OLDER THAN THE ENTRY: ${contributionIsOlder ? "yes" : "no"}`] : []),
     ...(input.updateInPlace ? ["UPDATE IN PLACE: yes (this contribution restates a claim the entry already holds, with new figures)"] : []),
     `ACTION: ${action}`,
     allowOverflow
@@ -177,8 +220,10 @@ export async function produceEntry(
   // LLM call — returns ONLY opinion (no ids, dates, section, resolved relations).
   // Re-parse through the schema to guarantee branded types AND re-validate the
   // model output (the confinement firewall — nothing invalid reaches assemble).
+  let rawSummary = "";
   const shape = (raw: unknown): LlmOpinion => {
     const o = LlmOpinion.parse(raw);
+    rawSummary = o.summary; // before foldIntro moves prose into it: the stand-in lede of an entry that has none
     // The entry renders as H1 + lede + detail: the detail must not repeat them.
     const detail = normalizeDetail(o.detail, o.summary, previous);
     return LlmOpinion.parse({ ...o, ...foldIntro(o.summary, detail, previous) });
@@ -245,25 +290,42 @@ export async function produceEntry(
   }
   // Older contribution: the code, not the model, guarantees existing facts are untouched. If the body changed
   // outside History, discard it, keep the old body and append only the new History lines.
+  // Runs only here, in produceEntry: the verbatim path (produce-verbatim.ts) makes no model call and never reaches it, and a
+  // decision entry is never rewritten in place (it has its own supersede flow).
   let olderGuard: ProduceEntryResult["olderGuard"];
-  if (contributionIsOlder && previous && !(entryId && isDecisionMarkdown(previous))) {
-    const prevBody = parseFrontmatter(previous).body;
-    const prevMain = detailMainLines(prevBody);
-    const newMain = detailMainLines(opinion.detail);
-    const prevSet = new Set(prevMain);
-    const newSet = new Set(newMain);
-    // prevMain holds the H1 and lede, which detail does not: ignore lines the detail never carried.
-    const added = newMain.some((l) => !prevSet.has(l));
-    const dropped = prevMain.some((l, i) => i > 1 && !l.startsWith("# ") && !newSet.has(l));
-    if (added || dropped) {
-      const mainText = splitHistory(prevBody).main;
-      const oldDetail = mainText.replace(/^\s*# .*\n+/, "").replace(/^[^\n]*\S[^\n]*(\n|$)/, "").trim();
-      const have = new Set(historyLines(previous).map((l) => l.replace(/\s+/g, " ").trim()));
-      const fresh = historyLines(`---\n---\n${opinion.detail}`).filter((l) => !have.has(l.replace(/\s+/g, " ").trim()));
-      const history = [...historyLines(previous), ...fresh];
-      opinion = LlmOpinion.parse({ ...opinion, detail: `${oldDetail}${history.length ? `\n\n## History\n\n${history.join("\n")}` : ""}` });
-      olderGuard = { discarded: true, historyAdded: fresh };
-      console.warn(`produce: contribution ${originDate} is older than entry ${entryUpdated}; model changed the body, kept the old body and added ${fresh.length} History line(s)`);
+  const guardable = !!(previous && entryId && !isDecisionMarkdown(previous));
+  const modelMain = (): { summary: string; main: string } => ({ summary: opinion.summary, main: stripDetailHeading(splitHistory(opinion.detail).main).trim() });
+  if (contributionIsOlder && guardable && previous) {
+    const old = bodyParts(previous, rawSummary);
+    // Same shape on both sides; a rewrap alone is not a change, a changed figure is.
+    if (!sameText(old, modelMain())) {
+      // Only History lines the entry does not already carry; the incoming fact is the older one, so its "Until" is the date the entry's facts were last known true.
+      const seenNew = new Set<string>();
+      const fresh = splitHistory(opinion.detail).history.split("\n")
+        .filter((l) => l.trim().startsWith("- ") && !keepHistory.has(squash(l)))
+        .map((l) => l.trim().replace(/^- Until \d{4}-\d{2}-\d{2}/, `- Until ${entryFactsAsOf}`))
+        .filter((l) => !seenNew.has(squash(l)) && seenNew.add(squash(l)));
+      let detail = `${old.main}\n\n## History\n\n${fresh.join("\n")}`.trim();
+      detail = preserveHistory(previous, detail).detail;
+      detail = dedupeDetail(detail, keepHistory).detail;
+      const added = historyLines(`---\n---\n${detail}`).filter((l) => !keepHistory.has(squash(l)));
+      opinion = LlmOpinion.parse({ ...opinion, summary: old.summary, detail });
+      // Lint what the guarded result carries, so the reported findings match what is committed.
+      after = lintOpinion(opinion, previous, liveIds);
+      olderGuard = { discarded: true, historyAdded: added };
+      console.warn(`produce: contribution ${originDate} is older than the entry's facts (${entryFactsAsOf}); the model changed the body, kept the old body and added ${added.length} History line(s)`);
+    }
+  }
+  // Update in place restates a claim with new figures: the entry must not grow.
+  if (input.updateInPlace && guardable && previous && !olderGuard) {
+    const old = bodyParts(previous, rawSummary);
+    const cur = modelMain();
+    const len = (p: { summary: string; main: string }): number => squash(`${p.summary}\n${p.main}`).length;
+    const lines = (p: { main: string }): number => p.main.split("\n").filter((l) => l.trim()).length;
+    if (len(cur) > len(old) * 1.1 || lines(cur) > lines(old) * 1.1) {
+      opinion = LlmOpinion.parse({ ...opinion, summary: old.summary, detail: `${old.main}${old.history.trim() ? `\n\n${old.history.trim()}` : ""}` });
+      after = lintOpinion(opinion, previous, liveIds);
+      console.warn(`produce: update-in-place grew the entry by more than 10%, kept the old body`);
     }
   }
   // A split ends with the entry under the cap; an overflow only the first
@@ -337,6 +399,14 @@ export async function produceEntry(
     domain: DomainId.parse(domain),
     created,
     updated: timestamp,
+    // Facts last known true: advances only when the body outside History really changed and the guard did not discard it.
+    factsAsOf: (() => {
+      const prior = entryFactsAsOf;
+      const changed = !previous || !mergeId || !sameText(bodyParts(previous, rawSummary), { summary: opinion.summary, main: stripDetailHeading(splitHistory(opinion.detail).main).trim() });
+      const next = changed && !olderGuard ? (originDate ?? timestamp) : prior;
+      const best = next && prior && prior > next ? prior : next;
+      return best ? IsoDate.parse(best) : undefined;
+    })(),
     contentHash: contentHashValue,
     currency: contribution.currency === "archived" ? "archived" : "live",
     asOf: contribution.sourceUpdated ? IsoDate.parse(contribution.sourceUpdated) : undefined,

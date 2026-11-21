@@ -186,6 +186,7 @@ export function renderEntry(entry: Entry): string {
   lines.push(`created: ${entry.created}`);
   lines.push(`updated: ${entry.updated}`);
   if (entry.asOf) lines.push(`asOf: ${entry.asOf}`);
+  if (entry.factsAsOf) lines.push(`factsAsOf: ${entry.factsAsOf}`);
   if (entry.expires) lines.push(`expires: ${entry.expires}`);
 
   // Content hash (integrity)

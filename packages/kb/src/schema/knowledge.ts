@@ -332,6 +332,8 @@ export const DerivedFacts = z.object({
   contentHash: z.string(),
   currency: Currency.default("live"),
   asOf: IsoDate.optional(),
+  /** When the facts in the body were last known true (frontmatter `factsAsOf:`); `updated` is only last touched. */
+  factsAsOf: IsoDate.optional(),
   /** Anchored subject key (frontmatter `anchor:`): routing by key, not similarity. */
   anchor: z.string().optional(),
   /** Group key (frontmatter `group:`): shown/sectioned under the anchored entry holding it. */
@@ -396,6 +398,8 @@ export const Entry = z.object({
   currency: Currency,
   verified: z.boolean(),
   asOf: IsoDate.optional(),
+  /** When the facts in the body were last known true (frontmatter `factsAsOf:`); `updated` is only last touched. */
+  factsAsOf: IsoDate.optional(),
   anchor: z.string().optional(),
   group: z.string().optional(),
   groupDate: z.string().optional(),
@@ -481,6 +485,7 @@ export function assembleEntry(input: {
     currency: facts.currency,
     verified: overrides.verified ?? false,
     asOf: facts.asOf,
+    factsAsOf: facts.factsAsOf,
     anchor: facts.anchor,
     group: facts.group,
     groupDate: facts.groupDate,

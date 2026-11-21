@@ -8,6 +8,8 @@ export interface RebuildCliArgs {
   sub: "preview" | "apply" | "restore" | "list";
   dataDir: string;
   port: number;
+  /** Where the hub listens: --host, else HUBD_HOST, else 127.0.0.1. */
+  host: string;
   domain?: string;
   plan?: string;
   stamp?: string;
@@ -17,21 +19,22 @@ export interface RebuildCliArgs {
   expectFlags: boolean;
 }
 
-export const REBUILD_USAGE = `hubd rebuild preview <domain> --data-dir <dir> [--port 3142] [--wait] [--from-scratch] [--allow-collapse] [--apply-cross-moves | --approve-move <entryId>...] [--allow-kmeans-fallback]
-hubd rebuild apply <planId> --data-dir <dir> [--port 3142] [--expect-flags + the same flags]   applies exactly that plan under the hub's KB lock; no model calls; hubd keeps running
-hubd rebuild restore <domain> <stamp> --data-dir <dir> [--port 3142]                          one command back to the state before an apply
-hubd rebuild list --data-dir <dir> [--port 3142]                                               plans, preview jobs and restore points`;
+export const REBUILD_USAGE = `hubd rebuild preview <domain> --data-dir <dir> [--port 3142] [--host 127.0.0.1] [--wait] [--from-scratch] [--allow-collapse] [--apply-cross-moves | --approve-move <entryId>...] [--allow-kmeans-fallback]
+hubd rebuild apply <planId> --data-dir <dir> [--port 3142] [--host 127.0.0.1] [--expect-flags + the same flags]   applies exactly that plan under the hub's KB lock; no model calls; hubd keeps running
+hubd rebuild restore <domain> <stamp> --data-dir <dir> [--port 3142] [--host 127.0.0.1]                          one command back to the state before an apply
+hubd rebuild list --data-dir <dir> [--port 3142] [--host 127.0.0.1]                                               plans, preview jobs and restore points`;
 
-export function parseRebuildArgs(rest: string[]): RebuildCliArgs {
+export function parseRebuildArgs(rest: string[], env: NodeJS.ProcessEnv = process.env): RebuildCliArgs {
   const sub = rest[0];
   if (sub !== "preview" && sub !== "apply" && sub !== "restore" && sub !== "list") throw new Error(`rebuild needs preview, apply, restore or list\n${REBUILD_USAGE}`);
-  const out: RebuildCliArgs = { sub, dataDir: "", port: 3142, wait: false, expectFlags: false, flags: { from: "current", applyCrossMoves: false, approvedCrossMoves: [], allowCollapse: false, allowKmeansFallback: false } };
+  const out: RebuildCliArgs = { sub, dataDir: "", port: 3142, host: env.HUBD_HOST?.trim() || "127.0.0.1", wait: false, expectFlags: false, flags: { from: "current", applyCrossMoves: false, approvedCrossMoves: [], allowCollapse: false, allowKmeansFallback: false } };
   const pos: string[] = [];
   for (let i = 1; i < rest.length; i++) {
     const f = rest[i]!;
     const val = () => { const v = rest[++i]; if (v === undefined || v.startsWith("--")) throw new Error(`${f} needs a value`); return v; };
     if (f === "--data-dir") out.dataDir = val();
     else if (f === "--port") { const p = Number(val()); if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error("--port must be an integer from 1 to 65535"); out.port = p; }
+    else if (f === "--host") out.host = val();
     else if (f === "--wait") out.wait = true;
     else if (f === "--expect-flags") out.expectFlags = true;
     else if (f === "--from-scratch") out.flags.from = "scratch";
@@ -65,7 +68,8 @@ function engineSummary(dataDir: string, planId: string): string {
 export async function runRebuildCli(a: RebuildCliArgs, log: (m: string) => void = console.log): Promise<void> {
   const store = createTokenStore(a.dataDir);
   const { token, tokenId } = store.redeem(store.mintPairingCode({ kind: "console" }).code, "hubd rebuild (temporary)", "console");
-  const base = `http://127.0.0.1:${a.port}`;
+  const host = a.host.includes(":") && !a.host.startsWith("[") ? `[${a.host}]` : a.host; // bare IPv6 needs brackets in a URL
+  const base = `http://${host}:${a.port}`;
   const call = async (method: "GET" | "POST", path: string, body?: unknown): Promise<unknown> => {
     for (let attempt = 0; ; attempt++) {
       let res: Response;
@@ -74,7 +78,7 @@ export async function runRebuildCli(a: RebuildCliArgs, log: (m: string) => void 
       } catch (e) {
         // a hub busy planning can drop a connection now and then: retry before giving up
         if (attempt < 5) { await new Promise((r) => setTimeout(r, 1000)); continue; }
-        throw new Error(`cannot reach hubd at ${base} (${e instanceof Error ? `${e.message}${e.cause ? `: ${String(e.cause)}` : ""}` : e}); is it running, and is --port right?`);
+        throw new Error(`cannot reach hubd at ${base} (${e instanceof Error ? `${e.message}${e.cause ? `: ${String(e.cause)}` : ""}` : e}); is it running, and are --host and --port right?`);
       }
       if (res.status === 401 && attempt < 10) { await new Promise((r) => setTimeout(r, 500)); continue; } // the running hub picks up the new token file within a moment
       const text = await res.text();

@@ -101,7 +101,7 @@ const USAGE = `usage:
                                                               one-off, idempotent: append Dewey's past curation decisions (receipts + _processed, kb-repair via the Dewey ledger's aliased events) to the hub KB ledger so /kb-activity shows history. Run as the hubd user (file ownership); stop hubd or rely on the KB writer lock. Events carry ids starting "bf-".
   hubd kb-rehome --data-dir <dir> --move <entryId>=<sectionId> ... [--remove-section <sectionId> ...] [--apply | --dry-run]
                                                               move entries between sections and remove emptied sections, through the hub write path (commitKb, ledger entry_placed / sections_replaced, _sections.json, digest/INDEX/registry re-rendered). Dry run unless --apply. hubd must be STOPPED (writer lock) and the curator sweep lease free.
-  hubd rebuild preview|apply|restore|list ... --data-dir <dir> [--port 3142]
+  hubd rebuild preview|apply|restore|list ... --data-dir <dir> [--port 3142] [--host 127.0.0.1]
                                                               KB section rebuild through the RUNNING hub (no stop needed): preview writes a plan file, apply commits exactly that plan under the hub's KB lock, restore undoes an apply. See the RUNBOOK for the flags.
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens owner <id> [--unset] --data-dir <dir>           mark a console/browser token as the hub owner (may revoke any device); --unset clears it (allowed even for the last owner, from the host CLI). 'hubd pair --owner' mints one directly. Host CLI only

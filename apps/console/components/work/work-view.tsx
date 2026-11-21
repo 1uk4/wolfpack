@@ -408,7 +408,19 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 					</span>
 					{/* Only a ready feature (or one with a job in flight) shows the button; why a feature is not ready is the stage cell's tooltip. */}
 					<span className="inline-flex shrink-0" onClick={(e) => e.stopPropagation()}>
-					<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready && !ctx.pendingApproval?.has(row.id) ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
+					{row.id && ctx.pendingApproval?.has(row.id) ? (
+						<button
+							type="button"
+							data-testid="work-awaiting-approval"
+							title="A graduate/archive/reassign request is pending; approve it on the item page or in Needs-you"
+							onClick={() => onSelect(row.id)}
+							className="shrink-0 whitespace-nowrap rounded-md border border-border/70 px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+						>
+							awaiting approval
+						</button>
+					) : (
+						<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
+					)}
 					</span>
 					<AssigneeCell row={row} ctx={ctx} />
 					<span className={`${COLS.status} flex min-w-0 flex-col md:flex-row md:items-center md:gap-2`}>

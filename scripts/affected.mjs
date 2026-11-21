@@ -5,7 +5,7 @@
 //  - changed files come from `git diff --name-only <base> <head>`; a missing/zero/unknown base marks EVERYTHING.
 //  - root config (package-lock.json, pnpm-lock.yaml, pnpm-workspace.yaml, root package.json, root tsconfig*.json, vitest/turbo config, .github/workflows/**) marks everything.
 //  - a file under a workspace dir marks that workspace; docs (*.md, docs/**, LICENSE) mark nothing.
-//  - affected packages = changed + everything that depends on them (dependencies/devDependencies/peer/optional), transitively.
+//  - affected packages = changed + everything that depends on them (dependencies/devDependencies/peer/optional, or the package.json `ci.affectedBy` list), transitively.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -17,7 +17,7 @@ export const COMPONENTS = {
   hubd: "@wolfpack/hubd",
   console: "@wolfpack/console",
 };
-const ROOT_CONFIG = [/^package-lock\.json$/, /^pnpm-lock\.yaml$/, /^pnpm-workspace\.yaml$/, /^package\.json$/, /^tsconfig[^/]*\.json$/, /^vitest\.(config|setup)\.[cm]?[jt]s$/, /^turbo\.json$/, /^\.github\/workflows\//, /^scripts\/affected\./];
+export const ROOT_CONFIG = [/^package-lock\.json$/, /^pnpm-lock\.yaml$/, /^pnpm-workspace\.yaml$/, /^package\.json$/, /^tsconfig[^/]*\.json$/, /^vitest\.(config|setup)\.[cm]?[jt]s$/, /^turbo\.json$/, /^\.github\/workflows\//, /^scripts\/affected\./];
 const DOC = [/\.md$/i, /^docs\//, /^LICENSE/, /^ATTRIBUTION/];
 const ZERO = /^0+$/;
 
@@ -59,7 +59,8 @@ export function loadWorkspaces(root) {
   return pkgs.map(({ dir, pkg }) => ({
     name: pkg.name,
     dir,
-    deps: [...new Set(["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"].flatMap((k) => Object.keys(pkg[k] ?? {})))].filter((d) => names.has(d)),
+    // declared deps, plus `ci.affectedBy`: workspaces this one reaches at runtime without importing them (spawns a built hubd, etc.)
+    deps: [...new Set([...["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"].flatMap((k) => Object.keys(pkg[k] ?? {})), ...(pkg.ci?.affectedBy ?? [])])].filter((d) => names.has(d)),
     inTsRoot: tsRoot.includes(dir),
     hasTest: !!pkg.scripts?.test,
     // only the console's tests load other packages' dist at runtime

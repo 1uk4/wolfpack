@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs
-import { computeAffected, loadWorkspaces, scriptsDistImports } from "./affected.mjs";
+import { computeAffected, loadWorkspaces, scriptsDistImports, ROOT_CONFIG } from "./affected.mjs";
 
 const ws = loadWorkspaces(new URL("..", import.meta.url).pathname);
 const run = (files: string[] | null) => computeAffected(files, ws) as { all: boolean; packages: string[]; components: string[]; tsProjects: string[]; consoleTests: boolean; tracer: boolean; release: boolean };
@@ -69,6 +70,24 @@ describe("affected", () => {
     expect(r.all).toBe(false);
     expect(r.consoleTests).toBe(true);
     expect(r.tsProjects).toEqual(expect.arrayContaining(["packages/client", "packages/protocol", "packages/harness"]));
+  });
+  it("a hubd source change marks every runtime consumer that mints hub tokens: workerd, desktop and cli", () => {
+    // desktop and cli only spawn/exercise a built hubd and declare no dependency on it; the real repo's declarations must cover them
+    const r = run(["packages/hubd/src/server.ts"]);
+    for (const p of ["@wolfpack/workerd", "@wolfpack/desktop", "@wolfpack/cli"]) expect(r.packages, p).toContain(p);
+    expect(r.tsProjects).toEqual(expect.arrayContaining(["packages/workerd", "packages/cli"]));
+  });
+  it("a protocol route change marks every consumer of it, including the spawn-only ones", () => {
+    const r = run(["packages/protocol/src/pairing.ts"]);
+    for (const p of ["@wolfpack/hubd", "@wolfpack/workerd", "@wolfpack/desktop", "@wolfpack/cli", "@wolfpack/console"]) expect(r.packages, p).toContain(p);
+  });
+  it("the inputs that rerun everything are exactly the ones docs/testing.md lists", () => {
+    const doc = readFileSync(new URL("../docs/testing.md", import.meta.url), "utf8");
+    const section = doc.split("## What makes CI rerun everything")[1]?.split("\n## ")[0] ?? "";
+    const listed = ["package-lock.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "package.json", "tsconfig*.json", "vitest.config", "turbo.json", ".github/workflows/**", "scripts/affected.*"];
+    expect(ROOT_CONFIG.length).toBe(listed.length);
+    for (const f of listed) expect(section, f).toContain(f);
+    for (const f of ["package-lock.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "package.json", "tsconfig.base.json", "vitest.config.ts", "turbo.json", ".github/workflows/ci.yml", "scripts/affected.mjs"]) expect(run([f]).all, f).toBe(true);
   });
   it("no console tests, no extra build projects", () => {
     expect(run(["packages/cli/src/x.ts"]).tsProjects).toEqual(["packages/cli"]);

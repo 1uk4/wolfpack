@@ -16,7 +16,7 @@
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, PanelRightOpenIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, ClockIcon, ChevronUpIcon, PanelRightOpenIcon, SearchIcon } from "lucide-react";
 import { TopBar } from "@/components/shell/top-bar";
 import { useWorkReader } from "./work-reader";
 import { MenuShell } from "@/components/shell/menu-shell";
@@ -413,10 +413,12 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 							type="button"
 							data-testid="work-awaiting-approval"
 							title="A graduate/archive/reassign request is pending; approve it on the item page or in Needs-you"
+							aria-label="Awaiting approval"
 							onClick={() => onSelect(row.id)}
-							className="shrink-0 whitespace-nowrap rounded-md border border-border/70 px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+							className="shrink-0 whitespace-nowrap rounded-md border border-border/70 px-1 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:px-1.5"
 						>
-							awaiting approval
+							<ClockIcon className="size-3 md:hidden" aria-hidden />
+							<span className="hidden md:inline">awaiting approval</span>
 						</button>
 					) : (
 						<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />

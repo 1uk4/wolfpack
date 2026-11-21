@@ -180,6 +180,11 @@ describe("hub curator", () => {
     expect(curatorFromEnv({ HUBD_CURATOR: "1" })).toMatchObject({ pollMs: 60000 });
   });
 
+  it("auto rebuild preview is off and misfit re-placement is a dry run unless the env switches say otherwise", () => {
+    expect(curatorFromEnv({ HUBD_CURATOR: "1" })).toMatchObject({ autoRebuildPreview: false, replaceDryRun: true });
+    expect(curatorFromEnv({ HUBD_CURATOR: "1", WOLFPACK_KB_AUTO_REBUILD_PREVIEW: "1", WOLFPACK_KB_REPLACE_MISFITS: "1" })).toMatchObject({ autoRebuildPreview: true, replaceDryRun: false });
+  });
+
   it("holds the hub lease while on and releases it on close", async () => {
     const { hub, dir } = await start({ curator: curatorOpts() });
     expect(JSON.parse(readFileSync(leaseFile(contributionsRoot(dir)), "utf8")).owner).toBe("hub");

@@ -31,13 +31,18 @@ export function planHash(p: Pick<PlanSummary, "sectionIds" | "assignment">): str
 
 export interface RebuildRequesterDeps {
   dataDir: string;
-  /** Run a from=current preview and return the plan (the server wires the rebuild service). Throws on failure. */
-  preview: (domain: string) => Promise<PlanSummary>;
+  /** Run a from=current preview and return the plan (the server wires the rebuild service). Call `started` once the job is running; throw PreviewBusyError when another preview of the domain is running; throw on failure. */
+  preview: (domain: string, started: () => void) => Promise<PlanSummary>;
+  /** True once the hub is closing: the caller stops waiting. */
+  stopped?: () => boolean;
   /** Announce a newly filed request to the owner. */
   notify: (req: RebuildRequest) => void | Promise<void>;
   now?: () => number;
   log?: (m: string) => void;
 }
+
+/** Another preview of the domain is already running: not a failure, and it does not use up the day's preview. */
+export class PreviewBusyError extends Error {}
 
 export function createRebuildRequester(d: RebuildRequesterDeps) {
   const file = rebuildRequestsFile(d.dataDir);
@@ -50,7 +55,9 @@ export function createRebuildRequester(d: RebuildRequesterDeps) {
         const p = JSON.parse(readFileSync(file, "utf8")) as Partial<Store>;
         return { lastPreview: p.lastPreview ?? {}, requests: p.requests ?? [] };
       }
-    } catch { /* unreadable: start clean, the rate limit then errs towards one extra preview */ }
+    } catch (e) {
+      log(`${file} is unreadable (${e instanceof Error ? e.message : String(e)}); starting with an empty record`);
+    }
     return { lastPreview: {}, requests: [] };
   };
   const save = (s: Store): void => {
@@ -69,9 +76,8 @@ export function createRebuildRequester(d: RebuildRequesterDeps) {
       if (now() - last < REBUILD_PREVIEW_INTERVAL_MS) return "rate-limited";
       running.add(domain);
       try {
-        s.lastPreview[domain] = new Date(now()).toISOString(); // counted even when the preview fails: a broken domain is not retried every sweep
-        save(s);
-        const plan = await d.preview(domain);
+        // Stamped only once the preview job has started (a failing one still counts: a broken domain is not retried every sweep).
+        const plan = await d.preview(domain, () => { s.lastPreview[domain] = new Date(now()).toISOString(); save(s); });
         const hash = planHash(plan);
         const cur = load();
         if (cur.requests.some((r) => r.hash === hash)) return "duplicate";
@@ -80,6 +86,7 @@ export function createRebuildRequester(d: RebuildRequesterDeps) {
         await d.notify(req);
         return "filed";
       } catch (e) {
+        if (e instanceof PreviewBusyError) return "busy";
         log(`preview for ${domain} failed: ${e instanceof Error ? e.message : String(e)}`);
         return "failed";
       } finally {

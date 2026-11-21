@@ -422,6 +422,8 @@ export function curatorFromEnv(env: NodeJS.ProcessEnv): CuratorOptions {
     ...(env.HUBD_CURATOR_MODELS?.trim() ? { modelsFile: env.HUBD_CURATOR_MODELS.trim() } : {}),
     ...(env.HUBD_EMBED_URL?.trim() ? { embedUrl: env.HUBD_EMBED_URL.trim() } : {}),
     ...(env.HUBD_EMBED_MODEL?.trim() ? { embedModel: env.HUBD_EMBED_MODEL.trim() } : {}),
+    autoRebuildPreview: /^(1|true|on|yes)$/i.test(env.WOLFPACK_KB_AUTO_REBUILD_PREVIEW?.trim() ?? ""),
+    replaceDryRun: !/^(1|true|on|yes)$/i.test(env.WOLFPACK_KB_REPLACE_MISFITS?.trim() ?? ""),
   };
 }
 

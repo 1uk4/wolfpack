@@ -74,6 +74,10 @@ export interface CuratorOptions {
   now?: () => number;
   /** Called once per domain AFTER a sweep finished when sections there outgrew the split threshold (never inside the sweep; errors are logged). The server wires it to the rebuild requester. */
   onSplitDue?: (domain: string, sections: { id: string; count: number }[]) => void | Promise<void>;
+  /** Opt-in (default false; env WOLFPACK_KB_AUTO_REBUILD_PREVIEW=1): the server previews a rebuild for a domain the sweep reports over the split threshold. Off: the sweep only logs "a rebuild is due" and the oversize sections are recorded. */
+  autoRebuildPreview?: boolean;
+  /** Re-placement of misfit entries: default TRUE = dry run (planned moves are logged, nothing is written). false (env WOLFPACK_KB_REPLACE_MISFITS=1) writes them. */
+  replaceDryRun?: boolean;
   /** Test seam: run budget for the one item (see SweepTickOptions.budgetMs). */
   budgetMs?: number;
   /** How long close() waits for a tick in flight, ms (default 15000, under the unit's TimeoutStopSec=20). A tick still running after that stops writing (every writer call checks the closing flag) and the lease is released when it ends. */
@@ -377,8 +381,11 @@ export function createCurator(deps: CuratorDeps): Curator {
       }
     };
     const splitDue: Array<[string, { id: string; count: number }[]]> = [];
+    let cleanTick = false; // set only when runSweepTick returned; a throw, abort or close drops the collected calls
     const flushSplitDue = () => {
-      for (const [domain, list] of splitDue.splice(0)) {
+      const calls = splitDue.splice(0);
+      if (!cleanTick || closing) return;
+      for (const [domain, list] of calls) {
         void Promise.resolve().then(() => o.onSplitDue?.(domain, list)).catch((e) => console.warn(`[curator] onSplitDue ${domain} failed: ${err1(e)}`));
       }
     };
@@ -402,9 +409,11 @@ export function createCurator(deps: CuratorDeps): Curator {
         notify: (m) => console.log(`[curator] ${m}`),
         alert: (m) => console.warn(`[curator] ${m}`),
         onEvent,
+        replaceDryRun: o.replaceDryRun !== false,
         ...(o.onSplitDue ? { onSplitDue: (domain: string, list: { id: string; count: number }[]) => void splitDue.push([domain, list]) } : {}),
       });
       const r = tick.sweep;
+      cleanTick = tick.outcome === "ran" && !r.paused && !r.errors;
       const error = r.errors > 0 ? (r.failures[0]?.reason ?? r.paused ?? "an item failed") : undefined;
       tally.remaining = r.remaining; // parked / processed are the per-item counts the events already carried
       finish(error);

@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createRebuildRequester, planHash, type PlanSummary, type RebuildRequest } from "./rebuild-requests.js";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { createRebuildRequester, planHash, PreviewBusyError, rebuildRequestsFile, type PlanSummary, type RebuildRequest } from "./rebuild-requests.js";
 
 const dirs: string[] = [];
 afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
@@ -17,7 +18,7 @@ describe("sweep-driven rebuild requests", () => {
     let next = plan("wp-1", [["e1", "s1"], ["e2", "s2"]]);
     const filed: RebuildRequest[] = [];
     let previews = 0;
-    const mk = () => createRebuildRequester({ dataDir: dir, now: () => clock, log: () => {}, preview: async () => (previews++, next), notify: (r) => void filed.push(r) });
+    const mk = () => createRebuildRequester({ dataDir: dir, now: () => clock, log: () => {}, preview: async (_d, started) => (started(), previews++, next), notify: (r) => void filed.push(r) });
     const over = [{ id: "s0", count: 31 }];
 
     expect(await mk().onSplitDue("wp", over)).toBe("filed");
@@ -35,6 +36,29 @@ describe("sweep-driven rebuild requests", () => {
     next = plan("wp-2", [["e1", "s1"], ["e2", "s1"], ["e3", "s3"]]);
     expect(await mk().onSplitDue("wp", over)).toBe("filed");
     expect(filed.map((r) => r.planId)).toEqual(["wp-1", "wp-2"]);
+  });
+
+  it("a busy preview (another running) answers busy and does not use up the day's preview", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rebuild-req-"));
+    dirs.push(dir);
+    let busy = true;
+    const r = createRebuildRequester({ dataDir: dir, log: () => {}, notify: () => {}, preview: async (_d, started) => { if (busy) throw new PreviewBusyError("running"); started(); return plan("wp-1", [["e1", "s1"]]); } });
+    expect(await r.onSplitDue("wp", [])).toBe("busy");
+    busy = false;
+    expect(await r.onSplitDue("wp", [])).toBe("filed"); // not rate-limited by the busy answer
+  });
+
+  it("a corrupt store file is reset and logged, and the request is still filed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rebuild-req-"));
+    dirs.push(dir);
+    const f = rebuildRequestsFile(dir);
+    mkdirSync(join(dir, "ledger"), { recursive: true });
+    writeFileSync(f, "{not json");
+    const logs: string[] = [];
+    const r = createRebuildRequester({ dataDir: dir, log: (m) => logs.push(m), notify: () => {}, preview: async (_d, started) => (started(), plan("wp-1", [["e1", "s1"]])) });
+    expect(await r.onSplitDue("wp", [])).toBe("filed");
+    expect(logs.some((m) => m.includes("unreadable"))).toBe(true);
+    expect(JSON.parse(readFileSync(f, "utf8")).requests).toHaveLength(1);
   });
 
   it("hashes the same plan the same regardless of order, and a changed assignment differently", () => {

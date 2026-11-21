@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { createRegistry, Harness } from "../../packages/harness/node_modules/@earendil-works/pi-durable/dist/index.js";
 import { NodeExecutionEnv } from "../../packages/harness/node_modules/@earendil-works/pi-durable/dist/env/node.js";
 import { openNodeSqliteStorage } from "../../packages/harness/node_modules/@earendil-works/pi-durable/dist/storage/sqlite/node.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Engine } from "@wolfpack/engine";
 import { takeSnapshot } from "@wolfpack/engine";
 import { startLocalWorkServer } from "@wolfpack/work-server";
@@ -307,5 +307,37 @@ describe("host interval timer (createWolfHarness path)", () => {
     expect(stub.steps).not.toContain("distill");
     detach();
     await harness.close(ctx);
+  });
+});
+
+describe("graduation promote dedupe", () => {
+  it("promoteForFeature runs once per feature inside the 10-minute window, again for another feature and after the window", async () => {
+    const dir = tmp("dedupe");
+    const ops = tmp("ops-dedupe");
+    const stub = stubEngine();
+    createMemoryExtension({ live: true, engine: stub.engine }, { wolfDen: dir, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: { KB_BASE: join(ops, "kb"), KB_OPS: ops } });
+    const actions = memoryActionsFor(dir)!;
+    const distills = () => stub.steps.filter((s) => s === "distill").length;
+    // A graduation topic is selected by its sources; rewrite it before each call so only the dedupe can stop a second pass.
+    const seed = (id: string, feature: string) =>
+      writeTopic(join(dir, ".memory", "sessions", "durable"), { id, title: id, summary: "Session lookups are cached", updated: "2026-10-25 09:00", body: "Cache session lookups for five minutes.", sources: [feature], lastNote: "2026-10-25T09:00:00.000Z" });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-20T10:00:00Z"));
+      seed("a1", "work-f1");
+      await actions.promoteForFeature!("work-f1");
+      expect(distills()).toBe(1);
+      seed("a2", "work-f1");
+      await actions.promoteForFeature!("work-f1");
+      expect(distills()).toBe(1); // same feature inside the window: skipped
+      seed("b1", "work-f2");
+      await actions.promoteForFeature!("work-f2");
+      expect(distills()).toBe(2); // another feature runs
+      vi.setSystemTime(new Date("2026-11-20T10:10:01Z"));
+      await actions.promoteForFeature!("work-f1");
+      expect(distills()).toBe(4); // window elapsed: a1 and a2 both carry work-f1, so two topics are distilled
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

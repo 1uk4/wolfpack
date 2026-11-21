@@ -280,6 +280,7 @@ function useCardDictation(
 	const inPlayKey = inPlay.join("\0");
 	useEffect(() => {
 		if (dictField !== null && !inPlay.includes(dictField)) setDictField(null);
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- inPlayKey is the string form of inPlay; depending on the array itself would re-run every render
 	}, [inPlayKey, dictField]);
 	useEffect(() => {
 		if (dictField === null) return;
@@ -300,6 +301,7 @@ function useCardDictation(
 			else if (f.kind === "multi") setTypedText(f.id, joinDictation(typedRef.current[f.id] ?? "", t));
 		},
 		// Deps are ref-backed: draftRef/typedRef are stable and `set`/`setTypedText` only write refs + state.
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- draftRef/typedRef are stable refs, set/setTypedText only write refs and state, and inPlayKey stands for inPlay
 		[card, dictField, inPlayKey],
 	);
 	const claimed = live && dictField !== null;

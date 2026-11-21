@@ -122,6 +122,7 @@ export function usePaneData(card: NodeCard): PaneData {
 		return () => {
 			cancelled = true;
 		};
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on card.id; other card fields do not change what is fetched
 	}, [card.id, fetchable, reads]);
 	if (!fetchable) return { kind: "none" };
 	return dataCache.get(card.id) ?? (fetched?.id === card.id ? fetched.data : { kind: "loading" });

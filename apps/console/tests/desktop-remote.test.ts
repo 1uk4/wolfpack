@@ -11,8 +11,8 @@ const { parseConsoleUrl, resolveConsoleTarget, sameOrigin, errorPageHtml, pairUr
 
 describe("parseConsoleUrl", () => {
 	it("accepts https and normalizes to origin + path", () => {
-		const r = parseConsoleUrl("https://sfo-01.tail4f0118.ts.net");
-		assert.deepEqual([r.ok, r.url, r.origin], [true, "https://sfo-01.tail4f0118.ts.net/", "https://sfo-01.tail4f0118.ts.net"]);
+		const r = parseConsoleUrl("https://host.example.ts.net");
+		assert.deepEqual([r.ok, r.url, r.origin], [true, "https://host.example.ts.net/", "https://host.example.ts.net"]);
 		assert.equal(parseConsoleUrl("https://h.ts.net/c/?x=1#y").url, "https://h.ts.net/c/");
 	});
 	it("allows http only for loopback and tailnet IPs", () => {

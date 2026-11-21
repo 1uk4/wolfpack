@@ -68,6 +68,7 @@ export function createMachinesApi(source: ClientSource) {
 			} catch (err) {
 				const e = err as Error & { code?: string; hubAuth?: boolean };
 				if (e?.hubAuth === true || e?.code === "unauthorized") return Response.json({ error: "unauthorized", code: "unauthorized" }, { status: 401, headers: { [HUB_AUTH_HEADER]: "required" } });
+				if (e?.code === "forbidden") return Response.json({ error: "only an owner device can do this", code: "forbidden" }, { status: 403 }); // fixed text: the hub's gate, never the client's message
 				if (e?.code === "invalid_request") return Response.json({ error: "invalid command", code: "invalid_request" }, { status: 400 });
 				return Response.json({ error: "the hub could not complete the request", code: "engine_error" }, { status: 502 });
 			}

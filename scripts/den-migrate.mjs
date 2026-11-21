@@ -623,13 +623,10 @@ export function render(res) {
 	return lines.join("\n");
 }
 
-/** Load the built scanner; refuse a stale or drifted build. */
+/** Load the built scanner; refuse a missing or drifted build. Mtimes are not compared: a cache restore leaves dist older than a fresh checkout of identical source. */
 export async function loadScanner(root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")) {
 	const dist = path.join(root, "packages", "memory", "dist", "work", "secrets.js");
-	const src = path.join(root, "packages", "memory", "src", "work", "secrets.ts");
 	if (!fs.existsSync(dist)) throw new Error(`secret scanner not built (${dist}); run \`pnpm run build\` or pass --no-scan`);
-	if (fs.existsSync(src) && fs.statSync(src).mtimeMs > fs.statSync(dist).mtimeMs)
-		throw new Error(`secret scanner is stale: ${src} is newer than ${dist}; run \`pnpm run build\``);
 	const scan = (await import(pathToFileURL(dist).href + `?t=${Date.now()}`)).scanSecrets;
 	const canaries = [`${"1".repeat(9)}:${"A".repeat(35)}`, `sk-${"a".repeat(24)}`, `-----BEGIN PRIVATE KEY-----\nabc`];
 	for (const c of canaries) if (!scan(c).findings.length) throw new Error("secret scanner build failed its canary self-test (out of date); run `pnpm run build`");

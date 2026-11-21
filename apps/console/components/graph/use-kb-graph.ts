@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KbGraph } from "@/src/core";
-import { dataStore } from "@/src/core/data-store";
+import { dataStore } from "@/src/core";
 import { fetchKbGraph, kbGraphUrl, type KbGraphOptions } from "../kb/kb-client";
 
 /** A graph this young is shown as is when the page mounts; the 30 s poll and `refetch()` still revalidate. */

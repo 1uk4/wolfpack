@@ -1,7 +1,7 @@
 /**
  * wolfpack release [component...] [--minor|--major|--version X.Y.Z] [--dry-run] [--yes]
  * Lists components changed since their last <component>/vX.Y.Z tag, with commits and a suggested version.
- * Without --dry-run: asks, then creates annotated tags at HEAD and pushes ONLY those tags, one per push (CI release.yml builds + publishes).
+ * Without --dry-run: asks, then creates annotated tags at HEAD and pushes ONLY those tags, in one atomic push (CI release.yml builds + publishes; more than 3 tags: dispatched per tag with gh).
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -9,7 +9,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { c } from "../render.js";
-import { formatPlan, planRelease, pushTagsSeparately, type Bump, type ReleaseDeps } from "../release.js";
+import { dispatchTagBuilds, formatPlan, planRelease, pushTagsAtomically, type Bump, type ReleaseDeps } from "../release.js";
 
 export interface ReleaseCmdOptions {
   only: string[];
@@ -19,6 +19,8 @@ export interface ReleaseCmdOptions {
   yes?: boolean;
   cwd?: string;
   remote?: string;
+  /** Runs `gh <args>`; injected by tests. */
+  gh?: (...args: string[]) => unknown;
 }
 
 function git(cwd: string, ...args: string[]): string {
@@ -41,6 +43,7 @@ export async function releaseCmd(opts: ReleaseCmdOptions): Promise<void> {
     changedFiles: (base) => aff.changedFiles(base, head, root),
     affected: (files) => aff.computeAffected(files, workspaces).components,
     headTags: () => git(root, "tag", "--points-at", head).split("\n").filter(Boolean),
+    onSkip: (c, t) => console.log(`skipping ${c}: already tagged ${t} at HEAD`),
     commits: (base) => git(root, "log", "--no-merges", "--format=%h %s", base ? `${base}..HEAD` : "HEAD").split("\n").filter(Boolean),
   };
   const items = planRelease({ components, only: opts.only, bump: opts.bump, version: opts.version }, deps);
@@ -61,6 +64,15 @@ export async function releaseCmd(opts: ReleaseCmdOptions): Promise<void> {
   }
   for (const i of items) git(root, "tag", "-a", i.tag, "-m", `${i.component} ${i.version}`, head);
   // Only the tags, never a branch.
-  pushTagsSeparately((...a) => git(root, ...a), opts.remote ?? "origin", items.map((i) => i.tag));
+  pushTagsAtomically((...a) => git(root, ...a), opts.remote ?? "origin", items.map((i) => i.tag));
   for (const i of items) console.log(`pushed ${i.tag}`);
+  // More than 3 tags in one push start no tag-triggered build: dispatch release.yml per tag.
+  const gh = opts.gh ?? ((...a: string[]) => execFileSync("gh", a, { cwd: root, encoding: "utf8" }));
+  const res = dispatchTagBuilds(gh, items.map((i) => i.tag));
+  for (const t of res.dispatched) console.log(`dispatched release.yml for ${t}`);
+  if (res.failed.length) {
+    console.log(c.yellow(`\ncould not dispatch ${res.failed.join(", ")}; the tags are pushed. Run:`));
+    for (const cmd of res.commands) console.log(`  ${cmd}`);
+    process.exitCode = 1;
+  }
 }

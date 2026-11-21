@@ -68,3 +68,7 @@ A fix that belongs to no feature does not get its own PR. A standing `fixes` bra
 - On the `stable` ruleset: require a pull request and the `ci` check, allow merge commits, keep the owner as the bypass actor.
 - The `ci` check is affected-only for feature work. For a PR into `stable` (and a push to `stable`) it runs everything: full vitest default project, console tests, tracer, release-smoke and the `eval` job. Live tests are not in CI; `wolfpack pr prepare` runs them. See `docs/testing.md`.
 - Confirm that agent tokens cannot merge pull requests.
+
+## Before the repository goes public (owner checklist)
+- **Rewrite history once** for the personal values that were scrubbed from the tree but remain in earlier commits: the owner's Telegram user id in `infra/inventory/hosts.yml` (now `${OWNER_TELEGRAM_ID}`, work-wolfpack-hO2A5br), the tailnet IP and hostname, and `/Users/<owner>` paths. Do it in one coordinated window together with any other scrub: it force-pushes every branch and invalidates every clone (sfo-01 deploys, every wolf worktree). Decided 2026-11-20: not before release prep.
+- Run `packages/agents/src/repo-hygiene.test.ts` on the rewritten history (`git log -p | grep` for the same fragments) before the first public push.

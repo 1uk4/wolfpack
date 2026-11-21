@@ -24,7 +24,7 @@
  * The closure shape (teardown assigned in start, called in cancel) is the
  * ui-stream subscribe() pattern.
  */
-import { subscribe, type ServerEvent } from "../../core/thread/events.ts";
+import { subscribe, type ServerEvent, type ServerEvents } from "../../core/thread/events.ts";
 import type { ConsoleClient } from "@wolfpack/client";
 import { createConsoleClient, getConsoleClient, nextRequestToken } from "./console-client.ts";
 import { HUB_AUTH_HEADER } from "../../core/ui/hub-auth.ts";
@@ -126,7 +126,13 @@ export function eventsResponse(eo: EventsOptions = {}): Response {
 			bridge = createActivityBridge(undefined, { ...eo.bridge, onAuthLost: authLost });
 			hubBridge = createHubEventsBridge(
 				// Straight to THIS connection (never the process-wide bus: another device's token may have a narrower scope).
-				(ev) => frame(`event: hub-event\ndata: ${JSON.stringify({ frame: ev })}\n\n`),
+				(ev) => {
+					if (ev.type === "work-request-changed") {
+						const { requestId, itemId, kind, status } = ev as unknown as ServerEvents["work-request-changed"];
+						return frame(`event: work-request-changed\ndata: ${JSON.stringify({ requestId, itemId, kind, status })}\n\n`);
+					}
+					frame(`event: hub-event\ndata: ${JSON.stringify({ frame: ev })}\n\n`);
+				},
 				{ ...eo.hubBridge, onAuthLost: authLost },
 			);
 			void (eo.clientFor ?? connectionClient)().then(

@@ -59,6 +59,10 @@ export const ErrorCodeSchema = z.enum([
   "preview_stale",
   /** Hub claim: the item (or its feature) is held by another wolf; `details.holder` names it. */
   "conflict",
+  /** A work item already has a pending approval request; `details.requestId` names it. */
+  "request_pending",
+  /** A worker token tried to decide an approval request, or to graduate/archive/reassign directly: file a request instead. */
+  "request_forbidden",
   /** A request body is over its cap (e.g. a prompt override over 64 KB). */
   "too_large",
   /** Too soon to repeat this (e.g. a restart within a minute of the last start). `details.retryAfterSeconds` (a number) says when; the error is retryable. */
@@ -102,6 +106,8 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   not_ready: 409,
   preview_stale: 409,
   conflict: 409,
+  request_pending: 409,
+  request_forbidden: 403,
   too_large: 413,
   rate_limited: 429,
 };
@@ -927,6 +933,8 @@ export function parseWolfEvent(input: unknown): ParsedWolfEvent {
 const hubBase = z.object({ id: EventIdSchema, at: IsoSchema });
 /** `domain`: the item's domain when the hub could fold it (absent for a deleted item). */
 export const HubWorkChangedEventSchema = hubBase.extend({ type: z.literal("work.changed"), itemId: z.string(), event: z.string(), domain: z.string().optional() });
+/** An approval request was filed, approved or rejected (`status` is the new state). */
+export const HubWorkRequestChangedEventSchema = hubBase.extend({ type: z.literal("work-request-changed"), requestId: z.string(), itemId: z.string(), kind: z.enum(["graduate", "archive", "reassign"]), status: z.enum(["pending", "approved", "rejected"]), domain: z.string().optional() });
 export const HubKbChangedEventSchema = hubBase.extend({ type: z.literal("kb.changed"), entryIds: z.array(z.string()), domain: z.string().optional() });
 /** The hub curator's sweep (KB curation in hubd): started once real work begins, one item per contribution, finished always follows a started (also on a throw: `error`). */
 export const HubSweepStartedEventSchema = hubBase.extend({ type: z.literal("sweep_started"), pending: z.number().int().nonnegative() });
@@ -1096,7 +1104,7 @@ export const HubWolfPresenceEventSchema = hubBase.extend({ type: z.literal("wolf
  * it as Last-Event-ID resumes with exactly the events after it.
  */
 export const HubResyncEventSchema = hubBase.extend({ type: z.literal("resync"), id: z.number().int().nonnegative() });
-export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubKbChangedEventSchema, HubSweepStartedEventSchema, HubSweepItemEventSchema, HubSweepProgressEventSchema, HubSweepFinishedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
+export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubWorkRequestChangedEventSchema, HubKbChangedEventSchema, HubSweepStartedEventSchema, HubSweepItemEventSchema, HubSweepProgressEventSchema, HubSweepFinishedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
 export type HubEvent = z.infer<typeof HubEventSchema>;
 const HUB_EVENT_TYPES: ReadonlySet<string> = new Set(HubEventSchema.options.map((o) => o.shape.type.value));
 export type ParsedHubEvent = { kind: "event"; event: HubEvent } | { kind: "unknown" } | { kind: "invalid"; error: z.ZodError };
@@ -1491,6 +1499,8 @@ export const WorkRecordResponseSchema = z.object({
   successCriteria: z.string().optional(),
   plan: z.string(),
   record: z.string(),
+  /** Opaque version of the item's body; send it back as `If-Match` on a PATCH to refuse the write when the item changed since. */
+  etag: z.string().optional(),
   /** The newest ledger entries ("**when** — what", oldest first, at most 10). Omitted when the item has none. */
   log: z.array(z.string()).optional(),
   /** The item's `updated` date as the Work API reports it (YYYY-MM-DD). */
@@ -1581,9 +1591,16 @@ export type GraduationPreview = z.infer<typeof GraduationPreviewSchema>;
 export const GraduationConfirmBodySchema = z.object({ token: z.string().min(1) });
 export type GraduationConfirmBody = z.infer<typeof GraduationConfirmBodySchema>;
 
-/** `POST /v1/wolves/:name/work/:id/graduate/confirm`: the graduation happened (it is all or nothing). */
+/**
+ * `POST /v1/wolves/:name/work/:id/graduate/confirm` (job result): the wolf filed a graduate approval request on the hub
+ * (`requestId`, `status` filed or pending, `graduated` false; nothing is sent until the owner approves). Older wolves that
+ * graduated directly answer `graduated: true` without them.
+ */
 export const GraduationResultSchema = z.object({
-  graduated: z.literal(true),
+  graduated: z.boolean(),
+  /** The approval request filed on the hub. */
+  requestId: z.string().optional(),
+  status: z.enum(["filed", "pending"]).optional(),
   /** Den topic ids written to the KB inbox. */
   entries: z.array(z.string()),
   /** Work items archived (the item and what it contained). */

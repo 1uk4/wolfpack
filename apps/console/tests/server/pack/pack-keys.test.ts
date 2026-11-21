@@ -112,6 +112,14 @@ describe("Pack keys API", () => {
 		assert.deepEqual(seen, ["Bearer browser-fake", "Bearer browser-fake", "Bearer browser-fake"]);
 	});
 
+	it("passes the hub's owner-only 403 through as the error text, hub called once", async () => {
+		const { api, calls } = setup({ "/v1/machines/box/key/ack": { status: 403, body: { code: "forbidden", message: "only an owner device can do this" } } });
+		const res = await api.ack(req("POST", { fingerprint: "ff00" }), "box");
+		assert.equal(res.status, 403);
+		assert.equal(((await res.json()) as { error: string }).error, "only an owner device can do this");
+		assert.equal(calls.length, 1);
+	});
+
 	it("forwards the fingerprint being accepted to the hub's ack, and passes its 409 through", async () => {
 		const { api, calls } = setup({ "/v1/machines/box/key/ack": { status: 409, body: { code: "conflict" } } });
 		const res = await api.ack(req("POST", { fingerprint: "ff00" }), "box");

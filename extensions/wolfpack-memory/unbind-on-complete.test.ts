@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import createTasksExtension, { readBoundTask as readBound } from "./unified-tasks.js";
+import createMemoryExtension from "./unified.js";
+import { memoryActionsFor, unregisterMemoryActions } from "./memory-actions.js";
 import { bindingFile, readBindingFile, writeBindingFile } from "./conversation-binding.js";
 import { unbindCompleted, unbindOnGraduation, writeUnboundNotice } from "@wolfpack/memory";
 
@@ -177,39 +179,6 @@ describe("completing a work item unbinds its conversations", () => {
     expect(await sectionText("active_task", 1)).not.toContain("Your previous work item");
   });
 
-  it("task_graduate after the owner's yes: unbinds the other holders (feature thread, task), the caller with the complete line, not unrelated ones", async () => {
-    const f = add({ kind: "feature", title: "Feat", stage: "shipped" });
-    const t = add({ kind: "task", title: "Tk", stage: "shipped", partOf: f.id });
-    bind(3, f.id, f.id); // feature thread
-    bind(4, t.id, f.id); // a conversation on a task
-    bind(5, "work-unrelated");
-    bind(1, t.id, f.id); // the caller (a task of the feature)
-    // an in-memory graduate endpoint is missing in this fake API: serve the preview + confirm through the real flow
-    const { mkdirSync, writeFileSync } = await import("node:fs");
-    const token = "abcdef012345";
-    mkdirSync(join(den, "tasks", "graduation"), { recursive: true });
-    const preview = { itemId: f.id, kind: "feature", title: "Feat", domain: "wolfpack", contributions: [], warnings: [], archive: [], token, createdAt: new Date().toISOString() };
-    writeFileSync(join(den, "tasks", "graduation", `${token}.json`), JSON.stringify(preview));
-    const base = fetchImpl;
-    vi.stubGlobal("fetch", async (u: string | URL, i: RequestInit = {}) => {
-      const m = new URL(String(u)).pathname.replace(/^\/work\/?/, "");
-      if (i.method === "POST" && m === `${f.id}/graduate`) { items.get(f.id)!.graduated = "2026-10-27"; return json({ item: items.get(f.id) }); }
-      return base(u, i);
-    });
-    ext = createTasksExtension({ kbRoots: { kbBase: join(den, "kbbase"), opsRoot: join(den, "ops"), denLocal: join(den, "kb") } }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {}, capabilities: { askCards: true } } as never);
-    // the owner said yes on the card for this feature; the stored preview is what was shown
-    const card = { tool: "task_graduate", fields: [{ id: "confirm", kind: "confirm", label: `Graduate "Feat" (${f.id})?`, description: `Preview ${token}` }] };
-    const conversation = { classify: async () => ({ kind: "root" }), latestCard: async () => ({ status: "answered", card, answers: { confirm: { value: true } }, laterResults: [] }) };
-    const r = (await tool("task_graduate").execute({ id: f.id }, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1, conversation } as never)).content[0].text;
-    expect(r).toContain("2 item(s) archived");
-    expect(r).toContain(`Feat (${f.id}) is complete; you are no longer bound to it.`);
-    expect(readBindingFile(den, 1)).toBeNull();
-    expect(readBindingFile(den, 3)).toBeNull();
-    expect(readBindingFile(den, 4)).toBeNull();
-    expect(readBindingFile(den, 5)?.workId).toBe("work-unrelated");
-    expect(await sectionText("active_task", 3)).toContain(NOTICE("Feat"));
-  });
-
   it("/task g (the graduation hook) unbinds the invoking conversation too and tells it", async () => {
     bind(1, "work-t", "work-f");
     bind(2, "work-f", "work-f");
@@ -229,6 +198,30 @@ describe("completing a work item unbinds its conversations", () => {
     expect(readBindingFile(den, 6)?.workId).toBe("work-t2");
     expect(readBindingFile(den, 5)?.workId).toBe("work-other");
     expect(await sectionText("active_task", 3)).toContain(NOTICE("Feat"));
+  });
+
+  it("a hub-approved graduation forgets the cached completion of the feature and its children, and promotes once", async () => {
+    createMemoryExtension({ live: true, engine: { call: async () => { throw new Error("unused"); } } } as never, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {}, env: {} });
+    const actions = memoryActionsFor(den)!;
+    const promote = vi.fn(async () => {});
+    actions.promoteForFeature = promote;
+    try {
+      const f = add({ kind: "feature", title: "F" });
+      const t = add({ kind: "task", title: "T", partOf: f.id });
+      bind(1, f.id, f.id);
+      bind(2, t.id, f.id);
+      expect((await readBoundTask(den))?.taskId).toBe(f.id); // not complete yet: the lookup is now cached
+      items.get(f.id)!.stage = "archived";
+      items.get(t.id)!.stage = "archived";
+      await actions.onGraduationApproved!(f.id, [t.id]);
+      expect(await readBoundTask(den)).toBeNull(); // re-read, not the cached "open" (no time has passed)
+      expect(readBindingFile(den, 2)?.workId).toBe(t.id);
+      expect(await readBound({ wolfDen: den, conversationId: 2 })).toBeNull();
+      expect(promote).toHaveBeenCalledTimes(1);
+      expect(promote).toHaveBeenCalledWith(f.id);
+    } finally {
+      unregisterMemoryActions(den, actions);
+    }
   });
 
   it("the binding guidance says when unbinding happens", async () => {

@@ -6,7 +6,7 @@ Prepared, NOT yet run. Run only after owner confirmation. Never print `/etc/wolf
 | | |
 |---|---|
 | user / group | `hubd` / `hubd` (system, nologin). Never a wolf user |
-| bind | Tailscale IP `100.120.154.69` only, port **3150** (3141 was the legacy wolfpack-agent, retired 2026-11-06; never use 3141) |
+| bind | Tailscale IP `<tailnet-ip>` only, port **3150** (3141 was the legacy wolfpack-agent, retired 2026-11-06; never use 3141) |
 | unit | `/etc/systemd/system/hubd.service`: `After=tailscaled`, `Type=notify` with `WatchdogSec=30s` (a hub whose event loop stops pinging is killed and restarted), `Restart=on-failure`, hardened (see file). Install the bundle that sends READY=1 BEFORE this unit: an older hubd never sends it, so its start times out after `TimeoutStartSec=300`. Order and rollback: section 4b |
 | env | `/etc/wolfpack/hubd.env`, root:root 600 |
 | code | `/opt/wolfpack-hubd/releases/<ts>-<sha>/hubd.mjs`, symlinks `current` and `previous` (node: `/usr/bin/node` v22) |
@@ -25,8 +25,8 @@ Prepared, NOT yet run. Run only after owner confirmation. Never print `/etc/wolf
 
 **Migrating an existing sfo-01 unit (as root, once; a hubd release deploy does this by itself, this is the manual equivalent):**
 ```
-/opt/wolfpack-hubd/setup.sh --dry-run setup --bind 100.120.154.69 --port 3150   # shows the unit rewrite and the drop-ins it removes; changes nothing
-/opt/wolfpack-hubd/setup.sh setup --bind 100.120.154.69 --port 3150
+/opt/wolfpack-hubd/setup.sh --dry-run setup --bind <tailnet-ip> --port 3150   # shows the unit rewrite and the drop-ins it removes; changes nothing
+/opt/wolfpack-hubd/setup.sh setup --bind <tailnet-ip> --port 3150
 systemctl restart hubd
 systemctl cat hubd | grep -E '/home|ReadWritePaths|BindPaths'                   # only ReadWritePaths=/var/lib/hubd
 systemctl show hubd -p DropInPaths                                              # empty (curator-local.conf and work-writes.conf* gone)
@@ -55,16 +55,16 @@ A symlink at `/var/lib/hubd/kb/base/domains` means the old layout into a wolf's 
 ## 2. Copy (staging only)
 ```
 S="ssh -i ~/.ssh/wolfpack -o IdentitiesOnly=yes -o IdentityAgent=none"
-rsync -a --delete -e "$S" /tmp/hubd-bundle/ root@100.120.154.69:/root/hubd-stage/bundle/
-rsync -a --delete -e "$S" deploy/hubd/ root@100.120.154.69:/root/hubd-stage/deploy/
+rsync -a --delete -e "$S" /tmp/hubd-bundle/ root@<tailnet-ip>:/root/hubd-stage/bundle/
+rsync -a --delete -e "$S" deploy/hubd/ root@<tailnet-ip>:/root/hubd-stage/deploy/
 ```
 ## 3. Dry run, then real (on sfo-01 as root)
 ```
 cd /root/hubd-stage/deploy
-./setup.sh --dry-run setup --bind 100.120.154.69 --port 3150 --wolf 1uk4
+./setup.sh --dry-run setup --bind <tailnet-ip> --port 3150 --wolf 1uk4
 ./setup.sh --dry-run install --bundle /root/hubd-stage/bundle
 # review; any "WOULD FAIL" line must be resolved. Then:
-./setup.sh setup --bind 100.120.154.69 --port 3150 --wolf 1uk4      # add --hub-writes only if the owner wants work writes
+./setup.sh setup --bind <tailnet-ip> --port 3150 --wolf 1uk4      # add --hub-writes only if the owner wants work writes
 ./setup.sh install --bundle /root/hubd-stage/bundle
 systemctl start hubd
 ```
@@ -73,12 +73,12 @@ systemctl start hubd
 ## 4. Verify
 `WOLFPACK_KB_WRITER=1` (in `hubd.env`, from `hubd.env.example`) turns off the worker-mirror write guard (`@wolfpack/kb` mirror-guard): hubd (and, until its retirement on 2026-11-06, the sfo-01 `wolfpack-agent`) writes the KB tree on purpose. Never set it on Mac workers.
 ```
-systemctl is-active hubd; journalctl -u hubd -n 30 --no-pager        # "hubd listening on http://100.120.154.69:3150"
+systemctl is-active hubd; journalctl -u hubd -n 30 --no-pager        # "hubd listening on http://<tailnet-ip>:3150"
 journalctl -k | grep -i seccomp                                      # nothing about hubd (a filtered call would show up here); also check journalctl -u hubd -p err
-ss -ltnp | grep -E 'hubd|:3150'                                      # ONLY 100.120.154.69:3150; no 0.0.0.0, *, or [::]
+ss -ltnp | grep -E 'hubd|:3150'                                      # ONLY <tailnet-ip>:3150; no 0.0.0.0, *, or [::]
 ps -o user= -p "$(systemctl show -p MainPID --value hubd)"            # hubd (never a wolf user)
 stat -c '%U:%G %a' /etc/wolfpack/hubd.env                            # root:root 600
-curl -s -o /dev/null -w '%{http_code}\n' http://100.120.154.69:3150/v1/registry/wolves       # 401: up, tokens enforced (no unauthenticated health route)
+curl -s -o /dev/null -w '%{http_code}\n' http://<tailnet-ip>:3150/v1/registry/wolves       # 401: up, tokens enforced (no unauthenticated health route)
 curl -s -m 3 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3150/v1/registry/wolves       # 000: not on loopback
 # as the hubd user (outside the sandbox these test plain file permissions)
 runuser -u hubd -- test -w /var/lib/hubd/kb/base/domains && echo kb-write ok
@@ -116,8 +116,8 @@ The unit moves from `Type=simple` to `Type=notify` + `WatchdogSec=30s` + `Watchd
    D=/root/hubd-stage/deploy
    grep '^Type=' "$D/hubd.service"                                  # must print Type=notify; anything else is a stale copy: stop
    cp -a /etc/systemd/system/hubd.service /root/hubd.service.bak-$(date -u +%Y%m%dT%H%M%SZ)
-   "$D/setup.sh" --dry-run setup --bind 100.120.154.69 --port 3150  # review: it must name $D/hubd.service as the template
-   "$D/setup.sh" setup --bind 100.120.154.69 --port 3150            # rewrites the unit from $D/hubd.service, runs daemon-reload
+   "$D/setup.sh" --dry-run setup --bind <tailnet-ip> --port 3150  # review: it must name $D/hubd.service as the template
+   "$D/setup.sh" setup --bind <tailnet-ip> --port 3150            # rewrites the unit from $D/hubd.service, runs daemon-reload
    grep '^Type=' /etc/systemd/system/hubd.service                   # Type=notify
    ```
 4. **Reload and restart:** `systemctl daemon-reload && systemctl restart hubd`. With `Type=notify` the restart returns only once hubd sent READY, or once 300 s have passed.
@@ -149,7 +149,7 @@ workerd announces wolves by **name** (`1uk4`), not by id (ddkyhT). Wolves must b
 1. A console (owner) token for the registry calls. On sfo-01 (single-use, 10 minutes):
 ```
 umask 077; runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind console --data-dir /var/lib/hubd
-H=http://100.120.154.69:3150
+H=http://<tailnet-ip>:3150
 TOKEN=$(curl -sS -H 'Content-Type: application/json' -X POST $H/v1/pair -d '{"code":"<code>","label":"sfo-admin","kind":"console"}' | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')   # keep in the shell, never echo
 A="Authorization: Bearer $TOKEN"; J='Content-Type: application/json'
 ```
@@ -164,7 +164,7 @@ curl -sS -H "$A" $H/v1/registry/wolves
 ```
 runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind worker --host-id mac-1uk4 --data-dir /var/lib/hubd
 ```
-   On the Mac, within 10 minutes: `workerd pair http://100.120.154.69:3150 <code>` (writes `~/.wolfpack/workerd/hub.json`, mode 0600; plain http is accepted inside Tailscale only; workerd prints a warning).
+   On the Mac, within 10 minutes: `workerd pair http://<tailnet-ip>:3150 <code>` (writes `~/.wolfpack/workerd/hub.json`, mode 0600; plain http is accepted inside Tailscale only; workerd prints a warning).
 4. Start workerd on the Mac as usual. `runWorkerd` reads `hub.json` at startup (`packages/workerd/src/run.ts:61-71`, called from `bin/workerd.ts`) and opens the link.
 5. Online check (there is no GET for presence):
    - `curl -sN -m 20 -H "$A" $H/v1/events` shows `wolf.presence` with state `online` for `1uk4`;

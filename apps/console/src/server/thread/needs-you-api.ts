@@ -13,7 +13,8 @@ import type { ConsoleClient, WolfEvent } from "@wolfpack/client";
 import { buildNeedsYou, type WolfNeedsYou } from "../../core/thread/needs-you.ts";
 import { emit, type ServerEvents } from "../../core/thread/events.ts";
 import { HUB_AUTH_HEADER } from "../../core/ui/hub-auth.ts";
-import { getConsoleClient, isHubAuthError } from "./console-client.ts";
+import { getConsoleClient, isHubAuthError, nextRequestToken } from "./console-client.ts";
+import { pendingApprovals, type PendingApproval } from "../work/approvals-api.ts";
 import type { ClientSource } from "./thread-api.ts";
 
 /**
@@ -39,15 +40,41 @@ export async function collectNeedsYou(client: ConsoleClient, only?: string): Pro
 	return { reports: ok, responded: ok.map((r) => r.wolf), listed: names };
 }
 
-export function createNeedsYouApi(source: ClientSource, opts: { onList?: (client: ConsoleClient) => void } = {}) {
+/** A pending owner-approval request as the needs-you list shows it: keyed by the work item (a feature with no live thread still appears). */
+export interface NeedsYouApproval {
+	requestId: string;
+	/** The work item id: the key. */
+	workId: string;
+	kind: PendingApproval["kind"];
+	/** "<kind> approval: <work item title>" */
+	label: string;
+	/** The feature's Work page. */
+	href: string;
+	raisedAt: string;
+}
+
+export const approvalEntry = (a: Pick<PendingApproval, "id" | "workId" | "kind" | "title" | "requestedAt">): NeedsYouApproval => ({ requestId: a.id, workId: a.workId, kind: a.kind, label: `${a.kind} approval: ${a.title}`, href: `/kb/work/${encodeURIComponent(a.workId)}`, raisedAt: a.requestedAt });
+
+async function defaultApprovals(): Promise<PendingApproval[]> {
+	let token: string | null | undefined;
+	try {
+		token = await nextRequestToken();
+	} catch {
+		token = null;
+	}
+	return pendingApprovals(token);
+}
+
+export function createNeedsYouApi(source: ClientSource, opts: { onList?: (client: ConsoleClient) => void; approvals?: () => Promise<PendingApproval[]> } = {}) {
+	const approvals = opts.approvals ?? defaultApprovals;
 	return {
 		/** `wolf`: only that wolf (the poked-wolf refetch). Answers `{items, responded}`. */
 		async list(wolf?: string): Promise<Response> {
 			try {
 				const client = source();
 				opts.onList?.(client);
-				const { reports, responded, listed } = await collectNeedsYou(client, wolf);
-				return Response.json({ items: buildNeedsYou(reports), responded, ...(wolf ? {} : { wolves: listed }) });
+				const [{ reports, responded, listed }, pending] = await Promise.all([collectNeedsYou(client, wolf), wolf ? Promise.resolve([]) : approvals().catch(() => [])]);
+				return Response.json({ items: buildNeedsYou(reports), approvals: pending.map(approvalEntry), responded, ...(wolf ? {} : { wolves: listed }) });
 			} catch (err) {
 				// An unpaired/revoked browser token: 401 + the marker, so the client goes to /pair (same as the other hub-backed routes).
 				if (isHubAuthError(err)) return Response.json({ error: err.message, code: "unauthorized" }, { status: 401, headers: { [HUB_AUTH_HEADER]: "required" } });

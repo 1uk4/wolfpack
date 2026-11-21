@@ -25,7 +25,7 @@
  * precedent, components/thread/session.ts).
  */
 import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
-import { clearHubToken } from "@/src/core/ui/hub-auth";
+import { clearHubToken } from "@/src/core";
 import { leaveOnUnauthorized } from "@/components/shell/single-mac";
 import { SERVER_EVENT_TYPES, type ServerEventType, type ServerEvents } from "@/src/core";
 

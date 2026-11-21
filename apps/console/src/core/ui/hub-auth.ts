@@ -130,14 +130,24 @@ export function tokenFromHash(hash: string): string | undefined {
 
 const RAW_TOKEN = /^[A-Za-z0-9._~+/=-]{1,512}$/;
 
-/** Sign-in box input: a pairing link (the token after `#token=`, other hash params ignored) or a raw token. Anything else is undefined. */
-export function tokenFromPairingInput(input: string): string | undefined {
+/** A hub pairing code: 12 random bytes as base64url, so exactly 16 characters of [A-Za-z0-9_-]. Hub tokens are 43 characters. */
+const PAIRING_CODE = /^[A-Za-z0-9_-]{16}$/;
+
+export type PairingInput = { kind: "token"; token: string } | { kind: "code"; code: string } | { kind: "invalid" };
+
+/** Sign-in box input: a pairing link (the token after `#token=`, other hash params ignored), a typed one-time pairing code, or a raw token. Anything else is invalid. */
+export function tokenFromPairingInput(input: string): PairingInput {
+	const invalid: PairingInput = { kind: "invalid" };
 	const s = input.trim();
-	if (!s) return undefined;
+	if (!s) return invalid;
 	const i = s.indexOf("#");
-	if (i >= 0) return tokenFromHash(s.slice(i));
-	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return undefined; // a link with no fragment
-	return RAW_TOKEN.test(s) ? s : undefined;
+	if (i >= 0) {
+		const token = tokenFromHash(s.slice(i));
+		return token ? { kind: "token", token } : invalid;
+	}
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return invalid; // a link with no fragment
+	if (PAIRING_CODE.test(s)) return { kind: "code", code: s };
+	return RAW_TOKEN.test(s) ? { kind: "token", token: s } : invalid;
 }
 
 type FetchFn = typeof fetch;

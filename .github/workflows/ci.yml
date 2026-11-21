@@ -9,6 +9,8 @@ on:
   pull_request:
 permissions:
   contents: read
+# Concurrency stays per branch so a newer commit cancels the older run. It cannot dedupe the same sha on two branches (different groups);
+# that case is handled by the coveredByPr gate in `detect`: a push whose sha is the head of an open PR skips, the pull_request run does the work.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -17,7 +19,12 @@ jobs:
   detect:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read   # for the covered-by-PR lookup below
     outputs:
+      coveredByPr: ${{ steps.cov.outputs.coveredByPr }}
+      prNumber: ${{ steps.cov.outputs.prNumber }}
       affected: ${{ steps.a.outputs.affected }}
       any: ${{ steps.flags.outputs.any }}
       release: ${{ steps.release.outputs.release }}
@@ -30,6 +37,25 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false   # no install in this job: skip v6's automatic cache restore/save
+      - id: cov
+        name: covered by an open PR? (push only; the pull_request run is the full superset)
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Matches on head sha, not branch name: a PR branch that lags behind does not cover this commit.
+          # Any API failure, forbidden answer or unparsable output falls back to "not covered" = run everything. Never to skipping.
+          covered=false; pr=""
+          if out=$(gh api "repos/$REPO/commits/$SHA/pulls" 2>/dev/null) && pr=$(printf '%s' "$out" | jq -r --arg sha "$SHA" '[.[] | select(.state == "open" and .head.sha == $sha)][0].number // empty' 2>/dev/null) && [ -n "$pr" ]; then
+            covered=true
+          else
+            pr=""
+          fi
+          echo "coveredByPr=$covered" >> "$GITHUB_OUTPUT"
+          echo "prNumber=$pr" >> "$GITHUB_OUTPUT"
+          echo "coveredByPr=$covered prNumber=$pr"
       - id: release
         name: release run? (PR into stable or push to stable)
         env:
@@ -52,27 +78,63 @@ jobs:
         env:
           A: ${{ steps.a.outputs.affected }}
 
-  verify:
+
+  # verify was one serialized job (install+build, tsc, vitest, console tests). It is now three parallel jobs (checks, vitest x2 shards, console-tests) behind the single `ci` aggregate.
+  # Each job repeats the same setup (install, test env, tsc --build of the affected projects: the tests import workspace packages from dist).
+  checks:
+    # lockfile guard + tsc --build (typecheck of the affected projects). There is no lint step today, so none is added.
     needs: detect
-    if: needs.detect.outputs.any == 'true'
+    if: needs.detect.outputs.any == 'true' && needs.detect.outputs.coveredByPr != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       A: ${{ needs.detect.outputs.affected }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: lockfile guard (package-lock.json is current, both locks agree)
+        # npm still builds the release from package-lock.json; this fails a PR that changed a package.json without regenerating both locks.
+        # Both guards run even if one fails; the last step fails the job.
+        id: lock
+        continue-on-error: true
+        run: pnpm check:lockfiles
+      - name: tsc --build (affected projects)
+        id: tsc
+        continue-on-error: true
+        run: |
+          mapfile -t P < <(node -p 'JSON.parse(process.env.A).tsProjects.join("\n")')
+          # if/else, not `a && b || c`: with that form a failing tsc fell through to the echo and the step passed.
+          if [ ${#P[@]} -gt 0 ]; then pnpm exec tsc --build "${P[@]}"; else echo "no TS projects affected"; fi
+      - name: fail if any check failed
+        if: always()
+        env:
+          LOCK: ${{ steps.lock.outcome }}
+          TSC: ${{ steps.tsc.outcome }}
+        run: |
+          echo "lockfile guard: $LOCK; tsc --build: $TSC"
+          if [ "$LOCK" != success ] || [ "$TSC" != success ]; then exit 1; fi
+
+  vitest:
+    # same affected-packages command as the old verify job plus vitest's --shard, applied after the file filter, so the shards together run every file once
+    needs: detect
+    if: needs.detect.outputs.any == 'true' && needs.detect.outputs.coveredByPr != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/3', '2/3', '3/3']
+    env:
+      A: ${{ needs.detect.outputs.affected }}
+      SHARD: ${{ matrix.shard }}
       WOLFPACK_DESKTOP_TEST_NODE: "1"   # apps/desktop supervisor test runs the runtime bundles under this job's Node 22 (no Electron binary on the runner)
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4   # no `version:`: it reads packageManager from package.json, so CI and dev use the same pnpm
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm   # caches the pnpm store (not node_modules), keyed on pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - name: lockfile guard (package-lock.json is current, both locks agree)
-        # npm still builds the release from package-lock.json; this fails a PR that changed a package.json without regenerating both locks.
-        run: pnpm check:lockfiles
+      - uses: ./.github/actions/setup
       - name: test environment (git identity + pack models block; no secrets)
         # Some suites commit in temp repos and resolve models from ~/.wolfpack/config.yaml, which a dev box has and a runner does not.
         run: |
@@ -84,17 +146,16 @@ jobs:
       - name: tsc --build (affected projects)
         run: |
           mapfile -t P < <(node -p 'JSON.parse(process.env.A).tsProjects.join("\n")')
-          # if/else, not `a && b || c`: with that form a failing tsc fell through to the echo and the step passed.
           if [ ${#P[@]} -gt 0 ]; then pnpm exec tsc --build "${P[@]}"; else echo "no TS projects affected"; fi
       - name: desktop runtime bundles (the supervisor test starts the real hubd, workerd and wolfd)
         if: needs.detect.outputs.affected && (fromJSON(needs.detect.outputs.affected).all || fromJSON(needs.detect.outputs.affected).desktopTests)
         run: |
           pnpm -r --filter "./packages/*" build
           node apps/desktop/scripts/build-runtime.mjs
-      - name: vitest (affected packages)
+      - name: vitest (affected packages, shard ${{ matrix.shard }})
         run: |
           ALL=$(node -p 'JSON.parse(process.env.A).all')
-          if [ "$ALL" = true ]; then pnpm exec vitest run --project default; exit; fi
+          if [ "$ALL" = true ]; then pnpm exec vitest run --project default --shard "$SHARD"; exit; fi
           mapfile -t F < <(node -e '
             const a=JSON.parse(process.env.A);
             const f=[...a.vitestPaths];
@@ -103,14 +164,37 @@ jobs:
             if(a.desktopTests)f.push("apps/desktop/electron/");
             console.log(f.join("\n"))')
           # if/else, not `a && b || c`: with that form a failing vitest fell through to the echo and the step passed.
-          if [ -n "${F[0]:-}" ]; then pnpm exec vitest run --project default "${F[@]}"; else echo "no vitest paths affected"; fi
+          if [ -n "${F[0]:-}" ]; then pnpm exec vitest run --project default --shard "$SHARD" "${F[@]}"; else echo "no vitest paths affected"; fi
+
+  console-tests:
+    needs: detect
+    if: needs.detect.outputs.any == 'true' && needs.detect.outputs.coveredByPr != 'true' && fromJSON(needs.detect.outputs.affected).consoleTests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      A: ${{ needs.detect.outputs.affected }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: test environment (git identity + pack models block; no secrets)
+        run: |
+          git config --global user.name ci
+          git config --global user.email ci@example.invalid
+          git config --global init.defaultBranch main
+          mkdir -p ~/.wolfpack
+          printf 'models:\n  main:  { model: claude-opus-5-5 }\n  smart: { model: claude-sonnet-5-5 }\n  fast:  { model: claude-haiku-5-5 }\n  transport:\n    local: subscription\n    vps: api\n' > ~/.wolfpack/config.yaml
+      - name: tsc --build (affected projects)
+        run: |
+          mapfile -t P < <(node -p 'JSON.parse(process.env.A).tsProjects.join("\n")')
+          if [ ${#P[@]} -gt 0 ]; then pnpm exec tsc --build "${P[@]}"; else echo "no TS projects affected"; fi
       - name: console tests
-        if: fromJSON(needs.detect.outputs.affected).consoleTests
         run: pnpm --filter @wolfpack/console test
 
   tracer:
     needs: detect
-    if: needs.detect.outputs.release == 'true' || fromJSON(needs.detect.outputs.affected).tracer
+    if: needs.detect.outputs.coveredByPr != 'true' && (needs.detect.outputs.release == 'true' || fromJSON(needs.detect.outputs.affected).tracer)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -130,7 +214,7 @@ jobs:
 
   release-smoke:
     needs: detect
-    if: needs.detect.outputs.release == 'true' || fromJSON(needs.detect.outputs.affected).release
+    if: needs.detect.outputs.coveredByPr != 'true' && (needs.detect.outputs.release == 'true' || fromJSON(needs.detect.outputs.affected).release)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -149,7 +233,7 @@ jobs:
   eval:
     # slow evals (KB tree-rules, llm-split), release runs only; skipped (counts as passing) elsewhere
     needs: detect
-    if: needs.detect.outputs.release == 'true'
+    if: needs.detect.outputs.release == 'true' && needs.detect.outputs.coveredByPr != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     concurrency:
@@ -159,12 +243,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - name: test environment (git identity + pack models block; no secrets)
         run: |
           git config --global user.name ci
@@ -178,10 +257,17 @@ jobs:
 
   ci:
     if: always()
-    needs: [detect, verify, tracer, release-smoke, eval]
+    needs: [detect, checks, vitest, console-tests, tracer, release-smoke, eval]
     runs-on: ubuntu-24.04
     steps:
+      - name: covered by PR (a push whose sha is the head of an open PR; the pull_request run is the check)
+        if: needs.detect.outputs.coveredByPr == 'true'
+        env:
+          PR: ${{ needs.detect.outputs.prNumber }}
+        run: |
+          echo "covered by PR #$PR run; see the pull_request check"
       - name: all required jobs passed or were skipped
+        if: needs.detect.outputs.coveredByPr != 'true'
         run: |
           echo '${{ toJSON(needs.*.result) }}'
           if echo '${{ toJSON(needs.*.result) }}' | grep -Eq 'failure|cancelled'; then exit 1; fi

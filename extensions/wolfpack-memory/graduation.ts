@@ -12,13 +12,11 @@ import type { WorkItem } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { WorkQueuedError } from "./work-client.js";
 import {
-  confirmGraduation,
+  prepareGraduation,
   drainScope,
   loadGraduationScope,
   previewGraduation,
   readinessOf,
-  unbindOnGraduation,
-  type ConfirmedGraduation,
   type DrainWork,
   type GraduationClient,
   type GraduationPreview,
@@ -42,6 +40,11 @@ export interface GraduationDeps {
   ship: (id: string) => Promise<unknown>;
   /** Final feature pass before the distill (memory.workLog: append). Not set by the durable runtime today. */
   finalPass?: (featureId: string) => Promise<unknown>;
+  /**
+   * Files an owner-approval request on the hub (never acts on the item): resolves with the request id and whether one was
+   * already pending; throws when the hub does not hold the request. A wolf's worker token cannot graduate, so the hub does it on approval.
+   */
+  fileRequest: (id: string, body: { kind: "graduate"; preview: { contributions: GraduationPreview["contributions"] } }) => Promise<{ requestId: string; existing: boolean }>;
   /** Called with every item that graduated (cache invalidation). */
   forget?: (id: string) => void;
   /** Called once a graduation has happened (after the unbind), with the graduated item: the promote pass for its topics. Never breaks the graduation. */
@@ -104,36 +107,22 @@ export function createGraduation(deps: GraduationDeps) {
   }
 
   /**
-   * Step 2: check the token, then confirmGraduation (late drain, emit, graduate, archive: all or nothing), then unbind
-   * every holder. `exceptRoot` is the calling conversation, which the caller unbinds itself.
+   * Step 2: check the token, run the wolf-side steps (late drain, final pass, re-distill, ship an incomplete item), then file
+   * a graduate approval request carrying the contributions. Nothing is written to the inbox and the item is not graduated
+   * here: the hub delivers and graduates on the owner's approval. The token is used up only once the hub holds the request,
+   * so a failed filing can be confirmed again.
    */
-  async function confirm(id: string, token: string, opts: { exceptRoot?: number } = {}): Promise<{ preview: GraduationPreview; done: ConfirmedGraduation; unbound: number[]; warnings: string[] }> {
+  async function confirm(id: string, token: string): Promise<{ preview: GraduationPreview; requestId: string; existing: boolean; lateFolded: number }> {
     try {
       const roots = needRoots();
       const p = await loadPreview(id, token);
-      const done = await confirmGraduation({ client, roots, wolf: deps.wolfName, preview: p, ship: deps.ship, drain: deps.drain, finalPass: deps.finalPass, engine: deps.engine() });
+      const prepared = await prepareGraduation({ client, roots, preview: p, ship: deps.ship, drain: deps.drain, finalPass: deps.finalPass, engine: deps.engine() });
+      const { requestId, existing } = await deps.fileRequest(id, { kind: "graduate", preview: { contributions: prepared.preview.contributions } });
       await unlink(previewFile(token)).catch(() => { /* used once */ });
-      // The graduation has happened (archived, token used): an unbind that fails is a warning, never an error, or the retry would find no token.
-      let unbound: number[] = [];
-      const warnings: string[] = [];
-      try {
-        unbound = afterGraduation(p, done, opts.exceptRoot);
-      } catch (e) {
-        warnings.push(`graduated, but unbinding the conversations failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      return { preview: p, done, unbound, warnings };
+      return { preview: prepared.preview, requestId, existing, lateFolded: prepared.lateFolded };
     } catch (err) {
       throw asFailure(err);
     }
-  }
-
-  /** Nothing more goes to a graduated feature: every conversation bound to it or to one of its tasks unbinds. */
-  function afterGraduation(p: GraduationPreview, done: ConfirmedGraduation, exceptRoot?: number): number[] {
-    const unbound = unbindOnGraduation(wolfDen, { id: p.itemId, title: p.title, archived: done.archived, exceptRoot });
-    deps.forget?.(p.itemId);
-    for (const a of done.archived) deps.forget?.(a);
-    try { deps.onGraduated?.(p.itemId); } catch { /* an observer never breaks a graduation */ }
-    return unbound;
   }
 
   /** The preview as the wire carries it. */
@@ -221,8 +210,8 @@ export function createGraduation(deps: GraduationDeps) {
       return toResult(await preview(id));
     },
     async confirm(id: string, token: string): Promise<GraduationConfirmResult> {
-      const { done, unbound, warnings } = await confirm(id, token);
-      return { entries: done.sent, archived: done.archived, lateFolded: done.lateFolded ?? 0, unbound: unbound.length, ...(warnings.length ? { warnings } : {}) };
+      const r = await confirm(id, token);
+      return { requestId: r.requestId, status: r.existing ? "pending" : "filed", entries: r.preview.contributions.map((c) => c.id), archived: [], lateFolded: r.lateFolded, unbound: 0 };
     },
     pendingPreview,
     observations,

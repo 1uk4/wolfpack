@@ -34,9 +34,9 @@ systemctl is-active wolf-ETAy7b; pgrep -u wolf-ETAy7b -fc . ; id workerd        
 ## C. Stage (Mac)
 ```
 S="ssh -i ~/.ssh/wolfpack -o IdentitiesOnly=yes -o IdentityAgent=none"
-$S root@100.120.154.69 'mkdir -p /root/workerd-stage/bundle /root/workerd-stage/deploy'
-rsync -a --delete -e "$S" /tmp/workerd-bundle/ root@100.120.154.69:/root/workerd-stage/bundle/
-rsync -a --delete -e "$S" deploy/workerd/ root@100.120.154.69:/root/workerd-stage/deploy/
+$S root@<tailnet-ip> 'mkdir -p /root/workerd-stage/bundle /root/workerd-stage/deploy'
+rsync -a --delete -e "$S" /tmp/workerd-bundle/ root@<tailnet-ip>:/root/workerd-stage/bundle/
+rsync -a --delete -e "$S" deploy/workerd/ root@<tailnet-ip>:/root/workerd-stage/deploy/
 ```
 ## D. Dry run (sfo-01, root)
 ```
@@ -61,14 +61,14 @@ systemd-run --wait --pipe -p User=workerd -p NoNewPrivileges=yes -p ProtectSyste
 ## F. Register, pair, start (sfo-01, root)
 Order: host and wolf on the hub, then pair, then start. The admin token must never appear in argv, so curl reads the header from a process substitution (a bash builtin `printf`; `cat` only reads the file):
 ```
-H=http://100.120.154.69:3150; J='Content-Type: application/json'
+H=http://<tailnet-ip>:3150; J='Content-Type: application/json'
 hubcurl() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$(cat /root/hubd-admin.token)") -H "$J" "$@"; }
 hubcurl -X POST $H/v1/registry/hosts  -d '{"name":"sfo-01"}'
 hubcurl -X POST $H/v1/registry/wolves -d '{"name":"hal","host":"sfo-01","domains":["personal","snapjack","wolfpack"]}'   # each 201
 hubcurl $H/v1/registry/wolves
 CODE=$(runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind worker --host-id sfo-01 --data-dir /var/lib/hubd | sed -n 's/^pairing code: *\([A-Za-z0-9_-]*\).*/\1/p')   # single-use, 10 minutes
 [ "${#CODE}" -eq 16 ] || { echo "STOP: pairing code is ${#CODE} chars, expected 16 (base64url); do not continue, read it from the pair output by hand" >&2; false; }
-( cd / && runuser -u workerd -- env WORKERD_CONFIG_DIR=/var/lib/workerd /usr/bin/node /opt/wolfpack-workerd/current/workerd.mjs pair http://100.120.154.69:3150 "$CODE" )
+( cd / && runuser -u workerd -- env WORKERD_CONFIG_DIR=/var/lib/workerd /usr/bin/node /opt/wolfpack-workerd/current/workerd.mjs pair http://<tailnet-ip>:3150 "$CODE" )
 test -f /var/lib/workerd/hub.json && echo "hub.json present" || echo "NO hub.json: the unit will NOT start (ConditionPathExists)"
 systemctl start workerd; sleep 3; systemctl is-active workerd
 ```

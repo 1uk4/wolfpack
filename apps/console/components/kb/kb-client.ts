@@ -8,7 +8,7 @@
  * "memory_busy", "promote_unavailable") so callers can tell 409s apart.
  */
 import type { WorkItemResponse } from "@wolfpack/protocol";
-import { dataStore, StoreHttpError } from "@/src/core/data-store";
+import { dataStore, StoreHttpError } from "@/src/core";
 import type {
 	ConsolidateResponse,
 	GraduationJob,
@@ -206,6 +206,11 @@ export function postGraduateConfirm(wolf: string, workId: string, token: string)
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ token }),
 	});
+}
+
+/** Approve a filed approval request as this console's owner device (a non-owner device is refused with 403: code "forbidden"). */
+export function postApproveRequest(requestId: string): Promise<KbResult<unknown>> {
+	return request(`/api/work/requests/${seg(requestId)}/approve`, { method: "POST" });
 }
 
 /** Where the feature's graduation job stands on this wolf (none, running, preview_ready, graduated, error). */

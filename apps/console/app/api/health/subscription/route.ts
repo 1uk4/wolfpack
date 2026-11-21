@@ -1,5 +1,5 @@
 import { healthApi } from "@/src/server";
-import { createSubscriptionHandler } from "@/src/server/pack/subscription-api";
+import { createSubscriptionHandler } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 

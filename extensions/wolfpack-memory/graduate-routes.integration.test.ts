@@ -18,9 +18,27 @@ import { readBindingFile, writeBindingFile } from "./conversation-binding.js";
 
 const tmp = (p: string) => mkdtempSync(join(tmpdir(), `grad-${p}-`));
 let tw: TestWolf | undefined;
-beforeEach(() => vi.stubEnv("PI_SUBAGENT_AGENT", ""));
+/** The stub hub: POST /v1/work/:id/requests answers per `hubMode` (201 files, 409 names the pending one, 500 refuses); everything else goes to the real fetch. */
+let hubMode: 201 | 409 | 500 = 201;
+let filed: { id: string; auth: string | null; body: any }[] = [];
+const realFetch = globalThis.fetch;
+beforeEach(() => {
+  vi.stubEnv("PI_SUBAGENT_AGENT", "");
+  hubMode = 201;
+  filed = [];
+  vi.stubGlobal("fetch", async (url: string | URL, init: RequestInit = {}) => {
+    const u = new URL(String(url));
+    if (u.host !== "hub.test") return realFetch(url, init);
+    const m = /^\/v1\/work\/([^/]+)\/requests$/.exec(u.pathname)!;
+    filed.push({ id: m[1]!, auth: new Headers(init.headers).get("authorization"), body: JSON.parse(String(init.body)) });
+    if (hubMode === 201) return new Response(JSON.stringify({ request: { id: "req-new" } }), { status: 201 });
+    if (hubMode === 409) return new Response(JSON.stringify({ error: "pending", code: "request_pending", details: { requestId: "req-old" } }), { status: 409 });
+    return new Response(JSON.stringify({ error: "boom" }), { status: 500 });
+  });
+});
 afterEach(async () => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   await tw?.stop();
   tw = undefined;
 });
@@ -70,7 +88,7 @@ function boot(dev: string) {
     hooks: {
       extensions: ({ config, den, env: sandboxEnv }) => {
         // KB_BASE is the live read-only mirror, which a sandbox does not copy: a temp dir stands in.
-        const env = { ...sandboxEnv, KB_BASE: kbBase };
+        const env = { ...sandboxEnv, KB_BASE: kbBase, WOLFPACK_HUB_URL: "http://hub.test", WOLFPACK_HUB_TOKEN: "wolf-token" };
         opsRoot = env.KB_OPS!;
         const c = { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env };
         const e = engine();
@@ -185,7 +203,7 @@ describe("graduate routes", () => {
     expect(job.kind).toBe("confirm");
     release();
     const done = await pollUntil(feature);
-    expect(done).toMatchObject({ state: "graduated", jobId: job.jobId, result: { graduated: true } });
+    expect(done).toMatchObject({ state: "graduated", jobId: job.jobId, result: { graduated: false, requestId: "req-new", status: "filed" } });
   });
 
   it("recovers a finished preview from its token file when wolfd has no job for it (after a restart)", async () => {
@@ -196,7 +214,7 @@ describe("graduate routes", () => {
     const s = await tw.client.graduationStatus!("testwolf", feature);
     expect(s).toMatchObject({ state: "preview_ready", preview: { token: p.token, itemId: feature } });
     // and the token confirms
-    expect(await confirm(feature, p.token)).toMatchObject({ graduated: true });
+    expect(await confirm(feature, p.token)).toMatchObject({ requestId: "req-new", status: "filed" });
     // an expired token file is not recovered
     const { feature: f2 } = await makeFeature(tw);
     const p2 = await graduationActionsFor(tw.wolf.config.den)!.preview(f2);
@@ -215,14 +233,30 @@ describe("graduate routes", () => {
     expect(again.jobId).not.toBe(job.jobId);
   });
 
-  it("a feature thread that cannot be closed does not turn a done graduation into an error: graduated, with a warning", async () => {
+  it("a hub that refuses the request fails the confirm with the token kept and nothing written", async () => {
     tw = await boot(await devRoot());
     const { feature, tasks } = await makeFeature(tw);
     const p = await preview(feature);
-    vi.spyOn(tw.wolf.server, "closeFeatureThreads").mockImplementation(() => { throw new Error("thread store locked"); });
-    const r = await confirm(feature, p.token);
-    expect(r).toMatchObject({ graduated: true, closedThreads: [], warnings: [expect.stringContaining("thread store locked")] });
-    for (const id of [feature, ...tasks]) expect((await item(tw, id)).stage).toBe("archived");
+    hubMode = 500;
+    await tw.client.startGraduationConfirm!("testwolf", feature, p.token);
+    // the preview is still valid, so the status offers it again with the failure
+    expect(await pollUntil(feature)).toMatchObject({ state: "preview_ready", preview: { token: p.token }, lastError: { kind: "confirm", message: expect.stringContaining("HTTP 500") } });
+    expect(existsSync(join(tw.wolf.config.den, "tasks", "graduation", `${p.token}.json`))).toBe(true);
+    expect(inbox(tw)).toEqual([]);
+    expect((await item(tw, feature)).graduated).toBeFalsy();
+    for (const id of [feature, ...tasks]) expect((await item(tw, id)).stage).not.toBe("archived");
+    // the hub is back: the same token files the request
+    hubMode = 201;
+    expect(await confirm(feature, p.token)).toMatchObject({ requestId: "req-new", status: "filed" });
+  });
+
+  it("a request already pending answers its id as pending and still uses up the token", async () => {
+    tw = await boot(await devRoot());
+    const { feature } = await makeFeature(tw);
+    const p = await preview(feature);
+    hubMode = 409;
+    expect(await confirm(feature, p.token)).toMatchObject({ requestId: "req-old", status: "pending", graduated: false });
+    expect(existsSync(join(tw.wolf.config.den, "tasks", "graduation", `${p.token}.json`))).toBe(false);
   });
 
   it("a confirm that failed (not stale) falls back to preview_ready from the token file; a stale one stays an error", async () => {
@@ -237,7 +271,7 @@ describe("graduate routes", () => {
     const s = await pollUntil(feature);
     expect(s).toMatchObject({ state: "preview_ready", preview: { token: p.token }, lastError: { kind: "confirm", code: "engine_error", message: expect.stringContaining("nothing archived") } });
     behave.workRecordFails = false;
-    expect(await confirm(feature, p.token)).toMatchObject({ graduated: true });
+    expect(await confirm(feature, p.token)).toMatchObject({ requestId: "req-new", status: "filed" });
     // a stale token: the token file is gone, so the error stays
     const { feature: f2 } = await makeFeature(tw);
     await tw.client.startGraduationConfirm!("testwolf", f2, "deadbeef0000");
@@ -289,7 +323,7 @@ describe("graduate routes", () => {
     expect((await item(tw, feature)).stage).not.toBe("archived");
   });
 
-  it("confirm graduates, archives the feature and its tasks, unbinds holders and closes the feature thread", async () => {
+  it("confirm files a graduate request with the previewed contributions and writes nothing else: the hub graduates on approval", async () => {
     tw = await boot(await devRoot());
     const den = tw.wolf.config.den;
     const { feature, tasks } = await makeFeature(tw);
@@ -301,16 +335,16 @@ describe("graduate routes", () => {
 
     const p = await preview(feature);
     const r = await confirm(feature, p.token);
-    expect(r).toMatchObject({ graduated: true, entries: [p.contributions[0]!.id], lateFolded: 0, unbound: 2 });
-    expect(r.archived).toEqual([feature, ...tasks]);
-    expect(r.closedThreads).toEqual([thread.id]);
-    expect(inbox(tw)).toHaveLength(1);
-    expect((await item(tw, feature)).graduated).toBeTruthy();
-    for (const id of [feature, ...tasks]) expect((await item(tw, id)).stage).toBe("archived");
-    expect(readBindingFile(den, cid)).toBeNull();
-    expect(readBindingFile(den, 77)).toBeNull();
-    const t = await tw.client.getThread(thread.id);
-    expect(t.closed).toBe(true);
+    expect(r).toMatchObject({ graduated: false, requestId: "req-new", status: "filed", entries: [p.contributions[0]!.id], lateFolded: 0, archived: [], closedThreads: [] });
+    expect(filed).toHaveLength(1);
+    expect(filed[0]).toMatchObject({ id: feature, auth: "Bearer wolf-token", body: { kind: "graduate", preview: { contributions: [{ id: p.contributions[0]!.id, title: "How caching works" }] } } });
+    // nothing is sent, graduated, archived, unbound or closed here
+    expect(inbox(tw)).toEqual([]);
+    expect((await item(tw, feature)).graduated).toBeFalsy();
+    for (const id of [feature, ...tasks]) expect((await item(tw, id)).stage).not.toBe("archived");
+    expect(readBindingFile(den, cid)).toMatchObject({ workId: feature });
+    expect(readBindingFile(den, 77)).toMatchObject({ workId: tasks[0] });
+    expect((await tw.client.getThread(thread.id)).closed).toBeFalsy();
     // a token works once
     await expect(confirm(feature, p.token)).rejects.toMatchObject({ code: "preview_stale" });
   });
@@ -361,7 +395,8 @@ describe("graduate routes", () => {
     behave.workRecordFails = false;
     const r = await confirm(feature, p.token);
     expect(r.lateFolded).toBe(1);
-    expect(inbox(tw)).toHaveLength(1);
+    expect(filed).toHaveLength(1);
+    expect(inbox(tw)).toEqual([]);
   });
 
   it("folds pending tagged observations into the Record before distilling", async () => {

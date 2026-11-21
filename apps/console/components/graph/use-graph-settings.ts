@@ -9,7 +9,7 @@
  * held back and wins over the server copy.
  */
 import { useEffect, useRef, useState } from "react";
-import { dataStore } from "@/src/core/data-store";
+import { dataStore } from "@/src/core";
 import { DEFAULT_RENDER_SETTINGS, sanitizeRenderSettings, type GraphRenderSettings } from "@/src/core";
 
 export interface GraphSettingsState {

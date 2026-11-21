@@ -277,13 +277,27 @@ export function KeysBody() {
 		if (io) void io.load().then(setState);
 	}, [io]);
 	useEffect(reload, [reload]);
+	const [ackError, setAckError] = useState<string | null>(null);
 	const ack = useCallback(
-		(hostId: string, fingerprint: string) =>
-			void fetch(`/api/pack/machines/${encodeURIComponent(hostId)}/key/ack`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fingerprint }) }).then(reload),
+		(hostId: string, fingerprint: string) => {
+			setAckError(null);
+			void fetch(`/api/pack/machines/${encodeURIComponent(hostId)}/key/ack`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fingerprint }) })
+				.then(async (r) => {
+					// Show the server's own words (e.g. "only an owner device can do this"), as wolves-model.ts does for body.error.
+					if (!r.ok) setAckError(((await r.json().catch(() => ({}))) as { error?: string }).error ?? `Not saved (${r.status}).`);
+					reload();
+				})
+				.catch(() => setAckError("This console's server is not answering."));
+		},
 		[reload],
 	);
 	if (!io || !state || !support) return <p className="text-xs text-muted-foreground">Loading keys…</p>;
 	if ("error" in state) return <p data-testid="keys-error" className="text-xs text-destructive">{state.error}</p>;
 	if (state.machines.length === 0) return <p className="text-xs text-muted-foreground">No machines have reported yet.</p>;
-	return <KeysView machines={state.machines} support={support} send={io.send} reload={reload} ack={ack} />;
+	return (
+		<>
+			{ackError ? <p data-testid="keys-ack-error" role="alert" className="mb-2 text-xs text-destructive">{ackError}</p> : null}
+			<KeysView machines={state.machines} support={support} send={io.send} reload={reload} ack={ack} />
+		</>
+	);
 }

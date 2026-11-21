@@ -63,6 +63,37 @@ describe("compactRecord", () => {
     expect(store.items.i!.body).toBe(before + "\n- 11:00 [hal\u00b7change] late arrival <!-- src:z -->");
   });
 
+  it("a line appended between the re-read and the write makes the write 409; compact retries once on the fresh Record and keeps the line", async () => {
+    const body = ["## Record", "", L(1, "change", "a"), L(2, "change", "b")].join("\n");
+    const { store } = setup(body, "task", new Error("model down"));
+    const writes: string[] = [];
+    const realSet = store.setRecord.bind(store);
+    store.setRecord = async (id, text, opts) => {
+      writes.push(text);
+      if (writes.length === 1) store.items.i!.body += "\n- 11:00 [hal\u00b7change] late arrival <!-- src:z -->"; // lands after compact's re-read
+      return realSet(id, text, opts);
+    };
+    const engine = { call: async () => { throw new Error("model down"); } } as never;
+    const r = await compactRecord({ store, engine, id: "i", cap: 1000, src: "hal" });
+    expect(r).toMatchObject({ ok: true });
+    expect(writes).toHaveLength(2);
+    expect(await rec(store)).toContain("late arrival <!-- src:z -->");
+  });
+
+  it("a second conflict returns {ok:false, reason:'conflict'} without throwing", async () => {
+    const body = ["## Record", "", L(1, "change", "a"), L(2, "change", "b")].join("\n");
+    const { store } = setup(body, "task", new Error("model down"));
+    const realSet = store.setRecord.bind(store);
+    let n = 0;
+    store.setRecord = async (id, text, opts) => {
+      store.items.i!.body += `\n- 11:0${++n} [hal\u00b7change] racer ${n} <!-- src:r${n} -->`;
+      return realSet(id, text, opts);
+    };
+    const engine = { call: async () => { throw new Error("model down"); } } as never;
+    expect(await compactRecord({ store, engine, id: "i", cap: 1000, src: "hal" })).toEqual({ ok: false, reason: "conflict" });
+    expect(await rec(store)).toContain("racer 2");
+  });
+
   it("falls back to dropping the oldest non-marker lines when the model fails", async () => {
     const lines = [L(1, "change", "distilled:t3,distilled:t3:1"), L(2, "change", "a"), L(3, "change", "b"), L(4, "change", "c"), L(5, "change", "d")];
     const { store, run } = setup(["## Record", "", ...lines].join("\n"), "task", new Error("model down"));

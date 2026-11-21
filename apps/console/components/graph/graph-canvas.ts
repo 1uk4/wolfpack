@@ -54,8 +54,8 @@
 
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "../../src/core/graph/dep-draw-list.ts";
-import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, ROUTE_DONE_COLOR } from "../../src/core/graph/dep-palette.ts";
+import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "@/src/core";
+import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, ROUTE_DONE_COLOR } from "@/src/core";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import {

@@ -31,6 +31,8 @@ export interface MemoryActions {
   promote(opts?: { ids?: string[] }): PromoteStart;
   /** A feature graduated: run the promote pass for the topics sourced from it. Optional; never throws into the graduation. */
   promoteForFeature?(featureId: string): Promise<void>;
+  /** The hub approved a graduation: forget cached completion for the feature and its archived descendants, then promote for it. Never throws into wolfd. */
+  onGraduationApproved?(featureId: string, archivedIds: string[]): Promise<void> | void;
 }
 
 // On globalThis, keyed by Symbol.for (as the event buses are): the memory extension and wolfd's server must see one
@@ -97,6 +99,10 @@ export interface GraduationPreviewResult {
 }
 
 export interface GraduationConfirmResult {
+  /** The approval request the wolf filed on the hub: the owner's approval graduates, nothing is sent before it. */
+  requestId: string;
+  /** `filed`: a new request; `pending`: one was already waiting. */
+  status: "filed" | "pending";
   entries: string[];
   archived: string[];
   lateFolded: number;
@@ -109,7 +115,7 @@ export interface GraduationConfirmResult {
 export interface GraduationActions {
   /** Distill and return the preview (writes the confirmation token). Throws GraduationError. */
   preview(id: string): Promise<GraduationPreviewResult>;
-  /** Check the token, fold late observations, send, graduate, archive, unbind. All or nothing. Throws GraduationError. */
+  /** Check the token, fold late observations, ship, then file a graduate approval request (the hub sends, graduates and archives on approval). Throws GraduationError. */
   confirm(id: string, token: string): Promise<GraduationConfirmResult>;
   /** The newest stored preview of this item that has not expired (its token file survives a restart), if any. */
   pendingPreview(id: string): Promise<GraduationPreviewResult | undefined>;

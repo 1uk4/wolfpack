@@ -152,6 +152,15 @@ describe("thread API: reads and commands", () => {
 		assert.deepEqual(asked, [undefined, { all: true }]);
 	});
 
+	it("the default threads list carries only what the sidebar draws: workspace shrinks to its branch; `all` keeps the full summary", async () => {
+		const full = { id: "1uk4/home", wolf: "1uk4", kind: "home", title: "Home", workspace: { repo: "wolfpack", toplevel: "/r", path: "/r", base: "main", branch: "wolf/1uk4", isWorktree: false } };
+		const api = createThreadApi(() => ({ listThreads: async () => [full] }) as never);
+		const trimmed = (await (await api.threads("1uk4")).json()) as { threads: unknown[] };
+		assert.deepEqual(trimmed.threads, [{ ...full, workspace: { branch: "wolf/1uk4" } }]);
+		const all = (await (await api.threads("1uk4", { all: true })).json()) as { threads: unknown[] };
+		assert.deepEqual(all.threads, [full]);
+	});
+
 	it("the children list asks the client for the settled subagents only when `all` is set", async () => {
 		const asked: unknown[] = [];
 		const client = {

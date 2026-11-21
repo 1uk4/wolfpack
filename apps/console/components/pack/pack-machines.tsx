@@ -237,6 +237,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 			stop = true;
 			clearInterval(t);
 		};
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- read is rebuilt each render; the poll restarts only when running or api change
 	}, [running, api]);
 	useEffect(() => {
 		let stop = false;
@@ -247,6 +248,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 		return () => {
 			stop = true;
 		};
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- one fetch per api; call is rebuilt each render and must not refetch
 	}, [api]);
 	useEffect(() => {
 		// A run the server reports as running that this card did not start (started elsewhere): watch it too, from when it was first seen.

@@ -12,6 +12,7 @@ import { fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb
 import { openReaderLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { TopBar } from "@/components/shell/top-bar";
 import { WorkBadges } from "@/components/work/work-badges";
+import { PendingApprovalBlock } from "@/components/work/approval-request";
 import { useLibrarian } from "@/components/kb/use-librarian";
 import { buildTaskGraph, featureThreadWolves, resolveWork, threadHref, workHref, composeItemDocument, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 
@@ -119,6 +120,7 @@ function WorkBody({ item, parent, onOpenTask, threadWolves = [], onOpenThread, t
 	return (
 		<article>
 			<WorkBadges kind={item.kind} stage={item.stage} domain={item.domain} className="mb-4" />
+			<PendingApprovalBlock workId={item.id} />
 			{item.kind === "feature" && !item.container && threadWolves.length > 0 && <OpenThread wolves={threadWolves} onOpen={onOpenThread} error={threadError} />}
 			<dl className="mb-6 flex flex-wrap gap-x-6 gap-y-2 text-sm">
 				{item.partOf && (

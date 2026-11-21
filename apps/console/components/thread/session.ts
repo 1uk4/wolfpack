@@ -78,6 +78,7 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight, ini
 	}, [initiallyInFlight, model]);
 
 	// The view + state, derived per model change from the model.
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- version is a change counter that invalidates the memoised snapshot from the mutable model
 	const state = useMemo<SessionState>(() => model.getState(), [model, version] as const);
 
 	// THE TURN-STATE BROADCAST (owner, sidebar round 2026-10-02): the same

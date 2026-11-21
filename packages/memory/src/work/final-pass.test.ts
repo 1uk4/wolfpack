@@ -64,6 +64,38 @@ describe("finalFeaturePass", () => {
     expect(body).not.toContain("final-pass:");
   });
 
+  it("a line appended between the re-read and the write makes the write 409; the pass retries once on the fresh Record and keeps the line", async () => {
+    // The model sees the fresh Record on the retry, so its answer cites the late line (l5).
+    const { store, run } = setup({ reply: { lines: [
+      { group: "Decisions", text: "Use a TTL map", from: ["l2"] },
+      { group: "Changes", text: "Cache wired into reads", from: ["l3", "l4"] },
+      { group: "Changes", text: "late line", from: ["l5"] },
+    ] } });
+    const realSet = store.setRecord.bind(store);
+    let writes = 0;
+    store.setRecord = async (id, text, opts) => {
+      if (++writes === 1) store.items.f!.body += "\n- 09:40 [hal·Changes] late line <!-- src:o9 -->"; // lands after the pass's re-read
+      return realSet(id, text, opts);
+    };
+    expect((await run()).ok).toBe(true);
+    expect(writes).toBe(2);
+    const body = (await store.get("f"))!.body;
+    expect(body).toContain("late line <!-- src:o9 -->");
+    expect(body.match(/final-pass:f/g)).toHaveLength(1);
+  });
+
+  it("a second conflict returns {ok:false, reason:'conflict'} without throwing", async () => {
+    const { store, run } = setup();
+    const realSet = store.setRecord.bind(store);
+    let n = 0;
+    store.setRecord = async (id, text, opts) => {
+      store.items.f!.body += `\n- 09:4${++n} [hal·Changes] racer ${n} <!-- src:r${n} -->`;
+      return realSet(id, text, opts);
+    };
+    expect(await run()).toEqual({ ok: false, reason: "conflict" });
+    expect((await store.get("f"))!.body).toContain("racer 2");
+  });
+
   it("writes only the marker when the model fails or its answer is not shorter", async () => {
     for (const reply of [new Error("down"), { lines: [{ group: "Changes", text: "y".repeat(230), from: ["l1"] }, { group: "Changes", text: "z".repeat(230), from: ["l2"] }, { group: "Changes", text: "w".repeat(230), from: ["l3"] }] }]) {
       const { store, run } = setup({ reply });

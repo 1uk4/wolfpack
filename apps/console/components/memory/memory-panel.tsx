@@ -98,6 +98,7 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 		try {
 			setOpen(parseOpen(localStorage.getItem(MEMORY_PANEL_OPEN_KEY)));
 		} catch {}
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only read of the stored open state; embedded does not change over the panel's life
 	}, []);
 	const toggle = () => {
 		const next = !open;

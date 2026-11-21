@@ -128,6 +128,7 @@ export async function produceEntry(
     `CONTRIBUTION (from ${contribution.from}):`,
     contribution.summary,
     "",
+    ...(contribution.change === "update" ? ["(This contribution is a unified diff of changes to the source this entry was written from: apply those changes to the entry and keep everything else as it is.)", ""] : []),
     contribution.body,
     existingMarkdown ? `\nEXISTING ENTRY (${entryId}):\n${hideSourceProperties(existingMarkdown)}` : "",
     `\nCONTRIBUTION DATE: ${contribution.sourceUpdated ?? now().slice(0, 10)}`,

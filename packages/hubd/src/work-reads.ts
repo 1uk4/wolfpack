@@ -4,10 +4,11 @@
  * of the ledger and folded by the one kb fold (`foldWork`), so ledger precedence (stage, unlink, unschedule, delete ...) is the fold's.
  * The shaping is the one in @wolfpack/memory (`work-shape.ts`), shared with the wolf-side reader in @wolfpack/harness.
  */
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parseFrontmatter } from "@wolfpack/engine";
-import { foldWork, readWorkLedger, resolveWorkItem, parseWorkEvent, type WorkEvent, type WorkItem } from "@wolfpack/kb/client";
+import { foldWork, loadWorkState, readWorkLedger, resolveWorkItem, parseWorkEvent, type WorkEvent, type WorkItem } from "@wolfpack/kb/client";
 import { workDir, workLedgerFile, type KbRoots } from "@wolfpack/kb/shared";
 import { shapeWorkList, shapeWorkRecord, toWorkChild } from "@wolfpack/memory";
 import type { WorkListResponse, WorkRecordResponse } from "@wolfpack/protocol";
@@ -172,6 +173,33 @@ function recordBody(roots: KbRoots, item: Item): string {
   }
 }
 
+/** The item's etag: the first 16 hex chars of the sha-256 of its file body (Record, ledger tail and all), so any write to the item moves it. */
+export function etagOfBody(body: string): string {
+  return createHash("sha256").update(body).digest("hex").slice(0, 16);
+}
+
+/** The current etag of an already-loaded work item. */
+export function etagOfItem(roots: KbRoots, item: WorkItem): string {
+  return etagOfBody(recordBody(roots, item as Item));
+}
+
+export function workEtag(roots: KbRoots, id: string): string | undefined {
+  const item = loadWorkState(roots).get(id as never);
+  return item ? etagOfBody(recordBody(roots, item as Item)) : undefined;
+}
+
+/** Throws 409 conflict (details.etag = the current etag) when `ifMatch` is given and is not the item's current etag. Call inside the write queue. */
+export function assertIfMatch(roots: KbRoots, id: string, ifMatch: string | undefined): void {
+  if (ifMatch === undefined) return;
+  const current = workEtag(roots, id);
+  if (current !== undefined && current !== ifMatch) throw new HubError("conflict", `work item ${id} changed since it was read (etag ${current})`, { etag: current });
+}
+
+/** Parses an If-Match header value (quotes and a weak prefix stripped); undefined when absent. */
+export function ifMatchOf(header: string | string[] | undefined): string | undefined {
+  return typeof header === "string" && header.trim() ? header.trim().replace(/^W\//, "").replace(/^"|"$/g, "") : undefined;
+}
+
 /** Undefined when the item is unknown. */
 export function readWorkRecordFor(roots: KbRoots, id: string): WorkRecordResponse | undefined {
   // The domain is the id's middle segment; this assumes domains contain no hyphen (work ids are work-<alnum domain>-<7 id>, see WorkId).
@@ -181,5 +209,6 @@ export function readWorkRecordFor(roots: KbRoots, id: string): WorkRecordRespons
   const item = all.get(id);
   if (!item) return undefined;
   const listed = item.kind === "feature" || item.container ? [...all.values()].filter((c) => c.partOf === item.id).map(toWorkChild) : undefined;
-  return shapeWorkRecord(item, recordBody(roots, item), listed);
+  const body = recordBody(roots, item);
+  return { ...shapeWorkRecord(item, body, listed), etag: etagOfBody(body) };
 }

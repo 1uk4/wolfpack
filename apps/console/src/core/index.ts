@@ -116,3 +116,28 @@ export * from "./pack/wolf-prompt-scopes.ts";
 export { buildGraphs, type FlowRow, type PromptGraph } from "./settings/prompt-flows.ts";
 export { updateWarnings, updateFinished, updateOffered, updateOutcome, updateQuestion } from "./pack/pack-health-view.ts";
 export type { HealthActionsView, UpdateUnitView } from "./pack/pack-health-view.ts";
+// Named re-exports so components/ and app/ import through the barrel (import/no-restricted-paths).
+export { RELAY_ATTACHMENT_BYTES } from "./thread/attachment-budget.ts";
+export { buildDepDrawList } from "./graph/dep-draw-list.ts";
+export type { DepArrow, DepRouteSelection } from "./graph/dep-draw-list.ts";
+export { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, ROUTE_DONE_COLOR } from "./graph/dep-palette.ts";
+export { reconcileCursor, rawWorkId, routeForNode, toRouteSelection } from "./graph/dep-route-adapter.ts";
+export { cursorChoose, cursorNext, cursorPrev, startCursor } from "./work/work-route.ts";
+export type { RouteCursor, WorkRoute } from "./work/work-route.ts";
+export { dataStore, StoreHttpError } from "./data-store.ts";
+export { dependencyEdges, HOST_LABEL } from "./settings/prompt-flows.ts";
+export type { GraphNodeDef } from "./settings/prompt-flows.ts";
+export {
+	HUB_COOKIE,
+	HUB_COOKIE_HOST,
+	PAIR_PATH,
+	clearHubToken,
+	readHubToken,
+	saveHubToken,
+	syncHubCookie,
+	tokenFromHash,
+	tokenFromPairingInput,
+	withHubAuth,
+} from "./ui/hub-auth.ts";
+export { EVENT_LABEL, parseSubagentMessage, resolveChild } from "./thread/subagent-message.ts";
+export type { SubagentOrigin } from "./thread/subagent-message.ts";

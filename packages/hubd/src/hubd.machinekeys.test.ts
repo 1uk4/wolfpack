@@ -31,7 +31,9 @@ afterEach(async () => {
 
 function mint(kind: "worker" | "console", hostId?: string) {
   const { code } = store.mintPairingCode({ kind, ...(hostId ? { hostId } : {}) });
-  return store.redeem(code, "t", kind, hostId);
+  const r = store.redeem(code, "t", kind, hostId);
+  if (kind === "console") store.setOwner(r.tokenId, true); // machine commands need an owner device
+  return r;
 }
 async function machine(hostId: string, extra: Record<string, unknown> = {}) {
   const w = mint("worker", hostId);
@@ -66,6 +68,7 @@ describe("machine keys", () => {
 
   it("raises the key-change flag when a known machine presents another key, until acknowledged", async () => {
     const c = mint("console");
+    store.setOwner(c.tokenId, true); // acknowledging a key needs an owner device
     const m = await machine("box", { pubkey: PK1 });
     m.ws.close();
     await sleep(50);

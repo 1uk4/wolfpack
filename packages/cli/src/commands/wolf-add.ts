@@ -19,6 +19,8 @@ import { ensureDenMirror } from "./host-sync.js";
 import { loadConfig, getHost, localWolfDir, kbBaseDir, librarianDir } from "../config.js";
 import { loadRegistry, listDomainNames, unknownDomains } from "../domains.js";
 import { c } from "../render.js";
+import { ModelConfigError, type ResolvedTier } from "@wolfpack/engine";
+import { resolveLocalWolfModels } from "../models.js";
 import { select, multiSelect, prompt } from "../prompts.js";
 import {
   AVAILABLE_EXTENSIONS,
@@ -260,7 +262,15 @@ function addLocal(
   });
 
   // Wire up PI extensions
-  const missing = writePiSettings(wolfDir, choices.extensions);
+  // Main tier comes from the pack's models (wolf.yaml is already written);
+  // with no pack models yet, writePiSettings falls back to its default.
+  let mainTier: ResolvedTier | undefined;
+  try {
+    mainTier = resolveLocalWolfModels(config, name).tiers.main;
+  } catch (err) {
+    if (!(err instanceof ModelConfigError)) throw err;
+  }
+  const missing = writePiSettings(wolfDir, choices.extensions, mainTier);
 
   reportCreated(wolfDir, id, choices, missing);
   console.log(c.dim(`  Config:  ${path.join(wolfDir, "wolf.yaml")}`));

@@ -29,7 +29,9 @@ afterEach(async () => {
 
 function mint(kind: "worker" | "console", hostId?: string) {
   const { code } = store.mintPairingCode({ kind, ...(hostId ? { hostId } : {}) });
-  return store.redeem(code, "t", kind, hostId);
+  const r = store.redeem(code, "t", kind, hostId);
+  if (kind === "console") store.setOwner(r.tokenId, true); // machine commands need an owner device
+  return r;
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function eventually(cond: () => unknown, what: string) {

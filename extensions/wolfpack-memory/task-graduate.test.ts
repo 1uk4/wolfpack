@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
-import { registerMemoryActions, unregisterMemoryActions } from "@wolfpack/harness/memory";
 import createTasksExtension from "./unified-tasks.js";
 
-// task_graduate on the durable stack: an in-memory Work API behind fetch, a mocked engine, temp dirs.
+// task_graduate and task_stage(archived) never act: they file an owner-approval request on the hub.
+// Two in-memory servers behind fetch: the Work API (/work) and the hub's request route (/v1/work/:id/requests).
 type Item = Record<string, any>;
 let items: Map<string, Item>;
 let n: number;
@@ -16,16 +16,27 @@ const add = (o: Item) => {
   return items.get(id)!;
 };
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status });
+
+/** What the hub's requests route answers next: 201 files, 409 names the pending one, anything else is a refusal; "down" = unreachable. */
+let hub: 201 | 409 | 403 | 500 | "down";
+let filed: { path: string; auth: string | null; body: any }[];
+
 async function fetchImpl(url: string | URL, init: RequestInit = {}) {
   const u = new URL(String(url));
-  const m = u.pathname.replace(/^\/work\/?/, "");
   const body = init.body ? JSON.parse(String(init.body)) : {};
+  const req = /^\/v1\/work\/([^/]+)\/requests$/.exec(u.pathname);
+  if (req) {
+    if (hub === "down") throw new TypeError("fetch failed");
+    filed.push({ path: u.pathname, auth: new Headers(init.headers).get("authorization"), body });
+    if (hub === 201) return json({ request: { id: "req-new", workId: req[1], kind: body.kind } }, 201);
+    if (hub === 409) return json({ error: "already pending", code: "request_pending", details: { requestId: "req-old" } }, 409);
+    return json({ error: "refused", code: "request_forbidden" }, hub);
+  }
+  const m = u.pathname.replace(/^\/work\/?/, "");
   if (init.method === "GET" && m === "") {
     const partOf = u.searchParams.get("partOf");
     return json({ items: [...items.values()].filter((i) => !partOf || i.partOf === partOf) });
   }
-  const graduate = /^(.+)\/graduate$/.exec(m);
-  if (init.method === "POST" && graduate) { items.get(graduate[1])!.graduated = "2026-10-22"; return json({ item: items.get(graduate[1]) }); }
   const it = items.get(m);
   if (!it) return json({ error: "not found" }, 404);
   if (init.method === "GET") return json({ item: it, body: it.body });
@@ -41,34 +52,17 @@ async function fetchImpl(url: string | URL, init: RequestInit = {}) {
 let den: string;
 let kb: { kbBase: string; opsRoot: string; denLocal: string };
 let ext: ReturnType<typeof createTasksExtension>;
-let call: ReturnType<typeof vi.fn>;
 const tool = (name: string) => ext.tools!.find((t) => t.name === name)!;
-/** The owner's side of the host's card protocol, as the conversation reports it for the newest task_graduate card. */
-type Newest = { status: "pending" | "answered"; yes?: boolean; laterTexts?: string[]; card: any } | undefined;
-let newest: Newest;
-let askCards: boolean;
-const conversation = () => ({
-  classify: async () => ({ kind: "root" }),
-  latestCard: async (tool: string, match: (c: any) => boolean) =>
-    newest && newest.card.tool === tool && match(newest.card)
-      ? { status: newest.status, card: newest.card, answers: { confirm: { value: newest.yes } }, laterResults: (newest.laterTexts ?? []).map((t) => ({ message: { content: t } })) }
-      : undefined,
-});
-const run = async (args: Record<string, unknown>) =>
-  (await tool("task_graduate").execute(args, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1, conversation: conversation() } as never)) as any;
-/** Ask (raises the card), then the owner answers on that card, then the agent calls again. */
-const askThenAnswer = async (id: string, yes: boolean) => {
-  const first = await run({ id });
-  newest = { status: "answered", yes, card: first.card };
-  return run({ id });
-};
-const storedTokens = () => {
-  const dir = join(den, "tasks", "graduation");
-  return existsSync(dir) ? readdirSync(dir).map((f) => f.replace(/\.json$/, "")) : [];
-};
+const run = async (name: string, args: Record<string, unknown>) =>
+  (await tool(name).execute(args, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 } as never)) as any;
 const inboxFiles = () => {
   const dir = join(kb.opsRoot, "inbox", "1uk4");
   return existsSync(dir) ? readdirSync(dir) : [];
+};
+const ready = () => {
+  const f = add({ kind: "feature", title: "F", stage: "shipped", body: "# F\n\n## Plan\n\nx\n\n## Record\n\n### Decisions\n\n- A — why: B\n" });
+  add({ kind: "task", title: "T", stage: "shipped", partOf: f.id });
+  return f;
 };
 
 beforeEach(() => {
@@ -76,18 +70,20 @@ beforeEach(() => {
   kb = { kbBase: join(den, "kbbase"), opsRoot: join(den, "ops"), denLocal: join(den, "kb") };
   items = new Map();
   n = 0;
+  hub = 201;
+  filed = [];
   vi.stubEnv("PI_SUBAGENT_AGENT", ""); // these tests run as the main session
   vi.stubEnv("WORK_ENDPOINT", "http://127.0.0.1:1");
   vi.stubEnv("WORK_TOKEN", "t");
+  vi.stubEnv("WOLFPACK_HUB_URL", "http://hub.test");
+  vi.stubEnv("WOLFPACK_HUB_TOKEN", "hub-secret");
   vi.stubGlobal("fetch", fetchImpl);
-  call = vi.fn(async (_step: string, schema: { parse: (v: unknown) => unknown }) =>
+  const call = vi.fn(async (_step: string, schema: { parse: (v: unknown) => unknown }) =>
     schema.parse({
       contributions: [{ slug: "main", title: "The change", summary: "How it works now.", body: "## How\n\nLike this.\n\n## History\n\n- 2026-10-22: changed (work-wolfpack-T000002)" }],
     }));
   const engine = { call, usage: { summarize: () => ({}) } } as unknown as Engine;
-  newest = undefined;
-  askCards = true;
-  ext = createTasksExtension({ engine: () => engine, kbRoots: kb, workLog: "fold" }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {}, capabilities: { askCards } } as never);
+  ext = createTasksExtension({ engine: () => engine, kbRoots: kb, workLog: "fold" }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {}, capabilities: { askCards: true } } as never);
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -95,196 +91,87 @@ afterEach(() => {
   rmSync(den, { recursive: true, force: true });
 });
 
-describe("durable task_graduate: the owner's card, never an agent token", () => {
-  const ready = () => {
-    const f = add({ kind: "feature", title: "F", stage: "shipped", body: "# F\n\n## Plan\n\nx\n\n## Record\n\n### Decisions\n\n- A — why: B\n" });
-    const t = add({ kind: "task", title: "T", stage: "shipped", partOf: f.id });
-    return { f, t };
-  };
-  const bindTo = async (f: Item) => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    await mkdir(join(den, "factory", "conversations", "1"), { recursive: true });
-    await writeFile(join(den, "factory", "conversations", "1", "active-task.json"), JSON.stringify({ workId: f.id, domain: "wolfpack", boundAt: "now", featureId: f.id }));
-  };
-
-  it("a call raises a confirm card showing the preview and sends nothing", async () => {
-    const { f } = ready();
-    const r = await run({ id: f.id });
-    expect(r.card.tool).toBe("task_graduate");
-    expect(r.card.fields[0]).toMatchObject({ id: "confirm", kind: "confirm", label: `Graduate "F" (${f.id})?` });
-    expect(r.card.fields[0].default).toBeUndefined();
-    expect(r.card).toMatchObject({ paged: true, steps: [{ fields: ["confirm"] }] });
-    expect(r.card.brief).toBeUndefined();
-    expect(r.card.fields[0].description).toContain("The change");
-    expect(r.content[0].text).not.toMatch(/confirm "/);
-    expect(inboxFiles()).toEqual([]);
-    expect(items.get(f.id)!.graduated).toBeNull();
-  });
-
-  it("a token passed by the agent, even the real one from the preview, graduates nothing", async () => {
-    const { f } = ready();
-    await run({ id: f.id });
-    const [real] = storedTokens();
-    expect(real).toHaveLength(12);
-    for (const confirm of [real, "abcdef012345"]) {
-      const r = await run({ id: f.id, confirm });
-      expect(r.card).toBeDefined(); // treated as a fresh request: asks the owner
-    }
+describe("task_graduate files an owner-approval request and never graduates", () => {
+  it("files the request with the preview set, names its id, and sends nothing", async () => {
+    const f = ready();
+    const r = await run("task_graduate", { id: f.id });
+    expect(r.isError).toBeUndefined();
+    expect(r.card).toBeUndefined();
+    expect(r.content[0].text).toContain(`Queued for the owner's approval: request req-new for ${f.id}, 1 contributions. Nothing is sent until the owner approves it from the thread card, the Work page or Needs-you.`);
+    expect(filed).toHaveLength(1);
+    expect(filed[0]).toMatchObject({ path: `/v1/work/${f.id}/requests`, auth: "Bearer hub-secret", body: { kind: "graduate", wolf: "1uk4" } });
+    expect(filed[0].body.preview.contributions).toMatchObject([{ title: "The change" }]);
     expect(inboxFiles()).toEqual([]);
     expect(items.get(f.id)!.graduated).toBeNull();
     expect(items.get(f.id)!.stage).toBe("shipped");
   });
 
-  it("while the owner has not answered the card, a repeat call asks nothing new and sends nothing", async () => {
-    const { f } = ready();
-    const first = await run({ id: f.id });
-    newest = { status: "pending", card: first.card };
-    const r = await run({ id: f.id });
-    expect(r.card).toBeUndefined();
-    expect(r.endTurn).toBe(true);
+  it("a request already pending returns the existing id, not a second request", async () => {
+    const f = ready();
+    hub = 409;
+    const r = await run("task_graduate", { id: f.id });
+    expect(r.isError).toBeUndefined();
+    expect(r.content[0].text).toContain("Already queued for the owner's approval: request req-old");
     expect(items.get(f.id)!.graduated).toBeNull();
   });
 
-  it("after the owner's yes on the card, the next call sends the contributions, graduates and archives", async () => {
-    const { f, t } = ready();
-    call.mockClear();
-    const r = await askThenAnswer(f.id, true);
-    expect(r.isError).toBeFalsy();
-    expect(r.content[0].text).toContain("1 contribution(s) sent to Dewey; 2 item(s) archived");
-    expect(call).toHaveBeenCalledTimes(1); // distilled once, at the first call
-    expect(inboxFiles()).toHaveLength(1);
-    expect(readFileSync(join(kb.opsRoot, "inbox", "1uk4", inboxFiles()[0]), "utf8")).toContain(`den_topic_id: ${f.id}`);
-    expect(items.get(f.id)!.graduated).toBe("2026-10-22");
-    expect(items.get(f.id)!.stage).toBe("archived");
-    expect(items.get(t.id)!.stage).toBe("archived");
-  });
-
-  it("a graduation asks the memory actions to promote the topics sourced from that feature", async () => {
-    const { f } = ready();
-    const promoted: string[] = [];
-    const actions = { promoteEnabled: true, isBusy: () => false, consolidate: async () => ({}) as never, promote: () => ({ status: "already_running", jobId: "x" }) as never, promoteForFeature: async (id: string) => { promoted.push(id); } };
-    registerMemoryActions(den, actions);
-    try {
-      await askThenAnswer(f.id, true);
-      await vi.waitFor(() => expect(promoted).toEqual([f.id]));
-    } finally {
-      unregisterMemoryActions(den, actions);
-    }
-  });
-
-  it("a yes is spent once it graduated: the same card cannot graduate again", async () => {
-    const { f } = ready();
-    const first = await run({ id: f.id });
-    newest = { status: "answered", yes: true, card: first.card };
-    const done = await run({ id: f.id });
-    newest.laterTexts = [done.content[0].text];
-    await run({ id: f.id });
-    expect(inboxFiles()).toHaveLength(1);
-  });
-
-  it("after the owner's no on the card, nothing is sent or archived", async () => {
-    const { f } = ready();
-    const r = await askThenAnswer(f.id, false);
-    expect(r.content[0].text).toContain("declined");
-    expect(r.card).toBeUndefined();
-    expect(inboxFiles()).toEqual([]);
-    expect(items.get(f.id)!.graduated).toBeNull();
-    expect(items.get(f.id)!.stage).toBe("shipped");
-  });
-
-  it("a no stays a no for that card, even after an unrelated tool result", async () => {
-    const { f } = ready();
-    const first = await run({ id: f.id });
-    newest = { status: "answered", yes: false, laterTexts: ["ok: some other tool ran"], card: first.card };
-    const r = await run({ id: f.id });
-    expect(r.card).toBeUndefined();
-    expect(r.content[0].text).toContain("declined");
-    expect(inboxFiles()).toEqual([]);
-  });
-
-  it("a yes on a ship card for the same id sends nothing and asks afresh", async () => {
-    const { f } = ready();
-    await run({ id: f.id }); // a stored preview exists
-    const shipCard = { tool: "task_done", fields: [{ id: "confirm", kind: "confirm", label: `Graduate "F" (${f.id})?` }] };
-    newest = { status: "answered", yes: true, card: shipCard };
-    const r = await run({ id: f.id });
-    expect(r.card.tool).toBe("task_graduate");
-    expect(inboxFiles()).toEqual([]);
-    expect(items.get(f.id)!.graduated).toBeNull();
-  });
-
-  it("a yes on the graduate card of another item sends nothing and asks afresh", async () => {
-    const { f } = ready();
-    const { f: g } = ready();
-    const other = await run({ id: g.id });
-    newest = { status: "answered", yes: true, card: other.card };
-    const r = await run({ id: f.id });
-    expect(r.card.fields[0].label).toContain(f.id);
-    expect(inboxFiles()).toEqual([]);
-    expect(items.get(f.id)!.graduated).toBeNull();
-  });
-
-  it("a preview replaced between the card and the yes is not sent; the owner is asked again", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    try {
-      const { f } = ready();
-      const first = await run({ id: f.id });
-      vi.setSystemTime(Date.now() + 5000);
-      newest = undefined;
-      call.mockImplementationOnce(async (_s: string, schema: { parse: (v: unknown) => unknown }) =>
-        schema.parse({ contributions: [{ slug: "main", title: "A different take", summary: "Changed.", body: "## How\n\nOther.\n\n## History\n\n- 2026-10-22: x (work-wolfpack-T000002)" }] }));
-      await run({ id: f.id }); // e.g. the console modal makes a newer, different preview
-      newest = { status: "answered", yes: true, card: first.card };
-      const r = await run({ id: f.id });
-      expect(r.card).toBeDefined();
-      expect(inboxFiles()).toEqual([]);
-      expect(items.get(f.id)!.graduated).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("two parallel calls before the card lands raise one card", async () => {
-    const { f } = ready();
-    const rs = await Promise.all([run({ id: f.id }), run({ id: f.id })]);
-    expect(rs.filter((r) => r.card)).toHaveLength(1);
-    expect(rs.filter((r) => !r.card)[0].endTurn).toBe(true);
-  });
-
-  it("where nobody can answer a card, the tool only previews and points to the console", async () => {
-    const { f } = ready();
-    ext = createTasksExtension({ engine: () => ({ call, usage: { summarize: () => ({}) } }) as unknown as Engine, kbRoots: kb }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {} } as never);
-    const r = (await tool("task_graduate").execute({ id: f.id }, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 } as never)) as any;
-    expect(r.card).toBeUndefined();
-    expect(r.content[0].text).toContain("Graduate button");
-    expect(inboxFiles()).toEqual([]);
-    expect(items.get(f.id)!.graduated).toBeNull();
-  });
-
-  it("an item that is not ready is refused before any card", async () => {
-    const { f: g } = ready();
-    add({ kind: "task", title: "open", stage: "in_build", partOf: g.id });
-    const r = await run({ id: g.id });
+  it.each([
+    ["the hub refuses (403)", 403],
+    ["the hub fails (500)", 500],
+    ["the hub is unreachable", "down"],
+  ] as const)("when %s it is an error and never says the owner was asked", async (_name, mode) => {
+    const f = ready();
+    hub = mode;
+    const r = await run("task_graduate", { id: f.id });
     expect(r.isError).toBe(true);
-    expect(r.content[0].text).toContain("not ready to graduate");
-    expect(r.card).toBeUndefined();
+    expect(r.content[0].text).toContain("the owner has not been asked");
+    expect(r.content[0].text).not.toMatch(/^Queued/);
+    expect(items.get(f.id)!.graduated).toBeNull();
   });
 
-  it("a graduated feature unbinds the session that was bound to it", async () => {
-    const { f } = ready();
-    await bindTo(f);
-    await run({ id: f.id }); // asking alone leaves the binding
-    const bound = () => JSON.parse(readFileSync(join(den, "factory", "conversations", "1", "active-task.json"), "utf8"));
-    expect(bound().workId).toBe(f.id);
-    await askThenAnswer(f.id, true);
-    expect(bound()).toBeNull();
+  it("on a wolf with only the Work env, files the request on the hub behind the Work endpoint with the Work token", async () => {
+    const f = ready();
+    vi.stubEnv("WOLFPACK_HUB_URL", "");
+    vi.stubEnv("WOLFPACK_HUB_TOKEN", "");
+    vi.stubEnv("WORK_ENDPOINT", "http://hub.test/v1/workapi");
+    vi.stubEnv("WORK_TOKEN", "work-secret");
+    const r = await run("task_graduate", { id: f.id });
+    expect(r.isError).toBeUndefined();
+    expect(r.content[0].text).toContain("Queued for the owner's approval: request req-new");
+    expect(filed).toMatchObject([{ path: `/v1/work/${f.id}/requests`, auth: "Bearer work-secret" }]);
   });
 
-  it("an Inbox task graduates alone after the owner's yes", async () => {
-    const inbox = add({ kind: "feature", title: "Inbox", container: true });
-    const s = add({ kind: "task", title: "Stray fix", stage: "shipped", partOf: inbox.id, body: "# Stray fix\n\nplan\n" });
-    expect((await askThenAnswer(s.id, true)).isError).toBeFalsy();
-    expect(items.get(s.id)!.graduated).toBe("2026-10-22");
-    expect(items.get(inbox.id)!.stage).not.toBe("archived");
+  it("with no hub configured it is an error", async () => {
+    const f = ready();
+    vi.stubEnv("WOLFPACK_HUB_URL", "");
+    const r = await run("task_graduate", { id: f.id });
+    expect(r.isError).toBe(true);
+    expect(filed).toEqual([]);
+  });
+});
+
+describe("task_stage to archived files an archive request instead of archiving", () => {
+  it("files kind archive, leaves the stage, and says it is queued", async () => {
+    const t = add({ kind: "task", title: "Old", stage: "shipped" });
+    const r = await run("task_stage", { to: "archived", id: t.id });
+    expect(r.isError).toBeUndefined();
+    expect(r.content[0].text).toContain(`Queued for the owner's approval: request req-new for ${t.id}, archive.`);
+    expect(filed).toMatchObject([{ path: `/v1/work/${t.id}/requests`, body: { kind: "archive", wolf: "1uk4" } }]);
+    expect(items.get(t.id)!.stage).toBe("shipped");
+  });
+
+  it("is an error when the request cannot be filed", async () => {
+    const t = add({ kind: "task", title: "Old", stage: "shipped" });
+    hub = 403;
+    const r = await run("task_stage", { to: "archived", id: t.id });
+    expect(r.isError).toBe(true);
+    expect(items.get(t.id)!.stage).toBe("shipped");
+  });
+
+  it("other stages still move the item directly", async () => {
+    const t = add({ kind: "task", title: "Work", stage: "plan" });
+    await run("task_stage", { to: "approved", id: t.id });
+    expect(items.get(t.id)!.stage).toBe("approved");
+    expect(filed).toEqual([]);
   });
 });

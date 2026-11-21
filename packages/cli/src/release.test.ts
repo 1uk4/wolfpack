@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs, no types
 import { computeAffected } from "../../../scripts/affected.mjs";
-import { bumpVersion, formatPlan, lastTag, parseTag, parseVersion, planRelease, pushTagsSeparately, type ReleaseDeps } from "./release.js";
+import { bumpVersion, formatPlan, lastTag, parseTag, parseVersion, planRelease, dispatchTagBuilds, pushTagsAtomically, type ReleaseDeps } from "./release.js";
 
 const COMPONENTS = ["wolfd", "workerd", "hubd"];
 function deps(tags: string[], affected: Record<string, string[]>): ReleaseDeps {
@@ -80,7 +80,9 @@ describe("auto-tag on stable (patch plan)", () => {
   it("skips a component that already has a tag on the commit being tagged (rerun)", () => {
     const tags = ["wolfd/v0.1.4", "wolfd/v0.1.5"];
     const d = { ...deps(tags, { "wolfd/v0.1.4": ["wolfd"], "wolfd/v0.1.5": ["wolfd"] }), headTags: () => ["wolfd/v0.1.5"] };
-    expect(planRelease({ components: ["wolfd"] }, d)).toEqual([]);
+    const skipped: string[] = [];
+    expect(planRelease({ components: ["wolfd"] }, { ...d, onSkip: (c, t) => skipped.push(`${c}: already tagged ${t} at HEAD`) })).toEqual([]);
+    expect(skipped).toEqual(["wolfd: already tagged wolfd/v0.1.5 at HEAD"]);
   });
 });
 
@@ -159,15 +161,46 @@ describe("release filter: only files a component ships make a tag", () => {
   });
 });
 
-describe("pushing tags", () => {
-  it("runs one git push per tag, never a branch", () => {
+describe("dispatching builds after a manual push", () => {
+  const four = ["wolfd/v0.1.5", "hubd/v1.0.10", "console/v0.2.1", "workerd/v0.3.1"];
+  it("dispatches release.yml once per tag, in order, when more than 3 tags were pushed", () => {
     const calls: string[][] = [];
-    pushTagsSeparately((...args) => void calls.push(args), "origin", ["wolfd/v0.1.5", "hubd/v1.0.10", "console/v0.2.1", "workerd/v0.3.1"]);
-    expect(calls).toEqual([
-      ["push", "origin", "refs/tags/wolfd/v0.1.5"],
-      ["push", "origin", "refs/tags/hubd/v1.0.10"],
-      ["push", "origin", "refs/tags/console/v0.2.1"],
-      ["push", "origin", "refs/tags/workerd/v0.3.1"],
-    ]);
+    const r = dispatchTagBuilds((...a) => void calls.push(a), four);
+    expect(calls).toEqual(four.map((t) => ["workflow", "run", "release.yml", "-f", `tag=${t}`]));
+    expect(r.failed).toEqual([]);
+    expect(r.dispatched).toEqual(four);
+  });
+  it("dispatches nothing for 3 tags, the tag trigger builds those", () => {
+    const calls: string[][] = [];
+    const r = dispatchTagBuilds((...a) => void calls.push(a), four.slice(0, 3));
+    expect(calls).toEqual([]);
+    expect(r.dispatched).toEqual([]);
+  });
+  it("on a dispatch failure keeps going and returns every undispatched tag with its gh command", () => {
+    const run = (...a: string[]) => {
+      if (a[4] === "tag=hubd/v1.0.10") throw new Error("gh: not found");
+    };
+    const r = dispatchTagBuilds(run, four);
+    expect(r.dispatched).toEqual(["wolfd/v0.1.5", "console/v0.2.1", "workerd/v0.3.1"]);
+    expect(r.failed).toEqual(["hubd/v1.0.10"]);
+    expect(r.commands).toEqual(["gh workflow run release.yml -f tag=hubd/v1.0.10"]);
+  });
+});
+
+describe("pushing tags", () => {
+  const four = ["wolfd/v0.1.5", "hubd/v1.0.10", "console/v0.2.1", "workerd/v0.3.1"];
+  it("pushes every tag in one atomic git push, never a branch", () => {
+    const calls: string[][] = [];
+    pushTagsAtomically((...args) => void calls.push(args), "origin", four);
+    expect(calls).toEqual([["push", "--atomic", "origin", ...four.map((t) => `refs/tags/${t}`)]]);
+  });
+  it("on rejection deletes the local tags it was given and throws naming the rejected ref", () => {
+    const calls: string[][] = [];
+    const git = (...args: string[]) => {
+      calls.push(args);
+      if (args[0] === "push") throw Object.assign(new Error("Command failed: git push"), { stderr: " ! [remote rejected] workerd/v0.3.1 -> workerd/v0.3.1 (deny)\nerror: failed to push some refs" });
+    };
+    expect(() => pushTagsAtomically(git, "origin", four)).toThrow(/workerd\/v0\.3\.1/);
+    expect(calls.slice(1)).toEqual(four.map((t) => ["tag", "-d", t]));
   });
 });

@@ -6,8 +6,8 @@ import { MessageResponse } from "@/components/ai-elements/message";
 import { useSubagentModal } from "@/components/thread/subagent-modal";
 import { SPEAKER } from "@/components/thread/speaker-colors";
 import { cn } from "@/lib/utils";
-import { EVENT_LABEL, resolveChild, type SubagentOrigin } from "@/src/core/thread/subagent-message";
-import type { ChildThread } from "@/src/core/thread/subagents";
+import { EVENT_LABEL, resolveChild, type SubagentOrigin } from "@/src/core";
+import type { ChildThread } from "@/src/core";
 
 const ACCENT: Record<SubagentOrigin["event"], string> = {
 	result: SPEAKER.child.bar,

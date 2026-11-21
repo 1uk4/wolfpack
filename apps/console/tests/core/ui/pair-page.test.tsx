@@ -13,6 +13,8 @@ import { HUB_TOKEN_KEY } from "../../../src/core/ui/hub-auth.ts";
 const dom = parseHTML("<html><body></body></html>");
 const store = new Map<string, string>();
 const replaced: string[] = [];
+const pairCalls: Array<Record<string, unknown>> = [];
+let pairReply: () => { ok: boolean; status: number; json: () => Promise<unknown> } = () => ({ ok: true, status: 200, json: async () => ({ token: "hub-issued-token" }) });
 Object.assign(globalThis, {
 	window: Object.assign(dom.window, {
 		localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) },
@@ -20,7 +22,13 @@ Object.assign(globalThis, {
 	}),
 	document: dom.document,
 	history: { replaceState: () => {} },
-	fetch: async () => ({ json: async () => ({ url: null }) }),
+	fetch: async (url: string, init?: { body?: string }) => {
+		if (url === "/api/pair") {
+			pairCalls.push(JSON.parse(init?.body ?? "{}"));
+			return pairReply();
+		}
+		return { json: async () => ({ url: null }) };
+	},
 	IS_REACT_ACT_ENVIRONMENT: true,
 });
 
@@ -44,7 +52,7 @@ const submit = (host: HTMLElement, value: string) => {
 describe("pair page sign-in box", () => {
 	it("labels one input, stores a pasted pairing link's token and opens the console home", async () => {
 		const { host, root } = await mount();
-		assert.match(host.innerHTML, /Pairing token or link/);
+		assert.match(host.innerHTML, /Pairing code, token or link/);
 		assert.equal(host.querySelectorAll("input").length, 1);
 		submit(host, "http://127.0.0.1:3231/pair#token=tok123");
 		assert.equal(store.get(HUB_TOKEN_KEY), "tok123");
@@ -60,6 +68,33 @@ describe("pair page sign-in box", () => {
 		assert.deepEqual(replaced, []);
 		assert.match(host.innerHTML, /role="alert"/);
 		assert.doesNotMatch(host.querySelector("[role='alert']")!.textContent ?? "", /not a token/, "the error never echoes the input");
+		root.unmount();
+	});
+	it("redeems a typed pairing code at the hub and stores the returned token, not the code", async () => {
+		store.clear();
+		replaced.length = 0;
+		pairCalls.length = 0;
+		const { host, root } = await mount();
+		submit(host, "Ab_d-fGh1JkLmN_p");
+		await act(async () => {});
+		assert.equal(pairCalls.length, 1);
+		assert.equal(pairCalls[0]!.code, "Ab_d-fGh1JkLmN_p");
+		assert.equal(pairCalls[0]!.kind, "browser");
+		assert.equal(typeof pairCalls[0]!.label, "string");
+		assert.equal(store.get(HUB_TOKEN_KEY), "hub-issued-token");
+		assert.deepEqual(replaced, ["/"]);
+		root.unmount();
+	});
+	it("shows the hub's message when a typed code is refused and stores nothing", async () => {
+		store.clear();
+		replaced.length = 0;
+		pairReply = () => ({ ok: false, status: 401, json: async () => ({ message: "unknown, used or expired pairing code" }) });
+		const { host, root } = await mount();
+		submit(host, "Ab_d-fGh1JkLmN_p");
+		await act(async () => {});
+		assert.equal(store.size, 0);
+		assert.deepEqual(replaced, []);
+		assert.match(host.querySelector("[role='alert']")?.textContent ?? "", /unknown, used or expired pairing code/);
 		root.unmount();
 	});
 });

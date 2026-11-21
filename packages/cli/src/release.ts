@@ -78,6 +78,8 @@ export interface ReleaseDeps {
   commits(base: string | null): string[];
   /** Tags that point at the commit being released (HEAD). A component with one is already released there. */
   headTags?(): string[];
+  /** Called when a component is skipped because it already has a tag at HEAD, so the skip is visible. */
+  onSkip?(component: string, tag: string): void;
 }
 
 export interface ReleaseOptions {
@@ -140,7 +142,11 @@ export function planRelease(opts: ReleaseOptions, deps: ReleaseDeps): ReleaseIte
   const items: ReleaseItem[] = [];
   for (const component of opts.components) {
     if (opts.only?.length && !opts.only.includes(component)) continue;
-    if (headTags.some((t) => parseTag(t)?.component === component)) continue;
+    const atHead = headTags.find((t) => parseTag(t)?.component === component);
+    if (atHead) {
+      deps.onSkip?.(component, atHead);
+      continue;
+    }
     const main = opts.channel === "main";
     const prev = lastTag(component, tags, !main) ?? null; // stable diffs against the last stable tag, main against the newest tag of either channel
     // No tag yet counts as changed.
@@ -171,9 +177,53 @@ export function planRelease(opts: ReleaseOptions, deps: ReleaseDeps): ReleaseIte
   return items;
 }
 
-/** GitHub fires no tag workflows when one push carries more than 3 tags, so push each tag on its own. Never a branch. */
-export function pushTagsSeparately(git: (...args: string[]) => unknown, remote: string, tags: string[]): void {
-  for (const tag of tags) git("push", remote, `refs/tags/${tag}`);
+/**
+ * Push all tags in ONE `git push --atomic`: all land or none, so a rejected ref leaves no orphan tag on the remote. Never a branch.
+ * On failure the local tags (created by the caller just before) are deleted and the error names the rejected ref from git's output.
+ * Build rule: CI builds through workflow_call (release-main.yml, release-stable.yml), so the tag trigger is not needed there. GitHub fires no
+ * tag-triggered workflow when one push carries more than 3 tags, so the manual CLI dispatches release.yml per tag in that case (dispatchTagBuilds).
+ */
+export function pushTagsAtomically(git: (...args: string[]) => unknown, remote: string, tags: string[]): void {
+  try {
+    git("push", "--atomic", remote, ...tags.map((t) => `refs/tags/${t}`));
+  } catch (err) {
+    for (const tag of tags) {
+      try {
+        git("tag", "-d", tag);
+      } catch {
+        // already gone
+      }
+    }
+    const out = String((err as { stderr?: unknown }).stderr ?? (err as Error).message);
+    const rejected = out.split("\n").filter((l) => /rejected|\[remote|failed/i.test(l) || l.includes("!")).join("; ").trim();
+    throw new Error(`atomic tag push to ${remote} failed, local tags removed (${tags.join(", ")}): ${rejected || out.trim()}`);
+  }
+}
+
+export interface DispatchResult {
+  dispatched: string[];
+  failed: string[];
+  commands: string[];
+}
+
+/**
+ * After a manual push of more than 3 tags (GitHub starts no tag-triggered build for those), run `gh workflow run release.yml -f tag=<tag>` per tag.
+ * With 3 or fewer tags the tag trigger fires, so nothing is dispatched (it would build twice). A failure never stops the loop; the failed tags
+ * come back with the exact command to run by hand. The tags stay on the remote.
+ */
+export function dispatchTagBuilds(gh: (...args: string[]) => unknown, tags: string[]): DispatchResult {
+  const res: DispatchResult = { dispatched: [], failed: [], commands: [] };
+  if (tags.length <= 3) return res;
+  for (const tag of tags) {
+    try {
+      gh("workflow", "run", "release.yml", "-f", `tag=${tag}`);
+      res.dispatched.push(tag);
+    } catch {
+      res.failed.push(tag);
+      res.commands.push(`gh workflow run release.yml -f tag=${tag}`);
+    }
+  }
+  return res;
 }
 
 export function formatPlan(items: ReleaseItem[]): string {

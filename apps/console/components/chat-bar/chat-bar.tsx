@@ -157,6 +157,7 @@ export function ChatBar() {
 	// the meter); clearError only sets state, so a stale copy is as good as the current one.
 	useEffect(() => {
 		publishBarDictation(dictation, shown);
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- the listed dictation fields are the ones the page reads; the dictation object itself is new every render
 	}, [dictation.phase, dictation.error, dictation.active, dictation.levelRef, dictation.toggle, dictation.stop, dictation.finish, dictation.cancel, shown]);
 	useEffect(() => () => publishBarDictation(null), []);
 
@@ -166,6 +167,7 @@ export function ChatBar() {
 	useEffect(() => setPhoneSheet?.(false), [pathname, setPhoneSheet]); // a requested sheet does not follow the owner to another page
 	useEffect(() => {
 		if (!attached) setPhoneSheet?.(false); // docked while the sheet was open: the flag must not outlive the bar
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on whether a thread is attached, not on the attached object identity
 	}, [!!attached, setPhoneSheet]);
 	useEffect(() => {
 		if (wide && minimized) setPhoneSheet?.(false); // collapsed: the request is spent, the row is all that shows
@@ -192,6 +194,7 @@ export function ChatBar() {
 			const a = live.current.attached;
 			if (t && a && a.wolf === t.wolf && a.threadId === t.threadId && live.current.onOwn && !dictation.error) live.current.dock?.();
 		}
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- fires on dictating flips only; error is read at that moment, not a trigger
 	}, [dictating]);
 
 	// Using another thread's composer docks the floating chat. Only a USER action counts: a pointerdown in a composer
@@ -304,6 +307,7 @@ export function ChatBar() {
 		const idle = (window as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
 		if (idle) idle(() => void loadComposer());
 		else setTimeout(() => void loadComposer(), 200);
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on whether a thread is attached, not on the attached object identity
 	}, [!!attached]);
 
 	// Thread pages show the attached chat as a row in the subagent strip (attached-strip-row.tsx), never a pill.
@@ -386,12 +390,14 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 		)
 	) : null;
 	const raised = useRaisedAt(BAR_EXTRAS.badge && api.attached !== null);
+	const approvals = useApprovalEntries(BAR_EXTRAS.badge && api.attached !== null);
 	const waiting = useMemo(() => (BAR_EXTRAS.badge ? oldestFirst(waitingElsewhere(api.threads, target), raised) : []), [api.threads, target, raised]);
 	const title = attachedThread ? (attachedThread.kind === "home" ? target.wolf : attachedThread.title) : target.slug;
 	// Phone only: the dock expands into a full-screen sheet. The composer stays at the same spot in the tree, so the draft survives both ways.
 	const [sheet, setSheet] = useState(api.phoneSheet);
 	useEffect(() => {
 		if (!sheet) api.setPhoneSheet(false);
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- fires on sheet changes only; api is read at that moment and a new api object must not re-run it
 	}, [sheet]);
 	const inset = useKeyboardInset(phone);
 	const swipeFrom = useRef<{ x: number; y: number } | null>(null);
@@ -408,6 +414,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 			if (input && (document.activeElement === input || input.value.trim() !== "")) return;
 			setSheet(false);
 		}
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- wrapRef is a stable ref object
 	}, [sheet, pendingCount]);
 	const openSheet = (forCard: boolean) => {
 		openedForCard.current = forCard;
@@ -464,7 +471,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	}, [askId, phone]);
 	const hasSurface = (BAR_EXTRAS.cards || BAR_EXTRAS.peek) && (cards.pending.length > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error);
 
-	const badge = BAR_EXTRAS.badge && waiting.length > 0 ? <NeedsYouBadge waiting={waiting} all={all} /> : null;
+	const badge = BAR_EXTRAS.badge && (waiting.length > 0 || approvals.length > 0) ? <NeedsYouBadge waiting={waiting} all={all} approvals={approvals} /> : null;
 	const chip = (
 		<button
 			ref={chipRef}
@@ -668,24 +675,60 @@ function useRaisedAt(enabled: boolean): RaisedAt {
 	return raised;
 }
 
+/** A pending owner approval as GET /api/needs-you lists it. */
+export interface ApprovalEntry { requestId: string; workId: string; label: string; href: string }
+
+/** The pending owner approvals: fetched once, refetched on needs-you-changed and work-request-changed (no polling). */
+function useApprovalEntries(enabled: boolean): ApprovalEntry[] {
+	const [list, setList] = useState<ApprovalEntry[]>([]);
+	const seq = useRef(0);
+	const load = useCallback(() => {
+		if (!enabled) return;
+		const n = ++seq.current;
+		void (async () => {
+			try {
+				const res = await fetch("/api/needs-you", { cache: "no-store" });
+				if (!res.ok || n !== seq.current) return;
+				const body = (await res.json()) as { approvals?: ApprovalEntry[] };
+				if (n === seq.current && Array.isArray(body.approvals)) setList(body.approvals);
+			} catch {
+				/* keep the last list */
+			}
+		})();
+	}, [enabled]);
+	useEffect(() => load(), [load]);
+	useOptionalServerEvent("needs-you-changed", load);
+	useOptionalServerEvent("work-request-changed", load);
+	return list;
+}
+
 /** Another thread has a card waiting: count + that thread's color dot. One tap attaches the bar to the oldest waiting one (no toast, no auto-switch). */
-function NeedsYouBadge({ waiting, all }: { waiting: (BarThread & { wolf: string })[]; all: BarThread[] }) {
+export function NeedsYouBadge({ waiting, all, approvals }: { waiting: (BarThread & { wolf: string })[]; all: BarThread[]; approvals: ApprovalEntry[] }) {
 	const api = useAttachedThread()!;
-	const first = waiting[0]!;
-	const color = useThreadColor({ id: first.id, ...(first.kind ? { kind: first.kind } : {}), ...(first.parentThreadId ? { parentThreadId: first.parentThreadId } : {}) }, all, api.wolves.find((w) => w.name === first.wolf)?.color).hex;
+	const router = useRouter();
+	const first = waiting[0];
+	const color = useThreadColor(first ? { id: first.id, ...(first.kind ? { kind: first.kind } : {}), ...(first.parentThreadId ? { parentThreadId: first.parentThreadId } : {}) } : { id: "" }, all, first ? api.wolves.find((w) => w.name === first.wolf)?.color : undefined).hex;
+	const total = waiting.length + approvals.length;
 	return (
-		<button
-			type="button"
-			data-testid="chat-bar-needs-you"
-			data-thread={first.id}
-			title={`${waiting.length} waiting for you · oldest: ${first.title}`}
-			aria-label={`${waiting.length} waiting for you. Attach the bar to ${first.title}`}
-			onClick={() => api.attach({ wolf: first.wolf, threadId: first.id })}
-			className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 font-ui text-[11px] text-amber-400 hover:bg-amber-500/25"
-		>
-			<span className="size-1.5 rounded-full" style={{ backgroundColor: color }} />
-			{waiting.length}
-		</button>
+		<span className="flex min-w-0 items-center gap-1">
+			<button
+				type="button"
+				data-testid="chat-bar-needs-you"
+				data-thread={first?.id}
+				title={first ? `${total} waiting for you · oldest: ${first.title}` : `${total} waiting for you · ${approvals[0]!.label}`}
+				aria-label={first ? `${total} waiting for you. Attach the bar to ${first.title}` : `${total} waiting for you. Open ${approvals[0]!.label}`}
+				onClick={() => (first ? api.attach({ wolf: first.wolf, threadId: first.id }) : router.push(approvals[0]!.href))}
+				className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 font-ui text-[11px] text-amber-400 hover:bg-amber-500/25"
+			>
+				<span className="size-1.5 rounded-full" style={{ backgroundColor: color }} />
+				{total}
+			</button>
+			{approvals.slice(0, 2).map((a) => (
+				<button key={a.requestId} type="button" data-testid="chat-bar-approval" title={a.label} onClick={() => router.push(a.href)} className="min-w-0 max-w-[30vw] truncate rounded-full bg-amber-500/10 px-2 py-0.5 font-ui text-[11px] text-amber-400 hover:bg-amber-500/25">
+					{a.label}
+				</button>
+			))}
+		</span>
 	);
 }
 
@@ -705,6 +748,7 @@ export function Switcher({ groups, current, onClose, sheet = false }: { groups: 
 		};
 		document.addEventListener("mousedown", onDown);
 		return () => document.removeEventListener("mousedown", onDown);
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only listener: the parent's closeSwitcher is a useCallback with [] deps, so the mount-render onClose never goes stale
 	}, []);
 	const onKeyDown = (e: React.KeyboardEvent) => {
 		if (e.key === "Escape") {

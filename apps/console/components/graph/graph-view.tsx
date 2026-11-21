@@ -26,9 +26,9 @@
  * `/?focus=<nodeId>` URL param goes through it.
  */
 
-import type { DepRouteSelection } from "../../src/core/graph/dep-draw-list.ts";
-import { reconcileCursor, rawWorkId, routeForNode, toRouteSelection } from "../../src/core/graph/dep-route-adapter.ts";
-import { startCursor, type RouteCursor } from "../../src/core/work/work-route.ts";
+import type { DepRouteSelection } from "@/src/core";
+import { reconcileCursor, rawWorkId, routeForNode, toRouteSelection } from "@/src/core";
+import { startCursor, type RouteCursor } from "@/src/core";
 import type { RouteNavModel } from "./graph-route-nav.tsx";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -50,7 +50,7 @@ import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
 import { useWorkReader } from "../work/work-reader.tsx";
 import { Hint } from "@/components/ui/hint";
-import { dataStore } from "@/src/core/data-store";
+import { dataStore } from "@/src/core";
 
 /** What a click on a map node does: ANY work node (collapsed features included) only opens the reader; the graph's selection,
  *  route, camera and pane are untouched. Anything else (KB entries, the factory...) selects into the side pane. */

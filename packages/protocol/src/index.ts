@@ -3,6 +3,7 @@ export * from "./ask.js";
 export * from "./routes.js";
 export * from "./paging.js";
 export * from "./work-writes.js";
+export * from "./work-approvals.js";
 export * from "./registry.js";
 export * from "./kb-commits.js";
 export * from "./kb-rebuild.js";

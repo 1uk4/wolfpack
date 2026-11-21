@@ -47,6 +47,7 @@ import {
 import { createWorkClient, type WorkClient, type WorkDomain } from "./work-client";
 import { createGraduateClient, type GraduateClient } from "../kb/graduate-client";
 import { GraduateControl } from "../kb/graduate-dialog";
+import { useApprovals } from "./approval-request";
 import { useGraduated } from "../kb/graduation-signal";
 
 export const WORK_DOMAIN_KEY = "wolfpack:work-view-domain";
@@ -105,6 +106,7 @@ function useWorkItems(client: WorkClient, domain: string): { load: Load; reload:
 		window.addEventListener("focus", onFocus);
 		const poll = setInterval(() => void refresh(), WORK_POLL_MS);
 		return () => {
+			// eslint-disable-next-line react-hooks/exhaustive-deps -- seq is a request counter: the cleanup must bump the current value to drop in-flight reads
 			seq.current++;
 			window.removeEventListener("focus", onFocus);
 			clearInterval(poll);
@@ -171,6 +173,8 @@ interface RowCtx {
 	openId: string | null;
 	/** The group's gutter width (px), added to the indent of the rows below the group row. */
 	gutter: number;
+	/** Work ids with a pending owner-approval request: their direct Graduate / Assign controls are hidden until it is decided. */
+	pendingApproval?: ReadonlySet<string>;
 	/** The graduation seam: each feature row's control reads and drives its job through it. */
 	graduate: GraduateClient;
 	/** The owner's assignee control (absent: assignees show as plain text). */
@@ -264,7 +268,7 @@ function AssigneeCell({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 	) : (
 		<span aria-label="unassigned">—</span>
 	);
-	if (!a || !row.assignable || !row.id) {
+	if (!a || !row.assignable || !row.id || ctx.pendingApproval?.has(row.id)) {
 		return (
 			<span data-testid={`work-assignee-${row.key}`} className={`${COLS.assignee} flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground`}>
 				{face}
@@ -404,7 +408,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 					</span>
 					{/* Only a ready feature (or one with a job in flight) shows the button; why a feature is not ready is the stage cell's tooltip. */}
 					<span className="inline-flex shrink-0" onClick={(e) => e.stopPropagation()}>
-					<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
+					<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready && !ctx.pendingApproval?.has(row.id) ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
 					</span>
 					<AssigneeCell row={row} ctx={ctx} />
 					<span className={`${COLS.status} flex min-w-0 flex-col md:flex-row md:items-center md:gap-2`}>
@@ -704,8 +708,10 @@ export function WorkList({ client: injected, graduate: injectedGraduate, undoMs 
 			window.removeEventListener("drop", end);
 		};
 	}, []);
+	const approvals = useApprovals();
+	const pendingApproval = useMemo(() => new Set(approvals.pending.map((r) => r.workId)), [approvals.pending]);
 	const table = useMemo(() => (items ? buildWorkTable(items, { showGraduated, query, sort }) : null), [items, showGraduated, query, sort]);
-	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId, ...(client.move && items ? { move: { options: (id: string) => moveOptions(items, id), busy: busyMove, messages: moveMsgs, dragId, onDragStart: setDragId, onDragEnd: () => setDragId(null), onMove: (id: string, to: string | null) => void onMove(id, to) } } : {}), ...(client.assign ? { assign: { wolves, wolvesError, busy, errors: assignErrors, onAssign: (id: string, wolf: string) => void onAssign(id, wolf) } } : {}) };
+	const ctx: RowCtx = { pendingApproval, expanded, onToggle: toggle, onSelect: openItem, gutter: 0, graduate: graduateClient, openId: itemId, ...(client.move && items ? { move: { options: (id: string) => moveOptions(items, id), busy: busyMove, messages: moveMsgs, dragId, onDragStart: setDragId, onDragEnd: () => setDragId(null), onMove: (id: string, to: string | null) => void onMove(id, to) } } : {}), ...(client.assign ? { assign: { wolves, wolvesError, busy, errors: assignErrors, onAssign: (id: string, wolf: string) => void onAssign(id, wolf) } } : {}) };
 	const options = domains.some((d) => d.name === domain) ? domains : [{ name: domain, label: domain }, ...domains];
 	const chevron = (col: WorkSortCol) => (sort.col !== col ? null : sort.dir === 1 ? <ChevronUpIcon className="size-3" /> : <ChevronDownIcon className="size-3" />);
 

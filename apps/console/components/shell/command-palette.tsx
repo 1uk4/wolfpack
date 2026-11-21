@@ -204,7 +204,7 @@ export function CommandPalette() {
 				setBusy(false);
 			}
 		},
-		[router, wolf],
+		[router, wolf, openWork],
 	);
 
 	const emptyText =

@@ -302,7 +302,7 @@ describe("bash summary", () => {
 		assert.equal(stripCd("cd '/a b' && cd \"/c d\" && ls"), "ls"); // quoted paths
 		assert.equal(stripCd('cd "/a \\"b\\"" && ls'), "ls"); // escaped quote inside a quoted path
 		assert.equal(stripCd("cd /a\\ b && ls"), "ls"); // escaped space
-		assert.equal(summarizeArgs("bash", { command: "cd /Users/lukaflores/Code/wolfpack-wt/1uk4-dev && npm test" }), "npm test");
+		assert.equal(summarizeArgs("bash", { command: "cd /Users/owner/Code/wolfpack-wt/1uk4-dev && npm test" }), "npm test");
 	});
 
 	it("keeps the full command for the expanded view", () => {

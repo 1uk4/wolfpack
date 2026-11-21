@@ -69,7 +69,7 @@ describe("hub work proxy", () => {
     const mk = async (title: string) => ((await (await call(A, "POST", "", { ...feature, title, successCriteria: "done when x" })).json()) as { id: string }).id;
     const [live, old] = [await mk("live"), await mk("old")];
     await call(A, "PATCH", `/${live}`, { note: "hello" });
-    await call(A, "PATCH", `/${old}`, { stage: "archived" });
+    await call(OP_TOKEN, "PATCH", `/${old}`, { stage: "archived" });
     type Row = Record<string, unknown> & { id: string };
     const list = async (q: string) => ((await (await call(A, "GET", `?domain=personal${q}`)).json()) as { items: Row[] }).items;
     const full = await list("");
@@ -104,7 +104,24 @@ describe("hub work proxy", () => {
     expect((await call(A, "PATCH", `/${id}`, { note: "hello" })).status).toBe(200);
     const list = (await (await call(A, "GET", `?partOf=${id}`)).json()) as { items: { id: string }[] };
     expect(list.items.map((i) => i.id)).toEqual([tid]);
-    expect((await call(A, "POST", `/${id}/graduate`)).status).toBe(200);
+    expect((await call(OP_TOKEN, "POST", `/${id}/graduate`)).status).toBe(200);
+  });
+
+  it("GET /work/:id carries an etag; PATCH with a stale If-Match is 409 conflict naming the current etag, a matching or absent one is applied", async () => {
+    const { call, hub, A } = await rig();
+    const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
+    const etag = async () => ((await (await call(A, "GET", `/${id}`)).json()) as { etag?: string }).etag;
+    const patch = (body: unknown, ifMatch?: string) =>
+      fetch(`${hub.url}/v1/workapi/work/${id}`, { method: "PATCH", headers: { "X-API-Key": A, "Content-Type": "application/json", ...(ifMatch ? { "If-Match": ifMatch } : {}) }, body: JSON.stringify(body) });
+    const first = await etag();
+    expect(typeof first).toBe("string");
+    expect((await patch({ section: { name: "Record", text: "- one" } })).status).toBe(200);
+    const current = await etag();
+    expect(current).not.toBe(first);
+    const stale = await patch({ section: { name: "Record", text: "- stale" } }, first);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ code: "conflict", details: { etag: current } });
+    expect((await patch({ section: { name: "Record", text: "- two" } }, current)).status).toBe(200);
   });
 
   it("answers 409 parent_closed (create and move) for a graduated parent, with the message", async () => {
@@ -112,7 +129,7 @@ describe("hub work proxy", () => {
     const id = ((await (await call(A, "POST", "", feature)).json()) as { id: string }).id;
     const t = await call(A, "POST", "", { kind: "task", domain: "personal", title: "T", assignee: "wa" }); // parentless: lands in the Inbox
     const tid = ((await t.json()) as { id: string }).id;
-    expect((await call(A, "POST", `/${id}/graduate`)).status).toBe(200);
+    expect((await call(OP_TOKEN, "POST", `/${id}/graduate`)).status).toBe(200);
     const c = await call(A, "POST", "", { kind: "task", domain: "personal", title: "late", assignee: "wa", partOf: id });
     expect(c.status).toBe(409);
     expect(await c.json()).toMatchObject({ code: "parent_closed", error: expect.stringContaining(`${id} "`) });
@@ -242,7 +259,8 @@ describe("hub work proxy", () => {
   it("a wolf hands off its own item and is then refused it", async () => {
     const g = await gateRig();
     const id = await g.mk({ kind: "feature", title: "F", body: "x" });
-    expect((await g.as("wa", "PATCH", `/${id}`, { assignee: "wa2" })).status).toBe(200);
+    expect((await g.as("wa", "PATCH", `/${id}`, { assignee: "wa2" })).status).toBe(403); // a wolf files a request instead
+    expect((await g.owner("PATCH", `/${id}`, { assignee: "wa2" })).status).toBe(200);
     const after = await g.as("wa", "PATCH", `/${id}`, { stage: "approved" });
     expect(after.status).toBe(403);
     expect((await g.json(after)).error).toBe("assigned to wa2; only wa2 or the owner can change it");
@@ -456,7 +474,7 @@ describe("hub work proxy", () => {
   it("an unknown assign target is a 400 that names it, for the owner too", async () => {
     const g = await gateRig();
     const id = await g.mk({ kind: "feature", title: "F", body: "x" });
-    for (const call of [() => g.owner("PATCH", `/${id}`, { assignee: "ghost" }), () => g.as("wa", "PATCH", `/${id}`, { assignee: "ghost" })]) {
+    for (const call of [() => g.owner("PATCH", `/${id}`, { assignee: "ghost" })]) {
       const r = await call();
       expect(r.status).toBe(400);
       expect((await g.json(r)).error).toContain("\"ghost\"");
@@ -469,7 +487,7 @@ describe("hub work proxy", () => {
     const feat = await g.mk({ kind: "feature", title: "F", body: "x" });
     const t1 = await g.mk({ kind: "task", title: "t1", partOf: feat, successCriteria: "ok" });
     const t2 = await g.mk({ kind: "task", title: "t2", partOf: feat, successCriteria: "ok" });
-    expect((await g.as("wa", "PATCH", `/${t1}`, { assignee: "wa2" })).status).toBe(200);
+    expect((await g.owner("PATCH", `/${t1}`, { assignee: "wa2" })).status).toBe(200);
     expect(await g.who(t1)).toBe("wa2");
     const loose = await g.mk({ kind: "task", title: "loose", successCriteria: "ok" }); // lands in the domain's Inbox
     const inbox = ((await (await g.owner("GET", `/${loose}`)).json()) as { item: { partOf: string } }).item.partOf;
@@ -511,8 +529,10 @@ describe("hub work proxy", () => {
     const feat = await g.mk({ kind: "feature", title: "F", body: "x" });
     const mine = await g.mk({ kind: "task", title: "mine", partOf: feat, successCriteria: "ok" });
     const theirs = await g.mk({ kind: "task", title: "theirs", partOf: feat, successCriteria: "ok", assignee: "wa2" });
-    expect((await g.as("wa", "PATCH", `/${feat}`, { assignee: "wb" })).status).toBe(200);
-    expect([await g.who(feat), await g.who(mine), await g.who(theirs)]).toEqual(["wb", "wb", "wa2"]);
+    const refused = await g.as("wa", "PATCH", `/${feat}`, { assignee: "wb" });
+    expect(refused.status).toBe(403);
+    expect((await g.json(refused)).error).toBe("file an approval request (POST /work/:id/requests)");
+    expect([await g.who(feat), await g.who(mine), await g.who(theirs)]).toEqual(["wa", "wa", "wa2"]);
   });
 
   it("a feature assign whose cascade fails changes nothing", async () => {

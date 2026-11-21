@@ -58,7 +58,9 @@ beforeEach(async () => {
   dataDir = tmp("cmd-hub-");
   hub = await createHubServer({ dataDir, port: 0, authPollMs: 30, kbPollMs: 0, kbSettleMs: -1, linkTimers: { heartbeatMs: 100, deadAfterMs: 1000, helloTimeoutMs: 500, asleepOfflineMs: 60_000 } });
   store = createTokenStore(dataDir);
-  consoleToken = store.redeem(store.mintPairingCode({ kind: "console" }).code, "it-console", "console").token;
+  const consoleTok = store.redeem(store.mintPairingCode({ kind: "console" }).code, "it-console", "console");
+  store.setOwner(consoleTok.tokenId, true); // machine commands need an owner device (hubd ownerCaller)
+  consoleToken = consoleTok.token;
 });
 afterEach(async () => {
   for (const r of raws.splice(0)) r.terminate();

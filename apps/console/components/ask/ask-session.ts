@@ -70,7 +70,7 @@ export const offersSendAnyway = (p: Pick<PendingCard, "source">): boolean => p.s
 
 /**
  * The paged cards waiting on this thread, in wolfd's order (oldest first): its own questionnaires, its subagents', and tool
- * confirmations (`source.kind === "tool"`: crawl_run, crawl_release, task_done, task_graduate), which are paged ask cards too.
+ * confirmations (`source.kind === "tool"`: crawl_run, crawl_release, task_done), which are paged ask cards too.
  */
 export function askQueue(pending: readonly PendingCard[]): PendingCard[] {
 	return pending.filter((p) => p.card.paged === true);
@@ -448,12 +448,13 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 	const serverSeen = useRef(new Map<string, Record<string, CardFieldAnswer>>());
 	useEffect(() => {
 		if (callId !== "") serverSeen.current.set(callId, seedAll(pcRef.current));
-	}, [callId, draftKey]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [callId, draftKey]);
 	useEffect(() => {
 		const id = callId;
 		const flush = flushNote;
 		return () => {
 			flush();
+			// eslint-disable-next-line react-hooks/exhaustive-deps -- the cleanup must read the latest ref values at card switch/unmount to save the cards answers
 			if (id !== "") kept.current.set(id, { draft: draftRef.current, note: noteRef.current, dirty: dirty.current, seen: serverSeen.current.get(id) ?? {} });
 		};
 	}, [callId]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -7,14 +7,14 @@ import WebSocket from "ws";
 import type { Engine } from "@wolfpack/engine";
 import { LINK_PROTOCOL_VERSION, parseLinkFrame, type LinkFrame } from "@wolfpack/protocol";
 import { contentHash } from "@wolfpack/kb/shared";
-import { readLedger, leaseFile } from "@wolfpack/kb/librarian";
+import { readLedger, leaseFile, writeSections } from "@wolfpack/kb/librarian";
 import { hostname } from "node:os";
 import { utimesSync } from "node:fs";
 import { createHubSweepWriter, SYSTEM_ACTOR } from "./curator.js";
 import { createTokenStore } from "./auth.js";
 import { curatorFromEnv } from "./cli.js";
 import { createHubServer, type HubServer, type HubOptions } from "./server.js";
-import { contributionsDir, contributionsRoot } from "./layout.js";
+import { contributionsDir, contributionsRoot, hubRoots } from "./layout.js";
 import { OP, seedTokens } from "./testing/tokens.js";
 
 const tmp: string[] = [];
@@ -324,6 +324,47 @@ describe("hub curator: failures", () => {
     expect(pairs(events)).toEqual({ s: 1, f: 1 });
     // the curator keeps working afterwards
     await expect(hub.runCuratorOnce()).resolves.toBeDefined();
+  }, 30_000);
+
+  // A parent section (with a child) holding 11 direct entries: over the split threshold, so the sweep reports it.
+  const seedOversize = (dir: string) => {
+    const sec = (id: string, parent: string | null, childIds: string[]) => ({ id, domain: "wp", parent, depth: parent ? 1 : 0, label: id, title: id, centroid: [1, 0, 0], memberCount: 11, childIds, summary: "s", summaryHash: "h", dirty: false, memberCountAtLastLabel: 11, created: "2026-10-01", updated: "2026-10-01" });
+    writeSections(hubRoots(dir), [sec("sec-wp-aaaaaa", null, ["sec-wp-bbbbbb"]), sec("sec-wp-bbbbbb", "sec-wp-aaaaaa", [])] as never);
+    const eDir = join(dir, "kb", "base", "domains", "wp", "entries");
+    mkdirSync(eDir, { recursive: true });
+    for (let i = 0; i < 11; i++) writeFileSync(join(eDir, `kb-wp-seed${String(i).padStart(3, "0")}.md`), `---\nid: kb-wp-seed${String(i).padStart(3, "0")}\ndomain: wp\nsection: sec-wp-aaaaaa\n---\nseed\n`);
+  };
+
+  it("onSplitDue is NOT fired when the tick throws mid-sweep", async () => {
+    const calls: string[] = [];
+    const { hub, dir } = await start({ curator: curatorOpts({ onSplitDue: (d: string) => void calls.push(d), wrapWriter: (w: any) => ({ ...w, renderDomain: () => { throw new Error("render blew up"); }, gitCommit: () => { throw new Error("late blow up"); }, appendLedger: () => { throw new Error("ledger blew up"); } }) }) });
+    seedOversize(dir);
+    drop(dir, 1);
+    await hub.runCuratorOnce();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(calls).toEqual([]);
+  }, 30_000);
+
+  it("fires onSplitDue once after a clean tick over an oversize section (the hook path works)", async () => {
+    const calls: string[] = [];
+    const { hub, dir } = await start({ curator: curatorOpts({ onSplitDue: (d: string) => void calls.push(d) }) });
+    seedOversize(dir);
+    drop(dir, 1);
+    await hub.runCuratorOnce();
+    await until(() => calls.length > 0, "onSplitDue fired");
+    expect(calls).toEqual(["wp"]);
+  }, 30_000);
+
+  it("with autoRebuildPreview off no requester call happens even when a section is oversize", async () => {
+    // The server attaches the requester hook only when autoRebuildPreview is true: with it off the curator has no hook to call.
+    // The requester stamps rebuild-requests.json the moment it previews, so its absence shows no requester call happened.
+    const { hub, dir } = await start({ curator: curatorOpts({ autoRebuildPreview: false }) });
+    seedOversize(dir);
+    drop(dir, 1);
+    await hub.runCuratorOnce();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(readLedger(hub.roots).length).toBeGreaterThan(0); // the sweep ran
+    expect(existsSync(join(dir, "ledger", "rebuild-requests.json"))).toBe(false);
   }, 30_000);
 
   it("engine.call and embed run WITHOUT the KB writer queue held (a commit from inside them completes)", async () => {

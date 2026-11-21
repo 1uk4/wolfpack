@@ -27,6 +27,8 @@ import { readTopics, readEvictedTopics, readJourney, type TopicFile } from "./se
 import {
   readDenJourney,
   writeDenTopic,
+  bodyHash,
+  readDenTopicStates,
   gateDenTopic,
   writeDenJourney,
   markSessionConsolidated,
@@ -35,6 +37,15 @@ import {
 } from "./den.js";
 import { renderDenIndex } from "./den-index.js";
 import { isAbsorbed, reconcileDen } from "./den-reconcile.js";
+
+const LEGACY_WRITE_SLACK_MS = 2 * 60 * 1000;
+
+/** True when the den file's body is what consolidate last wrote: the hash matches, or (no hash) the mtime sits at `updated`. */
+function isConsolidateWritten(s: { sessionHash: string | null; body: string; updated: string; mtimeMs: number }): boolean {
+  if (s.sessionHash) return s.sessionHash === bodyHash(s.body);
+  const at = Date.parse(`${s.updated.trim().replace(" ", "T")}Z`);
+  return !Number.isNaN(at) && Math.abs(s.mtimeMs - at) <= LEGACY_WRITE_SLACK_MS;
+}
 
 /** Den topics are working memory: past this size the consolidator is asked to split, and we log (no rejection). */
 export const TOPIC_SOFT_CAP = 8000;
@@ -181,11 +192,14 @@ export async function consolidateSession(
     summary: string;
     body: string;
     domain?: string;
+    sessionHash?: string;
     change: "create" | "merge";
     target?: string;
   }> = [];
 
   const now = new Date().toISOString().replace("T", " ").slice(0, 16);
+  // Existing den files by frontmatter id: the same key promote reads them by, so a renamed file is still guarded.
+  const denStates = readDenTopicStates(den.denRoot);
 
   for (const t of sessionTopics) {
     // The id names a den file and a KB key: one bad id is skipped, not fatal.
@@ -199,10 +213,21 @@ export async function consolidateSession(
       skipped++;
       continue;
     }
+    // An existing den file is the source of truth: when its body is not what consolidate last wrote (hash in the
+    // frontmatter; a file with no hash has unknown origin), it was edited by hand and the session copy never replaces it.
+    // A file with no hash is a legacy one: the session rewrite and this den write are different entry points and no
+    // previous session body is kept, so there is nothing to compare with. Consolidate writes `updated` and the file together, so a file whose mtime is
+    // within 2 minutes of `updated` is consolidate's own; a later edit moves the mtime away.
+    const existing = denStates.get(t.id);
+    const untouched = !!existing && isConsolidateWritten(existing);
+    if (existing && !untouched && existing.body !== t.body.trim()) {
+      // Edited by hand: the den file stays the truth. Logged only for a no-hash file (a finite set: the first stamp ends it),
+      // so a legacy file frozen by a moved mtime is visible without a line per run.
+      if (!existing.sessionHash) onProgress?.(`  den topic ${t.id} has no session_hash and differs from the session copy; kept as edited by hand`);
+      continue;
+    }
     // "merge" = updating an existing den topic with the same id; "create" = new.
-    const change: "create" | "merge" = existsSync(join(topicsDir, `${t.id}.md`))
-      ? "merge"
-      : "create";
+    const change: "create" | "merge" = existing ? "merge" : "create";
     const topic = {
       id: t.id,
       title: t.title,
@@ -210,10 +235,11 @@ export async function consolidateSession(
       updated: now,
       body: t.body,
       domain: t.domain,
+      sessionHash: bodyHash(t.body),
     };
 
     const gate = gateDenTopic(t);
-    writeDenTopic(den.denRoot, { ...topic, ...gate });
+    writeDenTopic(den.denRoot, { ...topic, ...gate }, existing ? { filePath: existing.filePath, refreshMeta: untouched || existing.body === t.body.trim() } : undefined);
     onProgress?.(`  ${change === "merge" ? "updated" : "created"}: ${t.title}`);
     if (t.body.length > TOPIC_SOFT_CAP) onProgress?.(`  topic over ${TOPIC_SOFT_CAP} chars (${t.body.length}): ${t.id} — should be split by subject`);
     if (!gate.promotable) {
@@ -248,7 +274,8 @@ export async function consolidateSession(
       onEmit: options.onEmit,
       onHold: (t, reason) => {
         const full = updatedTopics.find((x) => x.id === t.id);
-        if (full) writeDenTopic(den.denRoot, { ...full, updated: now, promotable: false, promotableReason: reason });
+        const file = denStates.get(t.id)?.filePath; // rewrite in place: keeps hand-set fields, no second file for a renamed one
+        if (full) writeDenTopic(den.denRoot, { ...full, updated: now, promotable: false, promotableReason: reason }, file ? { filePath: file, refreshMeta: true } : undefined);
       },
     });
     claimsSubmitted = stats.emitted;

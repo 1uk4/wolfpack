@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import { enforceByteCap, runPromotePass, setKeepLocal, type PassDeps, type Topic
 import { readPromoteState, updateTopicState } from "./promote-state.js";
 import { readRoutingIndex } from "./routing-index.js";
 import { readTopics, writeTopic } from "./session/memory.js";
+import { writeDenTopic } from "./den.js";
 
 /** A den and its session-topic root; owner messages at each given UTC hour (all on 2026-11-13). */
 function setup(activeHours: number[] = []) {
@@ -168,6 +169,50 @@ describe("promote pass", () => {
     expect(seen).toEqual({ a: "kb-new" });
     const byId = Object.fromEntries(readTopics(root).map((t) => [t.id, t.routingHint]));
     expect(byId).toEqual({ a: "kb-new", b: undefined, c: undefined });
+  });
+
+  it("promotes den topic files as the source: a den-only merge-* topic, and the den body over a stale session copy", async () => {
+    const { den, root } = setup([20]);
+    topic(root, "a"); // session copy: "body a"
+    writeDenTopic(den, { id: "a", title: "a", summary: "s", updated: "2026-11-13 00:00", body: "hand edited a" });
+    writeDenTopic(den, { id: "merge-x", title: "merge-x", summary: "s", updated: "2026-11-13 00:00", body: "den only" });
+    const bodies: Record<string, string> = {};
+    const d = deps({ "merge-x": { kind: "create", entryIds: ["kb-x"] } });
+    await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...d, promote: async (ts) => { for (const t of ts) bodies[t.id] = t.body; } });
+    expect(bodies).toEqual({ a: "hand edited a", "merge-x": "den only" });
+    expect(readPromoteState(den).topics["merge-x"].receipt).toEqual({ outcome: "create", entryIds: ["kb-x"] });
+  });
+
+  it("does not re-promote a retired den-only topic, nor select a keep_local one in an owner pass", async () => {
+    const { den, root } = setup([20]);
+    writeDenTopic(den, { id: "merge-r", title: "merge-r", summary: "s", updated: "2026-11-13 00:00", body: "retired body" });
+    updateTopicState(den, "merge-r", { promotedAt: NOW.toISOString(), retiredAt: NOW.toISOString() });
+    writeDenTopic(den, { id: "merge-k", title: "merge-k", summary: "s", updated: "2026-11-13 00:00", body: "local body" });
+    const kFile = join(den, "memory", "topics", "merge-k.md");
+    writeFileSync(kFile, readFileSync(kFile, "utf8").replace("related: []", "related: []\nkeep_local: true"));
+    const promoted: string[] = [];
+    await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...deps({}, promoted) });
+    expect(promoted).toEqual([]);
+  });
+
+  it("reports a topic the promote step marked promotable:false as held", async () => {
+    const { den, root } = setup([20]);
+    topic(root, "a");
+    writeDenTopic(den, { id: "a", title: "a", summary: "s", updated: "2026-11-13 00:00", body: "log-like a" });
+    const d = deps({ a: { kind: "held", reason: "log-like" } });
+    const r = await runPromotePass({
+      den, root, trigger: { kind: "owner" }, now: NOW, ...d,
+      promote: async () => writeDenTopic(den, { id: "a", title: "a", summary: "s", updated: "2026-11-13 00:00", body: "log-like a", promotable: false, promotableReason: "log-like" }),
+    });
+    expect(r.held).toEqual(["a"]);
+  });
+
+  it("promotes a den-only topic to the domain in its frontmatter", async () => {
+    const { den, root } = setup([20]);
+    writeDenTopic(den, { id: "new-s", title: "new-s", summary: "s", updated: "2026-11-13 00:00", body: "snap body", domain: "snapjack" });
+    const domains: Record<string, string | undefined> = {};
+    await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...deps({}), promote: async (ts) => { for (const t of ts) domains[t.id] = t.domain; } });
+    expect(domains).toEqual({ "new-s": "snapjack" });
   });
 
   it("drops a stale routing link when its entry resolves to nothing", async () => {

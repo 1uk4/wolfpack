@@ -12,6 +12,7 @@
  */
 import { existsSync, readFileSync, readdirSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { parseFrontmatter, atomicWrite } from "@wolfpack/engine";
 import { assessTopic } from "@wolfpack/kb/client";
 
@@ -29,6 +30,10 @@ export interface DenTopic {
   /** Work tags (frontmatter), if any. A tagged topic never promotes. */
   work?: string;
   feature?: string;
+  /** Domain (frontmatter), if any: where a den-only topic promotes to. */
+  domain?: string;
+  /** `keep_local: true` in the frontmatter: a promote pass never selects this topic. */
+  keepLocal?: boolean;
 }
 
 export interface DenConfig {
@@ -138,6 +143,8 @@ function readTopicFiles(dir: string, idFromStem: (stem: string) => string = (ste
       promotableReason: fields.promotable_reason ? String(fields.promotable_reason) : undefined,
       ...(fields.work ? { work: String(fields.work) } : {}),
       ...(fields.feature ? { feature: String(fields.feature) } : {}),
+      ...(fields.domain ? { domain: String(fields.domain) } : {}),
+      ...(String(fields.keep_local) === "true" ? { keepLocal: true } : {}),
     };
     return { topic, fields, mtimeMs: statSync(filePath).mtimeMs };
   });
@@ -169,10 +176,56 @@ export function writeDenTopic(
     /** Set false (with a reason) to keep the topic in the den but out of the KB. */
     promotable?: boolean;
     promotableReason?: string;
-  }
+    /** Hash of the session body consolidate wrote; a later mismatch means the file was edited by hand. */
+    sessionHash?: string;
+  },
+  /** The existing file to overwrite when its name differs from `<id>.md`. */
+  existing?: {
+    filePath: string;
+    /** The file is untouched by hand (its body hash matched): title and summary follow the new body too. */
+    refreshMeta?: boolean;
+  },
 ): void {
   ensureDenDirs(denRoot);
-  const filePath = join(denRoot, "memory", "topics", `${topic.id}.md`);
+  const existingPath = existing?.filePath;
+  const filePath = existingPath ?? join(denRoot, "memory", "topics", `${topic.id}.md`);
+
+  // Updating an existing file: keep its frontmatter (hand-set title, summary, promotable, related, work, feature, ...)
+  // and refresh only what the new body drives: updated, session_hash, and promotable when the gate holds the topic.
+  if (existingPath && existsSync(existingPath)) {
+    const m = /^---\n([\s\S]*?)\n---\n?/.exec(readFileSync(existingPath, "utf-8"));
+    if (m) {
+      const set: Record<string, string> = { updated: topic.updated };
+      if (existing?.refreshMeta) {
+        set.title = topic.title;
+        set.summary = topic.summary;
+      }
+      if (topic.sessionHash) set.session_hash = topic.sessionHash;
+      if (topic.domain) set.domain = topic.domain;
+      const kept = m[1].split("\n");
+      // A hold the gate set carries a promotable_reason; a hand-set flag has none. Once the gate passes, drop only the former.
+      const gateHeld = kept.some((l) => /^promotable_reason:/.test(l));
+      const drop = new Set<string>(topic.promotable !== false && gateHeld ? ["promotable", "promotable_reason"] : []);
+      if (topic.promotable === false) {
+        set.promotable = "false";
+        set.promotable_reason = (topic.promotableReason ?? "").replace(/\s+/g, " ").trim();
+      }
+      const out: string[] = [];
+      const done = new Set<string>();
+      for (const line of kept) {
+        const key = /^([A-Za-z_][\w-]*):/.exec(line)?.[1];
+        if (key && drop.has(key)) continue;
+        if (key && key in set) {
+          if (key === "domain") { out.push(line); done.add(key); continue; } // a hand-set domain wins
+          out.push(`${key}: ${set[key]}`);
+          done.add(key);
+        } else out.push(line);
+      }
+      for (const [k, v] of Object.entries(set)) if (!done.has(k)) out.push(`${k}: ${v}`);
+      atomicWrite(filePath, `---\n${out.join("\n")}\n---\n\n${topic.body}\n`);
+      return;
+    }
+  }
 
   const relatedArr = topic.related ?? [];
   const lines = [
@@ -182,6 +235,7 @@ export function writeDenTopic(
     `summary: ${topic.summary}`,
     `updated: ${topic.updated}`,
     ...(topic.domain ? [`domain: ${topic.domain}`] : []),
+    ...(topic.sessionHash ? [`session_hash: ${topic.sessionHash}`] : []),
     ...(topic.promotable === false
       ? ["promotable: false", `promotable_reason: ${(topic.promotableReason ?? "").replace(/\s+/g, " ").trim()}`]
       : []),
@@ -199,6 +253,36 @@ export function writeDenTopic(
   lines.push("---", "", topic.body, "");
 
   atomicWrite(filePath, lines.join("\n"));
+}
+
+/** Hash of a topic body as consolidate records it (whitespace-trimmed). */
+export function bodyHash(body: string): string {
+  return createHash("sha256").update(body.trim()).digest("hex").slice(0, 16);
+}
+
+/** What consolidate needs to know about an existing den topic file to decide whether a hand edit is in it. */
+export interface DenTopicState {
+  sessionHash: string | null;
+  body: string;
+  filePath: string;
+  /** The `updated` frontmatter stamp (UTC, "YYYY-MM-DD HH:MM"). */
+  updated: string;
+  mtimeMs: number;
+}
+
+/** Every den topic file's state, keyed by the frontmatter id (the key readDenTopics uses), not the file name. */
+export function readDenTopicStates(denRoot: string): Map<string, DenTopicState> {
+  const out = new Map<string, DenTopicState>();
+  for (const { topic, fields, mtimeMs } of readTopicFiles(join(denRoot, "memory", "topics"))) {
+    out.set(topic.id, {
+      sessionHash: fields.session_hash ? String(fields.session_hash) : null,
+      body: topic.body,
+      filePath: topic.filePath,
+      updated: topic.updated,
+      mtimeMs,
+    });
+  }
+  return out;
 }
 
 /**

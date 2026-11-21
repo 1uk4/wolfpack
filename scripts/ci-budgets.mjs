@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Measures per-job wall time of ci.yml runs and prints proposed timeout-minutes budgets. Needs only an authenticated `gh`.
-// Usage: node scripts/ci-budgets.mjs [--since <ISO time>] [--limit 60] [--json]
+// Usage: node scripts/ci-budgets.mjs [--since <ISO time | commit sha>] [--limit 60] [--json] [--help]
 // Budget = ceil(2 x p95 in minutes), floor 3. A job with fewer than 5 samples falls back to 2 x max.
 // Only successful jobs of runs created after --since count (skipped jobs have no start/complete times and are ignored).
 import { execFileSync } from "node:child_process";
@@ -10,8 +10,27 @@ const opt = (name, dflt) => {
 	const i = args.indexOf(name);
 	return i >= 0 ? args[i + 1] : dflt;
 };
-// default: the shape after the verify split and caches (c7a2b013, 2026-11-20 16:07 -08:00)
-const since = Date.parse(opt("--since", "2026-11-20T16:07:00-08:00"));
+const HELP = `Usage: node scripts/ci-budgets.mjs [--since <ISO date | commit sha>] [--limit N] [--json] [--help]
+  --since  only runs created after this time. A commit sha is resolved to its commit date. Default: 2026-11-20T16:07:00-08:00
+           (the date of c7a2b013, the verify split with caches).
+  --limit  how many recent ci.yml runs to list (default 60)
+  --json   print {job: budget minutes} instead of the table
+Budget = ceil(2 x p95), floor 3 minutes; fewer than 5 samples falls back to 2 x max. Needs only an authenticated gh.`;
+if (args.includes("--help") || args.includes("-h")) {
+	console.log(HELP);
+	process.exit(0);
+}
+const sinceArg = opt("--since", "2026-11-20T16:07:00-08:00");
+let since = Date.parse(sinceArg);
+if (Number.isNaN(since)) {
+	try {
+		since = Date.parse(execFileSync("git", ["log", "-1", "--format=%cI", sinceArg], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim());
+	} catch {}
+}
+if (Number.isNaN(since)) {
+	console.error(`--since: "${sinceArg}" is neither a date nor a commit in this repo\n${HELP}`);
+	process.exit(2);
+}
 const limit = opt("--limit", "60");
 const gh = (a) => JSON.parse(execFileSync("gh", a, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }));
 

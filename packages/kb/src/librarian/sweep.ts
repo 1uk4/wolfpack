@@ -34,7 +34,7 @@ import { createOracles } from "./oracles.js";
 import { survivorOf } from "./alias.js";
 import { lookupAlias, applyAliasRoute } from "./sweep-alias.js";
 import { maxMergeTargetCharsFor, mergeSizeLimit, exemptFromSizeGuard, notifyKeptOversize, shouldRoutePlacement } from "./sweep-size.js";
-import { exceedsSplitAbove, notifySplitDue } from "./sweep-replace.js";
+import { exceedsSplitAbove, notifySplitDue, replaceMisfits, type SplitDueHook } from "./sweep-replace.js";
 import { produceEntry, produceVerbatim, type ProduceEntryInput } from "./produce.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
@@ -102,6 +102,10 @@ export interface SweepContext {
   readLog?: () => KbEvent[] | Promise<KbEvent[]>;
   /** Step timings for the tick's one log line (see timings.ts). */
   timings?: Timings;
+  /** Host hook: a domain has parent sections over the split threshold. Called once per domain per sweep, never awaited; a throw is logged and ignored. */
+  onSplitDue?: SplitDueHook;
+  /** Re-placement of misfit entries (replaceMisfits) only logs the planned moves. */
+  replaceDryRun?: boolean;
 }
 
 /** One contribution the sweep could not commit, with a human-readable reason. */
@@ -440,7 +444,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   let sections: Section[] = timed("sections", () => readSections(roots));
   {
     const big = await oversizedParents(roots, sections, T);
-    notifySplitDue(ctx.notify, big);
+    notifySplitDue(ctx.notify, big, ctx.onSplitDue, sections);
   }
 
   const batch: KbEvent[] = [];
@@ -1080,6 +1084,15 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       ctx.notify?.(
         `item ${c.from}/${c.denTopicId}: ${route} · llm ${secs(llmMs)} · total ${secs(Date.now() - itemStart)} → ${outcome}`
       );
+    }
+  }
+
+  // ── RE-PLACEMENT (end of the placement phase): re-home misfit entries, bounded; never fails the sweep ──
+  if (touchedDomains.size > 0 && !ctx.signal?.aborted) {
+    try {
+      await replaceMisfits({ roots, sections, domains: [...touchedDomains], loadEntryVectors: ctx.loadEntryVectors, writer: w, notify: ctx.notify, dryRun: ctx.replaceDryRun });
+    } catch (err) {
+      ctx.notify?.(`sweep: re-placement failed (skipped): ${cleanError(err)}`);
     }
   }
 

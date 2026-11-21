@@ -72,6 +72,8 @@ export interface CuratorOptions {
   getEmbedder?: () => CachedEmbedder;
   /** Test seam: clock (ms) for the status `finishedAt` (default Date.now). */
   now?: () => number;
+  /** Called once per domain AFTER a sweep finished when sections there outgrew the split threshold (never inside the sweep; errors are logged). The server wires it to the rebuild requester. */
+  onSplitDue?: (domain: string, sections: { id: string; count: number }[]) => void | Promise<void>;
   /** Test seam: run budget for the one item (see SweepTickOptions.budgetMs). */
   budgetMs?: number;
   /** How long close() waits for a tick in flight, ms (default 15000, under the unit's TimeoutStopSec=20). A tick still running after that stops writing (every writer call checks the closing flag) and the lease is released when it ends. */
@@ -374,6 +376,12 @@ export function createCurator(deps: CuratorDeps): Curator {
         emit({ type: "sweep_item", from: e.from, denTopicId: e.denTopicId, outcome: e.outcome, ...(e.entryId ? { entryId: e.entryId } : {}), ...(e.decision ? { decision: e.decision } : {}) });
       }
     };
+    const splitDue: Array<[string, { id: string; count: number }[]]> = [];
+    const flushSplitDue = () => {
+      for (const [domain, list] of splitDue.splice(0)) {
+        void Promise.resolve().then(() => o.onSplitDue?.(domain, list)).catch((e) => console.warn(`[curator] onSplitDue ${domain} failed: ${err1(e)}`));
+      }
+    };
     const base = createHubSweepWriter({ ...deps, closing: () => closing }, { afterEntryRead: o.afterEntryRead });
     const writer = o.wrapWriter ? o.wrapWriter(base) : base;
     try {
@@ -394,6 +402,7 @@ export function createCurator(deps: CuratorDeps): Curator {
         notify: (m) => console.log(`[curator] ${m}`),
         alert: (m) => console.warn(`[curator] ${m}`),
         onEvent,
+        ...(o.onSplitDue ? { onSplitDue: (domain: string, list: { id: string; count: number }[]) => void splitDue.push([domain, list]) } : {}),
       });
       const r = tick.sweep;
       const error = r.errors > 0 ? (r.failures[0]?.reason ?? r.paused ?? "an item failed") : undefined;
@@ -409,6 +418,7 @@ export function createCurator(deps: CuratorDeps): Curator {
     } finally {
       stopProgress?.(); // also a tick that ended without a sweep_finished
       stopProgress = undefined;
+      flushSplitDue(); // after the sweep: the hook never runs inside it
     }
   };
 

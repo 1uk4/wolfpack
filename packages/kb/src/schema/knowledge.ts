@@ -332,12 +332,18 @@ export const DerivedFacts = z.object({
   contentHash: z.string(),
   currency: Currency.default("live"),
   asOf: IsoDate.optional(),
+  /** When the facts in the body were last known true (frontmatter `factsAsOf:`); `updated` is only last touched. */
+  factsAsOf: IsoDate.optional(),
   /** Anchored subject key (frontmatter `anchor:`): routing by key, not similarity. */
   anchor: z.string().optional(),
   /** Group key (frontmatter `group:`): shown/sectioned under the anchored entry holding it. */
   group: z.string().optional(),
   /** Ordering date within the group (frontmatter `groupDate:`). */
   groupDate: z.string().optional(),
+  /** On a History digest child: the entry whose History it holds (frontmatter `historyOf:`). Never an anchor. */
+  historyOf: EntryId.optional(),
+  /** On an anchored parent: its History digest child (frontmatter `historyChild:`). */
+  historyChild: EntryId.optional(),
   /** Deterministic + resolved relations (embedding see_also ∪ resolved LLM edges). */
   relations: z.array(Relation).default([]),
   /** Section placement (required, single-parent tree). */
@@ -392,9 +398,13 @@ export const Entry = z.object({
   currency: Currency,
   verified: z.boolean(),
   asOf: IsoDate.optional(),
+  /** When the facts in the body were last known true (frontmatter `factsAsOf:`); `updated` is only last touched. */
+  factsAsOf: IsoDate.optional(),
   anchor: z.string().optional(),
   group: z.string().optional(),
   groupDate: z.string().optional(),
+  historyOf: z.string().optional(),
+  historyChild: z.string().optional(),
   expires: IsoDate.optional(),
 });
 export type Entry = z.infer<typeof Entry>;
@@ -475,9 +485,12 @@ export function assembleEntry(input: {
     currency: facts.currency,
     verified: overrides.verified ?? false,
     asOf: facts.asOf,
+    factsAsOf: facts.factsAsOf,
     anchor: facts.anchor,
     group: facts.group,
     groupDate: facts.groupDate,
+    historyOf: facts.historyOf,
+    historyChild: facts.historyChild,
     expires: overrides.expires,
   });
 }

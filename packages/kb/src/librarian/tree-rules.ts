@@ -16,6 +16,19 @@ export type TreeRules = {
 };
 export const DEFAULT_RULES: TreeRules = { ...SECTION_TREE.rules };
 
+/**
+ * Size above which a section is judged for a split, scaled to the domain size:
+ * clamp(round(6 + 1.5*log2(max(domainSize, 8))), 12, 24). About 12 at 30 entries, 18 at 350.
+ */
+export function splitThresholdFor(domainSize: number): number {
+  return Math.min(24, Math.max(12, Math.round(6 + 1.5 * Math.log2(Math.max(domainSize, 8)))));
+}
+
+/** Share of the section's members a split's groups cover (leftovers that did not join are not covered). */
+export function splitCoverage(labels: number[]): number {
+  return labels.length ? labels.filter((l) => l >= 0).length / labels.length : 0;
+}
+
 // ── seeded randomness ────────────────────────────────────────────────────────
 
 /** mulberry32: a small seeded PRNG returning floats in [0, 1). */
@@ -296,7 +309,8 @@ export function chooseSplit(
     labels = labels.map((l) => (small.includes(l) ? -1 : l));
   }
   const groups = new Set(labels.filter((l) => l >= 0));
-  if (groups.size < 2) return { split: null, reason: "too-few-groups", detail: { p } };
+  if (groups.size < SECTION_TREE.minCoherentGroups) return { split: null, reason: "too-few-groups", detail: { p } };
+  if (splitCoverage(labels) < SECTION_TREE.minCoverage) return { split: null, reason: "low-coverage", detail: { p, coverage: splitCoverage(labels) } };
   // Renumber groups by first appearance.
   const map = new Map<number, number>();
   labels = labels.map((l) => {
@@ -479,9 +493,10 @@ export function validatePartition(
       leftovers: labels.flatMap((l, i) => (l < 0 ? [i] : [])),
     };
   };
-  if (survivors.length < 2) {
-    const one = survivors.length === 1 ? decide(survivors) : undefined;
-    return { split: null, reason: survivors.length === 0 ? "no-coherent-category" : "fewer-than-two-categories", categories: reports, single: one };
+  if (survivors.length < SECTION_TREE.minCoherentGroups) {
+    // One or two survivors: the rest may still hide in the leftovers, so a second pass can try to complete the set.
+    const one = survivors.length >= 1 ? decide(survivors) : undefined;
+    return { split: null, reason: survivors.length === 0 ? "no-coherent-category" : "fewer-than-three-groups", categories: reports, single: one };
   }
   return decide(survivors);
 }

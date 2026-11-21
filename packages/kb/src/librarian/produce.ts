@@ -62,7 +62,78 @@ export interface ProduceEntryInput {
   allowOverflow?: boolean;
   /** Maps `## Delivered` links to live entries: retired ids to their survivors, ids with none dropped. */
   resolveLinks?: (links: string[]) => string[];
+  /** YYYY-MM-DD the contribution's facts date from; derived from the contribution when not given (see deriveOriginDate). */
+  originDate?: string;
+  /** YYYY-MM-DD the existing entry's facts were last known true (`factsAsOf:`); derived from existingMarkdown when not given (see factsAsOfOf). */
+  entryFactsAsOf?: string;
+  /** The alias route found the same claim with new figures: replace the figures in place, add nothing new. */
+  updateInPlace?: boolean;
 }
+
+const ISO = /^\d{4}-\d{2}-\d{2}/;
+
+/** Dates a line states about itself: one at line start (a Record line), or in parentheses. A date inside an "Until/by/before …" phrase is a deadline or a past bound, not the line's own date. */
+function ownDates(line: string): string[] {
+  const out: string[] = [];
+  const start = /^\s*(?:[-*]\s+)?(\d{4}-\d{2}-\d{2})\b/.exec(line);
+  if (start) out.push(start[1]!);
+  for (const m of line.matchAll(/\((\d{4}-\d{2}-\d{2})\)/g)) {
+    const before = line.slice(0, m.index).toLowerCase();
+    if (/\b(until|by|before)\s*$/.test(before)) continue;
+    out.push(m[1]!);
+  }
+  return out;
+}
+
+/**
+ * The date a contribution's facts date from, in order: sourceUpdated, groupDate, sourceCreated (graduation sets these from
+ * the feature's dates), submitted, and only then dates the text states about its own lines (see ownDates), ignoring any date
+ * after `today`.
+ */
+export function deriveOriginDate(
+  c: Pick<ParsedContribution, "summary" | "body" | "sourceUpdated" | "groupDate" | "sourceCreated" | "submitted">,
+  today: string = now().slice(0, 10),
+): string | undefined {
+  for (const d of [c.sourceUpdated, c.groupDate, c.sourceCreated, c.submitted]) {
+    const m = ISO.exec(d ?? "");
+    if (m) return m[0];
+  }
+  const dates = `${c.summary ?? ""}\n${c.body ?? ""}`.split("\n").flatMap(ownDates).filter((d) => d <= today).sort();
+  return dates[dates.length - 1];
+}
+
+/**
+ * When the entry's facts were last known true: its `factsAsOf:` field; for entries without it, the newest date in its
+ * History lines, else `updated:`. (`updated:` alone is "last touched": History-only merges advance it.)
+ */
+export function factsAsOfOf(markdown: string): string | undefined {
+  const f = parseFrontmatter(markdown).fields;
+  const own = ISO.exec(String(f.factsAsOf ?? ""))?.[0];
+  if (own) return own;
+  const hist = historyLines(markdown).flatMap((l) => [...l.matchAll(/\d{4}-\d{2}-\d{2}/g)].map((m) => m[0])).sort();
+  if (hist.length) return hist[hist.length - 1];
+  return ISO.exec(String(f.updated ?? ""))?.[0];
+}
+
+const squash = (s: string): string => s.replace(/\s+/g, " ").trim();
+
+/** An entry body as the model sees it: lede (summary) and detail without History, wrapper heading and H1. Same shape for the old body and the model's answer. */
+function bodyParts(markdown: string, fallbackSummary: string): { summary: string; main: string; history: string } {
+  const body = markdown.replace(/^---\n[\s\S]*?\n---\n?/, "").replace(/^\s+/, "");
+  const { main, history } = splitHistory(body);
+  const h1 = /^# [^\n]*\n+/.exec(main);
+  if (!h1) return { summary: fallbackSummary, main: stripDetailHeading(main).trim(), history };
+  const rest = main.slice(h1[0].length);
+  const lede = /^([^\n#][^\n]*(?:\n(?!\s*\n)[^\n]*)*)(?:\n\s*\n|$)/.exec(rest);
+  return lede
+    ? { summary: lede[1]!, main: stripDetailHeading(rest.slice(lede[0].length)).trim(), history }
+    : { summary: fallbackSummary, main: stripDetailHeading(rest).trim(), history };
+}
+
+/** The same text apart from line wrapping and spacing. */
+const sameText = (a: { summary: string; main: string }, b: { summary: string; main: string }): boolean =>
+  squash(`${a.summary}\n${a.main}`) === squash(`${b.summary}\n${b.main}`);
+
 
 /** A second subject the model split out of the contribution, to be routed as its own contribution. */
 export interface ProduceOverflow {
@@ -87,6 +158,8 @@ export interface ProduceEntryResult {
   overflow?: ProduceOverflow;
   /** Near-duplicate paragraphs/bullets/History lines collapsed in code. */
   deduped?: string[];
+  /** The contribution was older than the entry and the model changed the body: its body was discarded, only History lines were added. */
+  olderGuard?: { discarded: true; historyAdded: string[] };
 }
 
 /**
@@ -121,6 +194,10 @@ export async function produceEntry(
   const allowOverflow = input.allowOverflow !== false;
   const previous = existingMarkdown;
   const action: ProduceEntryResult["action"] = entryId ? "merge" : "create";
+  const originDate = input.originDate ?? deriveOriginDate(contribution);
+  const entryFactsAsOf = input.entryFactsAsOf ?? (previous ? factsAsOfOf(previous) : undefined);
+  if (previous && !originDate) console.warn(`produce: no origin date for ${contribution.from}/${contribution.denTopicId}, treating the contribution as newer`);
+  const contributionIsOlder = !!(previous && originDate && entryFactsAsOf && originDate < entryFactsAsOf);
 
   // Build LLM prompt (bounded, context-aware)
   const prompt = [
@@ -131,7 +208,9 @@ export async function produceEntry(
     ...(contribution.change === "update" ? ["(This contribution is a unified diff of changes to the source this entry was written from: apply those changes to the entry and keep everything else as it is.)", ""] : []),
     contribution.body,
     existingMarkdown ? `\nEXISTING ENTRY (${entryId}):\n${hideSourceProperties(existingMarkdown)}` : "",
-    `\nCONTRIBUTION DATE: ${contribution.sourceUpdated ?? now().slice(0, 10)}`,
+    `\nCONTRIBUTION DATE: ${originDate ?? contribution.sourceUpdated ?? now().slice(0, 10)}`,
+    ...(previous ? [`CONTEXT: ORIGIN DATE ${originDate ?? "unknown"}; ENTRY FACTS AS OF ${entryFactsAsOf ?? "unknown"}; CONTRIBUTION IS OLDER THAN THE ENTRY: ${contributionIsOlder ? "yes" : "no"}`] : []),
+    ...(input.updateInPlace ? ["UPDATE IN PLACE: yes (this contribution restates a claim the entry already holds, with new figures)"] : []),
     `ACTION: ${action}`,
     allowOverflow
       ? `OVERFLOW: allowed${existingMarkdown && splitHistory(parseFrontmatter(existingMarkdown).body).main.length > DEFAULT_BODY_CAP ? " (the EXISTING ENTRY is already over the size cap, so it covers more than one subject. The contribution was routed here: it stays in this entry. The entry's main subject is what most of its existing text and the contribution are about. Move the other, smaller subject of the EXISTING text into overflow, remove it from the entry, and retitle the entry only if its title named the moved subject)" : ""}`
@@ -141,8 +220,10 @@ export async function produceEntry(
   // LLM call — returns ONLY opinion (no ids, dates, section, resolved relations).
   // Re-parse through the schema to guarantee branded types AND re-validate the
   // model output (the confinement firewall — nothing invalid reaches assemble).
+  let rawSummary = "";
   const shape = (raw: unknown): LlmOpinion => {
     const o = LlmOpinion.parse(raw);
+    rawSummary = o.summary; // before foldIntro moves prose into it: the stand-in lede of an entry that has none
     // The entry renders as H1 + lede + detail: the detail must not repeat them.
     const detail = normalizeDetail(o.detail, o.summary, previous);
     return LlmOpinion.parse({ ...o, ...foldIntro(o.summary, detail, previous) });
@@ -206,6 +287,46 @@ export async function produceEntry(
     // A second subject already split out stays split out, whatever the pass returns.
     opinion = clean(carried ? { ...opinion, overflow: carried } : opinion);
     after = lintOpinion(opinion, previous, liveIds);
+  }
+  // Older contribution: the code, not the model, guarantees existing facts are untouched. If the body changed
+  // outside History, discard it, keep the old body and append only the new History lines.
+  // Runs only here, in produceEntry: the verbatim path (produce-verbatim.ts) makes no model call and never reaches it, and a
+  // decision entry is never rewritten in place (it has its own supersede flow).
+  let olderGuard: ProduceEntryResult["olderGuard"];
+  const guardable = !!(previous && entryId && !isDecisionMarkdown(previous));
+  const modelMain = (): { summary: string; main: string } => ({ summary: opinion.summary, main: stripDetailHeading(splitHistory(opinion.detail).main).trim() });
+  if (contributionIsOlder && guardable && previous) {
+    const old = bodyParts(previous, rawSummary);
+    // Same shape on both sides; a rewrap alone is not a change, a changed figure is.
+    if (!sameText(old, modelMain())) {
+      // Only History lines the entry does not already carry; the incoming fact is the older one, so its "Until" is the date the entry's facts were last known true.
+      const seenNew = new Set<string>();
+      const fresh = splitHistory(opinion.detail).history.split("\n")
+        .filter((l) => l.trim().startsWith("- ") && !keepHistory.has(squash(l)))
+        .map((l) => l.trim().replace(/^- Until \d{4}-\d{2}-\d{2}/, `- Until ${entryFactsAsOf}`))
+        .filter((l) => !seenNew.has(squash(l)) && seenNew.add(squash(l)));
+      let detail = `${old.main}\n\n## History\n\n${fresh.join("\n")}`.trim();
+      detail = preserveHistory(previous, detail).detail;
+      detail = dedupeDetail(detail, keepHistory).detail;
+      const added = historyLines(`---\n---\n${detail}`).filter((l) => !keepHistory.has(squash(l)));
+      opinion = LlmOpinion.parse({ ...opinion, summary: old.summary, detail });
+      // Lint what the guarded result carries, so the reported findings match what is committed.
+      after = lintOpinion(opinion, previous, liveIds);
+      olderGuard = { discarded: true, historyAdded: added };
+      console.warn(`produce: contribution ${originDate} is older than the entry's facts (${entryFactsAsOf}); the model changed the body, kept the old body and added ${added.length} History line(s)`);
+    }
+  }
+  // Update in place restates a claim with new figures: the entry must not grow.
+  if (input.updateInPlace && guardable && previous && !olderGuard) {
+    const old = bodyParts(previous, rawSummary);
+    const cur = modelMain();
+    const len = (p: { summary: string; main: string }): number => squash(`${p.summary}\n${p.main}`).length;
+    const lines = (p: { main: string }): number => p.main.split("\n").filter((l) => l.trim()).length;
+    if (len(cur) > len(old) * 1.1 || lines(cur) > lines(old) * 1.1) {
+      opinion = LlmOpinion.parse({ ...opinion, summary: old.summary, detail: `${old.main}${old.history.trim() ? `\n\n${old.history.trim()}` : ""}` });
+      after = lintOpinion(opinion, previous, liveIds);
+      console.warn(`produce: update-in-place grew the entry by more than 10%, kept the old body`);
+    }
   }
   // A split ends with the entry under the cap; an overflow only the first
   // produce asked for leaves the entry as it is.
@@ -278,6 +399,14 @@ export async function produceEntry(
     domain: DomainId.parse(domain),
     created,
     updated: timestamp,
+    // Facts last known true: advances only when the body outside History really changed and the guard did not discard it.
+    factsAsOf: (() => {
+      const prior = entryFactsAsOf;
+      const changed = !previous || !mergeId || !sameText(bodyParts(previous, rawSummary), { summary: opinion.summary, main: stripDetailHeading(splitHistory(opinion.detail).main).trim() });
+      const next = changed && !olderGuard ? (originDate ?? timestamp) : prior;
+      const best = next && prior && prior > next ? prior : next;
+      return best ? IsoDate.parse(best) : undefined;
+    })(),
     contentHash: contentHashValue,
     currency: contribution.currency === "archived" ? "archived" : "live",
     asOf: contribution.sourceUpdated ? IsoDate.parse(contribution.sourceUpdated) : undefined,
@@ -300,73 +429,9 @@ export async function produceEntry(
       ? { entry: { ...entry, kind: { type: "decision" } }, action: "create", supersedes }
       : { entry, action: "merge", unchanged: true };
   }
-  return { entry, action, historyRestored, lint, overflow, deduped };
+  return { entry, action, historyRestored, lint, overflow, deduped, ...(olderGuard ? { olderGuard } : {}) };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// verbatim produce (no LLM)
-// ═══════════════════════════════════════════════════════════════════════════
 
-/** The entry's text split the way produce hashes it: title, summary, detail. */
-export function verbatimParts(c: Pick<ParsedContribution, "body" | "summary" | "denTopicId">): { title: string; summary: string; detail: string } {
-  const body = (c.body ?? "").trim();
-  const h1 = /^#[ \t]+(.+?)[ \t]*(?:\n+|$)/.exec(body);
-  const title = (h1?.[1] ?? c.denTopicId.replace(/[-_]+/g, " ")).trim().slice(0, 140).padEnd(3, " ");
-  const detail = (h1 ? body.slice(h1[0].length) : body).trim();
-  const summary = c.summary.trim() || title;
-  return { title, summary, detail: detail || summary };
-}
-
-/**
- * Produce an anchored entry whose body is kept as authored: no model call, no
- * knowledge lint, no size or overflow pass. The title is the body's `# title`,
- * the summary the contribution's, the detail the rest of the body. A
- * contribution to the anchor's existing entry replaces its whole text and keeps
- * its identity (id, anchor, group, creation date, relations).
- */
-export function produceVerbatim(input: ProduceEntryInput): ProduceEntryResult {
-  const { contribution, domain, section, placement, entryId, existingMarkdown, existingCreated, resolve } = input;
-  const previous = existingMarkdown;
-  const action: ProduceEntryResult["action"] = entryId ? "merge" : "create";
-  const parts = verbatimParts(contribution);
-  const opinion = LlmOpinion.parse({
-    title: parts.title,
-    kind: "fact",
-    summary: parts.summary,
-    detail: parts.detail,
-    confidence: "high",
-  });
-
-  const id = EntryId.parse(entryId ?? mkEntryId(domain));
-  const timestamp = IsoDate.parse(now().slice(0, 10));
-  const kept = IsoDate.safeParse(
-    existingCreated ?? (previous ? String(parseFrontmatter(previous).fields.created ?? "") : "")
-  );
-  const created = entryId && kept.success ? kept.data : timestamp;
-  const prev = entryId ? previous : undefined;
-
-  const facts: DerivedFacts = {
-    id,
-    domain: DomainId.parse(domain),
-    created,
-    updated: timestamp,
-    contentHash: hashContent(entryHashText(opinion.title, opinion.summary, opinion.detail)),
-    currency: contribution.currency === "archived" ? "archived" : "live",
-    asOf: contribution.sourceUpdated ? IsoDate.parse(contribution.sourceUpdated) : undefined,
-    anchor: contribution.anchor ?? (prev ? anchorOf(prev) : undefined),
-    group: contribution.group ?? (prev ? groupOf(prev) : undefined),
-    groupDate: contribution.groupDate ?? (prev ? groupDateOf(prev) : undefined),
-    relations: prev ? existingRelations(prev) : [],
-    section,
-    placement,
-  };
-  const entry = assembleEntry({ opinion, facts, overrides: input.overrides, resolve });
-  // Same text and same identity as the entry on disk: nothing to write.
-  if (prev) {
-    const f = parseFrontmatter(prev).fields;
-    if (String(f.contentHash ?? "") === entry.contentHash && facts.anchor === anchorOf(prev) && facts.group === groupOf(prev) && facts.groupDate === groupDateOf(prev)) {
-      return { entry, action, unchanged: true };
-    }
-  }
-  return { entry, action };
-}
+// verbatim produce (no LLM) lives in produce-verbatim.ts
+export { produceVerbatim, verbatimParts } from "./produce-verbatim.js";

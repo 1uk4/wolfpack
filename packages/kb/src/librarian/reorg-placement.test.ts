@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { reorg } from "./reorg.js";
-import { writeSections } from "./sections.js";
+import { readSections, writeSections } from "./sections.js";
 import type { KbRoots } from "../shared/index.js";
 import type { Section } from "../schema/knowledge.js";
 
@@ -48,6 +48,23 @@ describe("reorg: entries are re-homed into their own domain's tree", () => {
 
     expect(notes).toContain("  placed: kb-personal-MISPLCD → sec-personal-bbbbbb");
     expect(notes.some((n) => n.includes("kb-personal-BBBBBBB") && n.includes("placed:"))).toBe(false);
+  });
+
+  it("a 7-child parent is only reported as wide: no wrapper section is created", async () => {
+    const kids = Array.from({ length: 7 }, (_, i) => ({ ...root(`sec-personal-kid${i}x`, "personal"), parent: "sec-personal-parent", depth: 1, memberCount: 4 }) as unknown as Section);
+    const parent = { ...root("sec-personal-parent", "personal"), memberCount: 0, childIds: kids.map((k) => k.id) } as unknown as Section;
+    writeSections(roots, [parent, ...kids]);
+    kids.forEach((k, i) => { for (let j = 0; j < 4; j++) entry("personal", `kb-personal-K${i}E${j}ZZ`, String(k.id)); });
+
+    const notes: string[] = [];
+    const engine = { call: vi.fn(), usage: { summarize: () => ({}) } } as unknown as Engine;
+    await reorg({ engine, roots, domains: ["personal"], notify: (m) => notes.push(m) });
+
+    const after = readSections(roots).filter((s) => String(s.domain) === "personal");
+    expect(after.filter((s) => s.memberCount === 0 && !s.childIds.length)).toEqual([]);
+    expect(after).toHaveLength(8); // parent + 7 children, nothing added
+    expect(notes.some((n) => n.includes("soft limit"))).toBe(true);
+    expect(notes.some((n) => n.includes("group children"))).toBe(false);
   });
 
   it("gives an entry nothing in its domain is close to a new section of its own domain", async () => {

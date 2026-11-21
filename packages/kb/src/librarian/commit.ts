@@ -127,6 +127,8 @@ export function renderEntry(entry: Entry): string {
   if (entry.anchor) lines.push(`anchor: ${entry.anchor}`);
   if (entry.group) lines.push(`group: ${entry.group}`);
   if (entry.groupDate) lines.push(`groupDate: ${entry.groupDate}`);
+  if (entry.historyOf) lines.push(`historyOf: ${entry.historyOf}`);
+  if (entry.historyChild) lines.push(`historyChild: ${entry.historyChild}`);
 
   // Section placement
   lines.push(`section: ${entry.section}`);
@@ -184,6 +186,7 @@ export function renderEntry(entry: Entry): string {
   lines.push(`created: ${entry.created}`);
   lines.push(`updated: ${entry.updated}`);
   if (entry.asOf) lines.push(`asOf: ${entry.asOf}`);
+  if (entry.factsAsOf) lines.push(`factsAsOf: ${entry.factsAsOf}`);
   if (entry.expires) lines.push(`expires: ${entry.expires}`);
 
   // Content hash (integrity)

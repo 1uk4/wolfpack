@@ -61,11 +61,12 @@ function writeEntry(domain: string, id: string, size: number): string {
 }
 
 describe("scanFat", () => {
-  it("skips anchored entries", () => {
-    const p = writeEntry("testdom", "kb-testdom-anchor1", 30000);
-    writeFileSync(p, readFileSync(p, "utf-8").replace("id: kb-testdom-anchor1\n", "id: kb-testdom-anchor1\nanchor: work-testdom-FEAT001\n"));
-    writeEntry("testdom", "kb-testdom-plain01", 30000);
-    expect(scanFat(roots, { domain: "testdom" }).map((c) => c.entryId)).toEqual(["kb-testdom-plain01"]);
+  it("lists an anchored entry only past the anchor cap (it is folded, never split)", () => {
+    for (const [id, size] of [["kb-testdom-anchor1", 30000], ["kb-testdom-anchor2", 8000]] as const) {
+      const p = writeEntry("testdom", id, size);
+      writeFileSync(p, readFileSync(p, "utf-8").replace(`id: ${id}\n`, `id: ${id}\nanchor: work-testdom-FEAT001\n`));
+    }
+    expect(scanFat(roots, { domain: "testdom" }).map((c) => c.entryId)).toEqual(["kb-testdom-anchor1"]);
   });
 
   it("returns oversized entries sorted largest-first", () => {
@@ -272,10 +273,53 @@ describe("splitFatAuto progress reporting", () => {
   });
 });
 
+describe("splitFatEntry size rules", () => {
+  const noCallEngine = { call: async () => { throw new Error("engine must not be called"); } } as unknown as Engine;
+
+  it("an anchored entry over the anchor cap folds its History into an un-anchored ~history child instead of splitting", async () => {
+    const p = writeEntry("testdom", "kb-testdom-anchor9", 14000);
+    const raw = readFileSync(p, "utf-8").replace("id: kb-testdom-anchor9\n", "id: kb-testdom-anchor9\nanchor: work-testdom-FEAT001\n");
+    writeFileSync(p, `${raw}\n\n## History\n\n- 2026-01-02 first line\n`);
+
+    const r = await splitFatEntry({ engine: noCallEngine, roots, entryId: "kb-testdom-anchor9" });
+
+    const childId = r.shards[0].entryId;
+    expect(r.shards).toHaveLength(1);
+    expect(childId).toMatch(/^kb-testdom-[0-9A-Za-z]{7}$/);
+    const parent = readFileSync(p, "utf-8");
+    expect(parent).toContain(`historyChild: ${childId}`);
+    expect(parent).toContain(`History: see [[${childId}]]`);
+    expect(parent).toContain("anchor: work-testdom-FEAT001");
+    expect(parent).not.toContain("first line");
+    const child = readFileSync(join(roots.kbBase, "domains", "testdom", "entries", `${childId}.md`), "utf-8");
+    expect(child).toContain("first line");
+    expect(child).toContain("historyOf: kb-testdom-anchor9");
+    expect(child).not.toMatch(/^(anchor|group|groupDate):/m);
+    expect(child).not.toContain("source-");
+  });
+
+  it("a non-anchor entry over the body cap is split into shards each under the body cap", async () => {
+    writeEntry("testdom", "kb-testdom-plain77", 7000);
+    const engine = {
+      call: async (_s: string, schema: { parse: (v: unknown) => unknown }) =>
+        schema.parse({ shards: [
+          { title: "One", summary: "a", body: "## A\n\n" + "x".repeat(3000) },
+          { title: "Two", summary: "b", body: "## B\n\n" + "y".repeat(3000) },
+        ] }),
+    } as unknown as Engine;
+
+    const r = await splitFatEntry({ engine, roots, entryId: "kb-testdom-plain77" });
+
+    expect(r.retired).toBe(true);
+    expect(r.shards).toHaveLength(2);
+    for (const s of r.shards) expect(s.size).toBeLessThan(6000);
+  });
+});
+
 describe("SPLIT_FAT constants", () => {
   it("has sensible defaults", () => {
-    expect(SPLIT_FAT.oversizedThreshold).toBe(10_000);
-    expect(SPLIT_FAT.targetShardMax).toBeLessThan(SPLIT_FAT.oversizedThreshold);
+    expect(SPLIT_FAT.oversizedThreshold).toBe(6_000);
+    expect(SPLIT_FAT.targetShardMax).toBeLessThanOrEqual(SPLIT_FAT.oversizedThreshold);
     expect(SPLIT_FAT.maxShards).toBeGreaterThan(2);
   });
 });

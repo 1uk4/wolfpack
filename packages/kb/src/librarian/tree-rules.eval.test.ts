@@ -10,6 +10,10 @@
  *  - null p is 0.0099 (the floor with 100 replicates) for ALL five sets, grab bag
  *    included: the permutation null is weak (the experiment said so). What
  *    separates the grab bag and Console Chat is the seed/bootstrap stability gate.
+ *  - NOTE (work-wolfpack-Fs0BlY6): the numbers below were measured before the split rules changed. A split now needs
+ *    >= minCoherentGroups (3) groups and >= minCoverage (70%) of members covered, and the size threshold is per domain
+ *    (splitThresholdFor(domainSize), 12..24) instead of a fixed splitAbove 10. These evals pass ignoreSize, so the
+ *    threshold does not apply, but 2-group results here would now be rejected (too-few-groups / low-coverage) by chooseSplit.
  *  - Work Item Tracking and Graduation split into 2 groups; the accepted partition is
  *    identical across seeds, but they sit near the ARI .7 gate (mean ~.75), so the
  *    accept/reject decision itself flips on ~1 seed in 6. In production the seed is
@@ -142,8 +146,8 @@ const EQUIV_ARI = 0.7;
  * Tree shapes the top-down rebuild produces on the fixtures (default seed; inserts give the same shapes):
  *  - Console Chat (30):   one section, 30 entries (split rejected: unstable). Intended: no stable substructure.
  *  - Work Item Tracking (14): root with 2 children of 8 and 6, no leftovers.
- *  - Graduation (9):      one section, 9 entries (below splitAbove).
- *  - Game Tracking (9):   one section, 9 entries (below splitAbove).
+ *  - Graduation (9):      one section, 9 entries (below the split threshold, now >= 12).
+ *  - Game Tracking (9):   one section, 9 entries (below the split threshold, now >= 12).
  *  - grab bag (14):       one section, 14 entries (rejected: unstable).
  */
 describe("acceptance: one-by-one inserts ≈ top-down rebuild (work-wolfpack-t800z3L)", () => {

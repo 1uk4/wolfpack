@@ -26,8 +26,10 @@ export interface LintFinding {
   sample?: string;
 }
 
-/** Body size cap in chars, History excluded. */
-export const DEFAULT_BODY_CAP = 6000;
+/** The one body size cap in chars, History excluded. Every size rule (lint, merge limit, split) derives from it. */
+export const BODY_CAP = 6000;
+/** Alias of BODY_CAP kept for existing importers. */
+export const DEFAULT_BODY_CAP = BODY_CAP;
 
 /** Property keys that carry progress noise, never knowledge. */
 export const FORBIDDEN_PROPERTY = /^(?:commits?|commit-.+|.+-commits?|test-?counts?|tests?|tests?-.+|.+-tests?|scores?|.+-scores?|score-.+|tasks?|task-.+|work-?ids?|work-item.*)$/i;

@@ -6,6 +6,10 @@
  * the members present; an entry it never categorised goes to "doesn't fit".
  *
  * Inserts vs rebuild (stay-in-parent placement rule): Work Item Tracking ARI .76 (passes), Console Chat .32 (known gap, below).
+ * NOTE (work-wolfpack-Fs0BlY6): the shapes below were measured before the split rules changed. The size threshold is now per
+ * domain (splitThresholdFor, 12..24, not a fixed splitAbove 10), and a split needs >= 3 coherent groups covering >= 70% of the
+ * members after leftovers join. The 2-group results (Work Item Tracking, Graduation) and the 6/14 coverage of Work Item
+ * Tracking would now be rejected (fewer-than-three-groups / low-coverage); update the numbers when these evals are re-recorded.
  * Tree shapes B produces at llmMinCoherence .7 (identical to .8 on these fixtures: every dropped category is far below .7) (rebuild from one root, default rules; "k" groups + leftovers kept in the parent):
  *   Console Chat (30)        4 groups of 4/4/5/5 (18 entries) + 12 leftovers ("Console chat UI" is kept as a partial group of its 4 coherent members; "CLI, providers" is dropped, 1/4 coherent)
  *   Work Item Tracking (14)  2 groups of 3/3 (6 entries)    + 8 leftovers    (three categories dropped or too small)

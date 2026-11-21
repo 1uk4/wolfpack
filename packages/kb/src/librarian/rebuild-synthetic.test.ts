@@ -1,7 +1,7 @@
 /**
  * A synthetic 93-entry domain with 8 well-separated clusters in two super-groups: the case the frozen real
- * fixtures cannot cover (they mostly refuse to split). Exercises accepted splits, the branching-cap wrappers,
- * refinement moves, id/label reuse, the wrapper restate check, and inserts-vs-rebuild.
+ * fixtures cannot cover (they mostly refuse to split). Exercises accepted splits, wide parents without wrappers,
+ * the no-subject fold, the depth limit, refinement moves, id/label reuse, and inserts-vs-rebuild.
  */
 import { describe, it, expect } from "vitest";
 import { planRebuild, insertEntry, repairPath, type RebuildEntry, type RebuildState, type Namer } from "./rebuild.js";
@@ -28,7 +28,7 @@ const unique: Namer = async () => ({ title: `Name ${++n}`, summary: `s${n}` });
 const yieldLoop = () => new Promise<void>((r) => setImmediate(r));
 
 describe("synthetic 93-entry domain, 8 clusters", () => {
-  it("splits the root into the 8 clusters, with the branching cap grouping them into two wrappers", async () => {
+  it("splits the root into the 8 clusters and keeps the parent wide: no wrapper, no 0-entry section", async () => {
     const es = clustersFixture();
     const plan = await planRebuild({ domain: "wp", entries: es, namer: unique });
     const leaves = plan.state.sections.filter((s) => !plan.state.sections.some((c) => c.parent === s.id));
@@ -38,21 +38,16 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
       expect(new Set(members.map(clusterOf)).size).toBe(1); // every leaf is exactly one cluster
     }
     expect(plan.leftovers.size).toBe(0);
-    // 8 children of the root exceed maxChildrenPerSection (6): the cap groups them under wrappers
-    expect(plan.capWrappers.size).toBe(2);
-    for (const w of plan.capWrappers) {
-      const kids = plan.state.sections.filter((s) => String(s.parent) === w);
-      expect(kids.length).toBeGreaterThanOrEqual(3);
-      expect(plan.state.assignment.size).toBe(es.length);
-    }
-    // the clusters of one super-group sit under the same wrapper
-    const wrapperOf = (cl: number) => String(plan.state.sections.find((s) => String(s.id) === plan.state.assignment.get(es.find((e) => clusterOf(e.id) === cl)!.id))!.parent);
-    expect(new Set([0, 1, 2, 3].map(wrapperOf)).size).toBe(1);
-    expect(new Set([4, 5, 6, 7].map(wrapperOf)).size).toBe(1);
-    expect(wrapperOf(0)).not.toBe(wrapperOf(4));
-    // sections below the threshold or without substructure are judged and kept whole
+    // 8 children exceed the soft limit (6) but not the hard width (12): all 8 stay direct children of the one root
+    const roots = plan.state.sections.filter((s) => s.parent === null);
+    expect(roots).toHaveLength(1);
+    expect(plan.state.sections).toHaveLength(9);
+    expect(plan.state.sections.filter((s) => String(s.parent) === String(roots[0].id))).toHaveLength(8);
+    expect(plan.state.assignment.size).toBe(es.length);
+    // every leaf holds entries; the root holds none directly (no empty cap-wrapper style sections)
+    for (const l of leaves) expect([...plan.state.assignment.values()].filter((s) => s === String(l.id)).length).toBeGreaterThanOrEqual(10);
+    // only the root is judged (the leaves of 10-14 entries are below the threshold for a 93-entry domain)
     expect(plan.judged.filter((j) => j.outcome === "split")).toHaveLength(1);
-    expect(plan.judged.filter((j) => j.outcome === "kept").length).toBeGreaterThanOrEqual(5);
   }, 600_000);
 
   it("from the current tree: planted misfilings are moved back (listed), and unchanged sections keep id and name without any LLM call", async () => {
@@ -99,20 +94,81 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
     expect(plan.state.sections.find((s) => String(s.id) === leafOfCluster)!.title).toMatch(/^Renamed/);
   }, 600_000);
 
-  it("a cap wrapper whose title restates its parent is re-asked, then dissolved (children go back to the parent)", async () => {
+  it("a split whose children the namer cannot name is folded back: no concatenated-title section", async () => {
     const es = clustersFixture();
     const namer: Namer = async (c) => {
       if (!c.parentTitle) return { title: "Platform Services", summary: "root" };
-      if (c.members.length > 0 && c.depth === 1) return { title: "Platform Services Group", summary: "wrapper" }; // restates the parent
-      return { title: `Leaf ${++n}`, summary: "l" };
+      throw new Error("namer down");
     };
     const plan = await planRebuild({ domain: "wp", entries: es, namer });
-    expect(plan.rejected.some((r) => r.reason === "wrapper-label-restates-parent")).toBe(true);
-    expect(plan.capWrappers.size).toBe(0);
-    const root = plan.state.sections.filter((s) => s.parent === null);
-    expect(root).toHaveLength(1);
-    expect(plan.state.sections.filter((s) => String(s.parent) === String(root[0].id))).toHaveLength(8);
-    expect(plan.state.sections.every((s) => s.title !== "")).toBe(true);
+    expect(plan.rejected.some((r) => r.reason === "child-has-no-subject")).toBe(true);
+    expect(plan.state.sections).toHaveLength(1);
+    expect(plan.state.assignment.size).toBe(es.length);
+    expect(plan.state.sections.map((s) => s.title)).toEqual(["Platform Services"]); // no fallback title built from entry titles
+  }, 600_000);
+
+  it("folds every split child back when fewer than three would remain named", async () => {
+    const es = clustersFixture();
+    const namer: Namer = async (c) => {
+      if (!c.parentTitle) return { title: "Platform Services", summary: "root" };
+      const cl = Number(c.members[0].title.split(" ")[1]);
+      if (cl >= 2) throw new Error("namer down"); // 6 of 8 children cannot be named; only 2 remain
+      return { title: `Named ${cl}`, summary: "s" };
+    };
+    const plan = await planRebuild({ domain: "wp", entries: es, namer });
+    expect(plan.rejected.filter((r) => r.reason === "child-has-no-subject" || r.reason === "too-few-children-left")).toHaveLength(8);
+    expect(plan.state.sections).toHaveLength(1);
+    expect(plan.state.assignment.size).toBe(es.length);
+  }, 600_000);
+
+  it("a parent with 13 clusters is cut to 12 children: the smallest split is undone, no entry is lost", async () => {
+    const r = rng(11);
+    const es: RebuildEntry[] = [];
+    for (let c = 0; c < 13; c++) for (let k = 0; k < (c === 5 ? 7 : 10); k++) {
+      const v = Array.from({ length: DIM }, (_, d) => (d === 0 ? 3 : 0) + (d === 3 + c ? 1.6 : 0) + (r() + r() + r() - 1.5) * 0.1);
+      const norm = Math.hypot(...v);
+      es.push({ id: `c${String(c).padStart(2, "0")}-${String(k).padStart(2, "0")}`, title: `cluster ${c} entry ${k}`, summary: `topic ${c}`, vector: v.map((x) => x / norm) });
+    }
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: unique });
+    const root = plan.state.sections.find((s) => s.parent === null)!;
+    expect(plan.state.sections.filter((s) => String(s.parent) === String(root.id))).toHaveLength(12);
+    expect(plan.rejected.some((x) => x.reason === "too-wide")).toBe(true);
+    expect(plan.state.assignment.size).toBe(es.length);
+    const direct = [...plan.state.assignment].filter(([id, s]) => id.startsWith("c05-") && s === String(root.id)).length;
+    expect(direct).toBe(7); // the 7-entry cluster went back to the parent as direct entries
+  }, 600_000);
+
+  it("insert-path repair uses the per-domain threshold: 12 entries in a 300-entry domain are not split", async () => {
+    const es = clustersFixture();
+    const pick = [0, 1, 2].flatMap((c) => es.filter((e) => clusterOf(e.id) === c).slice(0, 4));
+    const vec = new Map(pick.map((e) => [e.id, e.vector]));
+    const mk = (): RebuildState => ({
+      sections: [{ id: "sec-wp-root00", domain: "wp", parent: null, depth: 0, label: "r", title: "Root", centroid: [], memberCount: pick.length, childIds: [], summary: "", summaryHash: "", dirty: true, memberCountAtLastLabel: 0, created: "x", updated: "x" } as any],
+      assignment: new Map(pick.map((e) => [e.id, "sec-wp-root00"])),
+    });
+    expect(await repairPath(mk(), "sec-wp-root00", vec, "wp", undefined, { domainSize: 300 })).toEqual([]);
+    expect((await repairPath(mk(), "sec-wp-root00", vec, "wp")).length).toBe(3); // default threshold 10: 12 members are judged and split
+  }, 600_000);
+
+  it("judges a section at depth 2 (children land at depth 3) but not at depth 3", async () => {
+    const es = clustersFixture();
+    const base = (await planRebuild({ domain: "wp", entries: es, namer: unique })).state.sections[0];
+    const chainTo = (last: number) => [...Array(last + 1).keys()].map((d) => ({ ...structuredClone(base), id: `sec-wp-chain${d}`, depth: d, parent: d ? `sec-wp-chain${d - 1}` : null, childIds: d < last ? [`sec-wp-chain${d + 1}`] : [] })) as any[];
+    const at2 = await planRebuild({ domain: "wp", entries: es, namer: unique, start: { sections: chainTo(2), assignment: new Map(es.map((e) => [e.id, "sec-wp-chain2"])) } });
+    expect(at2.judged.find((j) => j.id === "sec-wp-chain2")!.outcome).toBe("split");
+    expect(Math.max(...at2.state.sections.map((s) => s.depth))).toBe(3);
+  }, 600_000);
+
+  it("never judges a section whose children would sit at or below maxDepth", async () => {
+    const es = clustersFixture();
+    const first = await planRebuild({ domain: "wp", entries: es, namer: unique, rules: { ...(await import("./tree-rules.js")).DEFAULT_RULES, splitAbove: 100 } });
+    const base = first.state.sections[0];
+    // a chain root -> a -> b -> c (depth 0..3) with every entry in c
+    const chain = [0, 1, 2, 3].map((d) => ({ ...structuredClone(base), id: `sec-wp-chain${d}`, depth: d, parent: d ? `sec-wp-chain${d - 1}` : null, childIds: d < 3 ? [`sec-wp-chain${d + 1}`] : [] })) as any[];
+    const start: RebuildState = { sections: chain, assignment: new Map(es.map((e) => [e.id, "sec-wp-chain3"])) };
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: unique, start });
+    expect(plan.judged.find((j) => j.id === "sec-wp-chain3")!.outcome).toBe("max-depth");
+    expect(Math.max(...plan.state.sections.map((s) => s.depth))).toBe(3);
   }, 600_000);
 
   it("inserts into a built tree land in their cluster's section, create nothing, and a second pass is a no-op", async () => {
@@ -159,7 +215,7 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
       const leafOf = (cl: number) => first.state.assignment.get(es.find((e) => clusterOf(e.id) === cl)!.id)!;
       const topOf = (id: string) => { let s = first.state.sections.find((x) => String(x.id) === id)!; while (s.parent) s = first.state.sections.find((x) => x.id === s.parent)!; return String(s.id); };
       // flatten into two roots: A = {0..3}, B = {4..7}
-      const sections = structuredClone(first.state.sections).filter((s) => !first.capWrappers.has(String(s.id)) && s.parent !== null || false);
+      const sections = structuredClone(first.state.sections).filter((s) => s.parent !== null);
       const rootA = { ...structuredClone(first.state.sections.find((s) => s.parent === null)!), id: "sec-wp-rootAA", childIds: [] as any[], parent: null, title: "A" } as any;
       const rootB = { ...structuredClone(rootA), id: "sec-wp-rootBB", title: "B" } as any;
       const leaves = sections.filter((s) => !first.state.sections.some((c) => c.parent === s.id));

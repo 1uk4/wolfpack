@@ -12,7 +12,7 @@
  * siblings in the parent's section; a follow-up `kb_reorg` re-routes them
  * into the right branch of the tree.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
@@ -24,13 +24,16 @@ import { retireEntries } from "./retire.js";
 import { anchorOf } from "./anchors.js";
 import { appendLedger } from "./ledger.js";
 import { withKbLock } from "./lock.js";
+import { BODY_CAP } from "../shared/knowledgeLint.js";
+import { ANCHOR_BODY_CAP } from "./sweep-size.js";
+import { foldHistory, historyChildIdOf, mergeHistoryFrom, writeHistoryChild } from "./history-child.js";
 
 // ── Tunables ──────────────────────────────────────────────────────────────
 export const SPLIT_FAT = {
   /** Minimum entry size (chars) considered oversized. */
-  oversizedThreshold: 10_000,
+  oversizedThreshold: BODY_CAP,
   /** Per-shard target the LLM aims for. */
-  targetShardMax: 6_000,
+  targetShardMax: BODY_CAP,
   /** Divisor for shard-count heuristic: shards = max(2, round(size / X)). */
   shardSizeDivisor: 7_500,
   /** Hard upper bound on shards per split. */
@@ -85,7 +88,8 @@ export function scanFat(
       }
       if (size < threshold) continue;
       const raw = readFileSync(path, "utf-8");
-      if (anchorOf(raw)) continue; // anchored entries are pinned records, never split
+      // An anchored entry is never split: it is a candidate only past ANCHOR_BODY_CAP, where its History is folded out.
+      if (anchorOf(raw) && size < ANCHOR_BODY_CAP) continue;
       const title = extractTitle(raw) ?? f.replace(/\.md$/, "");
       const nH2 = (raw.match(/^## /gm) ?? []).length;
       out.push({
@@ -303,6 +307,44 @@ export interface SplitFatOptions {
   dryRun?: boolean;
 }
 
+/**
+ * An anchored entry over ANCHOR_BODY_CAP is not split: its `## History` moves to a `<id>~history` child (no anchor)
+ * and the parent keeps a one-line pointer.
+ */
+async function foldAnchorHistory(opts: SplitFatOptions, raw: string, yaml: string, body: string): Promise<SplitFatResult> {
+  const { roots, entryId, notify } = opts;
+  const domain = entryId.split("-")[1];
+  const title = extractTitle(raw) ?? entryId;
+  const existingId = historyChildIdOf(raw);
+  const childId = existingId ?? makeEntryId(domain);
+  const childFile = join(entriesDir(roots, domain), `${childId}.md`);
+  const prevChild = existingId && existsSync(childFile) ? readFileSync(childFile, "utf-8") : null;
+  const folded = foldHistory(mergeHistoryFrom(prevChild, body), { parentTitle: title, childId, date: todayISO(), force: !!existingId });
+  if (!folded.child) {
+    notify?.(`[split-fat] ${entryId}: anchored, over cap, no History to fold`);
+    return { entryId, parentSize: raw.length, shards: [], retired: false };
+  }
+  const child = folded.child;
+  const shards = [{ entryId: childId, title: child.title, size: child.body.length }];
+  if (opts.dryRun) return { entryId, parentSize: raw.length, shards, retired: false };
+  const fm = parseFrontmatter(raw).fields;
+  const parentSection = String(fm.section ?? "");
+  const placement = { basis: String(fm.placement && typeof fm.placement === "object" ? (fm.placement as Record<string, unknown>).basis ?? "routed" : "routed"), fit: 1 };
+  await withKbLock(roots, async () => {
+    const events = SectionId.safeParse(parentSection).success
+      ? writeHistoryChild(roots, { id: childId, parentId: entryId, domain, section: parentSection, placement, date: todayISO(), ...child })
+      : [];
+    if (events.length === 0) throw new Error(`${entryId} has no usable section: History not folded`);
+    const hash = createHash("sha256").update(folded.detail).digest("hex");
+    let parentYaml = yaml.replace(/^updated:.*$/m, `updated: ${todayISO()}`).replace(/^contentHash:.*$/m, `contentHash: sha256:${hash}`);
+    if (!existingId) parentYaml = parentYaml.replace(/^(id:.*)$/m, `$1\nhistoryChild: ${childId}`);
+    atomicWrite(join(entriesDir(roots, domain), `${entryId}.md`), `---\n${parentYaml}\n---\n\n${folded.detail.replace(/\s+$/, "")}\n`);
+    appendLedger(roots, [...events, ev.entryWritten(entryId, entryId, "merge")]);
+  }, { waitMs: 15 * 60_000 });
+  notify?.(`[split-fat] ${entryId}: History folded into ${childId}`);
+  return { entryId, parentSize: raw.length, shards, retired: false };
+}
+
 export async function splitFatEntry(opts: SplitFatOptions): Promise<SplitFatResult> {
   const { engine, roots, entryId, notify } = opts;
   const threshold = opts.threshold ?? SPLIT_FAT.oversizedThreshold;
@@ -312,10 +354,11 @@ export async function splitFatEntry(opts: SplitFatOptions): Promise<SplitFatResu
 
   const raw = readFileSync(file, "utf-8");
   const { yaml, body } = parseEntryFile(raw);
-  if (/^anchor:/m.test(yaml)) throw new Error(`${entryId} is anchored: an anchored entry is a pinned record and is not split`);
-  if (raw.length < threshold) {
+  const anchored = /^anchor:/m.test(yaml);
+  if (raw.length < (anchored ? Math.max(threshold, ANCHOR_BODY_CAP) : threshold)) {
     return { entryId, parentSize: raw.length, shards: [], retired: false };
   }
+  if (anchored) return foldAnchorHistory(opts, raw, yaml, body);
 
   const title = extractTitle(raw) ?? entryId;
   const nShards = suggestShardCount(raw.length);

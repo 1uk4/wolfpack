@@ -50,21 +50,7 @@ export const SWEEP = {
   nearMissScore: 0.8,
   /** Candidates (best first) shown to the LLM subject check. */
   mergeCandidates: 3,
-  /**
-   * Estimated milliseconds per character of LLM output during merge operations.
-   * Used to compute the merge threshold from the run budget.
-   * Calibrate from observed sweep times (12KB entry merged in 145s = ~12ms/char).
-   */
-  msPerMergeChar: 15,
-  
-  /**
-   * Fraction of the run budget allocated to the merge LLM call.
-   * The rest covers embedding, routing, and overhead.
-   * maxMergeChars = (runBudgetMs * mergeBudgetFraction) / msPerMergeChar
-   */
-  mergeBudgetFraction: 0.6,
-  
-  /** Failed attempts (across ticks) before a contribution is parked. */
+    /** Failed attempts (across ticks) before a contribution is parked. */
   maxAttempts: 3,
   /** Time budget for a tick's one contribution: past it the item is retried
    *  once, then parked, so a tick always ends (and writes its ledger).
@@ -91,8 +77,6 @@ export const SWEEP = {
 export const HIERARCHY = {
   /** Below this cosine to any child centroid → park in _unplaced. */
   fitThreshold: 0.78,
-  /** Section members over this count → split (BIRCH-style overflow). */
-  splitAt: 8,
   /** Section under this count → fold back into parent. */
   mergeBelow: 3,
   /** Cap tree descent depth. */
@@ -195,7 +179,6 @@ export const SECTION_TREE = {
   /**
    * When a section exceeds this many entries, split into parent + child.
    * The larger cluster stays as parent, smaller becomes child.
-   * (Same as HIERARCHY.splitAt but used by the new algorithm.)
    */
   splitThreshold: 8,
 
@@ -205,8 +188,25 @@ export const SECTION_TREE = {
    * children centroids. Keeps the tree navigable (Miller's number: 3-7).
    *
    * k = ceil(numChildren / maxChildrenPerSection)
+   *
+   * The rebuild planner no longer wraps wide parents (no cap-wrapper sections); there this is a
+   * soft notify threshold. The hard width is `hardMaxChildren`.
    */
   maxChildrenPerSection: 6,
+
+  /** Rebuild planner: a parent never keeps more child sections than this; the smallest split under it is undone. */
+  hardMaxChildren: 12,
+
+  // Rebuild planner split rules (work-wolfpack-Fs0BlY6). Proposals, kept as named constants to tune.
+  /**
+   * A split must cover at least this share of the section's members. The LLM path measures it after leftovers join their
+   * closest group; the k-means fallback has no join step, so it measures the share of members in a surviving group.
+   */
+  minCoverage: 0.7,
+  /** A split needs at least this many coherent groups. */
+  minCoherentGroups: 3,
+  /** Planner depth limit: roots are depth 0 and route.ts descends only while depth < maxDepth, so no section is created at depth >= maxDepth. */
+  maxDepth: 4,
 
   /**
    * When splitting, how to choose which cluster becomes the parent:

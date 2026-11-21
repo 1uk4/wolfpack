@@ -4,7 +4,7 @@
  * list and the graph pane take it as a prop so tests inject a fake; `createGraduateClient` is the real one.
  */
 import type { GraduationJob, GraduationObservations, GraduationStatus } from "@/src/core";
-import { fetchGraduateObservations, fetchGraduateStatus, fetchWolves, postApproveRequest, postGraduateConfirm, postGraduatePreview, type KbResult } from "./kb-client";
+import { fetchGraduateObservations, fetchApprovalRequest, fetchGraduateStatus, fetchWolves, postApproveRequest, postGraduateConfirm, postGraduatePreview, type KbResult } from "./kb-client";
 
 export interface GraduateWolf {
 	name: string;
@@ -19,6 +19,8 @@ export interface GraduateClient {
 	startConfirm(wolf: string, workId: string, token: string): Promise<KbResult<GraduationJob>>;
 	/** Approve the graduate request the wolf filed (owner devices only; others get code "forbidden"). */
 	approve(requestId: string): Promise<KbResult<unknown>>;
+	/** Re-read an approval request (its status says whether an approve that looked failed went through). */
+	request(requestId: string): Promise<KbResult<{ request: { id: string; status: "pending" | "approved" | "rejected" } }>>;
 	status(wolf: string, workId: string): Promise<KbResult<GraduationStatus>>;
 	/** Pending observations in that wolf's pool a graduation of the feature would fold. */
 	observations(wolf: string, workId: string): Promise<KbResult<GraduationObservations>>;
@@ -34,6 +36,7 @@ export function createGraduateClient(): GraduateClient {
 		startPreview: postGraduatePreview,
 		startConfirm: postGraduateConfirm,
 		approve: postApproveRequest,
+		request: fetchApprovalRequest,
 		status: fetchGraduateStatus,
 		observations: fetchGraduateObservations,
 	};

@@ -283,14 +283,19 @@ describe("splitFatEntry size rules", () => {
 
     const r = await splitFatEntry({ engine: noCallEngine, roots, entryId: "kb-testdom-anchor9" });
 
-    expect(r.shards.map((s) => s.entryId)).toEqual(["kb-testdom-anchor9~history"]);
+    const childId = r.shards[0].entryId;
+    expect(r.shards).toHaveLength(1);
+    expect(childId).toMatch(/^kb-testdom-[0-9A-Za-z]{7}$/);
     const parent = readFileSync(p, "utf-8");
-    expect(parent).toContain("History: see [[kb-testdom-anchor9~history]]");
+    expect(parent).toContain(`historyChild: ${childId}`);
+    expect(parent).toContain(`History: see [[${childId}]]`);
     expect(parent).toContain("anchor: work-testdom-FEAT001");
     expect(parent).not.toContain("first line");
-    const child = readFileSync(join(roots.kbBase, "domains", "testdom", "entries", "kb-testdom-anchor9~history.md"), "utf-8");
+    const child = readFileSync(join(roots.kbBase, "domains", "testdom", "entries", `${childId}.md`), "utf-8");
     expect(child).toContain("first line");
-    expect(child).not.toMatch(/^anchor:/m);
+    expect(child).toContain("historyOf: kb-testdom-anchor9");
+    expect(child).not.toMatch(/^(anchor|group|groupDate):/m);
+    expect(child).not.toContain("source-");
   });
 
   it("a non-anchor entry over the body cap is split into shards each under the body cap", async () => {

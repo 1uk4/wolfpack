@@ -10,6 +10,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { sweep } from "./sweep.js";
+import { ANCHOR_BODY_CAP, exemptFromSizeGuard } from "./sweep-size.js";
+import { anchorOf } from "./anchors.js";
+import { hideSourceProperties } from "./source-props.js";
 import { Entry } from "../schema/knowledge.js";
 import { lintKnowledge } from "../shared/knowledgeLint.js";
 import { writeEntrySection } from "./reorg.js";
@@ -26,6 +29,7 @@ describe("sweep: graduated work", () => {
   const calls: Array<{ step: string; prompt: string }> = [];
   let subjectAnswer: () => unknown;
   let produceProps: Record<string, string> = {};
+  let produceDetail: string | undefined;
   const inbox = () => join(roots.opsRoot, "inbox", "w1");
   const entries = () => join(roots.kbBase, "domains", "wp", "entries");
 
@@ -35,7 +39,7 @@ describe("sweep: graduated work", () => {
       if (step === "classifyToSection") return schema.parse({ section: "NEW", confidence: "low" });
       if (step === "matchSubject") return schema.parse(subjectAnswer());
       return schema.parse({
-        title: "Topic", kind: { type: "fact" }, summary: "s", detail: "## How\n\nd\n\n## History\n\n- 2026-10-22: changed (work-wp-FEAT001).",
+        title: "Topic", kind: { type: "fact" }, summary: "s", detail: produceDetail ?? "## How\n\nd\n\n## History\n\n- 2026-10-22: changed (work-wp-FEAT001).",
         confidence: "high", facets: {}, properties: produceProps, proposedRelations: [],
       });
     }),
@@ -66,6 +70,7 @@ describe("sweep: graduated work", () => {
     n = 0;
     subjectAnswer = () => ({ match: "new" });
     produceProps = {};
+    produceDetail = undefined;
     calls.length = 0;
     base = mkdtempSync(join(tmpdir(), "kb-work-"));
     roots = { kbBase: join(base, "base"), opsRoot: join(base, "ops"), denLocal: join(base, "den") };
@@ -95,6 +100,18 @@ describe("sweep: graduated work", () => {
     expect(aliasOf("work-wp-FEAT002")).toBe("kb-wp-GRAD001");
   });
 
+  it("an oversize non-anchor entry is trimmed to the body cap and its later sections are re-queued as ~split- parts, not duplicated", async () => {
+    produceDetail = `## A\n\n${"a".repeat(4000)}\n\n## Bsec\n\n${"b".repeat(4000)}\n`;
+    drop("topic-big", "Big topic");
+    await run({});
+    const parent = readdirSync(entries()).filter((f) => !f.startsWith("kb-wp-AAAAAAA") && !f.startsWith("kb-wp-BBBBBBB")).map((f) => readFileSync(join(entries(), f), "utf8"))[0];
+    expect(parent).toContain("a".repeat(4000));
+    expect(parent).not.toContain("b".repeat(100));
+    expect(parent.split("\n---\n")[1].length).toBeLessThanOrEqual(6000);
+    const queued = readdirSync(inbox());
+    expect(queued.some((f) => f.includes("~split-1-bsec"))).toBe(true);
+  });
+
   describe("graduation provenance", () => {
     const dropSrc = (topic: string, src: string, f: { anchor?: string; verbatim?: boolean } = {}) =>
       writeFileSync(
@@ -112,6 +129,34 @@ describe("sweep: graduated work", () => {
       const properties = Object.fromEntries(Object.entries(props(only())));
       expect(Entry.shape.properties.parse(properties)).toEqual(properties);
       expect(lintKnowledge({ title: "t", summary: "s", body: "b", properties }).filter((f) => f.code === "forbidden-property")).toEqual([]);
+    });
+
+    it("a verbatim anchored entry over the anchor cap gets its History folded into a written ~history child; the parent points at it", async () => {
+      const big = `# A rule\n\n${"x".repeat(ANCHOR_BODY_CAP - 1000)}\n\n## History\n\n- 2026-10-22: changed (work-wp-FEAT001). ${"h".repeat(1500)}\n`;
+      writeFileSync(join(inbox(), "big.md"), `---\nfrom: w1\nden_topic_id: work-wp-FEAT001\ncontent_hash: c0de0b16\nprev_hash: null\ndomain_hint: wp\nanchor: work-wp-FEAT001\nverbatim: true\nsource_feature: work-wp-FEAT001\n---\n\n${big}`);
+      await run({});
+      const files = readdirSync(entries()).filter((f) => !f.startsWith("kb-wp-AAAAAAA") && !f.startsWith("kb-wp-BBBBBBB"));
+      const read = (f: string) => readFileSync(join(entries(), f), "utf8");
+      const parentFile = files.find((f) => /^anchor: /m.test(read(f)))!;
+      const parent = read(parentFile);
+      const childId = /^historyChild: (\S+)$/m.exec(parent)![1];
+      expect(childId).toMatch(/^kb-wp-[0-9A-Za-z]{7}$/);
+      const childFile = `${childId}.md`;
+      expect(files).toContain(childFile);
+      const child = read(childFile);
+      expect(child).toMatch(new RegExp(`^historyOf: ${parentFile.replace(/\.md$/, "")}$`, "m"));
+      const section = /^section: (\S+)/m.exec(parent)![1];
+      expect(parent).toContain(`History: see [[${childId}]]`);
+      expect(parent).toMatch(/^anchor: work-wp-FEAT001$/m);
+      expect(parent.length).toBeLessThan(ANCHOR_BODY_CAP);
+      expect(child).toContain(`section: ${section}`);
+      expect(child).not.toMatch(/^anchor:/m);
+      expect(child).not.toContain("source-feature");
+      expect(child).toContain("work-wp-FEAT001"); // the History line moved with it
+      // no part of the pipeline treats the child as an anchor
+      expect(anchorOf(child)).toBeUndefined();
+      expect(exemptFromSizeGuard({ anchor: anchorOf(child), verbatim: true })).toBe(false);
+      expect(hideSourceProperties(child)).toBe(child);
     });
 
     it("a verbatim anchored entry carries them too, and a later graduation to it adds its own", async () => {

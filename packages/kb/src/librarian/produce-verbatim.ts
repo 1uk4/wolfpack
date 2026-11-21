@@ -10,7 +10,8 @@ import { contentHash as hashContent } from "../shared/hash.js";
 import { anchorOf, groupDateOf, groupOf } from "./anchors.js";
 import { entryHashText } from "./entry-hash.js";
 import { addCitedHistory, existingRelations, preserveHistory } from "./preserve.js";
-import { ANCHOR_BODY_CAP, foldHistory } from "./sweep-size.js";
+import { ANCHOR_BODY_CAP } from "./sweep-size.js";
+import { foldHistory, historyChildIdOf, mergeHistoryFrom } from "./history-child.js";
 import type { ProduceEntryInput, ProduceEntryResult } from "./produce.js";
 
 
@@ -31,7 +32,15 @@ export function verbatimParts(c: Pick<ParsedContribution, "body" | "summary" | "
  * contribution to the anchor's existing entry replaces its whole text and keeps
  * its identity (id, anchor, group, creation date, relations).
  */
-export function produceVerbatim(input: ProduceEntryInput): ProduceEntryResult & { historyChild?: { id: string; title: string; summary: string; body: string } } {
+export interface VerbatimResult extends ProduceEntryResult {
+  /** An over-cap entry's History digest to write (child id minted or the parent's existing one) before the parent. */
+  historyChild?: { id: string; title: string; summary: string; body: string };
+  /** The detail with the History kept in place: what the parent becomes when the child cannot be written. */
+  fullDetail?: string;
+}
+
+/** `existingHistoryMarkdown`: the parent's current History child (`historyChild:`), read by the caller. */
+export function produceVerbatim(input: ProduceEntryInput & { existingHistoryMarkdown?: string | null }): VerbatimResult {
   const { contribution, domain, section, placement, entryId, existingMarkdown, existingCreated, resolve } = input;
   const previous = existingMarkdown;
   const action: ProduceEntryResult["action"] = entryId ? "merge" : "create";
@@ -41,16 +50,25 @@ export function produceVerbatim(input: ProduceEntryInput): ProduceEntryResult & 
 
   // Same guards as produceEntry: the entry's History lines are never lost, graduated work's cited lines always land.
   let detail = parts.detail;
+  let fullDetail = detail;
+  // The History of a folded parent lives in its child: merge it back first so a re-fold appends and never loses a line.
+  const childId0 = entryId ? historyChildIdOf(previous) : undefined;
+  if (childId0) detail = mergeHistoryFrom(input.existingHistoryMarkdown, detail);
   if (entryId && previous) detail = preserveHistory(previous, detail).detail;
   detail = addCitedHistory(detail, contribution.body ?? "").detail;
 
   // Over the anchor cap: the History moves to a child entry (never an anchor) and the parent keeps a pointer.
   // Still over after the fold: kept as authored and reported as oversize; anchors are never auto-split.
-  let historyChild: { id: string; title: string; summary: string; body: string } | undefined;
-  if (detail.length > ANCHOR_BODY_CAP) {
-    const folded = foldHistory(detail, { parentTitle: parts.title, childId: `${id}~history`, date: timestamp });
-    detail = folded.detail;
-    historyChild = folded.child;
+  fullDetail = detail;
+  // An entry that already has a child keeps its pointer (and the child) whatever its size.
+  let historyChild: VerbatimResult["historyChild"];
+  let childId = childId0;
+  if (childId0 || detail.length > ANCHOR_BODY_CAP) {
+    childId = childId0 ?? mkEntryId(domain);
+    const folded = foldHistory(detail, { parentTitle: parts.title, childId, date: timestamp, force: !!childId0 });
+    if (folded.child) { detail = folded.detail; historyChild = { id: childId, ...folded.child }; }
+    else if (childId0) detail = folded.detail;
+    else childId = undefined;
   }
   const oversizeChars = detail.length > ANCHOR_BODY_CAP ? detail.length : undefined;
   const opinion = LlmOpinion.parse({
@@ -78,6 +96,7 @@ export function produceVerbatim(input: ProduceEntryInput): ProduceEntryResult & 
     group: contribution.group ?? (prev ? groupOf(prev) : undefined),
     groupDate: contribution.groupDate ?? (prev ? groupDateOf(prev) : undefined),
     relations: prev ? existingRelations(prev) : [],
+    historyChild: childId ? EntryId.parse(childId) : undefined,
     section,
     placement,
   };
@@ -92,7 +111,7 @@ export function produceVerbatim(input: ProduceEntryInput): ProduceEntryResult & 
   return {
     entry,
     action,
-    ...(historyChild ? { historyChild } : {}),
+    ...(historyChild ? { historyChild, fullDetail } : {}),
     ...(oversizeChars ? { lint: { retried: false, before: [], after: [], oversizeChars } } : {}),
   };
 }

@@ -338,6 +338,10 @@ export const DerivedFacts = z.object({
   group: z.string().optional(),
   /** Ordering date within the group (frontmatter `groupDate:`). */
   groupDate: z.string().optional(),
+  /** On a History digest child: the entry whose History it holds (frontmatter `historyOf:`). Never an anchor. */
+  historyOf: EntryId.optional(),
+  /** On an anchored parent: its History digest child (frontmatter `historyChild:`). */
+  historyChild: EntryId.optional(),
   /** Deterministic + resolved relations (embedding see_also ∪ resolved LLM edges). */
   relations: z.array(Relation).default([]),
   /** Section placement (required, single-parent tree). */
@@ -395,6 +399,8 @@ export const Entry = z.object({
   anchor: z.string().optional(),
   group: z.string().optional(),
   groupDate: z.string().optional(),
+  historyOf: z.string().optional(),
+  historyChild: z.string().optional(),
   expires: IsoDate.optional(),
 });
 export type Entry = z.infer<typeof Entry>;
@@ -478,6 +484,8 @@ export function assembleEntry(input: {
     anchor: facts.anchor,
     group: facts.group,
     groupDate: facts.groupDate,
+    historyOf: facts.historyOf,
+    historyChild: facts.historyChild,
     expires: overrides.expires,
   });
 }

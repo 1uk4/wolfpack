@@ -13,11 +13,8 @@ export { BODY_CAP };
 /** An anchored entry is a pinned record and is never split; past this many chars its History is folded into a child entry. */
 export const ANCHOR_BODY_CAP = 12_000;
 
-/**
- * Merge targets over twice the body cap are not merged into. The limit no longer derives from the run budget:
- * it is a property of the entry (BODY_CAP * 2), so the argument is accepted for call-site compatibility and ignored.
- */
-export function maxMergeTargetCharsFor(_itemBudgetMs: number): number {
+/** Merge targets over twice the body cap are not merged into. A property of the entry, no longer of the run budget. */
+export function maxMergeTargetCharsFor(): number {
   return BODY_CAP * 2;
 }
 
@@ -29,27 +26,6 @@ export function mergeSizeLimit(maxMergeTargetChars: number): number {
 /** A verbatim anchored entry is replaced whole, not merged: the size guard does not apply. */
 export function exemptFromSizeGuard(c: Pick<ParsedContribution, "anchor" | "verbatim">): boolean {
   return !!(c.anchor && c.verbatim);
-}
-
-/** The pointer line an anchored parent keeps in place of its History. */
-export const historyPointer = (childId: string): string => `History: see [[${childId}]]`;
-
-/**
- * Fold an entry's `## History` section out of its detail into a child entry. Returns the parent's detail with a
- * one-line pointer, and the child (never an anchor: it has no anchor field). No History: nothing to fold.
- */
-export function foldHistory(
-  detail: string,
-  o: { parentTitle: string; childId: string; date: string },
-): { detail: string; child?: { id: string; title: string; summary: string; body: string } } {
-  const { main, history } = splitHistory(detail);
-  if (!history.trim()) return { detail };
-  const parentTitle = o.parentTitle.trim(); // verbatimParts pads short titles to 3 chars
-  const title = `${parentTitle}: history digest (${o.date})`;
-  return {
-    detail: `${main.trimEnd()}\n\n${historyPointer(o.childId)}\n`,
-    child: { id: o.childId, title, summary: `History of ${parentTitle}, folded out to keep the entry under its size cap.`, body: history.trim() },
-  };
 }
 
 /**
@@ -73,11 +49,11 @@ export function oversizeSplits(
     else rest.push(s);
   }
   if (rest.length === 0) return { parts: [], keep: entry.detail };
-  const parts = rest.map((s) => {
+  const parts = rest.map((s, i) => {
     const title = (/^##[ \t]+(.+)$/m.exec(s)?.[1] ?? "Overflow").trim();
     const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "overflow";
     const body = `# ${title}\n\n${s.replace(/^##[ \t]+.+\n/, "").trim()}`.trim();
-    const denTopicId = `${c.denTopicId}~split-${slug}`;
+    const denTopicId = `${c.denTopicId}~split-${i + 1}-${slug}`;
     return {
       ...c,
       denTopicId,
@@ -95,21 +71,22 @@ export function oversizeSplits(
 }
 
 /**
- * Notify when produce kept an entry oversize, and return the `~split-` contributions to enqueue for it
- * (empty when `detail` is not given, the entry is anchored, or it is already a split part).
+ * Notify when produce kept an entry oversize, and return the `~split-` contributions to enqueue for it plus the
+ * detail the entry must be trimmed to (the caller writes `keep` back; the parts carry the cut sections).
+ * No parts (and `keep` = `detail`) when the entry is anchored, already a split part, or has nothing to cut at.
  */
 export function notifyKeptOversize(
   notify: ((msg: string) => void) | undefined,
-  c: ParsedContribution | Pick<ParsedContribution, "from" | "denTopicId">,
+  c: ParsedContribution,
   entryId: string,
   oversizeChars: number | undefined,
-  detail?: string,
-): ParsedContribution[] {
-  if (!oversizeChars) return [];
-  const parts = detail !== undefined && "filePath" in c ? oversizeSplits(c, { detail }).parts : [];
-  if (parts.length) notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entryId} ${oversizeChars} chars: ${parts.length} section(s) queued as ~split- parts`);
+  detail: string,
+): { parts: ParsedContribution[]; keep: string } {
+  if (!oversizeChars) return { parts: [], keep: detail };
+  const r = oversizeSplits(c, { detail });
+  if (r.parts.length) notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entryId} ${oversizeChars} chars: ${r.parts.length} section(s) queued as ~split- parts`);
   else notify?.(`sweep: ${c.from}/${c.denTopicId} → kept oversize: ${entryId} ${oversizeChars}`);
-  return parts;
+  return r;
 }
 
 /**

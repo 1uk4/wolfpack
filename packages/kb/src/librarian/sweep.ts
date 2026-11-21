@@ -37,6 +37,8 @@ import { maxMergeTargetCharsFor, mergeSizeLimit, exemptFromSizeGuard, notifyKept
 import { exceedsSplitAbove, notifySplitDue, replaceMisfits, type OversizeSection, type SplitDueHook } from "./sweep-replace.js";
 import { splitThresholdFor } from "./tree-rules.js";
 import { produceEntry, produceVerbatim, type ProduceEntryInput } from "./produce.js";
+import { type VerbatimResult } from "./produce-verbatim.js";
+import { historyChildIdOf, withDetail, writeHistoryChild } from "./history-child.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
 import { tryRecoverAndRender, badJournalNote } from "./rebuild-recover.js";
@@ -483,7 +485,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // The contribution gets the whole run budget. The merge threshold derives from
   // it: budget * mergeBudgetFraction / msPerMergeChar (600s -> 24,000 chars).
   const itemBudgetMs = budgetMs;
-  const maxMergeTargetChars = maxMergeTargetCharsFor(itemBudgetMs);
+  const maxMergeTargetChars = maxMergeTargetCharsFor();
 
   for (const c of contributions) {
     if (ctx.signal?.aborted) {
@@ -880,13 +882,26 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         allowOverflow: overflowOk,
       };
       // Verbatim: the anchored entry is the contribution as authored, no model call.
-      const { entry: produced, action, unchanged, supersedes, historyRestored, lint, overflow, deduped } = c.anchor && c.verbatim
-        ? produceVerbatim(produceInput)
-        : await produceEntry(itemEngine, produceInput);
-      const entry = withSourceProperties(produced, c.source, existingMarkdown);
+      const childId0 = historyChildIdOf(existingMarkdown);
+      const verbatim: VerbatimResult | undefined = c.anchor && c.verbatim
+        ? produceVerbatim({ ...produceInput, existingHistoryMarkdown: childId0 ? readEntryMarkdown(roots, domain, childId0) : null })
+        : undefined;
+      const { entry: produced, action, unchanged, supersedes, historyRestored, lint, overflow, deduped } = verbatim ?? await produceEntry(itemEngine, produceInput);
+      const { historyChild, fullDetail } = verbatim ?? ({} as Partial<VerbatimResult>);
+      let entry = withSourceProperties(produced, c.source, existingMarkdown);
+      // Anchor History fold: the child is written first; if that fails the parent keeps its History (no dangling pointer).
+      if (historyChild) {
+        try {
+          await w.appendLedger(roots, writeHistoryChild(roots, { parentId: entry.id, domain, section: entry.section, placement: entry.placement, date: entry.updated, ...historyChild }));
+        } catch (err) {
+          entry = withDetail(entry, fullDetail ?? entry.detail, !existingMarkdown || !historyChildIdOf(existingMarkdown));
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → History fold of ${entry.id} not written, kept in place: ${cleanError(err)}`);
+        }
+      }
       if (lint?.retried) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → produce retried for lint: ${lint.before.map((f) => f.code).join(",")}`);
       if (lint?.sizePass) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → size pass on ${entry.id}`);
-      for (const part of notifyKeptOversize(ctx.notify, c, entry.id, lint?.oversizeChars, entry.detail)) requeueOverflow(roots, part, lane);
+      const over = notifyKeptOversize(ctx.notify, c, entry.id, lint?.oversizeChars, entry.detail);
+      if (over.parts.length) { entry = withDetail(entry, over.keep); for (const part of over.parts) requeueOverflow(roots, part, lane); }
       if (lint?.after.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entry.id} kept with lint findings: ${lint.after.map((f) => f.code).join(",")}`);
       if (lint?.strippedLinks?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → stripped ${lint.strippedLinks.length} link(s) to no entry from ${entry.id}: ${lint.strippedLinks.join(", ")}`);
       if (deduped?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → collapsed ${deduped.length} duplicate paragraph/line(s) in ${entry.id}`);

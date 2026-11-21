@@ -195,6 +195,18 @@ describe("promote pass", () => {
     expect(promoted).toEqual([]);
   });
 
+  it("parks a den-only topic without creating a session file, and does not re-promote it next pass", async () => {
+    const { den, root } = setup([20]);
+    writeDenTopic(den, { id: "merge-p", title: "merge-p", summary: "s", updated: "2026-11-13 00:00", body: "park me" });
+    const promoted: string[] = [];
+    const d = deps({ "merge-p": { kind: "parked" } }, promoted);
+    const first = await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...d });
+    await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...d });
+    expect(first.parked).toEqual(["merge-p"]);
+    expect(promoted).toEqual(["merge-p"]);
+    expect(readTopics(root)).toEqual([]);
+  });
+
   it("reports a topic the promote step marked promotable:false as held", async () => {
     const { den, root } = setup([20]);
     topic(root, "a");

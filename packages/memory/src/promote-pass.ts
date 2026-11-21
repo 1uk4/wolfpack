@@ -34,7 +34,7 @@ function promoteSources(den: string, root: string): TopicFile[] {
     if (!d.promotable) continue;
     const s = session.get(d.id);
     // A den-only topic has no session file for retireTopic to move: its retired mark (or its own keep_local flag) is what stops it.
-    if (!s && state[d.id]?.retiredAt) continue;
+    if (!s && (state[d.id]?.retiredAt || state[d.id]?.state === "parked")) continue; // parked den-only: its state lives in promote state
     out.push({
       ...(s ?? {}),
       id: d.id,
@@ -159,7 +159,8 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
         result.retired.push(t.id);
         continue;
       } else if (out.kind === "parked") {
-        if (t.state !== "parked") writeTopic(root, { ...t, updated: t.updated, lastNote: t.lastNote, keepLocal: t.keepLocal, state: "parked" });
+        // A den-only topic has no session file: its parked mark lives in promote state only (below), never a new session file.
+        if (t.state !== "parked" && existsSync(join(root, t.filename))) writeTopic(root, { ...t, updated: t.updated, lastNote: t.lastNote, keepLocal: t.keepLocal, state: "parked" });
         updateTopicState(den, t.id, { state: "parked" });
         result.parked.push(t.id);
         continue;

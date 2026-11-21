@@ -32,7 +32,7 @@ import { placeEntry } from "./section-tree.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
 import { survivorOf } from "./alias.js";
-import { lookupAlias, applyAliasRoute } from "./sweep-alias.js";
+import { lookupAlias, applyAliasRoute, aliasClaim } from "./sweep-alias.js";
 import { maxMergeTargetCharsFor, mergeSizeLimit, exemptFromSizeGuard, notifyKeptOversize, shouldRoutePlacement } from "./sweep-size.js";
 import { exceedsSplitAbove, notifySplitDue, replaceMisfits, type OversizeSection, type SplitDueHook } from "./sweep-replace.js";
 import { splitThresholdFor } from "./tree-rules.js";
@@ -642,6 +642,18 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${named} (update diff)`);
         } else if (aliasedFrom || aliasMissing) {
           targetId = applyAliasRoute(aliasLookup, c, routing, head, ctx.notify) ?? targetId;
+          if (targetId && routing.route === "alias" && aliasClaim(reg, c) === "skip") {
+            const reason = "no-new-claim";
+            ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${targetId} already holds this claim, skipped (${reason})`);
+            await w.writeReceipt(roots, c.from, c, "reject", reason);
+            await w.markProcessed(c);
+            result.rejected++;
+            const decision: DecisionSummary = { outcome: "reject", reason, routing: routingSummary(routing) };
+            await recordDecision(decision);
+            itemEvent = { outcome: "reject", decision };
+            outcome = "skipped (no new claim)";
+            return null;
+          }
         }
       }
       // The size limit also keeps an oversized entry out of the candidates:
@@ -880,6 +892,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         liveIds,
         resolveLinks: (links) => links.map((id) => liveSurvivor(log, liveIds, id)).filter((id): id is string => !!id),
         allowOverflow: overflowOk,
+        updateInPlace: routing.route === "alias" && !!targetId && aliasClaim(reg, c) === "update-in-place",
       };
       // Verbatim: the anchored entry is the contribution as authored, no model call.
       const childId0 = historyChildIdOf(existingMarkdown);
@@ -932,7 +945,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           fit: placement.fit,
         }));
       }
-      pend.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
+      pend.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash, c.body));
       // The intent (same events) goes to disk BEFORE the entry is live; replayed at the next tick if we crash before the append.
       const patched = unchanged && existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry) ? patchSourceProperties(existingMarkdown, entry) : undefined;
       const expectText = !unchanged ? renderEntry(entry) : patched;

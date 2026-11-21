@@ -483,3 +483,62 @@ describe("produceEntry: prevent at source", () => {
       expect(r.deduped).toHaveLength(2);
     });
 });
+
+describe("produceEntry: date-aware merge", () => {
+  const prev = "---\nid: kb-wolfpack-AbC1234\ncreated: 2026-10-01\nupdated: 2026-11-20\n---\n\n# Lint\n\nlede\n\nThe lint count is 29.\n\n## History\n\n- Until 2026-10-01: 10. Now 29, because of a sweep.\n";
+  const run = async (body: string, detail: string, input: Partial<ProduceEntryInput> = {}) => {
+    const call = vi.fn().mockResolvedValue({ title: "Lint", kind: { type: "architecture" }, summary: "lede", detail, confidence: "high", facets: {}, properties: {}, proposedRelations: [] });
+    const r = await produceEntry({ call } as unknown as Engine, {
+      contribution: mockContribution({ body }),
+      domain: "wolfpack",
+      section: SectionId.parse("sec-wolfpack-abc123"),
+      placement: { basis: "routed", fit: 1 },
+      entryId: "kb-wolfpack-AbC1234",
+      existingMarkdown: prev,
+      resolve: () => null,
+      ...input,
+    });
+    return { r, prompt: call.mock.calls[0][2].prompt as string };
+  };
+
+  it("an older contribution leaves the body untouched and adds History only", async () => {
+    const { r, prompt } = await run(
+      "Record 2026-10-25: the lint count was 42.",
+      "The lint count is 42.\n\n## History\n\n- Until 2026-11-20: 29. Now 42.\n- Until 2026-10-01: 10. Now 29, because of a sweep.",
+    );
+    expect(prompt).toContain("ORIGIN DATE 2026-10-25; ENTRY UPDATED 2026-11-20; CONTRIBUTION IS OLDER THAN THE ENTRY: yes");
+    const [main, history] = r.entry.detail.split("## History");
+    expect(main).toContain("The lint count is 29.");
+    expect(main).not.toContain("42");
+    expect(history).toContain("- Until 2026-11-20: 29. Now 42.");
+    expect(r.olderGuard?.discarded).toBe(true);
+  });
+
+  it("a newer contribution replaces the fact and the Until line carries the entry's date", async () => {
+    const { r, prompt } = await run(
+      "Record 2026-11-25: the lint count is 12.",
+      "The lint count is 12.\n\n## History\n\n- Until 2026-11-20: 29. Now 12.\n- Until 2026-10-01: 10. Now 29, because of a sweep.",
+    );
+    expect(prompt).toContain("CONTRIBUTION IS OLDER THAN THE ENTRY: no");
+    expect(`${r.entry.summary}\n${r.entry.detail}`).toContain("The lint count is 12.");
+    expect(r.entry.detail).toContain("- Until 2026-11-20: 29. Now 12.");
+    expect(r.olderGuard).toBeUndefined();
+  });
+
+  it("a contribution with no date anywhere is treated as newer", async () => {
+    const { r, prompt } = await run(
+      "The lint count is 12.",
+      "The lint count is 12.\n\n## History\n\n- Until 2026-10-01: 10. Now 29, because of a sweep.",
+      { contribution: mockContribution({ body: "The lint count is 12.", submitted: undefined, summary: "s" } as Partial<ParsedContribution>) },
+    );
+    expect(prompt).toContain("ORIGIN DATE unknown");
+    expect(prompt).toContain("CONTRIBUTION IS OLDER THAN THE ENTRY: no");
+    expect(`${r.entry.summary}\n${r.entry.detail}`).toContain("The lint count is 12.");
+    expect(r.olderGuard).toBeUndefined();
+  });
+
+  it("updateInPlace reaches the prompt", async () => {
+    const { prompt } = await run("Lint: 29 findings.", "The lint count is 29.\n\n## History\n\n- Until 2026-10-01: 10. Now 29, because of a sweep.", { updateInPlace: true });
+    expect(prompt).toContain("UPDATE IN PLACE: yes");
+  });
+});

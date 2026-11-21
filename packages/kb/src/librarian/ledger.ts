@@ -274,12 +274,17 @@ export function foldRegistry(events: KbEvent[]): Registry {
         if (existing) {
           existing.lastHash = e.hash;
           existing.lastSeen = e.at;
+          if (e.body !== undefined) {
+            existing.lastBody = e.body;
+            existing.lastBodyHash = e.hash;
+          }
         } else {
           t.aliases.push({
             wolf: e.wolf,
             denTopicId: e.denTopicId,
             lastHash: e.hash,
             lastSeen: e.at,
+            ...(e.body !== undefined ? { lastBody: e.body, lastBodyHash: e.hash } : {}),
           });
         }
         // Contributing implies implicit subscription.

@@ -475,10 +475,24 @@ WRITING RULES:
 - On merge, REPLACE any fact the contribution supersedes in the body; never
   keep the old and the new side by side. Keep what the contribution does not
   touch.
+- DATES: the prompt's CONTEXT line gives the ORIGIN DATE (when the
+  contribution's facts date from), the ENTRY UPDATED date and a flag, computed
+  in code, that says whether the CONTRIBUTION IS OLDER THAN THE ENTRY. Never
+  work the flag out yourself. When it is "yes", the entry already holds newer
+  facts: do NOT change any existing fact, sentence or figure in the body; the
+  merge only adds dated History lines for what the contribution says. When it
+  is "no", the contribution is the newest word and replaces what it supersedes.
+- UPDATE IN PLACE: when the prompt says "UPDATE IN PLACE: yes", the
+  contribution restates a claim the entry already holds with new figures:
+  replace the matching figures/sentences, add nothing new (no new paragraph,
+  bullet or sentence).
 - HISTORY: end the detail with a final "## History" section. For each fact you
   replaced, add one line:
   - Until <YYYY-MM-DD>: <old fact>. Now <new fact>, because <reason, if known>.
-  Use the CONTRIBUTION DATE given in the prompt for <YYYY-MM-DD>; omit the
+  <YYYY-MM-DD> is the date the superseded fact was last known true: when the
+  contribution is newer, the CONTRIBUTION DATE given in the prompt; when the
+  contribution is older than the entry (the incoming fact is the older one),
+  the ENTRY UPDATED date. Omit the
   "because" clause when the reason is not known. Keep each line to at most two
   sentences. Keep every existing History line exactly as written (never rewrite
   them) and do not add a line for a change already recorded. History lines

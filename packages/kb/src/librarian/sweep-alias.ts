@@ -6,6 +6,36 @@ import { resolveAliasedEntry } from "./alias.js";
 import type { foldRegistry } from "./ledger.js";
 import type { RoutingRecord } from "./sweep.js";
 
+/** Lowercase, collapse whitespace. */
+export function normalizeClaim(body: string): string {
+  return body.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Claim-level dedupe for the alias route (seenHashes only catches byte-identical bodies).
+ *  - "skip": the normalized body equals the one this den topic last merged: nothing new, ledger reason 'no-new-claim'.
+ *  - "update-in-place": equal once digits are stripped too: the same claim with new figures; merge once, replacing figures.
+ *  - "merge": anything else, or no prior body recorded (records written before lastBody existed).
+ */
+export type AliasClaim = "skip" | "update-in-place" | "merge";
+
+export function aliasClaim(
+  reg: ReturnType<typeof foldRegistry>,
+  c: Pick<ParsedContribution, "from" | "denTopicId" | "body">,
+): AliasClaim {
+  for (const topic of reg.values()) {
+    const alias = topic.aliases.find((a) => a.wolf === c.from && a.denTopicId === c.denTopicId);
+    if (!alias) continue;
+    if (!alias.lastBody) return "merge";
+    const a = normalizeClaim(c.body);
+    const b = normalizeClaim(alias.lastBody);
+    if (a === b) return "skip";
+    if (a.replace(/\d+/g, "") === b.replace(/\d+/g, "")) return "update-in-place";
+    return "merge";
+  }
+  return "merge";
+}
+
 export interface AliasLookup {
   aliasedFrom: string | undefined;
   aliasMissing: string | undefined;

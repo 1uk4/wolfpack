@@ -11,6 +11,9 @@ export const AliasSchema = z.object({
   wolf: z.string(),
   denTopicId: z.string(),
   lastHash: z.string(),
+  /** Hash and text of the body this alias last merged; absent on records written before claim-level dedupe. */
+  lastBodyHash: z.string().optional(),
+  lastBody: z.string().optional(),
   lastSeen: z.string(),
 });
 export type Alias = z.infer<typeof AliasSchema>;

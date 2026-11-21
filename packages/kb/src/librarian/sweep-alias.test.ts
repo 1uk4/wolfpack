@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { sweep } from "./sweep.js";
+import { aliasClaim } from "./sweep-alias.js";
 import { readLedger, appendLedger, foldRegistry } from "./ledger.js";
 import { ev } from "../shared/index.js";
 import type { KbRoots } from "../shared/index.js";
@@ -260,5 +261,36 @@ describe("sweep: missing alias target creates fresh entry", () => {
     expect(result).toMatchObject({ errors: 0, created: 0, merged: 1 });
     expect(notes.some((n) => n.includes("is graduated"))).toBe(false);
     expect(readFileSync(join(entries(), `${live}.md`), "utf-8")).toContain("Some detail about this topic");
+  });
+});
+
+describe("aliasClaim (claim-level dedupe on the alias route)", () => {
+  const c = (body: string) => ({ from: "hal", denTopicId: "topic-lint", body });
+  const P42 = "React-hooks lint:  42 findings across 7 files.";
+  const P29 = "react-hooks lint: 29 findings across 3 files.";
+
+  it("skips a paragraph identical to the last merged one, after lowercase and whitespace collapse", () => {
+    const reg = foldRegistry([ev.aliased("hal", "topic-lint", "canon-1", "h1", P42)]);
+    expect(aliasClaim(reg, c("react-hooks lint: 42 findings\nacross 7 files."))).toBe("skip");
+  });
+
+  it("merges once in place when only the digits differ (42 vs 29 findings)", () => {
+    const reg = foldRegistry([ev.aliased("hal", "topic-lint", "canon-1", "h1", P42)]);
+    expect(aliasClaim(reg, c(P29))).toBe("update-in-place");
+  });
+
+  it("a third send identical to the second is skipped (the second body is the new baseline)", () => {
+    const reg = foldRegistry([
+      ev.aliased("hal", "topic-lint", "canon-1", "h1", P42),
+      ev.aliased("hal", "topic-lint", "canon-1", "h2", P29),
+    ]);
+    expect(aliasClaim(reg, c(P29))).toBe("skip");
+  });
+
+  it("merges a different claim, and an alias record without lastBody", () => {
+    const withBody = foldRegistry([ev.aliased("hal", "topic-lint", "canon-1", "h1", P42)]);
+    expect(aliasClaim(withBody, c("Lint is now enforced in CI on every pull request."))).toBe("merge");
+    const old = foldRegistry([ev.aliased("hal", "topic-lint", "canon-1", "h1")]);
+    expect(aliasClaim(old, c(P42))).toBe("merge");
   });
 });

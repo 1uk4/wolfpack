@@ -124,6 +124,8 @@ export const KbEventSchema = z.discriminatedUnion("t", [
     denTopicId: z.string(),
     canonicalId: z.string(),
     hash: z.string(),
+    /** The contribution body this alias last merged (claim-level dedupe); absent on old events. */
+    body: z.string().optional(),
   }),
   z.object({
     ...base,

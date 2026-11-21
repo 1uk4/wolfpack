@@ -109,7 +109,7 @@ describe("ci.yml release runs (PR into stable, push to stable)", () => {
 
 	it("the eval job runs pnpm test:eval after a frozen install, only on a release, and the ci aggregate waits for it", () => {
 		const job = ci.jobs.eval;
-		expect(job.if).toBe("needs.detect.outputs.release == 'true'");
+		expect(job.if).toBe("needs.detect.outputs.release == 'true' && needs.detect.outputs.coveredByPr != 'true'");
 		const steps = job.steps!;
 		const install = steps.findIndex((s) => s.run && /pnpm install --frozen-lockfile/.test(s.run));
 		const evalRun = steps.findIndex((s) => s.run && /^pnpm test:eval$/m.test(s.run));
@@ -134,5 +134,33 @@ describe("ci.yml release runs (PR into stable, push to stable)", () => {
 
 	it("no secrets and no live tests in CI (live runs in wolfpack pr prepare)", () => {
 		expect(code(raw)).not.toMatch(/secrets\.|test:live|pull_request_target/);
+	});
+});
+
+describe("one CI run per commit (a push covered by an open PR skips; the pull_request run does the work)", () => {
+	const detectJob = ci.jobs.detect as Job & { outputs?: Record<string, string> };
+	const guarded = Object.entries(ci.jobs).filter(([n, j]) => n !== "ci" && n !== "detect" && [j.needs].flat().includes("detect"));
+
+	it("detect exposes coveredByPr and computes it only on push events, matching the PR head sha", () => {
+		expect(detectJob.outputs?.coveredByPr).toMatch(/steps\.\w+\.outputs\.coveredByPr/);
+		const step = (detectJob.steps ?? []).find((s) => s.run && /coveredByPr=/.test(s.run));
+		expect(step?.run).toMatch(/commits\/\$SHA\/pulls/);
+		expect(step?.run).toMatch(/head\.sha == \$sha|head\.sha==\$sha/);
+		expect(step?.run).toMatch(/\.state == "open"|state=="open"/);
+		expect((step as { if?: string }).if).toBe("github.event_name == 'push'");
+	});
+
+	it("every job that needs detect skips when the push is covered by a PR (jobs enumerated from the YAML)", () => {
+		expect(guarded.length).toBeGreaterThanOrEqual(6);
+		const bad = guarded.filter(([, j]) => !/needs\.detect\.outputs\.coveredByPr != 'true'/.test(j.if ?? "")).map(([n]) => n);
+		expect(bad).toEqual([]);
+	});
+
+	it("the ci aggregate passes with a covered-by-PR message and otherwise keeps the all-jobs check", () => {
+		const steps = ci.jobs.ci.steps!;
+		const covered = steps.find((s) => s.run && /covered by PR #/.test(s.run)) as (Step & { if?: string }) | undefined;
+		expect(covered?.if).toMatch(/needs\.detect\.outputs\.coveredByPr == 'true'/);
+		const all = steps.find((s) => s.run && /failure\|cancelled/.test(s.run)) as (Step & { if?: string }) | undefined;
+		expect(all?.if).toMatch(/needs\.detect\.outputs\.coveredByPr != 'true'/);
 	});
 });

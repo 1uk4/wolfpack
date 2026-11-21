@@ -682,8 +682,12 @@ export async function confirmGraduation(opts: {
   // alone), so it needs no ordering against the subjects: nothing it says can be
   // merged into a subject, and no subject can merge into it.
   // A standing feature's entry is anchored to its item, stored as written and
-  // grouped under the initiative's entry, ordered by the item's creation date.
+  // grouped under the initiative's entry, ordered by the date the work was finished.
   const initiative = initiativeOf(item, all);
+  // Origin dates for the KB merge: when the work began and when it last changed (the model has no shipped date,
+  // so `updated` is the finish date). Without them the contribution would count as changed today.
+  const sourceCreated = String(item.created).slice(0, 10);
+  const sourceUpdated = String(item.updated ?? item.created).slice(0, 10);
   const sent: string[] = [];
   for (const c of preview.contributions) {
     let failure: string | undefined;
@@ -694,7 +698,9 @@ export async function confirmGraduation(opts: {
         denTopicId: c.id,
         change: c.initiative || c.feature ? "merge" : "create",
         ...(c.initiative || c.feature ? { anchor: c.id } : {}),
-        ...(c.feature && initiative ? { verbatim: true, group: initiative.id as string, groupDate: String(item.created).slice(0, 10) } : {}),
+        ...(c.feature && initiative ? { verbatim: true, group: initiative.id as string, groupDate: sourceUpdated } : {}),
+        sourceCreated,
+        sourceUpdated,
         ...(c.target && !c.initiative && !c.feature ? { target: c.target } : {}),
         ...(c.source ? { source: c.source } : {}),
         domainHint: preview.domain,

@@ -1,0 +1,35 @@
+# Shared setup for every CI job that installs: pnpm, node (pnpm store cached), node_modules cache, tsc output cache, install.
+# The caller keeps `actions/checkout` and runs `tsc --build` itself AFTER this action: tsc is the correctness check and is never skipped on a cache hit.
+name: setup
+description: pnpm + node + cached node_modules + cached tsc outputs
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4   # no `version:`: it reads packageManager from package.json, so CI and dev use the same pnpm
+    - uses: actions/setup-node@v6
+      with:
+        node-version: 22
+        cache: pnpm   # caches the pnpm store (not node_modules), keyed on pnpm-lock.yaml
+    - id: nm
+      name: restore node_modules
+      # Exact key only, no restore-keys: a partial node_modules is worse than none. node_modules/.modules.yaml and the .pnpm virtual store are included.
+      uses: actions/cache@v4
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+          packages/plugins/*/node_modules
+          apps/*/node_modules
+        key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '**/package.json', '!**/node_modules/**') }}
+    - id: tsc
+      name: restore tsc outputs (tsc --build in the job stays the check)
+      uses: actions/cache@v4
+      with:
+        path: |
+          packages/*/dist
+          packages/*/tsconfig.tsbuildinfo
+        key: tsc-${{ runner.os }}-${{ hashFiles('**/*.ts', '**/tsconfig*.json', 'pnpm-lock.yaml', '!**/node_modules/**', '!**/dist/**', '!**/test/fixtures/**', '!**/tests/fixtures/**') }}
+    - name: pnpm install (skipped on an exact node_modules hit)
+      if: steps.nm.outputs.cache-hit != 'true'
+      shell: bash
+      run: pnpm install --frozen-lockfile

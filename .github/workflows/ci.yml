@@ -93,12 +93,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4   # no `version:`: it reads packageManager from package.json, so CI and dev use the same pnpm
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm   # caches the pnpm store (not node_modules), keyed on pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - name: lockfile guard (package-lock.json is current, both locks agree)
         # npm still builds the release from package-lock.json; this fails a PR that changed a package.json without regenerating both locks.
         # Both guards run even if one fails; the last step fails the job.
@@ -139,12 +134,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - name: test environment (git identity + pack models block; no secrets)
         # Some suites commit in temp repos and resolve models from ~/.wolfpack/config.yaml, which a dev box has and a runner does not.
         run: |
@@ -187,12 +177,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - name: test environment (git identity + pack models block; no secrets)
         run: |
           git config --global user.name ci
@@ -258,12 +243,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - name: test environment (git identity + pack models block; no secrets)
         run: |
           git config --global user.name ci

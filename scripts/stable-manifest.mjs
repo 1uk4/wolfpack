@@ -122,6 +122,6 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import
 	const components = Object.keys(catalog).filter((k) => !k.startsWith("_"));
 	const out = arg("--out");
 	// A gh failure throws here, before anything is written: node exits non-zero, the step fails and the upload step never runs.
-	const manifest = writeManifest({ repo, tags: gitTags(root), components, checkReleases: process.argv.includes("--check-releases"), headTags: execFileSync("git", ["tag", "--points-at", arg("--ref") ?? "HEAD"], { cwd: root, encoding: "utf8" }).split("\n").filter(Boolean), out, channel, ref: arg("--ref"), sha: channel === "main" ? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim() : undefined });
+	const manifest = writeManifest({ repo, tags: gitTags(root), components, checkReleases: process.argv.includes("--check-releases"), headTags: execFileSync("git", ["tag", "--points-at", "HEAD"], { cwd: root, encoding: "utf8" }).split("\n").filter(Boolean), out, channel, ref: arg("--ref"), sha: channel === "main" ? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim() : undefined });
 	if (!out) process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
 }

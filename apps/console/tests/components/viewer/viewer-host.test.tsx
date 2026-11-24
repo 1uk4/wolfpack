@@ -123,6 +123,17 @@ describe("page host", () => {
 		assert.equal(q('[data-testid="viewer-panel"]'), null);
 	});
 
+	it("bounds the page viewer to the viewport: content scrolls in its own column and the panel is a non-scrolling sibling, whatever scrolls above", async () => {
+		await mount("/work?view=kb%3Ae1", <PageViewer scope="work" allowedKinds="all"><div data-testid="tall" style={{ height: 5000 }} /></PageViewer>);
+		const panel = q('[data-testid="viewer-panel"]')!;
+		const column = q('[data-testid="tall"]')!.parentElement!;
+		const row = panel.parentElement!;
+		assert.equal(column.parentElement, row);
+		assert.equal(column.contains(panel), false);
+		assert.match(column.className, /overflow-y-auto/);
+		assert.match(row.className, /max-h-\[100dvh\]/);
+	});
+
 	it("reads ?view= on load and writes it back with replace", async () => {
 		await mount("/work?view=kb%3Ae1", <PageViewer scope="work" allowedKinds="all"><span /></PageViewer>);
 		assert.equal(q('[data-testid="viewer-title"]')!.textContent, "e1");

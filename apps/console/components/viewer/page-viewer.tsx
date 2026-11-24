@@ -17,7 +17,7 @@ export function PageViewer({ scope, allowedKinds, children }: { scope: string; a
 	return (
 		<ViewerProvider host={host}>
 			{/* The content column scrolls on its own; the panel is a sibling, so it stays in view while the page scrolls. */}
-			<div className="flex h-full min-h-0 w-full">
+			<div className="flex h-full max-h-[100dvh] min-h-0 w-full md:sticky md:top-0">
 				<div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pb-6">{children}</div>
 				<ViewerPanel host={host} />
 			</div>

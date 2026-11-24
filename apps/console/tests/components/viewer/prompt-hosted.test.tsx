@@ -93,4 +93,16 @@ describe("wolf settings page", () => {
 		assert.deepEqual(stack, ["prompt:system.header", "prompt:system.identity"]);
 		assert.match(q('[data-testid="viewer-panel"]')?.textContent ?? "", /Identity/);
 	});
+
+	it("keeps the viewer panel outside the page's scrolling column, so scrolling the graph never scrolls the viewer away", async () => {
+		await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} onBack={() => {}} />);
+		await flush();
+		await act(async () => void (document.querySelector('[data-testid="graph-node-hit"]') as HTMLElement).dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 })));
+		await flush();
+		const panel = q('[data-testid="viewer-panel"]')!;
+		const scroller = q('[data-testid="wolf-prompts"]')!.closest(".overflow-y-auto");
+		assert.notEqual(scroller, null, "the page content has its own scroll column");
+		assert.equal(scroller!.contains(panel), false);
+		assert.equal(panel.closest(".overflow-y-auto") === null || panel.closest(".overflow-y-auto") === q('[data-testid="viewer-body"]'), true);
+	});
 });

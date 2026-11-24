@@ -16,8 +16,9 @@ export function PageViewer({ scope, allowedKinds, children }: { scope: string; a
 	const host = useMemo(() => pageHost(scope, allowedKinds), [scope, kinds]);
 	return (
 		<ViewerProvider host={host}>
+			{/* The content column scrolls on its own; the panel is a sibling, so it stays in view while the page scrolls. */}
 			<div className="flex h-full min-h-0 w-full">
-				<div className="min-w-0 flex-1">{children}</div>
+				<div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pb-6">{children}</div>
 				<ViewerPanel host={host} />
 			</div>
 		</ViewerProvider>

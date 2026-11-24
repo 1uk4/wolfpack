@@ -70,6 +70,24 @@ describe("viewer store", () => {
 		assert.deepEqual(getViewerState(W, T), { stack: [a, b], open: true });
 	});
 
+	it("localStorage throwing → memory fallback", () => {
+		const real = (globalThis as { window: { localStorage: unknown } }).window.localStorage;
+		const boom = () => {
+			throw new Error("denied");
+		};
+		(globalThis as { window: { localStorage: unknown } }).window.localStorage = { getItem: boom, setItem: boom, removeItem: boom };
+		try {
+			assert.deepEqual(getViewerState(W, T), { stack: [], open: false });
+			openView(W, T, a);
+			pushView(W, T, b);
+			flushViewer();
+			assert.deepEqual(ids(), ["A", "B"]);
+			assert.equal(getViewerState(W, T).open, true);
+		} finally {
+			(globalThis as { window: { localStorage: unknown } }).window.localStorage = real;
+		}
+	});
+
 	it("keeps threads separate", () => {
 		openView(W, "t1", a);
 		assert.deepEqual(getViewerState(W, "t2"), { stack: [], open: false });

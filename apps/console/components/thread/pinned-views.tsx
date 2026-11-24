@@ -2,7 +2,7 @@
 
 import { BookOpenIcon, ListTreeIcon, PinIcon, XIcon, type LucideIcon } from "lucide-react";
 import { usePinnedViews, unpinView } from "@/components/thread/pin-store";
-import { viewKey, type ViewDescriptor } from "@/components/viewer/view-descriptor";
+import { viewKey } from "@/components/viewer/view-descriptor";
 import { useViewer } from "@/components/viewer/viewer-store";
 
 /** Kind icons: work items use the work-list icon (as the work nav link), KB entries the book; unknown kinds fall back to a pin. */
@@ -14,12 +14,8 @@ const KIND_ICON: Record<string, LucideIcon> = { work: ListTreeIcon, kb: BookOpen
  */
 export function PinnedViewChips({ wolf, threadId }: { wolf: string; threadId: string }) {
 	const pins = usePinnedViews(threadId);
-	// The viewer store is only touched once something is pinned: a thread with no pins renders nothing and reads nothing.
-	return pins.length === 0 ? null : <Chips wolf={wolf} threadId={threadId} pins={pins} />;
-}
-
-function Chips({ wolf, threadId, pins }: { wolf: string; threadId: string; pins: readonly ViewDescriptor[] }) {
 	const v = useViewer(wolf, threadId);
+	if (pins.length === 0) return null;
 	return (
 		<div className="pointer-events-none flex min-h-0 flex-col" data-testid="pinned-views">
 			<div className="mx-auto flex w-full max-w-[46rem] flex-wrap gap-1 px-4 pt-1">

@@ -47,7 +47,13 @@ export function getViewerState(wolf: string, threadId: string): ViewerState {
 	const key = viewerKey(wolf, threadId);
 	let s = states.get(key);
 	if (!s) {
-		s = parse(storage()?.getItem(key) ?? null);
+		let raw: string | null = null;
+		try {
+			raw = storage()?.getItem(key) ?? null;
+		} catch {
+			/* storage unavailable (private mode, denied): start empty and keep the state in memory */
+		}
+		s = parse(raw);
 		states.set(key, s);
 	}
 	return s;

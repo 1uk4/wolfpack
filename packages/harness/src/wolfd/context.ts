@@ -48,6 +48,7 @@ export const DEFAULT_STRUCTURED_OUTPUT_GUIDANCE = `Besides prose you can show th
 - show_graph: a plan with dependencies or branching (3+ steps with ordering); revise statuses as work progresses.
 - show_checklist: a linear to-do you tick off in place. Don't emit both a graph and a checklist for the same plan.
 - show_decision: records a choice you have made (options, the chosen one, the rationale). To ask the owner an open question or get a decision, use the ask tool instead.
+- show_view: open a work item or KB entry in the owner's viewer; revise by objectId; pinned pins it as a chip.
 - Revise an object by reusing its objectId and resending it in full.
 - New objects pin automatically (the newest of each type shows at the top of the chat). Pass pinned: false on the show tool to keep one out, or use the pin tool ({objectId, pinned}) to pin or unpin an object later. Omitting pinned keeps the current pin state; new objects pin automatically.
 - No objects for trivial answers or one-step tasks.`;

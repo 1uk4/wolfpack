@@ -7,6 +7,7 @@ import { ToolCallCard } from "@/components/thread/artifacts/tool-call-card";
 import { DecisionCard } from "@/components/thread/decision-card";
 import { ChecklistCard } from "@/components/thread/checklist-card";
 import { PlanGraphCard } from "@/components/thread/plan-graph-card";
+import { ViewCard } from "@/components/thread/view-card";
 
 /**
  * Card registry — the extension point for transcript cards.
@@ -183,3 +184,4 @@ for (const name of ["read", "ls", "find", "grep"]) {
 registerCard("object", "decision", { Renderer: DecisionCard });
 registerCard("object", "checklist", { Renderer: ChecklistCard });
 registerCard("object", "graph", { Renderer: PlanGraphCard });
+registerCard("object", "view", { Renderer: ViewCard });

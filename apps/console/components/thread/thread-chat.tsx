@@ -27,6 +27,7 @@ import { useAttachedStripRow } from "@/components/chat-bar/attached-strip-row";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/thread/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/shell/panel-host";
 import { ViewerPanel } from "@/components/viewer/viewer-panel";
+import { ViewHostContext, useViewObjectArrivals } from "@/components/viewer/use-view-objects";
 import { AttachmentChips, Composer } from "@/components/composer/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer/composer-controls";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
@@ -523,6 +524,8 @@ function ThreadChatInner({
 		[],
 	);
 	// Per assistant message, its render items; a message with none (e.g. a revision-only turn whose tool row is hidden) draws no shell.
+	// show_view objects that stream in while this thread is on screen open the viewer (desktop) and may pin a chip.
+	useViewObjectArrivals(wolf, threadId, messages, status === "streaming" || status === "submitted");
 	const itemsByMessage = useMemo(
 		() => messages.map((m, mi) => (m.role === "assistant" ? renderItems(m.parts, status === "streaming" && mi === messages.length - 1) : null)),
 		[messages, status],
@@ -810,7 +813,12 @@ function ThreadChatInner({
 																// One part per object (projectView folds revisions): latest data, first position.
 																const { objectId, objectType, rev, data } = item.part as unknown as { objectId: string; objectType: string; rev: number; data: unknown };
 																const Card = lookupCard("object", objectType)?.Renderer;
-																return Card ? <Card key={`obj-${objectId}`} objectId={objectId} type={objectType} rev={rev} data={data} /> : null;
+																if (!Card) return null;
+																return (
+																	<ViewHostContext.Provider key={`obj-${objectId}`} value={{ wolf, threadId }}>
+																		<Card objectId={objectId} type={objectType} rev={rev} data={data} />
+																	</ViewHostContext.Provider>
+																);
 															}
 															case "separator":
 																return <Separator key={`sep-${item.index}`} className="my-3" />;

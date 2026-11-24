@@ -24,6 +24,9 @@ const DESCRIPTIONS: Record<ObjectToolName, string> = {
     "Show the user a plan/task graph: nodes (kind step|task|milestone, status todo|doing|done|blocked|skipped) and edges " +
     "{from,to} meaning `from` depends on `to`. Edges must reference node ids, with no self-loops or cycles. Call it again " +
     "with the same objectId as work progresses to update statuses in place; each revision must resend the full graph, not a diff.",
+  show_view:
+    "Open a work item (kind work-item) or a KB entry (kind kb-entry) in the owner's viewer panel and leave a small card in the " +
+    "transcript. Pass the full id. Calling it again with the same objectId revises it in place; pinned: true also pins it as a chip.",
 };
 
 const NAMES = Object.keys(OBJECT_TOOL_PARAMS) as ObjectToolName[];

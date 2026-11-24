@@ -70,7 +70,7 @@ describe("composeProjectContext", () => {
     it("is in the default instructions as a named section", () => {
       const ins = composeProjectContext(base()).instructions;
       expect(ins).toContain("# Structured output");
-      for (const t of ["show_graph", "show_checklist", "show_decision", "objectId"]) expect(ins).toContain(t);
+      for (const t of ["show_graph", "show_checklist", "show_decision", "show_view", "objectId"]) expect(ins).toContain(t);
       expect(DEFAULT_STRUCTURED_OUTPUT_GUIDANCE.split("\n").length).toBeLessThan(15);
     });
     it("a per-wolf string replaces the default", () => {

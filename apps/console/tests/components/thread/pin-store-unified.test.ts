@@ -24,7 +24,6 @@ const ids = (t: string) => ps.listPins(t).map(ref);
 beforeEach(() => {
 	broken = false;
 	store.clear();
-	ps.resetDismissedCache();
 	ps.resetPinnedViewsCache();
 });
 

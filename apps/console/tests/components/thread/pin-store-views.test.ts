@@ -12,7 +12,6 @@ const ps = await import("../../../components/thread/pin-store.ts");
 
 beforeEach(() => {
 	store.clear();
-	ps.resetDismissedCache();
 	ps.resetPinnedViewsCache();
 });
 
@@ -28,13 +27,11 @@ describe("pinned views", () => {
 		assert.deepEqual(ps.getPinnedViews("t1"), [{ kind: "kb", id: "k1", title: "Entry" }]);
 	});
 
-	it("survives a reload and does not touch object dismissals", () => {
-		ps.dismiss(ps.dismissKey("t1", "obj"));
+	it("survives a reload", () => {
 		ps.pinView("t1", { kind: "work", id: "w1", title: "One" });
 		ps.resetPinnedViewsCache(); // forget memory, storage stays
 		assert.deepEqual(ps.getPinnedViews("t1"), [{ kind: "work", id: "w1", title: "One" }]);
 		ps.unpinView("t1", { kind: "work", id: "w1" });
 		assert.deepEqual(ps.getPinnedViews("t1"), []);
-		assert.equal(JSON.parse(store.get("wp.pinned-checklist.dismissed.v1")!).length, 1);
 	});
 });

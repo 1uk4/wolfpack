@@ -433,18 +433,18 @@ describe("ThreadChat pinned area", () => {
 		assert.equal(chatRequests.filter((u) => u.endsWith("/threads")).length, 0);
 	});
 
-	it("an unbound thread keeps the floating checklist and shows no progress panel", async () => {
+	it("an unbound thread shows the checklist chip and no progress panel", async () => {
 		globalThis.fetch = serverFetch(undefined);
 		await mountChat();
-		assert.ok(q('[data-testid="pinned-checklist"]'));
+		assert.ok(q('[data-pin-key="checklist:cl"]'));
 		assert.ok(q('[data-testid="feature-progress"]') === null);
 	});
 
-	it("a thread bound to a feature pins its progress panel instead of the checklist (also for a bound task of it)", async () => {
+	it("a thread bound to a feature pins its progress panel next to the checklist chip (also for a bound task of it)", async () => {
 		globalThis.fetch = serverFetch("F");
 		await mountChat({ initialBound: "F" });
 		assert.ok(q('[data-testid="feature-progress"]'));
-		assert.ok(q('[data-testid="pinned-checklist"]') === null);
+		assert.ok(q('[data-pin-key="checklist:cl"]'), "the checklist is no longer replaced by the progress panel");
 		assert.equal(q('[data-testid="feature-progress-title"]')!.textContent?.replace(/\s+/g, " "), "Feat · 1/4 done");
 		await act(async () => root!.unmount());
 		root = null;
@@ -453,7 +453,7 @@ describe("ThreadChat pinned area", () => {
 		globalThis.fetch = serverFetch("F", "b");
 		await mountChat({ initialBound: "b" });
 		assert.ok(q('[data-testid="feature-progress"]'));
-		assert.ok(q('[data-testid="pinned-checklist"]') === null);
+		assert.ok(q('[data-pin-key="checklist:cl"]'));
 		await click(q('[data-testid="feature-progress-toggle"]')!);
 		assert.equal(q('[data-node-id="b"]')!.getAttribute("data-highlight"), "true");
 	});

@@ -53,8 +53,6 @@ export function setProgressOpen(threadId: string, open: boolean): void {
 	}
 }
 
-/** Top padding the transcript reserves for the collapsed bar; the expanded panel is an overlay (like the checklist's). */
-export const FEATURE_PROGRESS_RESERVE = "pt-14";
 
 // ---------------------------------------------------------------- data
 

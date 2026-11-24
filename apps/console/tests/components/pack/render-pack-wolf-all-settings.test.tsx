@@ -10,6 +10,7 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { WolfAllSettings, type WolfSettingsView } from "../../../components/pack/wolf-all-settings.tsx";
 import { WolfDetail } from "../../../components/pack/pack-wolves.tsx";
+const { RouterStub } = await import("../../helpers/router-stub.tsx");
 
 const view: WolfSettingsView = {
 	etag: "e1",
@@ -38,7 +39,7 @@ describe("Pack > Wolves > All settings", () => {
 		const machine = { hostId: "sfo", machine: "sfo-01", online: true, canSetKeys: true, slots: [], wolves: [{ name: "dewey", transport: "api" as const }] };
 		const wolf = machine.wolves[0]!;
 		const detail = (reach: { relay: boolean; machine: string }) =>
-			renderToStaticMarkup(<WolfDetail machine={machine} wolf={wolf} catalog={[]} reach={reach} call={noCall} onBack={() => {}} />);
+			renderToStaticMarkup(<RouterStub><WolfDetail machine={machine} wolf={wolf} catalog={[]} reach={reach} call={noCall} onBack={() => {}} /></RouterStub>);
 		const away = detail({ relay: false, machine: "Mac" });
 		assert.ok(!away.includes('data-testid="wolf-all-settings"'));
 		assert.match(away, /data-testid="wolf-readonly"/);
@@ -99,7 +100,7 @@ describe("Pack > Wolves > All settings (interaction)", () => {
 	it("a wolf whose settings fail to load shows the error in the All settings panel, not Loading", async () => {
 		const machine = { hostId: "sfo", machine: "sfo-01", online: true, canSetKeys: true, slots: [], wolves: [{ name: "dewey", transport: "api" as const }] };
 		const call = (async () => new Response(JSON.stringify({ error: "wolf is down" }), { status: 502 })) as unknown as typeof fetch;
-		const { root, q } = await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "sfo-01" }} call={call} onBack={() => {}} />);
+		const { root, q } = await mount(<RouterStub><WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "sfo-01" }} call={call} onBack={() => {}} /></RouterStub>);
 		const panel = q("wolf-all-settings")!.textContent ?? "";
 		assert.match(panel, /wolf is down/);
 		assert.ok(!panel.includes("Loading"));

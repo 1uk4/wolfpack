@@ -11,22 +11,21 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeftIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PromptGraphCanvas } from "@/components/settings/prompt-graph-view";
+import { PageViewer } from "@/components/viewer/page-viewer";
+import { useOpenView } from "@/components/viewer/viewer-context";
+import { buildPromptBlocks, PromptBlocksContext } from "@/components/viewer/renderers/prompt-view";
 import { WolfAllSettings, type WolfSettingsView } from "@/components/pack/wolf-all-settings";
 import {
 	buildGraphs,
-	filterByScope,
 	groupWolves,
 	keysNeeded,
 	mainProviderOf,
 	memoryIgnoredOn,
 	modelPickers,
 	PROMPT_SCOPES,
-	promptScope,
 	saveMessage,
 	SCOPE_GRAPH,
 	settingsAnswerFor,
-	sizeText,
-	sourceText,
 	transportLabel,
 	wolfAccess,
 	type ConsoleReach,
@@ -54,6 +53,12 @@ interface PromptRow {
 }
 
 const getAt = (o: Record<string, unknown>, path: string): unknown => path.split(".").reduce<unknown>((c, k) => (c && typeof c === "object" ? (c as Record<string, unknown>)[k] : undefined), o);
+
+/** The prompts graph; a node click opens that prompt block in the page's viewer. */
+function PromptsGraphBox({ graph, selected, onSelect }: { graph: Parameters<typeof PromptGraphCanvas>[0]["graph"]; selected: string | null; onSelect: (id: string) => void }) {
+	const open = useOpenView();
+	return <PromptGraphCanvas graph={graph} selected={selected} onSelect={(id) => (onSelect(id), open?.({ kind: "prompt", id }))} />;
+}
 
 /** One picker: a select of the offered models, or the plain reason there is none. */
 function PickerField({ label, picker, current, editable, onPick, testid, hint, note }: { note?: string; label: string; picker: Picker; current: string; editable: boolean; onPick: (id: string) => void; testid: string; hint?: string }) {
@@ -136,9 +141,14 @@ export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; cata
 		const gs = buildGraphs(flow, null);
 		return gs.find((g) => g.key === SCOPE_GRAPH[scope]) ?? gs[0]!;
 	}, [rows, scope]);
-	const shown = filterByScope(rows, scope).filter((r) => !node || (graph.nodes.find((n) => n.id === node)?.ids ?? []).includes(r.id));
+	const blocks = useMemo(() => {
+		const flow = rows.map((r) => ({ id: r.id, group: r.group, label: r.label, editable: false, text: r.text, file: r.file }));
+		return buildPromptBlocks(buildGraphs(flow, null), rows);
+	}, [rows]);
 
 	return (
+		<PromptBlocksContext.Provider value={{ blocks: rows.length ? blocks : null }}>
+		<PageViewer scope={`settings:${wolf.name}`} allowedKinds={["prompt"]}>
 		<div data-testid={`wolf-detail-${wolf.name}`} className="flex min-w-0 flex-col gap-4">
 			<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
 				<button type="button" className={cn(BTN, "inline-flex items-center gap-1")} onClick={props.onBack} data-testid="wolf-back"><ArrowLeftIcon className="size-3.5" aria-hidden />Wolves</button>
@@ -179,19 +189,11 @@ export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; cata
 				<div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Prompt scope">
 					{PROMPT_SCOPES.map((s) => <button key={s.key} role="tab" aria-selected={scope === s.key} data-testid={`scope-${s.key}`} className={cn(BTN, scope === s.key && "bg-accent")} onClick={() => (setScope(s.key), setNode(null))}>{s.label}</button>)}
 				</div>
-				<div className="h-[320px] min-w-0 rounded-md border"><PromptGraphCanvas graph={graph} selected={node} onSelect={setNode} /></div>
-				<ul className="flex flex-col gap-1.5" data-testid="wolf-prompt-list">
-					{shown.map((r) => (
-						<li key={r.id} className="rounded-sm border p-2" data-testid={`prompt-${r.id}`}>
-							<p className="text-foreground">{r.label} <span className="text-muted-foreground">· {promptScope(r.id)}</span></p>
-							<p className="text-muted-foreground">{sourceText(r)}</p>
-							<p className="text-muted-foreground">{sizeText(r.text)}</p>
-						</li>
-					))}
-					{shown.length === 0 ? <li className="text-muted-foreground">No prompts in this scope.</li> : null}
-				</ul>
+				<div className="h-[320px] min-w-0 rounded-md border"><PromptsGraphBox graph={graph} selected={node} onSelect={setNode} /></div>
 			</section>
 		</div>
+		</PageViewer>
+		</PromptBlocksContext.Provider>
 	);
 }
 

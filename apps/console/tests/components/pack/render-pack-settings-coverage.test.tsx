@@ -13,13 +13,14 @@ import { DevicesBody } from "../../../components/pack/pack-devices.tsx";
 import { ThisDeviceBody } from "../../../components/pack/pack-this-device.tsx";
 import { WolfDetail } from "../../../components/pack/pack-wolves.tsx";
 import { AppBridgeContext, type AppBridge } from "../../../components/settings/app-bridge.ts";
+const { RouterStub } = await import("../../helpers/router-stub.tsx");
 
 const noCall = (async () => new Response("{}")) as typeof fetch;
 const machine = { hostId: "mac", machine: "Mac", online: true, canSetKeys: true, servesConsole: true, pubkey: "PK", slots: [], wolves: [{ name: "hal", transport: "subscription" as const }] };
 const mac = { resetAppUi: async () => ({ ok: true }) } as unknown as AppBridge;
 
 describe("every former Settings tab has a Pack home", () => {
-	const wolf = renderToStaticMarkup(<WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={noCall} onBack={() => {}} />);
+	const wolf = renderToStaticMarkup(<RouterStub><WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={noCall} onBack={() => {}} /></RouterStub>);
 	const device = renderToStaticMarkup(
 		<AppBridgeContext.Provider value={mac}>
 			<ThisDeviceBody />
@@ -39,8 +40,8 @@ describe("every former Settings tab has a Pack home", () => {
 		assert.match(wolf, /data-testid="wolf-all-settings"/);
 	});
 
-	it("Prompts: the wolf's prompt list", () => {
-		assert.match(wolf, /data-testid="wolf-prompt-list"/);
+	it("Prompts: the wolf's prompts graph", () => {
+		assert.match(wolf, /data-testid="wolf-prompts"/);
 	});
 
 	it("Data and support: This device lists both folders, login, diagnostics and reset", () => {

@@ -34,6 +34,7 @@ import {
 } from "@/src/core";
 import { fetchWolves } from "../kb/kb-client";
 import { useMemoryEvents } from "../memory/memory-events";
+import { PageViewer } from "../viewer/page-viewer";
 import { GraphView, type GraphViewController } from "./graph-view";
 import { useGraphSettings } from "./use-graph-settings";
 import { useKbGraph } from "./use-kb-graph";
@@ -258,7 +259,9 @@ export function GraphHome() {
 	// useSearchParams needs a Suspense boundary (the page is prerendered).
 	return (
 		<Suspense fallback={null}>
-			<GraphHomeInner />
+			<PageViewer scope="kb" allowedKinds={["kb", "work"]}>
+				<GraphHomeInner />
+			</PageViewer>
 		</Suspense>
 	);
 }

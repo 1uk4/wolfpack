@@ -26,6 +26,7 @@ const { KbActivityView } = await import("../../../components/kb/kb-activity-view
 const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { kbActivityFixture } = await import("../../fixtures/kb-activity.ts");
 const { dataStore } = await import("../../../src/core/data-store.ts");
+const { FakeNav } = await import("../../helpers/fake-nav.tsx");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const TIMING = { debounceMs: 25, pollMs: 5_000 };
@@ -84,7 +85,7 @@ async function mount(timing = TIMING) {
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
-	await act(async () => root!.render(<ServerEventsProvider connect={connect}><KbActivityView timing={timing} /></ServerEventsProvider>));
+	await act(async () => root!.render(<FakeNav start="/kb-activity"><ServerEventsProvider connect={connect}><KbActivityView timing={timing} /></ServerEventsProvider></FakeNav>));
 }
 afterEach(async () => {
 	globalThis.fetch = realFetch;

@@ -18,6 +18,7 @@
  * node's card.
  */
 import { openWorkHrefLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
+import { openKbLink, useOpenView, viewFromHref } from "@/components/viewer/viewer-context";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { XIcon } from "lucide-react";
@@ -245,6 +246,7 @@ export function GraphPane({
 	graduate?: GraduateClient;
 }) {
 	const openWork = useOpenWorkItem();
+	const openView = useOpenView();
 	const [width, setWidth] = usePaneWidth();
 	const graduateClient = useMemo(() => graduate ?? createGraduateClient(), [graduate]);
 	const data = usePaneData(card);
@@ -367,7 +369,11 @@ export function GraphPane({
 				{(card.openHref || card.focusIds) && (
 					<div className="mt-3 flex flex-wrap items-center gap-2">
 						{card.openHref && (
-							<Link href={card.openHref} className={BTN} data-testid="pane-open" onClick={(e) => openWorkHrefLink(e, card.openHref!, openWork)}>
+							<Link href={card.openHref} className={BTN} data-testid="pane-open" onClick={(e) => {
+								const v = viewFromHref(card.openHref!);
+								if (v && openView?.canOpen(v.kind)) openKbLink(e, openView, v.kind, v.id);
+								else openWorkHrefLink(e, card.openHref!, openWork);
+							}}>
 								Open page
 							</Link>
 						)}

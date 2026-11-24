@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { fetchMemoryTopic, fetchSessionTopics, postPromote, putKeepLocal } from "@/components/kb/kb-client";
 import { TopBar } from "@/components/shell/top-bar";
+import { PageViewer } from "@/components/viewer/page-viewer";
+import { openKbLink, useOpenView } from "@/components/viewer/viewer-context";
 import { topicChip, topicFacts, type MemoryTopicRow } from "@/src/core";
 
 const LABEL = "font-mono text-[11px] uppercase tracking-wide text-muted-foreground";
@@ -14,6 +16,7 @@ const LABEL = "font-mono text-[11px] uppercase tracking-wide text-muted-foregrou
 /** The frontmatter block: state chip (reason as tooltip) and the facts; KB entry ids link to their pages. */
 export function TopicFacts({ topic }: { topic: MemoryTopicRow }) {
 	const chip = topicChip(topic);
+	const openView = useOpenView();
 	return (
 		<dl className="mb-6 flex flex-wrap gap-x-6 gap-y-2 text-sm" data-testid="topic-facts">
 			{topicFacts(topic).map((f) => (
@@ -26,7 +29,7 @@ export function TopicFacts({ topic }: { topic: MemoryTopicRow }) {
 							f.entryIds.map((id, i) => (
 								<span key={id}>
 									{i > 0 && ", "}
-									<Link href={`/kb/entry/${encodeURIComponent(id)}`} className="underline underline-offset-2">{id}</Link>
+									<Link href={`/kb/entry/${encodeURIComponent(id)}`} className="underline underline-offset-2" onClick={(e) => openKbLink(e, openView, "kb", id)}>{id}</Link>
 								</span>
 							))
 						) : (
@@ -39,7 +42,16 @@ export function TopicFacts({ topic }: { topic: MemoryTopicRow }) {
 	);
 }
 
+/** The topic page with the shared KB page viewer: entry ids open in the side panel. */
 export function TopicPage({ wolf, id }: { wolf: string; id: string }) {
+	return (
+		<PageViewer scope="kb" allowedKinds={["kb", "work"]}>
+			<TopicPageBody wolf={wolf} id={id} />
+		</PageViewer>
+	);
+}
+
+function TopicPageBody({ wolf, id }: { wolf: string; id: string }) {
 	const [row, setRow] = useState<MemoryTopicRow | null>(null);
 	const [body, setBody] = useState<string | null>(null);
 	const [title, setTitle] = useState(id);

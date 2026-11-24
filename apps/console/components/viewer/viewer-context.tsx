@@ -9,6 +9,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { hostAllows, hostStoreArgs, threadHost, type ViewerHost } from "./viewer-host";
 import { openView } from "./viewer-store";
+import { isPlainClick } from "@/components/work/work-reader-nav";
 import type { ViewDescriptor } from "./view-descriptor";
 
 export type OpenViewFn = ((d: ViewDescriptor) => boolean) & { canOpen: (kind: string) => boolean };
@@ -34,6 +35,13 @@ export function ViewerProvider({ wolf, threadId, host, children }: { wolf?: stri
 /** The open function, or null outside a viewer host. */
 export function useOpenView(): OpenViewFn | null {
 	return useContext(ViewerContext);
+}
+
+/** onClick for a link to a KB entry or work page: a plain click opens it in the viewer (when the host allows the kind); modified clicks and hosts without a viewer keep the real href. */
+export function openKbLink(e: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; defaultPrevented?: boolean; preventDefault: () => void }, open: OpenViewFn | null, kind: "kb" | "work", id: string): void {
+	if (!open || !open.canOpen(kind) || !isPlainClick({ ...e, defaultPrevented: e.defaultPrevented ?? false })) return;
+	e.preventDefault();
+	open({ kind, id });
 }
 
 /** An in-app KB link: `/kb/entry/<id>` is kind kb, `/kb/work/<id>` is kind work; anything else is null. */

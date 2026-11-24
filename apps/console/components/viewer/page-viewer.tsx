@@ -10,10 +10,10 @@ import { ViewerProvider } from "./viewer-context";
  * phone. Own stack under `wolfpack:viewer:page:<scope>`, no pins, no show_view arrivals. Triggers inside open it for the
  * allowed kinds only; anything else navigates as usual.
  */
-export function PageViewer({ scope, allowedKinds, children }: { scope: string; allowedKinds: readonly string[] | "all"; children: ReactNode }) {
+export function PageViewer({ scope, allowedKinds, urlSync = true, children }: { scope: string; allowedKinds: readonly string[] | "all"; urlSync?: boolean; children: ReactNode }) {
 	const kinds = allowedKinds === "all" ? "all" : allowedKinds.join(",");
 	// eslint-disable-next-line react-hooks/exhaustive-deps -- `kinds` is the stable value of allowedKinds
-	const host = useMemo(() => pageHost(scope, allowedKinds), [scope, kinds]);
+	const host = useMemo(() => pageHost(scope, allowedKinds, urlSync), [scope, kinds, urlSync]);
 	return (
 		<ViewerProvider host={host}>
 			{/* The content column scrolls on its own; the panel is a sibling, so it stays in view while the page scrolls. */}

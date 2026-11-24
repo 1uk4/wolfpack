@@ -35,4 +35,13 @@ describe("pack health store", () => {
 		assert.equal(getPackHealth().held, false);
 		assert.equal(openStreams(), 0);
 	});
+
+	it("releasing one of two holds keeps the page held until the last release", () => {
+		const a = holdPackHealth();
+		const b = holdPackHealth();
+		a();
+		assert.equal(getPackHealth().held, true);
+		b();
+		assert.equal(getPackHealth().held, false);
+	});
 });

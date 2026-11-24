@@ -20,7 +20,7 @@ const machine = { hostId: "mac", machine: "Mac", online: true, canSetKeys: true,
 const mac = { resetAppUi: async () => ({ ok: true }) } as unknown as AppBridge;
 
 describe("every former Settings tab has a Pack home", () => {
-	const wolf = renderToStaticMarkup(<RouterStub><WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={noCall} onBack={() => {}} /></RouterStub>);
+	const wolf = renderToStaticMarkup(<RouterStub><WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={noCall} /></RouterStub>);
 	const device = renderToStaticMarkup(
 		<AppBridgeContext.Provider value={mac}>
 			<ThisDeviceBody />
@@ -43,7 +43,7 @@ describe("every former Settings tab has a Pack home", () => {
 	});
 
 	it("Prompts: the wolf's prompts graph", () => {
-		const prompts = renderToStaticMarkup(<RouterStub search="wolfTab=prompts"><WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={noCall} onBack={() => {}} /></RouterStub>);
+		const prompts = renderToStaticMarkup(<RouterStub path="/pack/wolves/mac/hal/prompts"><WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={noCall} /></RouterStub>);
 		assert.match(prompts, /data-testid="wolf-prompts"/);
 	});
 

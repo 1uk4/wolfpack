@@ -32,9 +32,16 @@ export function mergeOnLoad(saved: ViewerState, param: string | null): ViewerSta
  * A caller that writes the URL itself (and changes the viewer in the same click) records the query it is writing, so the sync below
  * builds on it instead of on the not-yet-updated router params (two replaces from the same stale params make the second undo the first).
  */
-let pendingSearch: string | null = null;
+interface PendingWrite { search: string; path: string | null; at: number }
+let pending: PendingWrite | null = null;
+const PENDING_MS = 2000;
 export function noteUrlWrite(search: string): void {
-	pendingSearch = search;
+	pending = { search, path: typeof window !== "undefined" ? (window.location?.pathname ?? null) : null, at: Date.now() };
+}
+/** The noted query if it still applies: recent, and for the page it was noted on. Pure read; the sync's effect clears it. */
+function livePending(pathname: string | null): string | null {
+	if (!pending || Date.now() - pending.at > PENDING_MS) return null;
+	return pending.path === null || pending.path === pathname ? pending.search : null;
 }
 
 /**
@@ -47,13 +54,17 @@ export function useViewerUrlSync(wolf: string, threadId: string, host?: Pick<Vie
 	const searchParams = useSearchParams();
 	const { stack, open } = useViewer(wolf, threadId);
 	const routerSearch = searchParams?.toString() ?? "";
-	const search = pendingSearch !== null && pendingSearch !== routerSearch ? pendingSearch : routerSearch;
-	if (pendingSearch !== null && pendingSearch === routerSearch) pendingSearch = null;
+	const noted = livePending(pathname);
+	const search = noted !== null && noted !== routerSearch ? noted : routerSearch;
 	const skip = useRef(false);
+	// Consumed once the router has caught up, or expired: cleared here, not during render.
+	useEffect(() => {
+		if (pending && (pending.search === routerSearch || Date.now() - pending.at > PENDING_MS)) pending = null;
+	});
 
 	useEffect(() => {
-		if ((host && !host.urlSync) || new URLSearchParams(search).has("pack")) return; // a ?pack= URL is on its way to /pack: leave its view alone
-		const param = new URLSearchParams(search).get(VIEW_PARAM);
+		if ((host && !host.urlSync) || new URLSearchParams(routerSearch).has("pack")) return; // a ?pack= URL is on its way to /pack: leave its view alone
+		const param = new URLSearchParams(routerSearch).get(VIEW_PARAM); // the URL as loaded, never a noted write
 		const parsed = param ? parseViewKey(param) : null;
 		if (host && parsed && !hostAllows(host, parsed.kind)) return;
 		const merged = mergeOnLoad(getViewerState(wolf, threadId), param);

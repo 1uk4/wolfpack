@@ -4,11 +4,13 @@
  */
 
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, describe, it } from "node:test";
 import { DICTATION_KEYLESS, openDeepgramKeyInPack } from "../../../components/composer/dictation.tsx";
 import { setPackNavigator } from "../../../components/pack/pack-nav.ts";
 
-Object.assign(globalThis, { window: { location: { pathname: "/", search: "" }, sessionStorage: { getItem: () => null, setItem: () => {} } } });
+const priorWindow = (globalThis as Record<string, unknown>).window;
+Object.assign(globalThis, { window: { location: { pathname: "/", search: "", origin: "http://localhost:3210" }, sessionStorage: { getItem: () => null, setItem: () => {} } } });
+after(() => void ((globalThis as Record<string, unknown>).window = priorWindow));
 afterEach(() => setPackNavigator(null));
 
 describe("the dictation keyless seam (owner dictation trio)", () => {

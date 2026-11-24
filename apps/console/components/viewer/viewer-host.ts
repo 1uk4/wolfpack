@@ -25,10 +25,10 @@ export const threadHost = (wolf: string, threadId: string): ViewerHost => ({
 	viewObjects: true,
 });
 
-export const pageHost = (scope: string, allowedKinds: readonly string[] | "all"): ViewerHost => ({
+export const pageHost = (scope: string, allowedKinds: readonly string[] | "all", urlSync = true): ViewerHost => ({
 	id: `page:${scope}`,
 	allowedKinds,
-	urlSync: true,
+	urlSync,
 	pins: false,
 	viewObjects: false,
 });

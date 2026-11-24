@@ -46,10 +46,11 @@ describe("Pack > Wolves > All settings", () => {
 		const machine = { hostId: "sfo", machine: "sfo-01", online: true, canSetKeys: true, slots: [], wolves: [{ name: "dewey", transport: "api" as const }] };
 		const wolf = machine.wolves[0]!;
 		const detail = (reach: { relay: boolean; machine: string }) =>
-			renderToStaticMarkup(<RouterStub><WolfDetail machine={machine} wolf={wolf} catalog={[]} reach={reach} call={noCall} onBack={() => {}} /></RouterStub>);
+			renderToStaticMarkup(<RouterStub><WolfDetail machine={machine} wolf={wolf} catalog={[]} reach={reach} call={noCall} /></RouterStub>);
 		const away = detail({ relay: false, machine: "Mac" });
 		assert.ok(!away.includes('data-testid="section-env"'));
 		assert.match(away, /data-testid="wolf-readonly"/);
+		assert.match(away, /data-testid="wolf-readonly"[^>]*>[^<]*\S/); // the note has text, not just the marker
 	});
 });
 
@@ -107,7 +108,7 @@ describe("Pack > Wolves > All settings (interaction)", () => {
 	it("a wolf whose settings fail to load shows the error in the All settings panel, not Loading", async () => {
 		const machine = { hostId: "sfo", machine: "sfo-01", online: true, canSetKeys: true, slots: [], wolves: [{ name: "dewey", transport: "api" as const }] };
 		const call = (async () => new Response(JSON.stringify({ error: "wolf is down" }), { status: 502 })) as unknown as typeof fetch;
-		const { root, q } = await mount(<RouterStub><WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "sfo-01" }} call={call} onBack={() => {}} /></RouterStub>);
+		const { root, q } = await mount(<RouterStub><WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "sfo-01" }} call={call} /></RouterStub>);
 		const panel = q("wolf-all-settings-error")!.textContent ?? "";
 		assert.match(panel, /wolf is down/);
 		assert.ok(!panel.includes("Loading"));

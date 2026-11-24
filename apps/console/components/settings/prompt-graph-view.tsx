@@ -4,7 +4,7 @@
  * One Prompts graph drawn with the Work/plan graph component (PlanGraphView): a layered left-to-right DAG you pan by dragging.
  * Only the node look is ours: title, host marker, editable / read-only marker. Layout, edges and panning are the shared ones.
  */
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { LockIcon, PencilIcon } from "lucide-react";
 import type { GraphData } from "@wolfpack/protocol/objects";
 import { cn } from "@/lib/utils";
@@ -18,7 +18,7 @@ export function MarkerIcon({ marker, className }: { marker: GraphNodeDef["marker
 	return null;
 }
 
-export function PromptGraphCanvas({ graph, selected, onSelect }: { graph: PromptGraph; selected: string | null; onSelect: (id: string) => void }) {
+export function PromptGraphCanvas({ graph, selected, onSelect, toolbar }: { graph: PromptGraph; selected: string | null; onSelect: (id: string) => void; toolbar?: ReactNode }) {
 	const byId = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n] as const)), [graph]);
 	const data: GraphData = useMemo(
 		() => ({
@@ -38,6 +38,7 @@ export function PromptGraphCanvas({ graph, selected, onSelect }: { graph: Prompt
 			zoomable
 			fill
 			toolbarAbove
+			toolbar={toolbar}
 			alignToDependents={compact}
 			highlightId={selected}
 			onNodeClick={onSelect}

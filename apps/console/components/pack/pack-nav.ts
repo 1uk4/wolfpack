@@ -15,11 +15,26 @@ export function setPackNavigator(fn: ((href: string) => void) | null): void {
 	navigate = fn;
 }
 
+/**
+ * A same-origin path (with query) or null: rejects protocol-relative ("//x"), backslashes, schemes and other origins. The only guard
+ * for anything that becomes a navigation target (the stored return path, the `from` param, document.referrer).
+ */
+export function safeLocalPath(p: string | null | undefined): string | null {
+	if (!p || !p.startsWith("/") || p.startsWith("//") || p.includes("\\")) return null;
+	try {
+		const u = new URL(p, window.location.origin);
+		return u.origin === window.location.origin ? u.pathname + u.search + u.hash : null;
+	} catch {
+		return null;
+	}
+}
+
 /** Remember where to go on close, unless we are already inside the Pack (moving between sections keeps the first page). */
 export function rememberPackReturn(path: string): void {
 	try {
-		if (path === "/pack" || path.startsWith("/pack/")) return;
-		window.sessionStorage.setItem(PACK_RETURN_KEY, path);
+		const safe = safeLocalPath(path);
+		if (!safe || safe === "/pack" || safe.startsWith("/pack/")) return;
+		window.sessionStorage.setItem(PACK_RETURN_KEY, safe);
 	} catch {
 		// storage blocked: close falls back to "/"
 	}
@@ -27,8 +42,7 @@ export function rememberPackReturn(path: string): void {
 
 export function readPackReturn(): string {
 	try {
-		const p = window.sessionStorage.getItem(PACK_RETURN_KEY);
-		return p && p.startsWith("/") && !p.startsWith("//") ? p : "/";
+		return safeLocalPath(window.sessionStorage.getItem(PACK_RETURN_KEY)) ?? "/";
 	} catch {
 		return "/";
 	}

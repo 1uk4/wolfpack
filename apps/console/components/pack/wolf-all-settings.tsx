@@ -9,7 +9,7 @@
  * Every call goes through `call` (the hub-auth fetch) to /api/wolves/:name/settings*, with If-Match on saves. The parent renders this
  * only for a wolf this console can reach.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { cn } from "@/lib/utils";
 import { ThreadColorPicker } from "@/components/settings/thread-color-picker";
 import { THREAD_COLORS, autoThreadColor, buildPayload, fieldKind, getAt, parseIssues, retryAfterSeconds, type Draft } from "@/src/core";
@@ -57,7 +57,7 @@ export type WolfSectionId = "color" | "models" | "subagents" | "compaction" | "m
 const FORM_SECTIONS = new Set<string>(["models", "subagents", "compaction", "memory", "other"]);
 
 /** The restart-needed / pending banner, the Restart button with its countdown and Reload: lives in the wolf page header, so every tab shows it. */
-export function WolfRestartBar(props: { wolfName: string; view: WolfSettingsView; call: Fetcher; onView: (v: WolfSettingsView) => void; onReload: () => void }) {
+export function WolfRestartBar(props: { wolfName: string; view: WolfSettingsView; call: Fetcher; onView: (v: WolfSettingsView) => void; onReload: () => void; onRestarted?: () => void }) {
 	const { wolfName: wolf, view, call } = props;
 	const base = `/api/wolves/${encodeURIComponent(wolf)}/settings`;
 	const [pending, setPending] = useState(false);
@@ -107,6 +107,7 @@ export function WolfRestartBar(props: { wolfName: string; view: WolfSettingsView
 					const v = (await res.json()) as WolfSettingsView;
 					if (!mounted.current) return;
 					props.onView(v);
+					props.onRestarted?.();
 					setWait(v.restartAvailableInSeconds ?? 0);
 				})
 				.catch(() => void (seenDown = true));
@@ -115,32 +116,37 @@ export function WolfRestartBar(props: { wolfName: string; view: WolfSettingsView
 	const restartable = view.restartable ?? false;
 	const canRestart = restartable && wait <= 0 && !pending;
 	return (
-		<div className="flex min-w-0 flex-col gap-2" data-testid="wolf-restart-bar">
+		<div className="flex min-w-0 flex-wrap items-center gap-2 md:ml-auto" data-testid="wolf-restart-bar">
 			{pending ? (
-				<p className="rounded border border-amber-500/50 bg-amber-500/10 px-3 py-2" role="status" data-testid="banner-restart-pending">Restart pending: waiting for {wolf} to answer again…</p>
+				<p className="rounded-full border border-amber-500/50 bg-amber-500/10 px-2.5 py-0.5" role="status" data-testid="banner-restart-pending">Restart pending: waiting for {wolf} to answer again…</p>
 			) : view.restartNeeded ? (
-				<p className="rounded border border-amber-500/50 bg-amber-500/10 px-3 py-2" role="status" data-testid="banner-restart-needed">Restart needed: wolf.yaml changed since {wolf} started, so the running wolf still has the old values.</p>
+				<p className="rounded-full border border-amber-500/50 bg-amber-500/10 px-2.5 py-0.5" role="status" data-testid="banner-restart-needed" title="wolf.yaml changed since the wolf started, so the running wolf still has the old values.">Restart needed: wolf.yaml changed since {wolf} started.</p>
 			) : null}
-			<div className="flex flex-wrap items-center gap-3">
-				<button className="rounded border px-3 py-1 disabled:opacity-50 max-md:min-h-11" disabled={!canRestart} onClick={() => void restart()} data-testid="restart-button">Restart {wolf}</button>
+			<div className="flex flex-wrap items-center gap-2">
+				<button className={`rounded-sm border px-2.5 py-1 text-xs hover:bg-accent disabled:opacity-50 max-md:min-h-11 ${view.restartNeeded ? "border-amber-500 bg-amber-500/15 font-medium text-foreground" : "text-muted-foreground"}`} data-emphasis={view.restartNeeded ? "true" : "false"} disabled={!canRestart} onClick={() => void restart()} data-testid="restart-button">Restart {wolf}</button>
 				{!restartable && <span className="text-muted-foreground" data-testid="restart-reason">Not supervised: this wolf cannot restart itself.</span>}
 				{restartable && wait > 0 && <span className="text-muted-foreground" data-testid="restart-countdown">Available in {wait}s</span>}
 				{restartError && <span className="text-destructive" role="alert" data-testid="restart-error">{restartError}</span>}
-				<button className="rounded border px-3 py-1 max-md:min-h-11" onClick={props.onReload} data-testid="settings-reload">Reload</button>
+				<button className="rounded-sm border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent max-md:min-h-11" onClick={props.onReload} data-testid="settings-reload">Reload</button>
 			</div>
 		</div>
 	);
 }
 
 /** The named sections of the wolf's settings, each open. The parent owns the one view and etag (`onView`), so a save on any tab refreshes the others. */
-export function WolfAllSettings(props: { wolfName: string; view: WolfSettingsView; call: Fetcher; onView: (v: WolfSettingsView) => void; sections: WolfSectionId[] }) {
+export function WolfAllSettings(props: { wolfName: string; view: WolfSettingsView; call: Fetcher; onView: (v: WolfSettingsView) => void; sections: WolfSectionId[]; drafts?: Record<string, Draft>; setDrafts?: Dispatch<SetStateAction<Record<string, Draft>>>; revealed?: Record<string, string>; setRevealed?: Dispatch<SetStateAction<Record<string, string>>> }) {
 	const { wolfName: wolf, view, call } = props;
+	// WolfDetail owns drafts and revealed values so they survive tab switches; a bare WolfAllSettings keeps its own.
+	const [ownDrafts, setOwnDrafts] = useState<Record<string, Draft>>({});
+	const [ownRevealed, setOwnRevealed] = useState<Record<string, string>>({});
+	const drafts = props.drafts ?? ownDrafts;
+	const setDrafts = props.setDrafts ?? setOwnDrafts;
+	const revealed = props.revealed ?? ownRevealed;
+	const setRevealed = props.setRevealed ?? setOwnRevealed;
 	const want = (id: string) => props.sections.includes(id as WolfSectionId);
 	const base = `/api/wolves/${encodeURIComponent(wolf)}/settings`;
-	const [drafts, setDrafts] = useState<Record<string, Draft>>({});
 	const [errors, setErrors] = useState<Record<string, string>>({});
 	const [formError, setFormError] = useState("");
-	const [revealed, setRevealed] = useState<Record<string, string>>({});
 	const [confirming, setConfirming] = useState("");
 	const [saved, setSaved] = useState(false);
 
@@ -274,6 +280,8 @@ export function WolfAllSettings(props: { wolfName: string; view: WolfSettingsVie
 	const editable = view.editable.filter((k) => !OWNED_BY_PICKERS.has(k) && !NOT_IN_PACK.has(k));
 	const other = editable.filter((k) => !SECTIONS.some((s) => s.match(k)));
 	const dirtyCount = Object.keys(drafts).length;
+	// The Save row shows only where a form field is rendered; a Save sends every draft, whichever tab it was typed on.
+	const formFields = SECTIONS.filter((s) => s.id !== "color" && want(s.id)).reduce((n, s) => n + editable.filter(s.match).length, 0) + (want("other") ? other.length : 0);
 	const tierModels = Object.entries(view.tierModels ?? {});
 
 	return (
@@ -301,11 +309,13 @@ export function WolfAllSettings(props: { wolfName: string; view: WolfSettingsVie
 					{other.map(renderField)}
 				</section>
 			)}
-			<div className={cn("flex flex-wrap items-center gap-3", !props.sections.some((s) => FORM_SECTIONS.has(s)) && "hidden")}>
+			{formFields > 0 && (
+			<div className="flex flex-wrap items-center gap-3">
 				<button className="rounded border px-3 py-1 disabled:opacity-50 max-md:min-h-11" disabled={!dirtyCount} onClick={() => void save()} data-testid="settings-save">Save{dirtyCount ? ` (${dirtyCount})` : ""}</button>
 				{saved && <span className="text-muted-foreground" data-testid="settings-saved">Saved to wolf.yaml. Takes effect after the wolf restarts.</span>}
 				{formError && <span className="text-destructive" role="alert" data-testid="settings-form-error">{formError}</span>}
 			</div>
+			)}
 
 			{want("env") && (
 			<section className="flex flex-col gap-2 rounded-md border p-3" data-testid="section-env">

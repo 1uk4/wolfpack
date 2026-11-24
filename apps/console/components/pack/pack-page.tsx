@@ -9,12 +9,12 @@
  * viewport minus the header, which keeps PageViewer (/pack/wolves) bounded without any height constant.
  */
 import { useEffect, useRef } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { SettingsIcon, XIcon } from "lucide-react";
 import { usePackHealth } from "@/components/pack/pack-health";
 import { holdPackHealth } from "@/components/pack/pack-health-store";
 import { PACK_SECTION_BODIES } from "@/components/pack/pack-section-bodies";
-import { readPackReturn } from "@/components/pack/pack-nav";
+import { readPackReturn, rememberPackReturn, safeLocalPath } from "@/components/pack/pack-nav";
 import { cn } from "@/lib/utils";
 import { useSingleMac } from "@/components/shell/single-mac";
 import { PACK_SECTIONS, packSectionsFor, packEntrySummary, sectionBadges, type PackBadge, type PackSectionId, type Tone } from "@/src/core";
@@ -24,26 +24,55 @@ const TEXT: Record<Tone, string> = { red: "text-red-600 dark:text-red-400", ambe
 
 function Badge({ badge, id }: { badge: PackBadge; id: string }) {
 	return (
-		<span data-testid={`pack-badge-${id}`} aria-label={`${badge.count} need attention`} className={cn("min-w-4 rounded-full px-1 text-center text-[10px] leading-4 text-white", DOT[badge.tone])}>
-			{badge.count}
+		<span data-testid={`pack-badge-${id}`} className={cn("min-w-4 rounded-full px-1 text-center text-[10px] leading-4 text-white", DOT[badge.tone])}>
+			<span aria-hidden>{badge.count}</span>
+			<span className="sr-only">{badge.count} need attention</span>
 		</span>
 	);
 }
 
-/** Esc leaves the page, unless the user is typing or a viewer panel is open (its own Esc closes it first). */
+/** Esc leaves the page, unless the user is typing, a dialog/menu/listbox is open (its own Esc closes it), or a viewer panel is open. */
 function typing(t: EventTarget | null): boolean {
 	const el = t as HTMLElement | null;
 	return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable === true);
+}
+function overlayOpen(): boolean {
+	if (document.querySelector('[role="dialog"],[role="menu"],[role="listbox"]')) return true;
+	return (document.activeElement as HTMLElement | null)?.getAttribute?.("aria-expanded") === "true";
 }
 
 export function PackPage({ section: requested }: { section: PackSectionId }) {
 	const router = useRouter();
 	const pathname = usePathname();
+	const searchParams = useSearchParams();
+	const from = searchParams?.get("from") ?? null;
 	const singleMac = useSingleMac();
 	const shown = packSectionsFor(singleMac);
 	const hidden = !shown.some((s) => s.id === requested); // the desktop app has no Devices or This device
 	const section: PackSectionId = hidden ? "machines" : requested;
 	useEffect(() => holdPackHealth(), []);
+	// The proxy's ?pack= redirect carries the page you came from in `from`: keep it as the close target, then drop it from the URL (replace).
+	// Without it, a same-origin document.referrer is the fallback (a link that lands straight on /pack/...).
+	useEffect(() => {
+		if (from !== null) {
+			const safe = safeLocalPath(from);
+			if (safe) rememberPackReturn(safe);
+			const p = new URLSearchParams(searchParams?.toString() ?? "");
+			p.delete("from");
+			const qs = p.toString();
+			router.replace(qs ? `${pathname}?${qs}` : pathname);
+			return;
+		}
+		try {
+			if (document.referrer && new URL(document.referrer).origin === window.location.origin && !window.sessionStorage.getItem("wp.pack.return")) {
+				const r = new URL(document.referrer);
+				rememberPackReturn(r.pathname + r.search);
+			}
+		} catch {
+			// no usable referrer
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on `from`; the other params are read at that moment
+	}, [from, pathname, router]);
 	useEffect(() => {
 		if (hidden && pathname !== "/pack/machines" && pathname.startsWith("/pack/")) router.replace("/pack/machines");
 	}, [hidden, pathname, router]);
@@ -52,7 +81,7 @@ export function PackPage({ section: requested }: { section: PackSectionId }) {
 	closeRef.current = close;
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== "Escape" || e.defaultPrevented || typing(e.target)) return;
+			if (e.key !== "Escape" || e.defaultPrevented || typing(e.target) || overlayOpen()) return;
 			if (document.querySelector('[data-testid="viewer-panel"]')) return;
 			closeRef.current();
 		};
@@ -69,6 +98,13 @@ export function PackPage({ section: requested }: { section: PackSectionId }) {
 	}
 	const sum = packEntrySummary({ snapshot: h.snapshot, reachable: h.reachable, lastSeenAt: h.lastSeenAt, now: h.now });
 	const tabs = useRef<HTMLElement>(null);
+	const heading = useRef<HTMLHeadingElement>(null);
+	const firstSection = useRef(true);
+	// Moving between sections moves focus to the page heading (not on first load), so screen readers announce the new page.
+	useEffect(() => {
+		if (firstSection.current) return void (firstSection.current = false);
+		heading.current?.focus?.();
+	}, [section]);
 	useEffect(() => {
 		tabs.current?.querySelector<HTMLElement>(`[data-testid="pack-tab-${section}"]`)?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
 	}, [section]);
@@ -76,12 +112,12 @@ export function PackPage({ section: requested }: { section: PackSectionId }) {
 	return (
 		<div data-testid="pack-page" className="flex min-h-dvh flex-col text-xs md:h-dvh">
 			<header className="wp-drag wp-lights-gutter flex shrink-0 items-center gap-3 border-b px-4 py-2 max-md:flex-wrap">
-				<h1 className="flex items-center gap-1.5 text-sm font-semibold"><SettingsIcon className="size-3.5" aria-hidden />Pack</h1>
+				<h1 ref={heading} tabIndex={-1} className="flex items-center gap-1.5 text-sm font-semibold"><SettingsIcon className="size-3.5" aria-hidden />Pack</h1>
 				<span className={cn("flex min-w-0 items-center gap-1.5 truncate", TEXT[sum.tone])}>
 					<span aria-hidden className={cn("size-2 shrink-0 rounded-full", DOT[sum.tone])} />
 					{sum.label}
 				</span>
-				<button type="button" data-testid="pack-close" aria-label="Close" onClick={close} className="order-2 ml-auto flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground md:order-3 max-md:size-11">
+				<button type="button" data-testid="pack-close" aria-label="Close" title="Close (Esc)" onClick={close} className="order-2 ml-auto flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground md:order-3 max-md:size-11">
 					<XIcon className="size-4" aria-hidden />
 				</button>
 				<nav ref={tabs} aria-label="Pack sections" data-testid="pack-tabs" className="order-3 flex min-w-0 gap-0.5 md:order-2 max-md:w-full max-md:overflow-x-auto max-md:[scrollbar-width:none]">
@@ -97,7 +133,7 @@ export function PackPage({ section: requested }: { section: PackSectionId }) {
 								onClick={(e) => {
 									if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
 									e.preventDefault();
-									if (section !== s.id) router.push(href);
+									if (pathname !== href) router.push(href);
 								}}
 								className={cn("flex shrink-0 items-center gap-2 whitespace-nowrap rounded-sm px-3 py-1.5 max-md:min-h-11", section === s.id ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent")}
 							>
@@ -108,9 +144,9 @@ export function PackPage({ section: requested }: { section: PackSectionId }) {
 					})}
 				</nav>
 			</header>
-			<div data-testid="pack-body" className="mx-auto flex w-full max-w-6xl min-w-0 flex-1 flex-col px-4 pt-4 md:min-h-0 md:overflow-y-auto">
+			<main data-testid="pack-body" className="mx-auto flex w-full max-w-6xl min-w-0 flex-1 flex-col px-4 pt-4 md:min-h-0 md:overflow-y-auto">
 				<Body />
-			</div>
+			</main>
 		</div>
 	);
 }

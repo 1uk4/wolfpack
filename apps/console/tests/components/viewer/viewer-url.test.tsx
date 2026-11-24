@@ -16,7 +16,7 @@ Object.assign(globalThis, {
 	IS_REACT_ACT_ENVIRONMENT: true,
 });
 
-const { nextSearch, mergeOnLoad, useViewerUrlSync } = await import("../../../components/viewer/viewer-url.ts");
+const { nextSearch, mergeOnLoad, useViewerUrlSync, noteUrlWrite } = await import("../../../components/viewer/viewer-url.ts");
 const { useViewer, resetViewerCache } = await import("../../../components/viewer/viewer-store.ts");
 const { FakeNav, navLog, currentUrl } = await import("../../helpers/fake-nav.tsx");
 
@@ -80,6 +80,12 @@ describe("useViewerUrlSync", () => {
 		ls.set("wolfpack:viewer:1uk4:t1", JSON.stringify({ stack: [w], open: false }));
 		mount("/t?view=kb%3Akb-wolfpack-b");
 		assert.deepEqual(ctl!.stack, [w, k]);
+		assert.equal(ctl!.open, true);
+	});
+	it("a deep link still opens after an earlier noteUrlWrite that nothing consumed", () => {
+		noteUrlWrite(""); // e.g. a tab switch whose navigation never reached this page
+		mount("/t?view=kb%3Akb-wolfpack-b");
+		assert.deepEqual(ctl!.stack, [k]);
 		assert.equal(ctl!.open, true);
 	});
 });

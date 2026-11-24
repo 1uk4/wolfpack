@@ -105,11 +105,17 @@ export const getPackHealth = (): PackHealthState => state;
 export const getServerPackHealth = (): PackHealthState => INITIAL;
 
 /** The Pack page holds the stream while it is mounted (a counted subscriber, so it outlives the bars); returns the release. */
+let holds = 0;
 export function holdPackHealth(): () => void {
 	const release = subscribePackHealth(() => {});
+	holds++;
 	set({ held: true });
+	let done = false;
 	return () => {
-		set({ held: false });
+		if (done) return;
+		done = true;
+		holds--;
+		set({ held: holds > 0 });
 		release();
 	};
 }

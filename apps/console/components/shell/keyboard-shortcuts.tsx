@@ -122,7 +122,7 @@ export function KeyboardShortcuts() {
 					break;
 				case "open-settings":
 					// Settings-app wave: the dialog is the surface, the URL is
-					// gone — /settings redirects to the draft shell.
+					// gone; the Pack is the page /pack/<section>.
 					handlersRef.current.openSettings();
 					break;
 				case "jump-graph":

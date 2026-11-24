@@ -13,7 +13,7 @@
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
-import { rememberPackReturn, setPackNavigator } from "@/components/pack/pack-nav";
+import { setPackNavigator } from "@/components/pack/pack-nav";
 import {
 	getPackHealth,
 	getServerPackHealth,
@@ -21,7 +21,7 @@ import {
 	watchPackHealth,
 	type PackHealthState,
 } from "@/components/pack/pack-health-store";
-import { kbRelativeTime, packSectionFromSearch, BACK_MS, packSummary, type HealthSnapshotView } from "@/src/core";
+import { kbRelativeTime, BACK_MS, packSummary, type HealthSnapshotView } from "@/src/core";
 
 const TICK_MS = 2_000;
 
@@ -67,7 +67,7 @@ function announcement(s: PackHealthState): string {
 
 /**
  * Rendered once in the app shell: a polite live region for changes of the overall summary, the router hand-off for
- * openPackPage, and the ?pack=<section> redirect to /pack/<section> (wolf, wolfTab and view params kept). It watches the store
+ * openPackPage. (The ?pack=<section> redirect is proxy.ts, before any page renders.) It watches the store
  * without counting as a subscriber; the bars and the open Pack page (holdPackHealth) are the subscribers.
  */
 export function PackHealthHost() {
@@ -85,21 +85,6 @@ export function PackHealthHost() {
 		setPackNavigator((href) => router.push(href));
 		return () => setPackNavigator(null);
 	}, [router]);
-	useEffect(() => {
-		// ?pack=<section> on any page goes to /pack/<section> (an unknown name goes to Machines).
-		const wanted = packSectionFromSearch(window.location.search);
-		if (wanted === null) return;
-		rememberPackReturn(window.location.pathname);
-		const src = new URLSearchParams(window.location.search);
-		const keep = new URLSearchParams();
-		for (const k of ["wolf", "wolfTab", "view"]) {
-			const v = src.get(k);
-			if (v !== null) keep.set(k, v);
-		}
-		const qs = keep.toString();
-		router.replace(`/pack/${wanted}${qs ? `?${qs}` : ""}`);
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- once, on page load
-	}, []);
 	return (
 		<>
 			<div aria-live="polite" role="status" className="sr-only" data-testid="pack-health-live">

@@ -36,17 +36,66 @@ describe("proxy cookie -> bearer", () => {
 describe("?pack= redirect (work-wolfpack-oz3wvq3)", () => {
 	const at = (path: string) => req("GET", {}, `http://127.0.0.1:3210${path}`);
 	const where = (res: Response) => {
-		const u = new URL(res.headers.get("location") ?? "http://none/");
+		const u = new URL(res.headers.get("location") ?? "http://none/", "http://base.invalid");
 		return u.pathname + u.search;
 	};
 	it("on /work with ?pack=wolves goes to /pack/wolves before any page mounts, keeping wolf and the original view", () => {
 		const res = proxy(at("/work?pack=wolves&wolf=sfo-01-wolves%2Fhal&view=prompt%3Asystem.ending-turn"));
 		assert.equal(res.status, 307);
-		assert.equal(where(res), "/pack/wolves?wolf=sfo-01-wolves%2Fhal&view=prompt%3Asystem.ending-turn");
+		assert.equal(where(res), "/pack/wolves/sfo-01-wolves/hal/prompts?view=prompt%3Asystem.ending-turn&from=%2Fwork");
 	});
 	it("an unknown section goes to machines, and a page without ?pack= is left alone", () => {
-		assert.equal(where(proxy(at("/?pack=nope"))), "/pack/machines");
+		assert.equal(where(proxy(at("/?pack=nope"))), "/pack/machines?from=%2F");
 		assert.equal(proxy(at("/work?view=prompt%3Ax")).status, 200);
+	});
+	it("carries the origin page in from, so the Pack's close button returns to it", () => {
+		assert.equal(where(proxy(at("/work?x=1&pack=keys"))), "/pack/keys?from=%2Fwork%3Fx%3D1");
+	});
+	// Next 16's middleware adapter parses a response Location as an absolute URL; a relative one throws "Invalid URL" (500).
+	const absolute = (res: Response) => {
+		const loc = res.headers.get("location") ?? "";
+		assert.doesNotThrow(() => new URL(loc), `Location must be absolute: ${loc}`);
+		return loc;
+	};
+	const withPublicOrigin = (value: string | undefined, fn: () => void) => {
+		const before = process.env.WOLFPACK_CONSOLE_PUBLIC_ORIGIN;
+		if (value === undefined) delete process.env.WOLFPACK_CONSOLE_PUBLIC_ORIGIN;
+		else process.env.WOLFPACK_CONSOLE_PUBLIC_ORIGIN = value;
+		try {
+			fn();
+		} finally {
+			if (before === undefined) delete process.env.WOLFPACK_CONSOLE_PUBLIC_ORIGIN;
+			else process.env.WOLFPACK_CONSOLE_PUBLIC_ORIGIN = before;
+		}
+	};
+	it("names the configured public origin in an absolute Location, keeping the path, from and kept params", () => {
+		withPublicOrigin("https://sfo-01.example.ts.net", () => {
+			const loc = absolute(proxy(req("GET", { host: "internal:3210" }, "http://localhost:3210/work?pack=wolves&wolf=sfo-01-wolves%2Fhal&view=prompt%3Ax")));
+			assert.equal(loc, "https://sfo-01.example.ts.net/pack/wolves/sfo-01-wolves/hal/prompts?view=prompt%3Ax&from=%2Fwork");
+		});
+	});
+	it("without config uses the rightmost X-Forwarded-Proto and the forwarded host", () => {
+		withPublicOrigin(undefined, () => {
+			const res = proxy(req("GET", { "x-forwarded-proto": "http, https", "x-forwarded-host": "public.example" }, "http://localhost:3210/work?pack=keys"));
+			assert.equal(absolute(res), "https://public.example/pack/keys?from=%2Fwork");
+		});
+	});
+	it("with no config and no forwarding headers uses the request's own origin", () => {
+		withPublicOrigin(undefined, () => {
+			assert.equal(absolute(proxy(req("GET", {}, "http://localhost:3210/work?pack=keys"))), "http://localhost:3210/pack/keys?from=%2Fwork");
+		});
+	});
+	it("ignores a forwarded host that is not a plain host[:port], so a crafted header cannot redirect off-site", () => {
+		withPublicOrigin(undefined, () => {
+			for (const bad of ["evil.com/x", "a@b", "a b"]) {
+				const res = proxy(req("GET", { "x-forwarded-proto": "https", "x-forwarded-host": bad }, "http://localhost:3210/work?pack=keys"));
+				assert.equal(absolute(res), "http://localhost:3210/pack/keys?from=%2Fwork", bad);
+			}
+		});
+	});
+	it("leaves alone a POST, the API, the Pack itself, /pair and a static asset", () => {
+		assert.equal(proxy(req("POST", {}, "http://127.0.0.1:3210/work?pack=keys")).status, 200);
+		for (const p of ["/api/x?pack=keys", "/pack/keys?pack=wolves", "/pair?pack=keys", "/logo.png?pack=keys"]) assert.equal(proxy(at(p)).status, 200, p);
 	});
 });
 

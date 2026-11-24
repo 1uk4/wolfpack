@@ -26,12 +26,12 @@ Object.assign(globalThis, {
 const { PromptViewRenderer, PromptBlocksContext } = await import("../../../components/viewer/renderers/prompt-view.tsx");
 const { WolfDetail } = await import("../../../components/pack/pack-wolves.tsx");
 const { getViewerState, resetViewerCache } = await import("../../../components/viewer/viewer-store.ts");
-const { FakeNav, currentUrl, navOptions } = await import("../../helpers/fake-nav.tsx");
+const { FakeNav, currentUrl, navOptions, navLog, historyBack } = await import("../../helpers/fake-nav.tsx");
 
 let root: Root | null = null;
 const q = (s: string) => document.querySelector(s) as HTMLElement | null;
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); });
-async function mount(node: React.ReactNode, start = "/pack") {
+async function mount(node: React.ReactNode, start = "/pack/wolves/mac/hal") {
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
@@ -72,9 +72,9 @@ describe("prompt renderer", () => {
 	});
 });
 
-const PROMPTS = "/pack/wolves?wolfTab=prompts";
+const PROMPTS = "/pack/wolves/mac/hal/prompts";
 describe("wolf settings page", () => {
-	const machine = { hostId: "mac", machine: "Mac", online: true, canSetKeys: true, servesConsole: true, pubkey: "PK", slots: [], wolves: [{ name: "hal", transport: "subscription" as const }] };
+	const machine = { hostId: "mac", machine: "Mac", online: true, canSetKeys: true, servesConsole: true, pubkey: "PK", slots: [], wolves: [{ name: "hal", transport: "subscription" as const }, { name: "dewey", transport: "subscription" as const }] };
 	const rows = [
 		{ id: "system.header", group: "system", label: "Header", text: "H", source: "default", file: "header.ts" },
 		{ id: "system.identity", group: "system", label: "Identity", text: "I", source: "default", file: "identity.md" },
@@ -83,7 +83,7 @@ describe("wolf settings page", () => {
 		String(u).endsWith("/prompts") ? Response.json({ prompts: rows }) : Response.json({ config: { name: "hal" }, etag: "e", editable: [] })) as typeof fetch;
 
 	it("clicking a graph node opens kind prompt on the page's own stack, successive clicks push, and the list under the graph is gone", async () => {
-		await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} onBack={() => {}} />, PROMPTS);
+		await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} />, PROMPTS);
 		await flush();
 		assert.equal(q('[data-testid="wolf-prompt-list"]'), null);
 		const hits = () => [...document.querySelectorAll('[data-testid="graph-node-hit"]')] as HTMLElement[];
@@ -96,7 +96,7 @@ describe("wolf settings page", () => {
 	});
 
 	it("keeps the viewer panel outside the page's scrolling column, so scrolling the graph never scrolls the viewer away", async () => {
-		await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} onBack={() => {}} />, PROMPTS);
+		await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} />, PROMPTS);
 		await flush();
 		await act(async () => void (document.querySelector('[data-testid="graph-node-hit"]') as HTMLElement).dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 })));
 		await flush();
@@ -107,22 +107,27 @@ describe("wolf settings page", () => {
 		assert.equal(panel.closest(".overflow-y-auto") === null || panel.closest(".overflow-y-auto") === q('[data-testid="viewer-body"]'), true);
 	});
 
-	it("the selected wolf is in the URL (wolf=<host>/<name>): a link restores the detail, Wolves clears it", async () => {
+	it("the wolf is in the path (/pack/wolves/<host>/<name>/<tab>): a link restores the detail on that tab, and there is no \"← Wolves\" button", async () => {
 		const { WolvesView } = await import("../../../components/pack/pack-wolves.tsx");
-		await mount(<WolvesView machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} />, "/pack/wolves?wolf=mac%2Fhal&wolfTab=prompts");
+		await mount(<WolvesView machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} />, "/pack/wolves/mac/hal/prompts");
 		await flush();
 		assert.notEqual(q('[data-testid="wolf-detail-hal"]'), null);
-		await act(async () => void (q('[data-testid="wolf-back"]') as HTMLElement).dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 })));
+		assert.notEqual(q('[data-testid="wolf-prompts"]'), null);
+		assert.equal(q('[data-testid="wolf-back"]'), null);
+	});
+
+	it("the list rows open the wolf's path (a navigation, so Back returns to the list)", async () => {
+		const { WolvesView } = await import("../../../components/pack/pack-wolves.tsx");
+		await mount(<WolvesView machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} />, "/pack/wolves");
 		await flush();
-		assert.equal(q('[data-testid="wolf-detail-hal"]'), null);
-		const p = new URL(currentUrl(), "http://x").searchParams;
-		assert.equal(p.get("wolf"), null);
-		assert.equal(p.get("wolfTab"), null);
-		assert.equal(new URL(currentUrl(), "http://x").pathname, "/pack/wolves");
+		await act(async () => void (q('[data-testid="wolf-row-hal"]') as HTMLElement).dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 })));
+		await flush();
+		assert.equal(currentUrl(), "/pack/wolves/mac/hal");
+		assert.equal(navLog.stack.length, 2);
 	});
 
 	describe("Wolf page tabs", () => {
-		const detail = () => <WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} onBack={() => {}} />;
+		const detail = () => <WolfDetail machine={machine} wolf={machine.wolves[0]!} machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} />;
 		const tab = (name: string) => [...document.querySelectorAll('[role="tablist"][aria-label="Wolf page"] [role="tab"]')].find((t) => t.textContent === name) as HTMLElement;
 		const press = async (el: HTMLElement) => { await act(async () => void el.dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 }))); await flush(); };
 
@@ -141,7 +146,7 @@ describe("wolf settings page", () => {
 			if (String(u).endsWith("/prompts")) return Response.json({ prompts: rows });
 			return Response.json(init?.method === "PUT" ? full(90, "e2") : full(80, "e1"));
 		}) as typeof fetch;
-		const fullDetail = () => <WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={fullCall} onBack={() => {}} />;
+		const fullDetail = () => <WolfDetail machine={machine} wolf={machine.wolves[0]!} machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={fullCall} />;
 		const has = (id: string) => q(`[data-testid="section-${id}"]`) !== null;
 
 		it("has the tabs Appearance, Models, Behaviour, Access, wolf.yaml, Prompts in order, and no All settings disclosure", async () => {
@@ -193,46 +198,38 @@ describe("wolf settings page", () => {
 			assert.match(q('[data-testid="section-config"]')?.textContent ?? "", /threshold:\s*90/);
 		});
 
-		it("an old wolfTab=overview link opens on Models", async () => {
-			await mount(detail(), "/pack/wolves?wolfTab=overview");
-			await flush();
-			assert.equal(tab("Models").getAttribute("aria-selected"), "true");
-		});
-
-		it("clicking Prompts shows the graph, hides the cards and writes wolfTab=prompts to the URL, keeping ?pack", async () => {
-			await mount(detail(), "/pack/wolves");
+		it("clicking Prompts shows the graph, hides the cards and navigates (push) to the prompts path", async () => {
+			await mount(detail(), "/pack/wolves/mac/hal");
 			await flush();
 			await press(tab("Prompts"));
 			assert.notEqual(q('[data-testid="wolf-prompts"]'), null);
 			assert.equal(q('[data-testid="wolf-models"]'), null);
-			const p = new URL(currentUrl(), "http://x").searchParams;
-			assert.equal(p.get("wolfTab"), "prompts");
-			assert.equal(new URL(currentUrl(), "http://x").pathname, "/pack/wolves");
+			assert.equal(currentUrl(), "/pack/wolves/mac/hal/prompts");
+			assert.equal(navLog.stack.length, 2);
 		});
 
-		it("opens on Prompts when the URL says wolfTab=prompts", async () => {
+		it("opens on Prompts when the path says /prompts", async () => {
 			await mount(detail(), PROMPTS);
 			await flush();
 			assert.equal(tab("Prompts").getAttribute("aria-selected"), "true");
 			assert.notEqual(q('[data-testid="wolf-prompts"]'), null);
 		});
 
-		it("opens on Prompts, with the block open, for ?view=prompt:<id> even without wolfTab", async () => {
-			await mount(detail(), "/pack/wolves?view=prompt:system.identity");
+		it("opens on Prompts, with the block open, for ?view=prompt:<id> on a non-prompts path, and the URL ends on /prompts keeping view", async () => {
+			await mount(detail(), "/pack/wolves/mac/hal?view=prompt:system.identity");
 			await flush();
 			assert.equal(tab("Prompts").getAttribute("aria-selected"), "true");
 			assert.match(q('[data-testid="viewer-panel"]')?.textContent ?? "", /Identity/);
+			assert.equal(currentUrl(), "/pack/wolves/mac/hal/prompts?view=prompt%3Asystem.identity");
 		});
 
-		it("closing a viewer that was opened by ?view=prompt:<id> alone keeps the Prompts tab, and the URL says wolfTab=prompts", async () => {
-			await mount(detail(), "/pack/wolves?view=prompt:system.identity");
+		it("closing a viewer that was opened by ?view=prompt:<id> alone keeps the Prompts tab, and the path stays /prompts", async () => {
+			await mount(detail(), "/pack/wolves/mac/hal?view=prompt:system.identity");
 			await flush();
 			await press(q('[data-testid="viewer-close"]') as HTMLElement);
 			assert.equal(tab("Prompts").getAttribute("aria-selected"), "true");
 			assert.notEqual(q('[data-testid="wolf-prompts"]'), null);
-			const p = new URL(currentUrl(), "http://x").searchParams;
-			assert.equal(p.get("wolfTab"), "prompts");
-			assert.equal(p.get("view"), null);
+			assert.equal(currentUrl(), "/pack/wolves/mac/hal/prompts");
 		});
 
 		it("switching to Models closes the open prompt and clears ?view=", async () => {
@@ -242,36 +239,173 @@ describe("wolf settings page", () => {
 			assert.equal(getViewerState("page", "settings:hal").open, true);
 			await press(tab("Models"));
 			assert.equal(getViewerState("page", "settings:hal").open, false);
-			const p = new URL(currentUrl(), "http://x").searchParams;
-			assert.equal(p.get("view"), null);
-			assert.equal(p.get("wolfTab"), null);
-			assert.equal(new URL(currentUrl(), "http://x").pathname, "/pack/wolves");
+			assert.equal(currentUrl(), "/pack/wolves/mac/hal");
 		});
 
 		it("one click on Models from Prompts with a prompt open from the URL switches in one write: Models selected, no view, no wolfTab", async () => {
-			await mount(detail(), `${PROMPTS}&view=prompt:system.identity`);
+			await mount(detail(), `${PROMPTS}?view=prompt:system.identity`);
 			await flush();
 			assert.equal(tab("Prompts").getAttribute("aria-selected"), "true");
 			navOptions.defer = true; // like Next: the URL changes after a transition, so a second write reads stale params
+			navLog.writes = 0;
 			try {
 				await press(tab("Models"));
 				await flush();
 			} finally {
 				navOptions.defer = false;
 			}
-			const p = new URL(currentUrl(), "http://x").searchParams;
-			assert.equal(p.get("view"), null);
-			assert.equal(p.get("wolfTab"), null);
+			assert.equal(navLog.writes, 1);
+			assert.equal(currentUrl(), "/pack/wolves/mac/hal");
 			assert.equal(tab("Models").getAttribute("aria-selected"), "true");
 		});
 
-		it("the graph box fills the height left under the tabs and filters (flex-1 with a min-height floor) instead of a fixed height", async () => {
+		it("has no \"← Wolves\" button; the wolf row has a dropdown of every wolf, on the machine, with Restart and Reload", async () => {
+			await mount(fullDetail(), "/pack/wolves/mac/hal");
+			await flush();
+			assert.equal(q('[data-testid="wolf-back"]'), null);
+			assert.equal([...document.querySelectorAll("button")].some((b) => /Wolves/.test(b.textContent ?? "")), false);
+			const row = q('[data-testid="wolf-row"]')!;
+			const options = [...row.querySelectorAll('select[aria-label="Wolf"] option')].map((o) => o.textContent);
+			assert.deepEqual(options, ["hal", "dewey"]);
+			assert.match(row.textContent ?? "", /on Mac/);
+			assert.notEqual(row.querySelector('[data-testid="restart-button"]'), null);
+			assert.notEqual(row.querySelector('[data-testid="settings-reload"]'), null);
+		});
+
+		it("choosing another wolf in the dropdown goes to the same tab on that wolf and drops view", async () => {
+			await mount(fullDetail(), `${PROMPTS}?view=prompt:system.identity`);
+			await flush();
+			const sel = q('select[aria-label="Wolf"]') as HTMLSelectElement;
+			await act(async () => {
+				const key = Object.keys(sel).find((k) => k.startsWith("__reactProps$"))!;
+				(sel as unknown as Record<string, { onChange: (e: unknown) => void }>)[key]!.onChange({ target: { value: "mac/dewey" }, currentTarget: { value: "mac/dewey" } });
+			});
+			await flush();
+			assert.equal(currentUrl(), "/pack/wolves/mac/dewey/prompts");
+		});
+
+		it("Restart is emphasised only when a restart is needed", async () => {
+			await mount(fullDetail(), "/pack/wolves/mac/hal");
+			await flush();
+			const btn = q('[data-testid="restart-button"]')!;
+			assert.equal(btn.getAttribute("data-emphasis"), "true"); // the fixture says restartNeeded
+			await act(async () => root?.unmount());
+			document.body.innerHTML = "";
+			await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={(async (u: string) => String(u).endsWith("/prompts") ? Response.json({ prompts: rows }) : Response.json({ ...full(80, "e1"), restartNeeded: false })) as typeof fetch} />, "/pack/wolves/mac/hal");
+			await flush();
+			assert.equal(q('[data-testid="restart-button"]')!.getAttribute("data-emphasis"), "false");
+		});
+
+		it("the scope filters are aria-pressed buttons in a group inside the graph toolbar, not tabs", async () => {
 			await mount(detail(), PROMPTS);
 			await flush();
-			const box = q('[data-testid="wolf-prompts-graph"]')!;
-			assert.match(box.className, /\bflex-1\b/);
-			assert.match(box.className, /\bmin-h-\[/);
-			assert.doesNotMatch(box.className, /\bh-\[320px\]/);
+			const bar = q('[data-testid="graph-toolbar"]')!;
+			const all = bar.querySelector('[data-testid="scope-all"]') as HTMLElement;
+			assert.notEqual(all, null);
+			assert.equal(all.getAttribute("aria-pressed"), "true");
+			assert.equal(all.getAttribute("role"), null);
+			assert.equal(all.parentElement?.getAttribute("role"), "group");
+			assert.equal(document.querySelectorAll('[role="tablist"]').length, 1);
+			await press(bar.querySelector('[data-testid="scope-wolf"]') as HTMLElement);
+			assert.equal(q('[data-testid="scope-wolf"]')!.getAttribute("aria-pressed"), "true");
+			assert.equal(q('[data-testid="scope-all"]')!.getAttribute("aria-pressed"), "false");
+		});
+
+		it("browser Back from an open prompt leaves it: the viewer closes and the URL goes to the entry before the Prompts tab", async () => {
+			await mount(detail(), "/pack/wolves/mac/hal");
+			await flush();
+			await press(tab("Prompts"));
+			await press(document.querySelector('[data-testid="graph-node-hit"]') as HTMLElement);
+			assert.match(currentUrl(), /\/prompts\?view=prompt/);
+			await act(async () => historyBack());
+			await flush();
+			assert.equal(currentUrl(), "/pack/wolves/mac/hal");
+			assert.equal(getViewerState("page", "settings:hal").open, false);
+		});
+
+		const typeThreshold = async (value: string) => {
+			const input = q('[data-testid="field-compaction.threshold"]') as HTMLInputElement;
+			await act(async () => {
+				input.value = value;
+				const key = Object.keys(input).find((k) => k.startsWith("__reactProps$"))!;
+				(input as unknown as Record<string, { onChange: (e: unknown) => void }>)[key]!.onChange({ target: input, currentTarget: input });
+			});
+		};
+		const thresholdValue = () => (q('[data-testid="field-compaction.threshold"]') as HTMLInputElement).value;
+
+		it("an unsaved edit survives a tab switch, and the Save row shows only on tabs with form fields", async () => {
+			await mount(fullDetail());
+			await flush();
+			await press(tab("Models"));
+			assert.equal(q('[data-testid="settings-save"]'), null, "Models has no form field here");
+			await press(tab("Behaviour"));
+			await typeThreshold("95");
+			await press(tab("Models"));
+			await press(tab("Behaviour"));
+			assert.equal(thresholdValue(), "95");
+		});
+
+		it("drafts are cleared when a restart completes", async () => {
+			let restarted = false;
+			let gets = 0;
+			const restartCall = (async (u: string, init?: RequestInit) => {
+				if (String(u).endsWith("/prompts")) return Response.json({ prompts: rows });
+				if (String(u).endsWith("/restart")) return (restarted = true), Response.json({});
+				if (restarted && gets++ === 0) return new Response("{}", { status: 502 }); // the wolf is down, then back
+				return Response.json(init?.method === "PUT" ? full(90, "e2") : full(80, "e1"));
+			}) as typeof fetch;
+			await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={restartCall} />);
+			await flush();
+			await press(tab("Behaviour"));
+			await typeThreshold("95");
+			await press(q('[data-testid="restart-button"]') as HTMLElement);
+			await act(async () => { await new Promise((r) => setTimeout(r, 4400)); });
+			assert.equal(q('[data-testid="banner-restart-pending"]'), null);
+			assert.equal(thresholdValue(), "80");
+		});
+
+		it("Arrow, Home and End move focus only (no history entry); every tab and panel is linked by id, aria-controls and aria-labelledby", async () => {
+			await mount(fullDetail(), "/pack/wolves/mac/hal");
+			await flush();
+			const key = async (el: HTMLElement, k: string) => { await act(async () => void el.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: k }))); await flush(); };
+			const focused: string[] = [];
+			const orig = dom.window.HTMLElement.prototype.focus;
+			dom.window.HTMLElement.prototype.focus = function (this: HTMLElement) { focused.push(this.id); };
+			const before = navLog.stack.length;
+			for (const k of ["ArrowRight", "ArrowLeft", "End", "Home"]) await key(tab("Models"), k);
+			assert.equal(navLog.stack.length, before);
+			assert.equal(currentUrl(), "/pack/wolves/mac/hal");
+			await key(tab("Models"), "End");
+			assert.equal(focused.at(-1), "wolf-tab-prompts");
+			await key(tab("Models"), "Home");
+			assert.equal(focused.at(-1), "wolf-tab-appearance");
+			dom.window.HTMLElement.prototype.focus = orig;
+			const models = tab("Models");
+			const panel = q('[role="tabpanel"]')!;
+			assert.equal(models.getAttribute("aria-controls"), panel.id);
+			assert.equal(panel.getAttribute("aria-labelledby"), models.id);
+			assert.notEqual(panel.id, "");
+		});
+
+		it("a wolf name containing a slash survives the switcher", async () => {
+			await mount(fullDetail(), "/pack/wolves/mac/hal");
+			await flush();
+			const sel = q('select[aria-label="Wolf"]') as HTMLSelectElement;
+			await act(async () => {
+				const key = Object.keys(sel).find((k) => k.startsWith("__reactProps$"))!;
+				(sel as unknown as Record<string, { onChange: (e: unknown) => void }>)[key]!.onChange({ target: { value: "mac/a%2Fb" }, currentTarget: { value: "mac/a%2Fb" } });
+			});
+			await flush();
+			assert.equal(currentUrl(), "/pack/wolves/mac/a%2Fb");
+		});
+
+		it("a wolf path whose wolf is not in the pack says Wolf not found, with a link to the list", async () => {
+			const { WolvesView } = await import("../../../components/pack/pack-wolves.tsx");
+			await mount(<WolvesView machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} />, "/pack/wolves/mac/ghost");
+			await flush();
+			assert.match(document.body.textContent ?? "", /Wolf not found/);
+			assert.equal(q('a[href="/pack/wolves"]')?.textContent, "All wolves");
+			assert.doesNotMatch(document.body.textContent ?? "", /No wolves have reported/);
 		});
 	});
 });

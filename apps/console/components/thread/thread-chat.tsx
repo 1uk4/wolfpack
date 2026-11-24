@@ -25,6 +25,7 @@ import { submitToThread } from "@/components/chat-bar/chat-bar-io";
 import { useAttachedStripRow } from "@/components/chat-bar/attached-strip-row";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/thread/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/shell/panel-host";
+import { ViewerPanel } from "@/components/viewer/viewer-panel";
 import { AttachmentChips, Composer } from "@/components/composer/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer/composer-controls";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
@@ -970,6 +971,7 @@ function ThreadChatInner({
 					</div>
 				</div>
 			</div>
+			<ViewerPanel wolf={wolf} threadId={threadId} />
 			<RightPanelHost />
 		</div>
 	);

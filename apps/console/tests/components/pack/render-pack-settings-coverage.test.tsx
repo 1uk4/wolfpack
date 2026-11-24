@@ -36,8 +36,10 @@ describe("every former Settings tab has a Pack home", () => {
 		assert.match(renderToStaticMarkup(<DevicesBody />), /data-testid="pack-devices"/);
 	});
 
-	it("Wolf settings: All settings inside a wolf's detail", () => {
-		assert.match(wolf, /data-testid="wolf-all-settings"/);
+	it("Wolf settings: a wolf's detail has Appearance, Models, Behaviour, Access and wolf.yaml tabs, opening on Models", () => {
+		for (const id of ["appearance", "models", "behaviour", "access", "yaml"]) assert.match(wolf, new RegExp(`data-testid="wolf-tab-${id}"`), id);
+		assert.match(wolf, /data-testid="wolf-models"/);
+		assert.doesNotMatch(wolf, /data-testid="wolf-all-settings"/);
 	});
 
 	it("Prompts: the wolf's prompts graph", () => {

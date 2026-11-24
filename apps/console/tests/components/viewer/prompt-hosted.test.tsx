@@ -121,19 +121,82 @@ describe("wolf settings page", () => {
 		assert.equal(p.get("pack"), "wolves");
 	});
 
-	describe("Overview | Prompts tabs", () => {
+	describe("Wolf page tabs", () => {
 		const detail = () => <WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} onBack={() => {}} />;
 		const tab = (name: string) => [...document.querySelectorAll('[role="tablist"][aria-label="Wolf page"] [role="tab"]')].find((t) => t.textContent === name) as HTMLElement;
 		const press = async (el: HTMLElement) => { await act(async () => void el.dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 }))); await flush(); };
 
-		it("opens on Overview with the settings cards and no prompts graph", async () => {
+		it("opens on Models (the default) with the picker card and keys, and no prompts graph", async () => {
 			await mount(detail());
 			await flush();
-			assert.equal(tab("Overview").getAttribute("aria-selected"), "true");
+			assert.equal(tab("Models").getAttribute("aria-selected"), "true");
 			assert.equal(tab("Prompts").getAttribute("aria-selected"), "false");
 			assert.notEqual(q('[data-testid="wolf-models"]'), null);
 			assert.notEqual(q('[data-testid="wolf-keys"]'), null);
 			assert.equal(q('[data-testid="wolf-prompts"]'), null);
+		});
+
+		const full = (threshold: number, etag: string) => ({ config: { name: "hal", compaction: { threshold } }, etag, editable: ["color", "compaction.threshold", "subagents.enabled", "memory.enabled", "other.thing"], env: [{ name: "ANTHROPIC_API_KEY", set: true, secret: true, purpose: "chat" }], restartNeeded: true, restartable: true, restartAvailableInSeconds: 0 });
+		const fullCall = (async (u: string, init?: RequestInit) => {
+			if (String(u).endsWith("/prompts")) return Response.json({ prompts: rows });
+			return Response.json(init?.method === "PUT" ? full(90, "e2") : full(80, "e1"));
+		}) as typeof fetch;
+		const fullDetail = () => <WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={fullCall} onBack={() => {}} />;
+		const has = (id: string) => q(`[data-testid="section-${id}"]`) !== null;
+
+		it("has the tabs Appearance, Models, Behaviour, Access, wolf.yaml, Prompts in order, and no All settings disclosure", async () => {
+			await mount(fullDetail());
+			await flush();
+			const names = [...document.querySelectorAll('[role="tablist"][aria-label="Wolf page"] [role="tab"]')].map((t) => t.textContent);
+			assert.deepEqual(names, ["Appearance", "Models", "Behaviour", "Access", "wolf.yaml", "Prompts"]);
+			assert.equal(q('[data-testid="wolf-all-settings"]'), null);
+			assert.equal(document.querySelector("details"), null);
+		});
+
+		it("each tab shows its own sections and not the others'", async () => {
+			await mount(fullDetail());
+			await flush();
+			const ids = ["color", "models", "subagents", "compaction", "memory", "other", "env", "config"];
+			const want: Record<string, string[]> = { Appearance: ["color"], Models: [], Behaviour: ["subagents", "compaction", "memory", "other"], Access: ["env"], "wolf.yaml": ["config"] };
+			for (const [name, shown] of Object.entries(want)) {
+				await press(tab(name));
+				assert.deepEqual(ids.filter(has), shown, name);
+			}
+			await press(tab("Access"));
+			assert.notEqual(q('[data-testid="wolf-domains"]'), null);
+			await press(tab("Models"));
+			assert.notEqual(q('[data-testid="wolf-keys"]'), null);
+		});
+
+		it("the Restart control is in the page header on every tab", async () => {
+			await mount(fullDetail());
+			await flush();
+			for (const name of ["Models", "Access", "Prompts"]) {
+				await press(tab(name));
+				assert.notEqual(q('[data-testid="restart-button"]'), null, name);
+				assert.notEqual(q('[data-testid="banner-restart-needed"]'), null, name);
+			}
+		});
+
+		it("a save on Behaviour shows in the wolf.yaml read-out on another tab (one shared view)", async () => {
+			await mount(fullDetail());
+			await flush();
+			await press(tab("Behaviour"));
+			const input = q('[data-testid="field-compaction.threshold"]') as HTMLInputElement;
+			await act(async () => {
+				input.value = "90";
+				const key = Object.keys(input).find((k) => k.startsWith("__reactProps$"))!;
+				(input as unknown as Record<string, { onChange: (e: unknown) => void }>)[key]!.onChange({ target: input, currentTarget: input });
+			});
+			await press(q('[data-testid="settings-save"]') as HTMLElement);
+			await press(tab("wolf.yaml"));
+			assert.match(q('[data-testid="section-config"]')?.textContent ?? "", /threshold:\s*90/);
+		});
+
+		it("an old wolfTab=overview link opens on Models", async () => {
+			await mount(detail(), "/pack?pack=wolves&wolfTab=overview");
+			await flush();
+			assert.equal(tab("Models").getAttribute("aria-selected"), "true");
 		});
 
 		it("clicking Prompts shows the graph, hides the cards and writes wolfTab=prompts to the URL, keeping ?pack", async () => {
@@ -172,12 +235,12 @@ describe("wolf settings page", () => {
 			assert.equal(p.get("view"), null);
 		});
 
-		it("switching to Overview closes the open prompt and clears ?view=", async () => {
+		it("switching to Models closes the open prompt and clears ?view=", async () => {
 			await mount(detail(), PROMPTS);
 			await flush();
 			await press(document.querySelector('[data-testid="graph-node-hit"]') as HTMLElement);
 			assert.equal(getViewerState("page", "settings:hal").open, true);
-			await press(tab("Overview"));
+			await press(tab("Models"));
 			assert.equal(getViewerState("page", "settings:hal").open, false);
 			const p = new URL(currentUrl(), "http://x").searchParams;
 			assert.equal(p.get("view"), null);

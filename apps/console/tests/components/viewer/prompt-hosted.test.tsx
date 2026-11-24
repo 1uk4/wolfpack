@@ -26,7 +26,7 @@ Object.assign(globalThis, {
 const { PromptViewRenderer, PromptBlocksContext } = await import("../../../components/viewer/renderers/prompt-view.tsx");
 const { WolfDetail } = await import("../../../components/pack/pack-wolves.tsx");
 const { getViewerState, resetViewerCache } = await import("../../../components/viewer/viewer-store.ts");
-const { FakeNav, currentUrl } = await import("../../helpers/fake-nav.tsx");
+const { FakeNav, currentUrl, navOptions } = await import("../../helpers/fake-nav.tsx");
 
 let root: Root | null = null;
 const q = (s: string) => document.querySelector(s) as HTMLElement | null;
@@ -72,7 +72,7 @@ describe("prompt renderer", () => {
 	});
 });
 
-const PROMPTS = "/pack?pack=wolves&wolfTab=prompts";
+const PROMPTS = "/pack/wolves?wolfTab=prompts";
 describe("wolf settings page", () => {
 	const machine = { hostId: "mac", machine: "Mac", online: true, canSetKeys: true, servesConsole: true, pubkey: "PK", slots: [], wolves: [{ name: "hal", transport: "subscription" as const }] };
 	const rows = [
@@ -109,7 +109,7 @@ describe("wolf settings page", () => {
 
 	it("the selected wolf is in the URL (wolf=<host>/<name>): a link restores the detail, Wolves clears it", async () => {
 		const { WolvesView } = await import("../../../components/pack/pack-wolves.tsx");
-		await mount(<WolvesView machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} />, "/pack?pack=wolves&wolf=mac%2Fhal&wolfTab=prompts");
+		await mount(<WolvesView machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} />, "/pack/wolves?wolf=mac%2Fhal&wolfTab=prompts");
 		await flush();
 		assert.notEqual(q('[data-testid="wolf-detail-hal"]'), null);
 		await act(async () => void (q('[data-testid="wolf-back"]') as HTMLElement).dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 })));
@@ -118,7 +118,7 @@ describe("wolf settings page", () => {
 		const p = new URL(currentUrl(), "http://x").searchParams;
 		assert.equal(p.get("wolf"), null);
 		assert.equal(p.get("wolfTab"), null);
-		assert.equal(p.get("pack"), "wolves");
+		assert.equal(new URL(currentUrl(), "http://x").pathname, "/pack/wolves");
 	});
 
 	describe("Wolf page tabs", () => {
@@ -194,20 +194,20 @@ describe("wolf settings page", () => {
 		});
 
 		it("an old wolfTab=overview link opens on Models", async () => {
-			await mount(detail(), "/pack?pack=wolves&wolfTab=overview");
+			await mount(detail(), "/pack/wolves?wolfTab=overview");
 			await flush();
 			assert.equal(tab("Models").getAttribute("aria-selected"), "true");
 		});
 
 		it("clicking Prompts shows the graph, hides the cards and writes wolfTab=prompts to the URL, keeping ?pack", async () => {
-			await mount(detail(), "/pack?pack=wolves");
+			await mount(detail(), "/pack/wolves");
 			await flush();
 			await press(tab("Prompts"));
 			assert.notEqual(q('[data-testid="wolf-prompts"]'), null);
 			assert.equal(q('[data-testid="wolf-models"]'), null);
 			const p = new URL(currentUrl(), "http://x").searchParams;
 			assert.equal(p.get("wolfTab"), "prompts");
-			assert.equal(p.get("pack"), "wolves");
+			assert.equal(new URL(currentUrl(), "http://x").pathname, "/pack/wolves");
 		});
 
 		it("opens on Prompts when the URL says wolfTab=prompts", async () => {
@@ -218,14 +218,14 @@ describe("wolf settings page", () => {
 		});
 
 		it("opens on Prompts, with the block open, for ?view=prompt:<id> even without wolfTab", async () => {
-			await mount(detail(), "/pack?pack=wolves&view=prompt:system.identity");
+			await mount(detail(), "/pack/wolves?view=prompt:system.identity");
 			await flush();
 			assert.equal(tab("Prompts").getAttribute("aria-selected"), "true");
 			assert.match(q('[data-testid="viewer-panel"]')?.textContent ?? "", /Identity/);
 		});
 
 		it("closing a viewer that was opened by ?view=prompt:<id> alone keeps the Prompts tab, and the URL says wolfTab=prompts", async () => {
-			await mount(detail(), "/pack?pack=wolves&view=prompt:system.identity");
+			await mount(detail(), "/pack/wolves?view=prompt:system.identity");
 			await flush();
 			await press(q('[data-testid="viewer-close"]') as HTMLElement);
 			assert.equal(tab("Prompts").getAttribute("aria-selected"), "true");
@@ -245,7 +245,24 @@ describe("wolf settings page", () => {
 			const p = new URL(currentUrl(), "http://x").searchParams;
 			assert.equal(p.get("view"), null);
 			assert.equal(p.get("wolfTab"), null);
-			assert.equal(p.get("pack"), "wolves");
+			assert.equal(new URL(currentUrl(), "http://x").pathname, "/pack/wolves");
+		});
+
+		it("one click on Models from Prompts with a prompt open from the URL switches in one write: Models selected, no view, no wolfTab", async () => {
+			await mount(detail(), `${PROMPTS}&view=prompt:system.identity`);
+			await flush();
+			assert.equal(tab("Prompts").getAttribute("aria-selected"), "true");
+			navOptions.defer = true; // like Next: the URL changes after a transition, so a second write reads stale params
+			try {
+				await press(tab("Models"));
+				await flush();
+			} finally {
+				navOptions.defer = false;
+			}
+			const p = new URL(currentUrl(), "http://x").searchParams;
+			assert.equal(p.get("view"), null);
+			assert.equal(p.get("wolfTab"), null);
+			assert.equal(tab("Models").getAttribute("aria-selected"), "true");
 		});
 
 		it("the graph box fills the height left under the tabs and filters (flex-1 with a min-height floor) instead of a fixed height", async () => {

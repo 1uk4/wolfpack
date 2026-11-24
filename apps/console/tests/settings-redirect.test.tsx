@@ -13,8 +13,8 @@ const redirectsTo = (page: () => unknown, target: string) =>
 	);
 
 describe("the old Settings URLs", () => {
-	it("/settings and /prompts open the Pack at Wolves", () => {
-		redirectsTo(SettingsPage, "/?pack=wolves");
-		redirectsTo(PromptsPage, "/?pack=wolves");
+	it("/settings and /prompts go to the Pack page at Wolves", () => {
+		redirectsTo(SettingsPage, "/pack/wolves");
+		redirectsTo(PromptsPage, "/pack/wolves");
 	});
 });

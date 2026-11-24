@@ -29,6 +29,15 @@ export function mergeOnLoad(saved: ViewerState, param: string | null): ViewerSta
 }
 
 /**
+ * A caller that writes the URL itself (and changes the viewer in the same click) records the query it is writing, so the sync below
+ * builds on it instead of on the not-yet-updated router params (two replaces from the same stale params make the second undo the first).
+ */
+let pendingSearch: string | null = null;
+export function noteUrlWrite(search: string): void {
+	pendingSearch = search;
+}
+
+/**
  * Keeps `?view=` in step with the thread's viewer store. Once on mount the URL is merged into the store; afterwards every
  * stack/open change is written back with router.replace (never push, so browser Back leaves the thread).
  */
@@ -37,11 +46,13 @@ export function useViewerUrlSync(wolf: string, threadId: string, host?: Pick<Vie
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
 	const { stack, open } = useViewer(wolf, threadId);
-	const search = searchParams?.toString() ?? "";
+	const routerSearch = searchParams?.toString() ?? "";
+	const search = pendingSearch !== null && pendingSearch !== routerSearch ? pendingSearch : routerSearch;
+	if (pendingSearch !== null && pendingSearch === routerSearch) pendingSearch = null;
 	const skip = useRef(false);
 
 	useEffect(() => {
-		if (host && !host.urlSync) return;
+		if ((host && !host.urlSync) || new URLSearchParams(search).has("pack")) return; // a ?pack= URL is on its way to /pack: leave its view alone
 		const param = new URLSearchParams(search).get(VIEW_PARAM);
 		const parsed = param ? parseViewKey(param) : null;
 		if (host && parsed && !hostAllows(host, parsed.kind)) return;
@@ -55,7 +66,7 @@ export function useViewerUrlSync(wolf: string, threadId: string, host?: Pick<Vie
 	const top = stack[stack.length - 1];
 	const topKey = open && top ? viewKey(top) : null;
 	useEffect(() => {
-		if (host && !host.urlSync) return;
+		if ((host && !host.urlSync) || new URLSearchParams(search).has("pack")) return; // a ?pack= URL is on its way to /pack: leave its view alone
 		if (skip.current) {
 			skip.current = false;
 			return;

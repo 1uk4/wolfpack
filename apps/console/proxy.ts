@@ -10,6 +10,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { withCookieBearer } from "@/src/core/ui/hub-auth";
+import { packSectionFromSearch } from "@/src/core/pack/pack-sections";
 import { isHiddenInSingleMac, isSingleMac, isUnavailableInSingleMac, singleMacBearer } from "@/src/core/single-mac";
 
 let warned = false;
@@ -31,7 +32,28 @@ export const isHttps = (req: Pick<NextRequest, "headers" | "nextUrl">, env: Reco
 	return fwd ? fwd === "https" : req.nextUrl.protocol === "https:";
 };
 
+/**
+ * `?pack=<section>` on any page goes to /pack/<section> (work-wolfpack-oz3wvq3), keeping wolf, wolfTab and the original view. It runs here, before
+ * any page renders, so a page viewer on the page you opened (e.g. /work restoring its saved view) cannot overwrite `view` first.
+ */
+function packRedirect(req: NextRequest): NextResponse | null {
+	if (req.method !== "GET" && req.method !== "HEAD") return null;
+	const path = req.nextUrl.pathname;
+	if (path.startsWith("/api/") || path === "/pack" || path.startsWith("/pack/")) return null;
+	const section = packSectionFromSearch(req.nextUrl.search);
+	if (section === null) return null;
+	const keep = new URLSearchParams();
+	for (const k of ["wolf", "wolfTab", "view"]) {
+		const v = req.nextUrl.searchParams.get(k);
+		if (v !== null) keep.set(k, v);
+	}
+	const qs = keep.toString();
+	return NextResponse.redirect(new URL(`/pack/${section}${qs ? `?${qs}` : ""}`, req.url));
+}
+
 export function proxy(req: NextRequest): NextResponse {
+	const packed = packRedirect(req);
+	if (packed) return packed;
 	// Single-Mac app: multi-machine features do not exist (work-wolfpack-TdmbaV4). API: 404; pages: home.
 	if (isSingleMac() && isHiddenInSingleMac(req.nextUrl.pathname)) {
 		if (req.nextUrl.pathname.startsWith("/api/")) return NextResponse.json({ error: "not found" }, { status: 404 });

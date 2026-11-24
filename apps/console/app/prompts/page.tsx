@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-/** /prompts used to open the Settings dialog on Prompts; prompts are viewed in the Pack's Wolves section now (work-wolfpack-u6GH2kk). */
+/** /prompts: the prompts graph lives under the wolf's page in the Pack, so this goes to the Wolves section. */
 export default function Page(): never {
-	redirect("/?pack=wolves");
+	redirect("/pack/wolves");
 }

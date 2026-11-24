@@ -15,7 +15,7 @@ import { PromptGraphCanvas } from "@/components/settings/prompt-graph-view";
 import { PageViewer } from "@/components/viewer/page-viewer";
 import { useOpenView } from "@/components/viewer/viewer-context";
 import { closeViewer } from "@/components/viewer/viewer-store";
-import { VIEW_PARAM } from "@/components/viewer/viewer-url";
+import { VIEW_PARAM, noteUrlWrite } from "@/components/viewer/viewer-url";
 import { buildPromptBlocks, PromptBlocksContext } from "@/components/viewer/renderers/prompt-view";
 import { WolfAllSettings, WolfRestartBar, type WolfSectionId, type WolfSettingsView } from "@/components/pack/wolf-all-settings";
 import {
@@ -237,12 +237,12 @@ export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; cata
 		const p = new URLSearchParams(search);
 		if (id === DEFAULT_TAB) p.delete("wolfTab");
 		else p.set("wolfTab", id);
-		if (id !== "prompts") {
-			// Leaving Prompts closes the viewer so its panel never floats next to the settings cards.
-			closeViewer("page", `settings:${wolf.name}`);
-			p.delete(VIEW_PARAM);
-		}
+		// Leaving Prompts closes the viewer (so its panel never floats next to the settings cards) and drops `view` in the SAME write:
+		// the URL sync is told the new query first, so it does not build a second replace from the stale params and undo this one.
+		if (id !== "prompts") p.delete(VIEW_PARAM);
 		const qs = p.toString();
+		noteUrlWrite(qs);
+		if (id !== "prompts") closeViewer("page", `settings:${wolf.name}`);
 		router.replace(qs ? `${pathname}?${qs}` : pathname);
 	};
 	const onTabKey = (e: KeyboardEvent<HTMLButtonElement>) => {

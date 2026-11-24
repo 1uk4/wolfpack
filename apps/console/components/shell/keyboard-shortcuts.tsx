@@ -36,7 +36,7 @@ import {
 	KEYBOARD_ACTIONS,
 } from "@/src/core";
 import { isDictationActive } from "@/components/composer/dictation";
-import { openPackHealth } from "@/components/pack/pack-health-store";
+import { openPackPage } from "@/components/pack/pack-nav";
 
 // Re-exported for the contract pin (tests/core/ui/keyboard-toggle-sidebar.test.ts):
 // the dispatcher composes event names through the ONE helper — a second
@@ -46,8 +46,8 @@ export { kbdEventForAction };
 export function KeyboardShortcuts() {
 	const router = useRouter();
 	const [cheatOpen, setCheatOpen] = useState(false);
-	// mod+, opens the Pack (it replaced the Settings dialog; the dialog stays behind "Old settings" in the Pack).
-	const openSettings = () => openPackHealth(document.activeElement as HTMLElement | null);
+	// mod+, opens the Pack page.
+	const openSettings = () => openPackPage();
 
 	// Router + cheat + settings state inside a ref so the keydown listener
 	// (attached once) never goes stale.

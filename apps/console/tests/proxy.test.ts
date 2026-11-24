@@ -33,6 +33,23 @@ describe("proxy cookie -> bearer", () => {
 	});
 });
 
+describe("?pack= redirect (work-wolfpack-oz3wvq3)", () => {
+	const at = (path: string) => req("GET", {}, `http://127.0.0.1:3210${path}`);
+	const where = (res: Response) => {
+		const u = new URL(res.headers.get("location") ?? "http://none/");
+		return u.pathname + u.search;
+	};
+	it("on /work with ?pack=wolves goes to /pack/wolves before any page mounts, keeping wolf and the original view", () => {
+		const res = proxy(at("/work?pack=wolves&wolf=sfo-01-wolves%2Fhal&view=prompt%3Asystem.ending-turn"));
+		assert.equal(res.status, 307);
+		assert.equal(where(res), "/pack/wolves?wolf=sfo-01-wolves%2Fhal&view=prompt%3Asystem.ending-turn");
+	});
+	it("an unknown section goes to machines, and a page without ?pack= is left alone", () => {
+		assert.equal(where(proxy(at("/?pack=nope"))), "/pack/machines");
+		assert.equal(proxy(at("/work?view=prompt%3Ax")).status, 200);
+	});
+});
+
 describe("single-Mac mode (WOLFPACK_SINGLE_MAC=1, work-wolfpack-TdmbaV4)", () => {
 	const at = (path: string) => req("GET", {}, `http://127.0.0.1:3210${path}`);
 	const withFlag = (value: string | undefined, fn: () => void) => {

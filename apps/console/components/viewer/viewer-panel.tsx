@@ -99,7 +99,7 @@ export function ViewerPanel({ wolf, threadId }: { wolf: string; threadId: string
 					<XIcon />
 				</Button>
 			</div>
-			<div className="min-h-0 flex-1 overflow-hidden">
+			<div className="min-h-0 flex-1 overflow-y-auto" data-testid="viewer-body">
 				<Renderer key={key} descriptor={top} onPush={v.pushView} onTitle={(t) => onTitle(key, t)} onClose={closeViewer} />
 			</div>
 		</aside>

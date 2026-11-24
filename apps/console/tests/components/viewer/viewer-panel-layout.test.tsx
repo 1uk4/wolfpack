@@ -37,6 +37,11 @@ afterEach(() => {
 	vs.resetViewerCache();
 });
 
+function stubDesktop(desktop: boolean) {
+	(dom.window as unknown as Record<string, unknown>).matchMedia = () => ({ matches: desktop, addEventListener() {}, removeEventListener() {} });
+	(dom.window as unknown as Record<string, unknown>).innerWidth = 1400;
+}
+
 async function mount() {
 	vs.setViewerState("hal", "t1", { stack: [{ kind: "tall", id: "x" }], open: true });
 	const host = document.createElement("div");
@@ -44,6 +49,37 @@ async function mount() {
 	root = createRoot(host);
 	await act(async () => root!.render(<FakeNav start="/t"><ViewerPanel wolf="hal" threadId="t1" /></FakeNav>));
 }
+
+const ptr = (type: string, clientX: number) => Object.assign(new dom.window.Event(type, { bubbles: true }), { clientX, pointerId: 1 });
+
+describe("viewer resize handle", () => {
+	it("is absent in the phone sheet, which ignores the stored width", async () => {
+		stubDesktop(false);
+		ls.set("wolfpack:viewer:width", "600");
+		await mount();
+		assert.equal(document.querySelector('[data-testid="viewer-resize"]'), null);
+		assert.doesNotMatch((document.querySelector('[data-testid="viewer-panel"]') as HTMLElement).getAttribute("style") ?? "", /600/);
+	});
+
+	it("drags the column wider (clamped, persisted, text selection off meanwhile) and double-click resets to 480", async () => {
+		stubDesktop(true);
+		await mount();
+		const h = () => document.querySelector('[data-testid="viewer-resize"]') as HTMLElement;
+		const panel = () => document.querySelector('[data-testid="viewer-panel"]') as HTMLElement;
+		await act(async () => void h().dispatchEvent(ptr("pointerdown", 900)));
+		assert.equal(document.body.style.userSelect, "none");
+		await act(async () => void h().dispatchEvent(ptr("pointermove", 800)));
+		assert.match(panel().getAttribute("style") ?? "", /580px/);
+		await act(async () => void h().dispatchEvent(ptr("pointermove", -5000)));
+		assert.match(panel().getAttribute("style") ?? "", /980px/);
+		await act(async () => void h().dispatchEvent(ptr("pointerup", -5000)));
+		assert.equal(document.body.style.userSelect, "");
+		assert.equal(ls.get("wolfpack:viewer:width"), "980");
+		await act(async () => void h().dispatchEvent(new dom.window.Event("dblclick", { bubbles: true })));
+		assert.match(panel().getAttribute("style") ?? "", /480px/);
+		assert.equal(ls.get("wolfpack:viewer:width"), "480");
+	});
+});
 
 describe("viewer panel body", () => {
 	it("is the scroll container: a tall view scrolls inside the body, not clipped", async () => {

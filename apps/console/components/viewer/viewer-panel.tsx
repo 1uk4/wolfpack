@@ -10,6 +10,7 @@ import "./register-renderers";
 import { getViewRenderer } from "./registry";
 import { useViewer } from "./viewer-store";
 import { useViewerUrlSync } from "./viewer-url";
+import { clampViewerWidth, DEFAULT_VIEWER_WIDTH, readViewerWidth, writeViewerWidth } from "./viewer-width";
 
 const typing = (t: EventTarget | null) => {
 	const el = t as HTMLElement | null;
@@ -75,6 +76,28 @@ export function ViewerPanel({ wolf, threadId }: { wolf: string; threadId: string
 		return () => window.removeEventListener("keydown", onKey);
 	}, [shown, closeViewer]);
 
+	// Desktop column width: one global stored value; the phone sheet has no handle and ignores it.
+	const [desktop, setDesktop] = useState(false);
+	const [width, setWidth] = useState(DEFAULT_VIEWER_WIDTH);
+	useEffect(() => {
+		const mq = typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 768px)") : null;
+		const sync = () => setDesktop(!!mq?.matches);
+		sync();
+		mq?.addEventListener?.("change", sync);
+		return () => mq?.removeEventListener?.("change", sync);
+	}, []);
+	useEffect(() => setWidth(readViewerWidth(window.localStorage)), []);
+	const drag = useRef<{ x: number; w: number } | null>(null);
+	const widthRef = useRef(width);
+	widthRef.current = width;
+	const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (!drag.current) return;
+		drag.current = null;
+		document.body.style.userSelect = "";
+		e.currentTarget.releasePointerCapture?.(e.pointerId);
+		writeViewerWidth(window.localStorage, widthRef.current);
+	};
+
 	const onTitle = useCallback((key: string, t: string) => setTitles((m) => (m[key] === t ? m : { ...m, [key]: t })), []);
 
 	if (!shown || !top) return null;
@@ -86,7 +109,31 @@ export function ViewerPanel({ wolf, threadId }: { wolf: string; threadId: string
 			className="relative flex w-[480px] shrink-0 flex-col border-l border-border bg-background text-sm max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full max-md:border-l-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]"
 			data-testid="viewer-panel"
 			data-kind={top.kind}
+			style={desktop ? { width } : undefined}
 		>
+			{desktop && (
+				<div
+					role="separator"
+					aria-orientation="vertical"
+					aria-label="Resize viewer"
+					data-testid="viewer-resize"
+					className="absolute inset-y-0 -left-[3px] z-10 w-[6px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-border active:bg-border"
+					onPointerDown={(e) => {
+						drag.current = { x: e.clientX, w: width };
+						document.body.style.userSelect = "none";
+						e.currentTarget.setPointerCapture?.(e.pointerId);
+					}}
+					onPointerMove={(e) => {
+						if (drag.current) setWidth(clampViewerWidth(drag.current.w + drag.current.x - e.clientX, window.innerWidth));
+					}}
+					onPointerUp={endDrag}
+					onPointerCancel={endDrag}
+					onDoubleClick={() => {
+						setWidth(DEFAULT_VIEWER_WIDTH);
+						writeViewerWidth(window.localStorage, DEFAULT_VIEWER_WIDTH);
+					}}
+				/>
+			)}
 			<div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
 				{v.stack.length > 1 && (
 					<Button variant="ghost" size="icon" aria-label="Back" data-testid="viewer-back" onClick={v.backView}>

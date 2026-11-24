@@ -3,51 +3,11 @@ import { viewKey, type ViewDescriptor } from "../viewer/view-descriptor";
 
 /**
  * Shared state of the pinned strip: the unified per-thread pin store (wp.pins.v2, below)
- * and the feature progress panel's open state (session). Neutral module so every pin kind imports the same store.
+ * Neutral module so every pin kind imports the same store.
  */
 
 /** The pre-v2 dismissed list's storage key: read only by the one-time migration into wp.pins.v2. */
 const DISMISSED_KEY = "wp.pinned-checklist.dismissed.v1";
-
-// ---------------------------------------------------------------- open panel (session only: survives remounts, not a reload)
-
-/**
- * One open panel per thread across the whole pinned column: the feature progress panel, the checklist and every decision or
- * graph pin. Opening one collapses the rest. Ids: `progress`, `checklist`, `decision:<objectId>`, `graph:<objectId>`.
- */
-export const PANEL_PROGRESS = "progress";
-const openPanels = new Map<string, string>();
-const panelListeners = new Set<() => void>();
-
-/** Open `id` (replacing whichever panel was open) or, with null, collapse whatever is open. */
-export function setOpenPanel(threadId: string, id: string | null) {
-	if ((openPanels.get(threadId) ?? null) === id) return;
-	if (id === null) openPanels.delete(threadId);
-	else openPanels.set(threadId, id);
-	for (const l of panelListeners) l();
-}
-
-/** Collapse `id` only if it is the open one (a closing panel must not collapse a different one that just opened). */
-export function closePanel(threadId: string, id: string) {
-	if (openPanels.get(threadId) === id) setOpenPanel(threadId, null);
-}
-
-export const togglePanel = (threadId: string, id: string) => (openPanels.get(threadId) === id ? closePanel(threadId, id) : setOpenPanel(threadId, id));
-
-function subscribePanels(l: () => void) {
-	panelListeners.add(l);
-	return () => void panelListeners.delete(l);
-}
-
-/** The id of the thread's open panel, or null. */
-export function useOpenPanel(threadId: string): string | null {
-	return useSyncExternalStore(subscribePanels, () => openPanels.get(threadId) ?? null, () => null);
-}
-
-/** Test hook: forget which panels are open. */
-export function resetOpenPanels() {
-	openPanels.clear();
-}
 
 // ---------------------------------------------------------------- unified per-thread pins (wp.pins.v2)
 
@@ -66,8 +26,7 @@ export function resetOpenPanels() {
  * dismissal holds against every plain revision, as before; only a higher pinRev revives it). The old keys are left untouched.
  * Every localStorage read/write is guarded; on failure the store keeps working from memory.
  *
- * pinView/unpinView/isViewPinned/getPinnedViews/usePinnedViews are thin wrappers over this store. The open-panel functions
- * above (session-only, ids like `progress`/`checklist`) are unchanged until the rendering moves to `expanded`.
+ * pinView/unpinView/isViewPinned/getPinnedViews/usePinnedViews are thin wrappers over this store.
  */
 export type PinKind = "checklist" | "decision" | "graph" | "work" | "kb" | "task";
 export interface Pin {

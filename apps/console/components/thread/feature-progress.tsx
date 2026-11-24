@@ -2,15 +2,12 @@
 
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ChevronDownIcon, Maximize2Icon } from "lucide-react";
+import { Maximize2Icon } from "lucide-react";
 import { OverlayHeader, OverlayShell } from "@/components/shell/overlay-shell";
 import { useOptionalMemoryEvents } from "@/components/memory/memory-events";
 import { useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { PlanGraphView } from "@/components/thread/plan-graph-view";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/shell/server-events";
-import { PANEL_PROGRESS, closePanel, setOpenPanel, togglePanel, useOpenPanel } from "@/components/thread/pin-store";
-import { sessionFindHasForegroundLayer } from "@/components/thread/session-find";
-import { cn } from "@/lib/utils";
 import { buildFeatureGraph, featureStrip, isWorkEvent, type FeatureGraph, type WorkRecordResponse } from "@/src/core";
 
 type Model = Extract<FeatureGraph, { kind: "graph" }>;
@@ -22,37 +19,6 @@ type Model = Extract<FeatureGraph, { kind: "graph" }>;
  * that opens the same canvas in a modal. A node click opens the Status panel on that task.
  * Data is live from the Work API (no model input): see useFeatureProgress. The open/folded state is kept per thread.
  */
-
-// ---------------------------------------------------------------- collapse state (per thread, persisted)
-
-/** Threads whose panel the user opened (default collapsed). localStorage: survives reload; memory fallback otherwise. */
-const OPEN_KEY = "wp.feature-progress.open.v1";
-const OPEN_MAX = 200;
-let memoryOpen: string[] = [];
-
-function readOpen(): string[] {
-	try {
-		const v: unknown = JSON.parse(localStorage.getItem(OPEN_KEY) ?? "[]");
-		return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-	} catch {
-		return memoryOpen; // localStorage unavailable: the in-memory copy
-	}
-}
-
-export function isProgressOpen(threadId: string): boolean {
-	return readOpen().includes(threadId);
-}
-
-export function setProgressOpen(threadId: string, open: boolean): void {
-	const next = [...readOpen().filter((t) => t !== threadId), ...(open ? [threadId] : [])].slice(-OPEN_MAX);
-	memoryOpen = next;
-	try {
-		localStorage.setItem(OPEN_KEY, JSON.stringify(next));
-	} catch {
-		/* memory fallback */
-	}
-}
-
 
 // ---------------------------------------------------------------- data
 
@@ -161,28 +127,22 @@ export function useFeatureProgress(wolf: string, threadId: string, boundId: stri
 
 // ---------------------------------------------------------------- panel
 
-export interface FeatureProgressPanelProps {
-	threadId: string;
-	model: Model;
-	/** The thread is running a turn: shows the small loader. */
-	busy: boolean;
+/** The task chip's two texts: the feature's title and its progress ("1/4 done"), from featureStrip's "<title> · n/m done". */
+export function progressParts(model: Model): { title: string; progress: string } {
+	const strip = featureStrip(model);
+	const prefix = `${model.title} · `;
+	return { title: model.title, progress: strip.startsWith(prefix) ? strip.slice(prefix.length) : strip };
 }
 
-export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressPanelProps) {
-	// One open panel per thread across the pinned column (pin-store). The persisted per-thread flag means "the progress panel is
-	// what is open now": it is written true when progress opens and false when anything collapses it (a pin, the checklist), so a
-	// panel collapsed that way stays closed after a reload. On first mount the flag reopens the panel (nothing else is open yet).
-	// The restore relies on ThreadChat being keyed by thread id (thread/[threadId]/page.tsx): a thread switch remounts this panel.
-	const open = useOpenPanel(threadId) === PANEL_PROGRESS;
-	const restored = useRef(false);
-	useEffect(() => {
-		if (!restored.current) {
-			restored.current = true;
-			if (isProgressOpen(threadId)) setOpenPanel(threadId, PANEL_PROGRESS);
-			return;
-		}
-		setProgressOpen(threadId, open);
-	}, [threadId, open]);
+export interface FeatureProgressPanelProps {
+	model: Model;
+}
+
+/**
+ * The body of the bound-task chip when expanded: the feature's graph (the bound task highlighted) and a full-screen modal.
+ * The chip row (title, progress, expand, dismiss) is the pinned strip's; this renders only what unfolds under it.
+ */
+export function FeatureProgressPanel({ model }: FeatureProgressPanelProps) {
 	const panelId = useId();
 	const openWork = useOpenWorkItem();
 	const [full, setFull] = useState(false);
@@ -192,68 +152,42 @@ export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressP
 	};
 	const titleId = `${panelId}-full`;
 	return (
-		<div className="pointer-events-none flex min-h-0 flex-col" data-testid="feature-progress" data-expanded={open} data-feature-id={model.featureId}>
-			<div className="mx-auto flex min-h-0 w-full max-w-[46rem] flex-col px-4 pt-2">
-				<div
-					onKeyDown={(e) => {
-						if (e.key !== "Escape" || !open || full || sessionFindHasForegroundLayer(document)) return;
-						e.stopPropagation(); // one-Esc law, like the other pinned panels
-						closePanel(threadId, PANEL_PROGRESS);
-					}}
-					className="pointer-events-auto flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-lg">
-					<button
-						type="button"
-						aria-expanded={open}
-						aria-controls={open ? panelId : undefined}
-						onClick={() => togglePanel(threadId, PANEL_PROGRESS)}
-						data-testid="feature-progress-toggle"
-						className="flex w-full shrink-0 items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
-					>
-						<span className="min-w-0 flex-1 truncate font-medium" data-testid="feature-progress-title">
-							{featureStrip(model)}
-						</span>
-						{model.boundId === null && (
-							<span className="shrink-0 rounded bg-yellow-400/20 px-1 text-[11px] font-medium text-yellow-600 dark:text-yellow-300" data-testid="feature-progress-bound-feature">
-								bound
-							</span>
-						)}
-						{busy && <span role="status" aria-label="Working" data-testid="feature-progress-loader" className="size-3 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-foreground motion-reduce:animate-none" />}
-						<ChevronDownIcon aria-hidden className={cn("size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none", open && "rotate-180")} />
-					</button>
-					{open && (
-						<div id={panelId} role="region" aria-label={`${model.title} graph`} data-testid="feature-progress-panel" className="max-h-[40dvh] min-h-0 overflow-hidden border-t p-3">
-							{model.graph.nodes.length > 0 ? (
-								<PlanGraphView
-									draggable
-									collapseDone
-									orderByStatus
-									graph={model.graph}
-									highlightId={model.boundId}
-									label={`Task graph: ${model.title}`}
-									onNodeClick={openTask}
-									toolbar={
-										<button
-											type="button"
-											data-testid="feature-progress-fullscreen"
-											aria-label="Full screen"
-											title="Full screen"
-											onClick={() => setFull(true)}
-											className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-										>
-											<Maximize2Icon className="size-3.5" aria-hidden />
-										</button>
-									}
-								/>
-							) : (
-								<p className="text-xs text-muted-foreground" data-testid="feature-progress-empty">
-									No tasks yet.
-								</p>
-							)}
-						</div>
-					)}
-				</div>
+		<div data-testid="feature-progress" data-feature-id={model.featureId}>
+			{model.boundId === null && (
+				<span className="mb-2 inline-block rounded bg-yellow-400/20 px-1 text-[11px] font-medium text-yellow-600 dark:text-yellow-300" data-testid="feature-progress-bound-feature">
+					bound to the feature
+				</span>
+			)}
+			<div role="region" aria-label={`${model.title} graph`} data-testid="feature-progress-panel" className="max-h-[40dvh] min-h-0 overflow-hidden">
+				{model.graph.nodes.length > 0 ? (
+					<PlanGraphView
+						draggable
+						collapseDone
+						orderByStatus
+						graph={model.graph}
+						highlightId={model.boundId}
+						label={`Task graph: ${model.title}`}
+						onNodeClick={openTask}
+						toolbar={
+							<button
+								type="button"
+								data-testid="feature-progress-fullscreen"
+								aria-label="Full screen"
+								title="Full screen"
+								onClick={() => setFull(true)}
+								className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+							>
+								<Maximize2Icon className="size-3.5" aria-hidden />
+							</button>
+						}
+					/>
+				) : (
+					<p className="text-xs text-muted-foreground" data-testid="feature-progress-empty">
+						No tasks yet.
+					</p>
+				)}
 			</div>
-			{full && open && typeof document !== "undefined" &&
+			{full && typeof document !== "undefined" &&
 				createPortal(
 				<OverlayShell
 					labelledBy={titleId}

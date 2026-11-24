@@ -24,6 +24,7 @@ Object.assign(globalThis, {
 const { PinnedStrip, useSyncObjectPins } = await import("../../../components/thread/pinned-strip.tsx");
 const ps = await import("../../../components/thread/pin-store.ts");
 const vs = await import("../../../components/viewer/viewer-store.ts");
+const tp = await import("../../../components/thread/task-pin.tsx");
 
 let root: Root | null = null;
 beforeEach(() => {
@@ -137,5 +138,58 @@ describe("useSyncObjectPins", () => {
 			/>,
 		);
 		assert.deepEqual(ps.listPins("t1").map((p) => `${p.kind}:${p.id}:${p.title}`), ["checklist:cl:Plan", "decision:db:Datastore"]);
+	});
+});
+
+describe("bound task chip", () => {
+	const model = { kind: "graph", featureId: "F", title: "Feat", shipped: 1, total: 4, label: "1/4 done", graph: { title: "Feat", nodes: [], edges: [] }, boundId: null } as never;
+	const withTask = (extra: React.ReactNode = null) => (
+		<>
+			<PinnedStrip wolf="hal" threadId="t1" objects={objects} task={{ model, busy: false }} />
+			{extra}
+		</>
+	);
+	const keys = () => qa('[data-testid="pinned-chip"]').map((c) => c.getAttribute("data-pin-key"));
+	beforeEach(() => tp.resetHiddenTasks());
+
+	it("binding adds the task chip with title and progress; unbinding removes it", async () => {
+		tp.syncTaskPin("t1", "work-w-F");
+		await mount(withTask());
+		assert.deepEqual(keys(), ["task:task"]);
+		assert.match(q(chip("task:task"))!.textContent ?? "", /Feat.*1\/4 done/);
+		await act(async () => tp.syncTaskPin("t1", undefined));
+		assert.deepEqual(keys(), []);
+	});
+
+	it("x hides the chip without touching the binding, a re-sync keeps it hidden, and the header toggle shows it again", async () => {
+		tp.syncTaskPin("t1", "work-w-F");
+		await mount(withTask(<tp.TaskPinToggle threadId="t1" bound="work-w-F" />));
+		assert.equal(q('[data-testid="task-pin-show"]'), null, "no control while the chip shows");
+		await click(q(`${chip("task:task")} [data-testid="pinned-chip-dismiss"]`));
+		assert.deepEqual(keys(), []);
+		await act(async () => tp.syncTaskPin("t1", "work-w-F"));
+		assert.deepEqual(keys(), [], "still bound, still hidden");
+		await click(q('[data-testid="task-pin-show"]'));
+		assert.deepEqual(keys(), ["task:task"]);
+	});
+
+	it("binding a different item shows the chip again after a dismissal", async () => {
+		tp.syncTaskPin("t1", "work-w-F");
+		await mount(withTask());
+		await click(q(`${chip("task:task")} [data-testid="pinned-chip-dismiss"]`));
+		await act(async () => tp.syncTaskPin("t1", "work-w-G"));
+		assert.deepEqual(keys(), ["task:task"]);
+	});
+
+	it("shows next to a checklist chip; the title opens the bound item in the viewer, the chip body expands the progress graph", async () => {
+		ps.pin("t1", { kind: "checklist", id: "cl", title: "Plan", pinnedBy: "agent", rev: 1 });
+		tp.syncTaskPin("t1", "work-w-F");
+		await mount(withTask());
+		assert.deepEqual(keys(), ["checklist:cl", "task:task"]);
+		await click(q(`${chip("task:task")} [data-testid="pinned-task-title"]`));
+		assert.deepEqual(vs.getViewerState("hal", "t1").stack.at(-1), { kind: "work", id: "work-w-F" });
+		assert.equal(q('[data-testid="pinned-expanded"]'), null);
+		await click(q(`${chip("task:task")} [data-testid="pinned-chip-open"]`));
+		assert.ok(q('[data-testid="pinned-expanded"] [data-testid="feature-progress"]'));
 	});
 });

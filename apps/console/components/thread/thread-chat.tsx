@@ -12,7 +12,8 @@ import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/thread/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/thread/card-registry";
 import { PinnedStrip, useSyncObjectPins, type StripObject } from "@/components/thread/pinned-strip";
-import { FeatureProgressPanel, useFeatureProgress } from "@/components/thread/feature-progress";
+import { useFeatureProgress } from "@/components/thread/feature-progress";
+import { TaskPinToggle, syncTaskPin } from "@/components/thread/task-pin";
 import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread/thread-compaction-divider";
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/thread/subagent-message";
@@ -544,6 +545,10 @@ function ThreadChatInner({
 		return out;
 	}, [messages]);
 	useSyncObjectPins(threadId, stripObjects);
+	// The bound item pins the task chip (removed on unbind); the owner's x hides it for that item without unbinding.
+	useEffect(() => {
+		syncTaskPin(threadId, bound);
+	}, [threadId, bound]);
 	// The pinned column's measured height is the transcript's top reserve (any number of chips, an expanded card, the progress panel).
 	const pinnedColumnRef = useRef<HTMLDivElement | null>(null);
 	const [pinnedHeight, setPinnedHeight] = useState(0);
@@ -737,6 +742,7 @@ function ThreadChatInner({
 					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
 					<TurnTimer startedAt={turnStart} />
 					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} />
+					<TaskPinToggle threadId={threadId} bound={bound} />
 					{kind === "feature" && (
 						<ThreadActionsMenu
 							testid="thread-header-actions"
@@ -985,10 +991,7 @@ function ThreadChatInner({
 					</Conversation>
 					{/* One flex column for everything pinned: checklist / feature progress, then the decision and graph pins. The pins sit below whichever panel is open, at its real height; the column's max height (the thread area minus the composer reserve) caps what is open. */}
 					<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-h-0 flex-col" style={{ maxHeight: `max(6rem, calc(100% - ${dockHeight ?? 160}px))` }} data-testid="pinned-column" ref={pinnedColumnRef}>
-						{featureProgress.state.phase === "ready" && (
-							<FeatureProgressPanel threadId={threadId} model={featureProgress.state.model} busy={busy} />
-						)}
-						<PinnedStrip wolf={wolf} threadId={threadId} objects={stripObjects} onDismiss={() => inputRef.current?.focus()} />
+						<PinnedStrip wolf={wolf} threadId={threadId} objects={stripObjects} task={featureProgress.state.phase === "ready" ? { model: featureProgress.state.model, busy } : undefined} onDismiss={() => inputRef.current?.focus()} />
 					</div>
 				</div>
 			</div>

@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { viewKey, type ViewDescriptor } from "../viewer/view-descriptor";
 
 /**
  * Shared state of the pinned panels (progress, checklist, decision, graph): which cards the user dismissed (persisted)
@@ -125,4 +126,95 @@ export function useOpenPanel(threadId: string): string | null {
 /** Test hook: forget which panels are open. */
 export function resetOpenPanels() {
 	openPanels.clear();
+}
+
+// ---------------------------------------------------------------- pinned views (viewer)
+
+/**
+ * Views pinned from the viewer header: any number per thread (not the newest-of-type rule of objects), in pin order, persisted
+ * in localStorage as `{ [threadId]: ViewDescriptor[] }`. Independent of the dismissed list above.
+ */
+const VIEWS_KEY = "wp.pinned-views.v1";
+const VIEWS_MAX_PER_THREAD = 50;
+const EMPTY_VIEWS: readonly ViewDescriptor[] = [];
+let viewsCache: Record<string, ViewDescriptor[]> | null = null;
+const viewListeners = new Set<() => void>();
+
+function readViews(): Record<string, ViewDescriptor[]> {
+	if (viewsCache) return viewsCache;
+	const out: Record<string, ViewDescriptor[]> = {};
+	try {
+		const v: unknown = JSON.parse(localStorage.getItem(VIEWS_KEY) ?? "{}");
+		if (v && typeof v === "object" && !Array.isArray(v)) {
+			for (const [tid, list] of Object.entries(v as Record<string, unknown>)) {
+				if (!Array.isArray(list)) continue;
+				const ds = list
+					.filter((d): d is ViewDescriptor => !!d && typeof (d as ViewDescriptor).kind === "string" && typeof (d as ViewDescriptor).id === "string")
+					.map((d) => (typeof d.title === "string" ? { kind: d.kind, id: d.id, title: d.title } : { kind: d.kind, id: d.id }));
+				if (ds.length) out[tid] = ds;
+			}
+		}
+	} catch {
+		/* unreadable: start empty */
+	}
+	viewsCache = out;
+	return out;
+}
+
+function writeViews(next: Record<string, ViewDescriptor[]>) {
+	viewsCache = next;
+	try {
+		if (Object.keys(next).length === 0) localStorage.removeItem(VIEWS_KEY);
+		else localStorage.setItem(VIEWS_KEY, JSON.stringify(next));
+	} catch {
+		/* memory only */
+	}
+	for (const l of viewListeners) l();
+}
+
+/** The thread's pinned views in pin order. The array identity is stable until the list changes. */
+export function getPinnedViews(threadId: string): readonly ViewDescriptor[] {
+	return readViews()[threadId] ?? EMPTY_VIEWS;
+}
+
+export const isViewPinned = (threadId: string, d: Pick<ViewDescriptor, "kind" | "id">): boolean => getPinnedViews(threadId).some((p) => viewKey(p) === viewKey(d));
+
+/** Pin `d` with its title (the chip shows it). Re-pinning keeps the place and refreshes a given title. */
+export function pinView(threadId: string, d: ViewDescriptor) {
+	const cur = getPinnedViews(threadId);
+	const entry: ViewDescriptor = d.title ? { kind: d.kind, id: d.id, title: d.title } : { kind: d.kind, id: d.id };
+	const list = isViewPinned(threadId, d)
+		? cur.map((p) => (viewKey(p) === viewKey(d) ? { ...entry, ...(entry.title || !p.title ? {} : { title: p.title }) } : p))
+		: [...cur, entry].slice(-VIEWS_MAX_PER_THREAD);
+	writeViews({ ...readViews(), [threadId]: list });
+}
+
+export function unpinView(threadId: string, d: Pick<ViewDescriptor, "kind" | "id">) {
+	if (!isViewPinned(threadId, d)) return;
+	const { [threadId]: cur = [], ...rest } = readViews();
+	const list = cur.filter((p) => viewKey(p) !== viewKey(d));
+	writeViews(list.length ? { ...rest, [threadId]: list } : rest);
+}
+
+function subscribeViews(l: () => void) {
+	viewListeners.add(l);
+	const onStorage = (e: StorageEvent) => {
+		if (e.key !== null && e.key !== VIEWS_KEY) return;
+		viewsCache = null;
+		for (const x of viewListeners) x();
+	};
+	window.addEventListener("storage", onStorage);
+	return () => {
+		viewListeners.delete(l);
+		window.removeEventListener("storage", onStorage);
+	};
+}
+
+export function usePinnedViews(threadId: string): readonly ViewDescriptor[] {
+	return useSyncExternalStore(subscribeViews, () => getPinnedViews(threadId), () => EMPTY_VIEWS);
+}
+
+/** Test hook: forget the in-memory pinned views (storage stays). */
+export function resetPinnedViewsCache() {
+	viewsCache = null;
 }

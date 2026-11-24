@@ -12,6 +12,7 @@ import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/thread/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/thread/card-registry";
 import { PINNED_OBJECT_ROW_REM, PinnedObjects, pinnedObjectDismissKey } from "@/components/thread/pinned-objects";
+import { PinnedViewChips } from "@/components/thread/pinned-views";
 import { activeDismissKey, useDismissed } from "@/components/thread/pin-store";
 import { PINNED_CHECKLIST_RESERVE, PinnedChecklist } from "@/components/thread/pinned-checklist";
 import { FEATURE_PROGRESS_RESERVE, FeatureProgressPanel, useFeatureProgress } from "@/components/thread/feature-progress";
@@ -968,6 +969,7 @@ function ThreadChatInner({
 						)}
 						<PinnedChecklist active={pinned} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
 						<PinnedObjects items={pinnedObjects} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
+						<PinnedViewChips wolf={wolf} threadId={threadId} />
 					</div>
 				</div>
 			</div>

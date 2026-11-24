@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeftIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon, PinIcon, XIcon } from "lucide-react";
+import { pinView, unpinView, usePinnedViews } from "@/components/thread/pin-store";
+import { viewKey, type ViewDescriptor } from "./view-descriptor";
 import { Button } from "@/components/ui/button";
 import { usePanelHost, usePanelState } from "@/components/shell/panel-host";
 import "./register-renderers";
@@ -13,6 +15,23 @@ const typing = (t: EventTarget | null) => {
 	const el = t as HTMLElement | null;
 	return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable === true);
 };
+
+/** Header toggle: pins the shown view for the thread (storing its title for the chip) or unpins it. */
+export function PinViewButton({ threadId, descriptor, title }: { threadId: string; descriptor: ViewDescriptor; title: string }) {
+	const pinned = usePinnedViews(threadId).some((p) => viewKey(p) === viewKey(descriptor));
+	return (
+		<Button
+			variant="ghost"
+			size="icon"
+			aria-label={pinned ? "Unpin view" : "Pin view"}
+			aria-pressed={pinned}
+			data-testid="viewer-pin"
+			onClick={() => (pinned ? unpinView(threadId, descriptor) : pinView(threadId, { kind: descriptor.kind, id: descriptor.id, title }))}
+		>
+			<PinIcon className={pinned ? "fill-current" : undefined} />
+		</Button>
+	);
+}
 
 /**
  * The thread page's right-hand viewer: a 480px column on md+, a full-screen sheet below. One right column at a time:
@@ -85,6 +104,7 @@ export function ViewerPanel({ wolf, threadId }: { wolf: string; threadId: string
 					</Button>
 				)}
 				<span className="min-w-0 flex-1 truncate font-medium" data-testid="viewer-title">{title}</span>
+				<PinViewButton threadId={threadId} descriptor={top} title={title} />
 				<Button variant="ghost" size="icon" aria-label="Close viewer" data-testid="viewer-close" onClick={closeViewer}>
 					<XIcon />
 				</Button>

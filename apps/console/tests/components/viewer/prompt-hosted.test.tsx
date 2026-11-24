@@ -26,16 +26,16 @@ Object.assign(globalThis, {
 const { PromptViewRenderer, PromptBlocksContext } = await import("../../../components/viewer/renderers/prompt-view.tsx");
 const { WolfDetail } = await import("../../../components/pack/pack-wolves.tsx");
 const { getViewerState, resetViewerCache } = await import("../../../components/viewer/viewer-store.ts");
-const { FakeNav } = await import("../../helpers/fake-nav.tsx");
+const { FakeNav, currentUrl } = await import("../../helpers/fake-nav.tsx");
 
 let root: Root | null = null;
 const q = (s: string) => document.querySelector(s) as HTMLElement | null;
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); });
-async function mount(node: React.ReactNode) {
+async function mount(node: React.ReactNode, start = "/pack") {
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
-	await act(async () => root!.render(<FakeNav start="/pack">{node}</FakeNav>));
+	await act(async () => root!.render(<FakeNav start={start}>{node}</FakeNav>));
 }
 beforeEach(() => {
 	mem.clear();
@@ -72,6 +72,7 @@ describe("prompt renderer", () => {
 	});
 });
 
+const PROMPTS = "/pack?pack=wolves&wolfTab=prompts";
 describe("wolf settings page", () => {
 	const machine = { hostId: "mac", machine: "Mac", online: true, canSetKeys: true, servesConsole: true, pubkey: "PK", slots: [], wolves: [{ name: "hal", transport: "subscription" as const }] };
 	const rows = [
@@ -82,7 +83,7 @@ describe("wolf settings page", () => {
 		String(u).endsWith("/prompts") ? Response.json({ prompts: rows }) : Response.json({ config: { name: "hal" }, etag: "e", editable: [] })) as typeof fetch;
 
 	it("clicking a graph node opens kind prompt on the page's own stack, successive clicks push, and the list under the graph is gone", async () => {
-		await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} onBack={() => {}} />);
+		await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} onBack={() => {}} />, PROMPTS);
 		await flush();
 		assert.equal(q('[data-testid="wolf-prompt-list"]'), null);
 		const hits = () => [...document.querySelectorAll('[data-testid="graph-node-hit"]')] as HTMLElement[];
@@ -95,7 +96,7 @@ describe("wolf settings page", () => {
 	});
 
 	it("keeps the viewer panel outside the page's scrolling column, so scrolling the graph never scrolls the viewer away", async () => {
-		await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} onBack={() => {}} />);
+		await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} onBack={() => {}} />, PROMPTS);
 		await flush();
 		await act(async () => void (document.querySelector('[data-testid="graph-node-hit"]') as HTMLElement).dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 })));
 		await flush();
@@ -104,5 +105,93 @@ describe("wolf settings page", () => {
 		assert.notEqual(scroller, null, "the page content has its own scroll column");
 		assert.equal(scroller!.contains(panel), false);
 		assert.equal(panel.closest(".overflow-y-auto") === null || panel.closest(".overflow-y-auto") === q('[data-testid="viewer-body"]'), true);
+	});
+
+	it("the selected wolf is in the URL (wolf=<host>/<name>): a link restores the detail, Wolves clears it", async () => {
+		const { WolvesView } = await import("../../../components/pack/pack-wolves.tsx");
+		await mount(<WolvesView machines={[machine]} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} />, "/pack?pack=wolves&wolf=mac%2Fhal&wolfTab=prompts");
+		await flush();
+		assert.notEqual(q('[data-testid="wolf-detail-hal"]'), null);
+		await act(async () => void (q('[data-testid="wolf-back"]') as HTMLElement).dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 })));
+		await flush();
+		assert.equal(q('[data-testid="wolf-detail-hal"]'), null);
+		const p = new URL(currentUrl(), "http://x").searchParams;
+		assert.equal(p.get("wolf"), null);
+		assert.equal(p.get("wolfTab"), null);
+		assert.equal(p.get("pack"), "wolves");
+	});
+
+	describe("Overview | Prompts tabs", () => {
+		const detail = () => <WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={call} onBack={() => {}} />;
+		const tab = (name: string) => [...document.querySelectorAll('[role="tablist"][aria-label="Wolf page"] [role="tab"]')].find((t) => t.textContent === name) as HTMLElement;
+		const press = async (el: HTMLElement) => { await act(async () => void el.dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 }))); await flush(); };
+
+		it("opens on Overview with the settings cards and no prompts graph", async () => {
+			await mount(detail());
+			await flush();
+			assert.equal(tab("Overview").getAttribute("aria-selected"), "true");
+			assert.equal(tab("Prompts").getAttribute("aria-selected"), "false");
+			assert.notEqual(q('[data-testid="wolf-models"]'), null);
+			assert.notEqual(q('[data-testid="wolf-keys"]'), null);
+			assert.equal(q('[data-testid="wolf-prompts"]'), null);
+		});
+
+		it("clicking Prompts shows the graph, hides the cards and writes wolfTab=prompts to the URL, keeping ?pack", async () => {
+			await mount(detail(), "/pack?pack=wolves");
+			await flush();
+			await press(tab("Prompts"));
+			assert.notEqual(q('[data-testid="wolf-prompts"]'), null);
+			assert.equal(q('[data-testid="wolf-models"]'), null);
+			const p = new URL(currentUrl(), "http://x").searchParams;
+			assert.equal(p.get("wolfTab"), "prompts");
+			assert.equal(p.get("pack"), "wolves");
+		});
+
+		it("opens on Prompts when the URL says wolfTab=prompts", async () => {
+			await mount(detail(), PROMPTS);
+			await flush();
+			assert.equal(tab("Prompts").getAttribute("aria-selected"), "true");
+			assert.notEqual(q('[data-testid="wolf-prompts"]'), null);
+		});
+
+		it("opens on Prompts, with the block open, for ?view=prompt:<id> even without wolfTab", async () => {
+			await mount(detail(), "/pack?pack=wolves&view=prompt:system.identity");
+			await flush();
+			assert.equal(tab("Prompts").getAttribute("aria-selected"), "true");
+			assert.match(q('[data-testid="viewer-panel"]')?.textContent ?? "", /Identity/);
+		});
+
+		it("closing a viewer that was opened by ?view=prompt:<id> alone keeps the Prompts tab, and the URL says wolfTab=prompts", async () => {
+			await mount(detail(), "/pack?pack=wolves&view=prompt:system.identity");
+			await flush();
+			await press(q('[data-testid="viewer-close"]') as HTMLElement);
+			assert.equal(tab("Prompts").getAttribute("aria-selected"), "true");
+			assert.notEqual(q('[data-testid="wolf-prompts"]'), null);
+			const p = new URL(currentUrl(), "http://x").searchParams;
+			assert.equal(p.get("wolfTab"), "prompts");
+			assert.equal(p.get("view"), null);
+		});
+
+		it("switching to Overview closes the open prompt and clears ?view=", async () => {
+			await mount(detail(), PROMPTS);
+			await flush();
+			await press(document.querySelector('[data-testid="graph-node-hit"]') as HTMLElement);
+			assert.equal(getViewerState("page", "settings:hal").open, true);
+			await press(tab("Overview"));
+			assert.equal(getViewerState("page", "settings:hal").open, false);
+			const p = new URL(currentUrl(), "http://x").searchParams;
+			assert.equal(p.get("view"), null);
+			assert.equal(p.get("wolfTab"), null);
+			assert.equal(p.get("pack"), "wolves");
+		});
+
+		it("the graph box fills the height left under the tabs and filters (flex-1 with a min-height floor) instead of a fixed height", async () => {
+			await mount(detail(), PROMPTS);
+			await flush();
+			const box = q('[data-testid="wolf-prompts-graph"]')!;
+			assert.match(box.className, /\bflex-1\b/);
+			assert.match(box.className, /\bmin-h-\[/);
+			assert.doesNotMatch(box.className, /\bh-\[320px\]/);
+		});
 	});
 });

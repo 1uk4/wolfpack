@@ -7,11 +7,11 @@ const { PathnameContext, SearchParamsContext } = await import("next/dist/shared/
 const router = { push() {}, replace() {}, back() {}, forward() {}, prefetch() {}, refresh() {} };
 const params = new URLSearchParams();
 
-export function RouterStub({ children }: { children: ReactNode }) {
+export function RouterStub({ children, search = "" }: { children: ReactNode; search?: string }) {
 	return (
 		<AppRouterContext.Provider value={router as never}>
 			<PathnameContext.Provider value="/pack">
-				<SearchParamsContext.Provider value={params as never}>{children}</SearchParamsContext.Provider>
+				<SearchParamsContext.Provider value={(search ? new URLSearchParams(search) : params) as never}>{children}</SearchParamsContext.Provider>
 			</PathnameContext.Provider>
 		</AppRouterContext.Provider>
 	);

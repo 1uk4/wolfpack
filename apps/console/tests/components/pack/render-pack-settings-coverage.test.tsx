@@ -41,7 +41,8 @@ describe("every former Settings tab has a Pack home", () => {
 	});
 
 	it("Prompts: the wolf's prompts graph", () => {
-		assert.match(wolf, /data-testid="wolf-prompts"/);
+		const prompts = renderToStaticMarkup(<RouterStub search="wolfTab=prompts"><WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "Mac" }} call={noCall} onBack={() => {}} /></RouterStub>);
+		assert.match(prompts, /data-testid="wolf-prompts"/);
 	});
 
 	it("Data and support: This device lists both folders, login, diagnostics and reset", () => {

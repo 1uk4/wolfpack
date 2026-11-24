@@ -7,6 +7,7 @@ import { usePanelHost, usePanelState } from "@/components/shell/panel-host";
 import "./register-renderers";
 import { getViewRenderer } from "./registry";
 import { useViewer } from "./viewer-store";
+import { useViewerUrlSync } from "./viewer-url";
 
 const typing = (t: EventTarget | null) => {
 	const el = t as HTMLElement | null;
@@ -19,6 +20,7 @@ const typing = (t: EventTarget | null) => {
  */
 export function ViewerPanel({ wolf, threadId }: { wolf: string; threadId: string }) {
 	const v = useViewer(wolf, threadId);
+	useViewerUrlSync(wolf, threadId);
 	const host = usePanelHost();
 	const { open: panelOpen } = usePanelState();
 	const top = v.stack[v.stack.length - 1];

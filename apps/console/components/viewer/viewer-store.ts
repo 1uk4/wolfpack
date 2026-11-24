@@ -119,6 +119,11 @@ export function closeViewer(wolf: string, threadId: string) {
 	set(wolf, threadId, { stack: s.stack, open: false });
 }
 
+/** Replace the whole state (used by the URL sync's load-time merge). */
+export function setViewerState(wolf: string, threadId: string, next: ViewerState) {
+	set(wolf, threadId, next);
+}
+
 export function clearViewer(wolf: string, threadId: string) {
 	set(wolf, threadId, EMPTY);
 }

@@ -75,16 +75,6 @@ export function ViewerPanel({ wolf, threadId }: { wolf: string; threadId: string
 		return () => window.removeEventListener("keydown", onKey);
 	}, [shown, closeViewer]);
 
-	// Dev-only hook until the triggers exist: window.__wolfpackViewer.open("work", "work-wolfpack-ZHFif9V").
-	const openRef = useRef(v.openView);
-	openRef.current = v.openView;
-	useEffect(() => {
-		if (process.env.NODE_ENV === "production") return;
-		const w = window as unknown as { __wolfpackViewer?: unknown };
-		w.__wolfpackViewer = { open: (kind: string, id: string) => openRef.current({ kind, id }) };
-		return () => void delete w.__wolfpackViewer;
-	}, []);
-
 	const onTitle = useCallback((key: string, t: string) => setTitles((m) => (m[key] === t ? m : { ...m, [key]: t })), []);
 
 	if (!shown || !top) return null;

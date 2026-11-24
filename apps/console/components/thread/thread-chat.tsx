@@ -28,6 +28,7 @@ import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components
 import { PanelHostProvider, RightPanelHost } from "@/components/shell/panel-host";
 import { ViewerPanel } from "@/components/viewer/viewer-panel";
 import { ViewHostContext, useViewObjectArrivals } from "@/components/viewer/use-view-objects";
+import { ViewerProvider } from "@/components/viewer/viewer-context";
 import { AttachmentChips, Composer } from "@/components/composer/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer/composer-controls";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
@@ -1000,7 +1001,9 @@ function scrollParent(el: HTMLElement | null): HTMLElement | null {
 export function ThreadChat(props: ComponentProps<typeof ThreadChatInner>) {
 	return (
 		<PanelHostProvider wolf={props.wolf} slug={props.slug} threadId={props.threadId}>
-			<ThreadChatInner {...props} />
+			<ViewerProvider wolf={props.wolf} threadId={props.threadId}>
+				<ThreadChatInner {...props} />
+			</ViewerProvider>
 		</PanelHostProvider>
 	);
 }

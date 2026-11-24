@@ -20,6 +20,7 @@ import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared
 import { cn } from "@/lib/utils";
 import { fetchWolfThreads, fetchWolves, fetchWorkRecord, openFeatureThread, type KbResult } from "@/components/kb/kb-client";
 import { openWorkItem } from "@/components/work/work-reader-nav";
+import { useOpenView } from "@/components/viewer/viewer-context";
 import { featureThreadWolves, findLibrarian, resolveWork, threadHref, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 import { shortWorkId, workIdDomain } from "@/src/core";
 
@@ -224,6 +225,8 @@ type OpenedBy = "hover" | "focus" | "click" | "key";
 
 function InteractiveChip({ id, short }: { id: string; short: string }) {
 	const router = useContext(AppRouterContext);
+	// On the thread page: the chip and the card's Open open the viewer instead of the Work view.
+	const openView = useOpenView();
 	const currentWolf = currentWolfOf(usePathname());
 	const ref = useRef<HTMLSpanElement>(null);
 	const cardRef = useRef<HTMLDivElement>(null);
@@ -326,6 +329,7 @@ function InteractiveChip({ id, short }: { id: string; short: string }) {
 	const go = (href: string) => (router ? router.push(href) : window.location.assign(href));
 	const openWork = () => {
 		close(false);
+		if (openView) return openView({ kind: "work", id });
 		openWorkItem(router, id);
 	};
 	const openThread = async () => {
@@ -384,6 +388,12 @@ function InteractiveChip({ id, short }: { id: string; short: string }) {
 				}}
 				onClick={() => {
 					pressed.current = false;
+					if (openView) {
+						// The hover card is the peek; a click opens the viewer and dismisses it.
+						close(false);
+						openView({ kind: "work", id });
+						return;
+					}
 					openWith("click");
 				}}
 				onKeyDown={(e) => {

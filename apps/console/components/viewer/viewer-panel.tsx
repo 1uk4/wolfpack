@@ -69,7 +69,7 @@ export function ViewerPanel({ wolf, threadId }: { wolf: string; threadId: string
 	if (!shown || !top) return null;
 	const Renderer = getViewRenderer(top.kind);
 	const key = `${top.kind}:${top.id}`;
-	const title = top.title ?? titles[key] ?? `${top.kind} ${top.id}`;
+	const title = top.title ?? titles[key] ?? top.id;
 	return (
 		<aside
 			className="relative flex w-[480px] shrink-0 flex-col border-l border-border bg-background text-sm max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full max-md:border-l-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]"

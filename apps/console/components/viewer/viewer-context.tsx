@@ -1,23 +1,37 @@
 "use client";
 
 /**
- * Thread-page viewer triggers. `ViewerProvider` (mounted by the thread page only) makes `useOpenView()` return a function
- * that opens a view in that thread's viewer; off the thread page there is no provider and it returns null, so chips and
- * links keep their normal navigation.
+ * Viewer triggers. `ViewerProvider` (the thread page, or a PageViewer) makes `useOpenView()` return a function that opens
+ * a view in that host's viewer; with no provider it returns null, so chips and links keep their normal navigation. The
+ * function returns false (and does nothing) for a kind the host does not allow, and `canOpen(kind)` asks first: a
+ * trigger that cannot open the kind falls back to its normal navigation.
  */
-import { createContext, useCallback, useContext, type ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { hostAllows, hostStoreArgs, threadHost, type ViewerHost } from "./viewer-host";
 import { openView } from "./viewer-store";
 import type { ViewDescriptor } from "./view-descriptor";
 
-type OpenViewFn = (d: ViewDescriptor) => void;
+export type OpenViewFn = ((d: ViewDescriptor) => boolean) & { canOpen: (kind: string) => boolean };
 const ViewerContext = createContext<OpenViewFn | null>(null);
 
-export function ViewerProvider({ wolf, threadId, children }: { wolf: string; threadId: string; children: ReactNode }) {
-	const open = useCallback((d: ViewDescriptor) => openView(wolf, threadId, d), [wolf, threadId]);
+export function ViewerProvider({ wolf, threadId, host, children }: { wolf?: string; threadId?: string; host?: ViewerHost; children: ReactNode }) {
+	const h = host ?? threadHost(wolf ?? "", threadId ?? "");
+	const kinds = h.allowedKinds === "all" ? "all" : h.allowedKinds.join(",");
+	const open = useMemo<OpenViewFn>(() => {
+		const [a, b] = hostStoreArgs(h);
+		const fn = ((d: ViewDescriptor) => {
+			if (!hostAllows(h, d.kind)) return false;
+			openView(a, b, d);
+			return true;
+		}) as OpenViewFn;
+		fn.canOpen = (kind) => hostAllows(h, kind);
+		return fn;
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- h is rebuilt each render; id + kinds are its value
+	}, [h.id, kinds]);
 	return <ViewerContext.Provider value={open}>{children}</ViewerContext.Provider>;
 }
 
-/** The open function, or null when not on a thread page. */
+/** The open function, or null outside a viewer host. */
 export function useOpenView(): OpenViewFn | null {
 	return useContext(ViewerContext);
 }

@@ -577,7 +577,7 @@ export function MarkdownLink(props: ComponentProps<"a"> & ExtraProps) {
 	const id = workIdFromHref(props.href);
 	if (id) return <WorkIdChip id={id} />;
 	const view = viewFromHref(props.href ?? null);
-	if (view && open) {
+	if (view && open?.canOpen(view.kind)) {
 		// Thread page: KB entry / work page links open the viewer. Streamdown's default link is a button, so render an anchor.
 		return (
 			<a

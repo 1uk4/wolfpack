@@ -329,7 +329,7 @@ function InteractiveChip({ id, short }: { id: string; short: string }) {
 	const go = (href: string) => (router ? router.push(href) : window.location.assign(href));
 	const openWork = () => {
 		close(false);
-		if (openView) return openView({ kind: "work", id });
+		if (openView?.canOpen("work")) return void openView({ kind: "work", id });
 		openWorkItem(router, id);
 	};
 	const openThread = async () => {
@@ -388,7 +388,7 @@ function InteractiveChip({ id, short }: { id: string; short: string }) {
 				}}
 				onClick={() => {
 					pressed.current = false;
-					if (openView) {
+					if (openView?.canOpen("work")) {
 						// The hover card is the peek; a click opens the viewer and dismisses it.
 						close(false);
 						openView({ kind: "work", id });

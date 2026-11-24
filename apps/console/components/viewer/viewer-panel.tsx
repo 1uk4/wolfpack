@@ -10,6 +10,7 @@ import "./register-renderers";
 import { getViewRenderer } from "./registry";
 import { useViewer } from "./viewer-store";
 import { useViewerUrlSync } from "./viewer-url";
+import { hostAllows, hostStoreArgs, threadHost, type ViewerHost } from "./viewer-host";
 import { clampViewerWidth, DEFAULT_VIEWER_WIDTH, readViewerWidth, writeViewerWidth } from "./viewer-width";
 
 const typing = (t: EventTarget | null) => {
@@ -38,9 +39,11 @@ export function PinViewButton({ threadId, descriptor, title }: { threadId: strin
  * The thread page's right-hand viewer: a 480px column on md+, a full-screen sheet below. One right column at a time:
  * opening it closes the status (memory) panel, and opening that panel closes the viewer (the stack is kept).
  */
-export function ViewerPanel({ wolf, threadId }: { wolf: string; threadId: string }) {
+export function ViewerPanel(props: { wolf: string; threadId: string } | { host: ViewerHost }) {
+	const viewerHost = "host" in props ? props.host : threadHost(props.wolf, props.threadId);
+	const [wolf, threadId] = hostStoreArgs(viewerHost);
 	const v = useViewer(wolf, threadId);
-	useViewerUrlSync(wolf, threadId);
+	useViewerUrlSync(wolf, threadId, viewerHost);
 	const host = usePanelHost();
 	const { open: panelOpen } = usePanelState();
 	const top = v.stack[v.stack.length - 1];
@@ -141,7 +144,7 @@ export function ViewerPanel({ wolf, threadId }: { wolf: string; threadId: string
 					</Button>
 				)}
 				<span className="min-w-0 flex-1 truncate font-medium" data-testid="viewer-title">{title}</span>
-				<PinViewButton threadId={threadId} descriptor={top} title={title} />
+				{viewerHost.pins && <PinViewButton threadId={threadId} descriptor={top} title={title} />}
 				<Button variant="ghost" size="icon" aria-label="Close viewer" data-testid="viewer-close" onClick={closeViewer}>
 					<XIcon />
 				</Button>

@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { parseViewKey, viewKey } from "./view-descriptor";
 import { getViewerState, setViewerState, useViewer, type ViewerState } from "./viewer-store";
+import { hostAllows, type ViewerHost } from "./viewer-host";
 
 /** The thread URL's `?view=` param: the viewKey of the top descriptor while the viewer is open. */
 export const VIEW_PARAM = "view";
@@ -31,7 +32,7 @@ export function mergeOnLoad(saved: ViewerState, param: string | null): ViewerSta
  * Keeps `?view=` in step with the thread's viewer store. Once on mount the URL is merged into the store; afterwards every
  * stack/open change is written back with router.replace (never push, so browser Back leaves the thread).
  */
-export function useViewerUrlSync(wolf: string, threadId: string) {
+export function useViewerUrlSync(wolf: string, threadId: string, host?: Pick<ViewerHost, "allowedKinds" | "urlSync">) {
 	const router = useRouter();
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
@@ -40,7 +41,11 @@ export function useViewerUrlSync(wolf: string, threadId: string) {
 	const skip = useRef(false);
 
 	useEffect(() => {
-		const merged = mergeOnLoad(getViewerState(wolf, threadId), new URLSearchParams(search).get(VIEW_PARAM));
+		if (host && !host.urlSync) return;
+		const param = new URLSearchParams(search).get(VIEW_PARAM);
+		const parsed = param ? parseViewKey(param) : null;
+		if (host && parsed && !hostAllows(host, parsed.kind)) return;
+		const merged = mergeOnLoad(getViewerState(wolf, threadId), param);
 		if (!merged) return;
 		skip.current = true; // the store update re-runs the sync below with the merged state
 		setViewerState(wolf, threadId, merged);
@@ -50,6 +55,7 @@ export function useViewerUrlSync(wolf: string, threadId: string) {
 	const top = stack[stack.length - 1];
 	const topKey = open && top ? viewKey(top) : null;
 	useEffect(() => {
+		if (host && !host.urlSync) return;
 		if (skip.current) {
 			skip.current = false;
 			return;

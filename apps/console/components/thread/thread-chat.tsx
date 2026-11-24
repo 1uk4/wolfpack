@@ -13,7 +13,7 @@ import { ToolGroup, ToolRow } from "@/components/thread/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/thread/card-registry";
 import { PinnedStrip, useSyncObjectPins, type StripObject } from "@/components/thread/pinned-strip";
 import { useFeatureProgress } from "@/components/thread/feature-progress";
-import { TaskPinToggle, syncTaskPin } from "@/components/thread/task-pin";
+import { TaskPinToggle, applyAgentTaskPin, lastAgentTaskPin, syncTaskPin } from "@/components/thread/task-pin";
 import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread/thread-compaction-divider";
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/thread/subagent-message";
@@ -549,6 +549,10 @@ function ThreadChatInner({
 	useEffect(() => {
 		syncTaskPin(threadId, bound);
 	}, [threadId, bound]);
+	// The agent's pin({objectId: "task"}) calls hide/show the same chip (latest event wins against the owner's x).
+	useEffect(() => {
+		applyAgentTaskPin(threadId, bound, lastAgentTaskPin(messages));
+	}, [threadId, bound, messages]);
 	// The pinned column's measured height is the transcript's top reserve (any number of chips, an expanded card, the progress panel).
 	const pinnedColumnRef = useRef<HTMLDivElement | null>(null);
 	const [pinnedHeight, setPinnedHeight] = useState(0);

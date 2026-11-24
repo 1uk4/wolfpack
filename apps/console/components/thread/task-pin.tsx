@@ -30,6 +30,52 @@ function write(next: Record<string, string>) {
 	}
 }
 
+/**
+ * The agent's `pin({objectId: "task", pinned})` calls share the owner's hidden state (latest event wins). The transcript carries
+ * the calls (live and on reload alike), so the last successful one is the agent's current wish; the id of the call last applied is
+ * remembered per thread, so a replay applies it once and an owner action made after it is never overridden by it.
+ */
+const APPLIED_KEY = "wp.task-pin.agent-applied.v1";
+let appliedMemory: Record<string, string> = {};
+
+function readApplied(): Record<string, string> {
+	try {
+		const v: unknown = JSON.parse(localStorage.getItem(APPLIED_KEY) ?? "{}");
+		return v && typeof v === "object" && !Array.isArray(v) ? { ...appliedMemory, ...(v as Record<string, string>) } : appliedMemory;
+	} catch {
+		return appliedMemory;
+	}
+}
+
+/** The last successful agent task-pin call in the transcript (parts in order), or undefined. */
+export function lastAgentTaskPin(messages: ReadonlyArray<{ role: string; parts: ReadonlyArray<Record<string, unknown>> }>): { callId: string; pinned: boolean } | undefined {
+	let last: { callId: string; pinned: boolean } | undefined;
+	for (const m of messages) {
+		if (m.role !== "assistant") continue;
+		for (const p of m.parts) {
+			if (p.type !== "tool-pin" || p.state !== "output-available" || typeof p.toolCallId !== "string") continue;
+			const i = p.input as { objectId?: unknown; pinned?: unknown } | undefined;
+			if (i?.objectId === "task" && typeof i.pinned === "boolean") last = { callId: p.toolCallId, pinned: i.pinned };
+		}
+	}
+	return last;
+}
+
+/** Apply the agent's latest task-pin call once (hide = the owner's x; show = the header control). Never changes the binding. */
+export function applyAgentTaskPin(threadId: string, bound: string | undefined, last: { callId: string; pinned: boolean } | undefined) {
+	if (!last || bound === undefined) return;
+	const applied = readApplied();
+	if (applied[threadId] === last.callId) return;
+	appliedMemory = { ...applied, [threadId]: last.callId };
+	try {
+		localStorage.setItem(APPLIED_KEY, JSON.stringify(appliedMemory));
+	} catch {
+		/* memory only */
+	}
+	if (last.pinned) showTaskPin(threadId, bound);
+	else hideTaskPin(threadId, bound);
+}
+
 /** Keep the task pin in step with the thread's binding: pin it while bound (unless the owner hid it for this item), remove it when unbound. */
 export function syncTaskPin(threadId: string, bound: string | undefined) {
 	const { [threadId]: hidden, ...rest } = read();
@@ -77,4 +123,5 @@ export function TaskPinToggle({ threadId, bound }: { threadId: string; bound: st
 /** Test hook: forget the in-memory copy. */
 export function resetHiddenTasks() {
 	memory = {};
+	appliedMemory = {};
 }

@@ -9,6 +9,7 @@
  */
 import { defineExtension, defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { OBJECT_TOOL_PARAMS, PinParamsSchema, objectToolJsonSchema, parseObjectData, pinToolJsonSchema, type ObjectToolName } from "@wolfpack/protocol";
+import { readBindingFile } from "@wolfpack/memory";
 import { conversationReaderFor } from "./conversation-reader.js";
 
 const DESCRIPTIONS: Record<ObjectToolName, string> = {
@@ -41,6 +42,8 @@ export interface ObjectCall {
 }
 
 export const PIN_TOOL = "pin";
+/** Reserved `pin` objectId: the bound-task chip, not a transcript object. */
+export const TASK_PIN_ID = "task";
 
 /** The pin action of a `pin` tool call, or undefined (not the pin tool, or arguments that fail the schema). */
 export function pinFromCall(name: string | undefined, args: unknown): { objectId: string; pinned: boolean } | undefined {
@@ -95,7 +98,8 @@ async function objectShown(den: string, conversationId: number, objectId: string
 const PIN_DESCRIPTION =
   "Pin or unpin a checklist, decision or graph already shown in this thread, without resending it. Pinned objects show in the strip " +
   "at the top of the chat (new objects pin automatically, the newest of each type); pin an older one to show it instead of the newest, " +
-  "or unpin one to take it out. Errors if no object has that objectId.";
+  "or unpin one to take it out. Errors if no object has that objectId. The reserved objectId \"task\" is the bound-task chip: " +
+  "pinned false hides it, true shows it again (the binding never changes; errors when no task is bound).";
 
 /** `den` is the wolf's den: where the engine registers the conversation reader the pin tool uses to find the object. */
 export function createObjectsExtension(den: string) {
@@ -122,6 +126,12 @@ export function createObjectsExtension(den: string) {
         async execute(args: unknown, api: ToolExecutionApi) {
           const p = pinFromCall(PIN_TOOL, args);
           if (!p) return { output: [{ type: "text" as const, text: "Invalid arguments." }], isError: true };
+          if (p.objectId === TASK_PIN_ID) {
+            if (!readBindingFile(den, Number(api.conversationId))?.workId) {
+              return { output: [{ type: "text" as const, text: "No task is bound to this thread, so there is no task chip to pin or unpin." }], isError: true };
+            }
+            return { output: [{ type: "text" as const, text: `${p.pinned ? "Pinned" : "Unpinned"} "task".` }] };
+          }
           if (!(await objectShown(den, Number(api.conversationId), p.objectId, api.callId))) {
             return { output: [{ type: "text" as const, text: `No object "${p.objectId}" in this thread. Show it first with show_checklist, show_decision or show_graph.` }], isError: true };
           }

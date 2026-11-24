@@ -173,6 +173,47 @@ describe("bound task chip", () => {
 		assert.deepEqual(keys(), ["task:task"]);
 	});
 
+	const taskCall = (callId: string, pinned: boolean, state = "output-available") => ({ type: "tool-pin", toolCallId: callId, state, input: { objectId: "task", pinned } });
+	const transcript = (...parts: Record<string, unknown>[]) => [{ role: "assistant", parts }];
+	const apply = (...parts: Record<string, unknown>[]) => act(async () => tp.applyAgentTaskPin("t1", "work-w-F", tp.lastAgentTaskPin(transcript(...parts))));
+
+	it("an agent task pin:false hides the chip and shows the header control without unbinding; pin:true brings it back", async () => {
+		tp.syncTaskPin("t1", "work-w-F");
+		await mount(withTask(<tp.TaskPinToggle threadId="t1" bound="work-w-F" />));
+		await apply(taskCall("c1", false));
+		assert.deepEqual(keys(), []);
+		assert.ok(q('[data-testid="task-pin-show"]'), "header control appears");
+		await apply(taskCall("c1", false), taskCall("c2", true));
+		assert.deepEqual(keys(), ["task:task"]);
+		assert.equal(q('[data-testid="task-pin-show"]'), null);
+	});
+
+	it("agent pin:true clears the owner's hide, and an owner x after an agent event wins until the next agent event", async () => {
+		tp.syncTaskPin("t1", "work-w-F");
+		await mount(withTask());
+		await click(q(`${chip("task:task")} [data-testid="pinned-chip-dismiss"]`));
+		assert.deepEqual(keys(), []);
+		await apply(taskCall("c1", true));
+		assert.deepEqual(keys(), ["task:task"], "agent show clears the owner's hide");
+		await click(q(`${chip("task:task")} [data-testid="pinned-chip-dismiss"]`));
+		await apply(taskCall("c1", true));
+		assert.deepEqual(keys(), [], "replaying the earlier agent call does not undo the later owner x");
+		await apply(taskCall("c1", true), taskCall("c2", false));
+		await apply(taskCall("c1", true), taskCall("c2", false), taskCall("c3", true));
+		assert.deepEqual(keys(), ["task:task"], "a newer agent call wins over the earlier owner x");
+	});
+
+	it("replaying the same transcript is idempotent and ignores failed or pending calls", async () => {
+		tp.syncTaskPin("t1", "work-w-F");
+		await mount(withTask());
+		await apply(taskCall("c1", false));
+		await apply(taskCall("c1", false));
+		await act(async () => tp.syncTaskPin("t1", "work-w-F"));
+		assert.deepEqual(keys(), []);
+		await apply(taskCall("c1", false), taskCall("c2", true, "output-error"), taskCall("c3", true, "input-available"));
+		assert.deepEqual(keys(), [], "errored and in-flight calls change nothing");
+	});
+
 	it("binding a different item shows the chip again after a dismissal", async () => {
 		tp.syncTaskPin("t1", "work-w-F");
 		await mount(withTask());

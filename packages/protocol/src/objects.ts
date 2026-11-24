@@ -13,6 +13,11 @@
  * object with the most recent event (upsert, or pin with pinned true) whose resulting state is not `pinned: false`;
  * an object never explicitly pinned auto-pins. Omitting `pinned` on a revision keeps the current pin state, so an object
  * shown with `pinned: false` stays unpinned until pinned explicitly. A client compares its local dismissal against pinRev: a higher pinRev wins.
+ * Every explicit pin bumps pinRev, so an explicit pin:true revives an object the owner dismissed with no content change.
+ *
+ * TASK CHIP: the reserved `pin` objectId "task" is the bound-task chip, not an object. A successful `pin({objectId:"task", pinned})`
+ * call (an error when no task is bound; the binding never changes) travels as an ordinary tool call, with no object-pin event;
+ * the console reads the transcript's last successful one and applies it once to the owner's hidden state (latest event wins).
  */
 
 /** Object types this version knows. A new type adds its name here, a parser below and a schemas.ts entry. */

@@ -75,12 +75,14 @@ export function EntryReader({ id, chrome = "full", onTitle, onOpenView }: { id: 
 	return (
 		<div
 			className="contents"
-			onClick={(e) => {
+			// Capture phase: the anchor is a next/link whose own onClick preventDefaults and navigates, so a bubbling handler here runs too late.
+			onClickCapture={(e) => {
 				if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
 				const a = (e.target as Element | null)?.closest?.("a");
 				const target = viewFromHref(a?.getAttribute("href") ?? null);
 				if (!target) return;
 				e.preventDefault();
+				e.stopPropagation();
 				onOpenView(target);
 			}}
 		>

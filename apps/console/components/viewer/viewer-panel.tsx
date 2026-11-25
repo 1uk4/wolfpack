@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeftIcon, PinIcon, XIcon } from "lucide-react";
 import { pinView, unpinView, usePinnedViews } from "@/components/thread/pin-store";
 import { viewKey, type ViewDescriptor } from "./view-descriptor";
@@ -39,7 +39,7 @@ export function PinViewButton({ threadId, descriptor, title }: { threadId: strin
  * The thread page's right-hand viewer: a 480px column on md+, a full-screen sheet below. One right column at a time:
  * opening it closes the status (memory) panel, and opening that panel closes the viewer (the stack is kept).
  */
-export function ViewerPanel(props: { wolf: string; threadId: string } | { host: ViewerHost }) {
+export function ViewerPanel(props: ({ wolf: string; threadId: string } | { host: ViewerHost }) & { fill?: boolean; headerExtra?: ReactNode }) {
 	const viewerHost = "host" in props ? props.host : threadHost(props.wolf, props.threadId);
 	const [wolf, threadId] = hostStoreArgs(viewerHost);
 	const v = useViewer(wolf, threadId);
@@ -109,12 +109,13 @@ export function ViewerPanel(props: { wolf: string; threadId: string } | { host: 
 	const title = top.title ?? titles[key] ?? top.id;
 	return (
 		<aside
-			className="relative flex w-[480px] shrink-0 flex-col border-l border-border bg-background text-sm max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full max-md:border-l-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]"
+			className={`relative flex ${props.fill ? "min-w-0 flex-1" : "w-[480px] shrink-0"} flex-col border-l border-border bg-background text-sm max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full max-md:border-l-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]`}
 			data-testid="viewer-panel"
 			data-kind={top.kind}
-			style={desktop ? { width } : undefined}
+			data-fill={props.fill ? "true" : undefined}
+			style={desktop && !props.fill ? { width } : undefined}
 		>
-			{desktop && (
+			{desktop && !props.fill && (
 				<div
 					role="separator"
 					aria-orientation="vertical"
@@ -144,6 +145,7 @@ export function ViewerPanel(props: { wolf: string; threadId: string } | { host: 
 					</Button>
 				)}
 				<span className="min-w-0 flex-1 truncate font-medium" data-testid="viewer-title">{title}</span>
+				{props.headerExtra}
 				{viewerHost.pins && <PinViewButton threadId={threadId} descriptor={top} title={title} />}
 				<Button variant="ghost" size="icon" aria-label="Close viewer" data-testid="viewer-close" onClick={closeViewer}>
 					<XIcon />

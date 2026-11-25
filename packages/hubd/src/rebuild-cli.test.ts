@@ -25,7 +25,7 @@ describe("hubd rebuild host", () => {
   };
 
   it("sends requests to the --host and --port given", async () => {
-    expect(await run(["--host", "100.120.154.69", "--port", "3150"], {})).toBe("http://100.120.154.69:3150/v1/admin/kb/rebuild/plans");
+    expect(await run(["--host", "100.64.0.7", "--port", "3150"], {})).toBe("http://100.64.0.7:3150/v1/admin/kb/rebuild/plans");
   });
 
   it("takes HUBD_HOST from the environment when no --host is given", async () => {

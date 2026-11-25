@@ -83,7 +83,9 @@ describe("withDroppedCallNet (work-wolfpack-7g4ZFMJ)", () => {
       const log = vi.fn();
       const events = await collect(withDroppedCallNet(q, log)({}, toolCtx, {}));
       expect(q).toHaveBeenCalledTimes(2);
-      expect(q.mock.calls[1][1].messages.at(-1)).toMatchObject({ role: "user", content: CONTINUE_PROMPT });
+      const retried = q.mock.calls[1][1].messages;
+      expect(retried).toHaveLength(2); // no standalone user turn added
+      expect(retried.at(-1)).toMatchObject({ role: "toolResult", content: [{ type: "text", text: "launched" }, { type: "text", text: CONTINUE_PROMPT }] });
       expect(events.at(-1).message.content[0].text).toBe("Started the worker; expect a report in a few minutes.");
       expect(events.filter((e) => e.type === "text_delta").map((e) => e.delta).join("")).not.toMatch(/no response/i);
       expect(events.at(-1).message.usage).toEqual(usage(2));
@@ -102,6 +104,49 @@ describe("withDroppedCallNet (work-wolfpack-7g4ZFMJ)", () => {
       const events = await collect(withDroppedCallNet(q, vi.fn())({}, userCtx, {}));
       expect(q).toHaveBeenCalledTimes(1);
       expect(events.at(-1).type).toBe("done");
+    });
+
+    it("retries an empty ack once when the turn began with wolfd-injected user text (ask result, superseded note, task notice, sub-agent delivery)", async () => {
+      const injected = [
+        "The user submitted your ask questionnaire (call c1), 1 page:\n- Q1 Name: Ada\nThe questionnaire is complete: you may proceed.",
+        "The user skipped your ask question (call c1).",
+        "The user answered your confirm question (call c1):\n- OK: yes",
+        "(Your pending ask question (call c1) was superseded by this message.)\n\nactually do X",
+        "Task update: stage a → b\n\nhello",
+        'Sub-agent "scout" completed (2m 1s).\n\nfound it',
+      ];
+      for (const text of injected) {
+        const q = rounds(textRound("No response requested."), real);
+        const events = await collect(withDroppedCallNet(q, vi.fn())({}, { messages: [{ role: "user", content: text }] }, {}));
+        expect(q, text).toHaveBeenCalledTimes(2);
+        expect(events.at(-1).message.content[0].text).toBe("Started the worker; expect a report in a few minutes.");
+      }
+    });
+
+    it("never puts the dropped ack into the retry's context", async () => {
+      const q = rounds(textRound("No response requested."), real);
+      await collect(withDroppedCallNet(q, vi.fn())({}, toolCtx, {}));
+      const retryCtx = q.mock.calls[1][1];
+      expect(retryCtx.messages.filter((m: any) => m.role === "assistant")).toEqual([]);
+      expect(toolCtx.messages).toHaveLength(2);
+    });
+
+    it("after thinking was shown, an empty ack ends with the visible error (no duplicate blocks) and is logged", async () => {
+      const thinkAck = () => (async function* () {
+        yield { type: "start" };
+        yield { type: "thinking_start", contentIndex: 0 };
+        yield { type: "thinking_end", contentIndex: 0 };
+        yield { type: "text_start", contentIndex: 1 };
+        yield { type: "text_delta", contentIndex: 1, delta: "No response requested." };
+        yield { type: "text_end", contentIndex: 1 };
+        yield done(msg([{ type: "thinking", thinking: "hm" }, { type: "text", text: "No response requested." }]));
+      })();
+      const q = rounds(thinkAck, real);
+      const log = vi.fn();
+      const events = await collect(withDroppedCallNet(q, log)({}, toolCtx, {}));
+      expect(q).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)).toMatchObject({ type: "error", error: { errorMessage: EMPTY_ACK_MESSAGE } });
+      expect(log).toHaveBeenCalledWith("claude-stateless: EMPTY ACK (attempt 1)");
     });
 
     it("streams a longer real reply that contains the phrase without retrying", async () => {

@@ -48,6 +48,14 @@ const isEmptyAck = (msg: any) => {
   return msg?.stopReason === "stop" && !c.some((b: any) => b?.type === "toolCall")
     && texts.length > 0 && ACK_RE.test(texts.map((b: any) => String(b.text ?? "")).join(""));
 };
+/**
+ * User messages wolfd injects itself (ask result, skip, answer, superseded note, task notice, sub-agent delivery or merge).
+ * The model must answer these, so a bare ack to one is a failure like an ack to a tool result. A genuine owner chat
+ * message is none of these and is never retried (a real "ok" may deserve a short ack).
+ */
+const INJECTED_RE = /^(?:The user (?:submitted|skipped|answered) your |\(Your pending [^\n]*? question \(call |Task update: |Sub-agent "[^"\n]*" (?:completed|failed|asks)|merge:)/;
+const userText = (m: any): string => typeof m?.content === "string" ? m.content : Array.isArray(m?.content) ? m.content.map((b: any) => (b?.type === "text" ? String(b.text ?? "") : "")).join("") : "";
+const needsAnswer = (last: any) => last?.role === "toolResult" || (last?.role === "user" && INJECTED_RE.test(userText(last).trimStart()));
 const stillAckPrefix = (text: string) => ACK.startsWith(text.trim().toLowerCase());
 const isDropped = (slot: RoundSlot, msg: any) =>
   slot.rewrite !== undefined && msg?.stopReason === "stop"
@@ -80,8 +88,15 @@ export const withDroppedCallNet = (stream: (...a: any[]) => any, log: (line: str
         let committed = false; // visible text or a tool call was released
         const release = () => { const h = held; held = undefined; h?.forEach((e) => out.push(e)); };
         let retry = false;
-        const ackCtx = (context?.messages ?? []).at(-1)?.role === "toolResult";
-        const retryCtx = () => ({ ...context, messages: [...(context?.messages ?? []), { role: "user", content: CONTINUE_PROMPT, timestamp: Date.now() }] });
+        const ackCtx = needsAnswer((context?.messages ?? []).at(-1));
+        // The nudge rides inside the last message (tool result or injected user text), never as a standalone owner-like user turn.
+        const retryCtx = () => {
+          const msgs = [...(context?.messages ?? [])];
+          const last = msgs.at(-1);
+          const c = last?.content;
+          msgs[msgs.length - 1] = { ...last, content: typeof c === "string" ? `${c}\n\n${CONTINUE_PROMPT}` : [...(Array.isArray(c) ? c : []), { type: "text", text: CONTINUE_PROMPT }] };
+          return { ...context, messages: msgs };
+        };
         let textAcc = "";
         for await (const e of inner as AsyncIterable<any>) {
           if (e.type === "done") {

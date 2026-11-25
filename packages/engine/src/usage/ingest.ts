@@ -9,7 +9,8 @@ import os from "node:os";
 import path from "node:path";
 import type { UsageEvent, UsageSource } from "../usage-log.js";
 import { listSources, readSource, reportSources, type CollectOptions, type SourceReport } from "./collect.js";
-import { appendLedger, ledgerIds } from "./ledger.js";
+import { readLiveDurableStore, type DurableMark } from "./read-durable.js";
+import { appendLedger, readLedger } from "./ledger.js";
 
 interface FileStamp {
   size: number;
@@ -20,6 +21,8 @@ export interface IngestState {
   version: 1;
   /** Every watched source file at its last successful read. */
   files: Record<string, FileStamp>;
+  /** Live durable stores: how far each was read, and which store that was. */
+  marks: Record<string, DurableMark>;
 }
 
 export interface IngestOptions extends CollectOptions {
@@ -58,11 +61,15 @@ export function statePath(ledgerDir: string): string {
 export function readState(ledgerDir: string): IngestState {
   try {
     const s = JSON.parse(fs.readFileSync(statePath(ledgerDir), "utf8")) as IngestState;
-    if (s.version === 1 && s.files && typeof s.files === "object") return s;
+    if (s.version === 1 && s.files && typeof s.files === "object") {
+      const marks: Record<string, DurableMark> = {};
+      for (const [f, m] of Object.entries(s.marks ?? {})) if (m && typeof m === "object") marks[f] = m;
+      return { version: 1, files: s.files, marks };
+    }
   } catch {
     /* none yet */
   }
-  return { version: 1, files: {} };
+  return { version: 1, files: {}, marks: {} };
 }
 
 function writeState(ledgerDir: string, state: IngestState): void {
@@ -78,6 +85,21 @@ function stamp(file: string): FileStamp | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Drop durable events that a `pi` ledger row already covers: the same call logged by the pi launcher
+ * (before wolfd) and by the store (claude-bridge rows overlap the old pi/main rows around 2026-10-28).
+ * Same wolf, same four token counts, timestamps within 5 s. The two ids differ, so ids alone can't dedupe.
+ */
+function withoutPiTwins(fresh: UsageEvent[], pi: UsageEvent[]): UsageEvent[] {
+  const key = (e: UsageEvent): string => `${e.wolf}|${e.input}|${e.output}|${e.cacheRead}|${e.cacheWrite}`;
+  const seen = new Map<string, number[]>();
+  for (const e of [...pi, ...fresh.filter((f) => f.source === "pi")]) {
+    const k = key(e);
+    seen.set(k, [...(seen.get(k) ?? []), Date.parse(e.ts)]);
+  }
+  return fresh.filter((e) => e.source !== "durable" || !seen.get(key(e))?.some((t) => Math.abs(t - Date.parse(e.ts)) <= 5000));
 }
 
 /** Take the ingest lock; false if a live ingest holds it. */
@@ -105,10 +127,11 @@ export async function ingestUsage(opts: IngestOptions): Promise<IngestResult> {
     return { added, scanned: 0, unchanged: 0, ms: Date.now() - started, sources: reportSources(sources, skipped), locked: true };
   }
   try {
-    const ids = ledgerIds(opts.ledgerDir);
+    const existing = readLedger(opts.ledgerDir);
+    const ids = new Set(existing.flatMap((e) => (e.id ? [e.id] : [])));
     // A wiped ledger with a surviving state file would otherwise never refill.
-    const prev = ids.size > 0 ? readState(opts.ledgerDir) : { version: 1 as const, files: {} };
-    const next: IngestState = { version: 1, files: { ...prev.files } };
+    const prev: IngestState = ids.size > 0 ? readState(opts.ledgerDir) : { version: 1, files: {}, marks: {} };
+    const next: IngestState = { version: 1, files: { ...prev.files }, marks: { ...prev.marks } };
     const fresh: UsageEvent[] = [];
     const failed: string[] = [];
     let scanned = 0;
@@ -126,8 +149,16 @@ export async function ingestUsage(opts: IngestOptions): Promise<IngestResult> {
       }
       scanned++;
       let events: UsageEvent[];
+      let complete = true;
       try {
-        events = await readSource(src);
+        if (src.live && src.kind === "durable") {
+          const r = readLiveDurableStore(src.file, src.host, src.wolf, prev.marks[src.file]);
+          events = r.events;
+          next.marks[src.file] = r.mark;
+          complete = r.complete;
+        } else {
+          events = await readSource(src);
+        }
       } catch (err) {
         failed.push(`${src.host}/${src.wolf} ${src.kind} unreadable: ${(err as Error).message}`);
         continue;
@@ -138,18 +169,25 @@ export async function ingestUsage(opts: IngestOptions): Promise<IngestResult> {
         fresh.push(e);
         added[e.source]++;
       }
+      // A scan a lock cut short keeps its old stamp, so the next turn picks up from the mark.
+      if (!complete) continue;
       for (const [f, s] of stamps) {
         if (s) next.files[f] = s;
         else delete next.files[f];
       }
     }
 
-    appendLedger(opts.ledgerDir, fresh);
+    const kept = fresh.some((e) => e.source === "durable")
+      ? withoutPiTwins(fresh, existing.filter((e) => e.source === "pi"))
+      : fresh;
+    for (const e of fresh) if (!kept.includes(e)) added[e.source]--;
+    appendLedger(opts.ledgerDir, kept);
     if (!opts.wolf && !opts.dens) {
       // Forget files that no longer exist (only a full run sees them all; a
       // den-scoped run lists just its own files and would wipe the rest).
-      const live = new Set(sources.flatMap((s) => s.watch));
-      for (const f of Object.keys(next.files)) if (!live.has(f)) delete next.files[f];
+      const watched = new Set(sources.flatMap((s) => s.watch));
+      for (const f of Object.keys(next.files)) if (!watched.has(f)) delete next.files[f];
+      for (const f of Object.keys(next.marks)) if (!watched.has(f)) delete next.marks[f];
     }
     writeState(opts.ledgerDir, next);
     return { added, scanned, unchanged, ms: Date.now() - started, sources: reportSources(sources, [...skipped, ...failed]) };

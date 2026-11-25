@@ -37,6 +37,17 @@ describe("graduateDirect", () => {
 	});
 });
 
+describe("graduateDirect, hub 409", () => {
+	it("counts a hub 409 as already graduated, except a pending approval request", async () => {
+		reply(409, { error: "item i1 was graduated meanwhile", code: "conflict" });
+		const done = await graduateDirect("i1", { contributions: [], via: "work" });
+		assert.equal(done.ok === false && done.alreadyGraduated, true);
+		reply(409, { error: "item i1 already has a pending approval request", code: "request_pending" });
+		const pending = await graduateDirect("i1", { contributions: [], via: "work" });
+		assert.equal(pending.ok === false && pending.alreadyGraduated, false);
+	});
+});
+
 describe("getPendingPreview", () => {
 	const preview = (createdAt: string) => ({ itemId: "i1", kind: "feature", title: "T", domain: "d", contributions: [], foldedObservations: 0, warnings: [], archive: [], token: "tok", createdAt, readiness: { ready: true } });
 
@@ -50,6 +61,11 @@ describe("getPendingPreview", () => {
 		const fresh = await getPendingPreview("hal", "i1");
 		assert.equal(fresh.ok && "preview" in fresh && fresh.preview.token, "tok");
 		reply(200, { state: "preview_ready", preview: preview(new Date(Date.now() - 7 * 3600_000).toISOString()) });
+		assert.deepEqual(await getPendingPreview("hal", "i1"), { ok: true, none: true });
+	});
+
+	it("treats a preview with an unreadable createdAt as expired", async () => {
+		reply(200, { state: "preview_ready", preview: preview("not a date") });
 		assert.deepEqual(await getPendingPreview("hal", "i1"), { ok: true, none: true });
 	});
 });

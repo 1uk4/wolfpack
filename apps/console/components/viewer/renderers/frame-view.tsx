@@ -24,13 +24,12 @@ export function buildSrcdoc(html: string): string {
 	return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">${html.replace(META_REFRESH, "")}`;
 }
 
-type State = { phase: "loading" } | { phase: "navigated" } | { phase: "ready"; html: string } | { phase: "error"; status: number | null };
+type State = { phase: "loading" } | { phase: "nowolf" } | { phase: "navigated" } | { phase: "ready"; html: string } | { phase: "error"; status: number | null };
 
 export const frameUrl = (wolf: string, path: string) => `/api/wolves/${encodeURIComponent(wolf)}/frame-file?path=${encodeURIComponent(path)}`;
 
 /** Kind "frame": a workspace HTML file in a sandboxed iframe. Frames send no messages to the console: there is no message listener. */
-export function FrameViewRenderer({ descriptor, onTitle }: ViewRendererProps) {
-	const wolf = descriptor.wolf ?? "";
+export function FrameViewRenderer({ descriptor, wolf = "", onTitle }: ViewRendererProps) {
 	const path = descriptor.id;
 	const rev = descriptor.rev;
 	const [state, setState] = useState<State>({ phase: "loading" });
@@ -45,8 +44,13 @@ export function FrameViewRenderer({ descriptor, onTitle }: ViewRendererProps) {
 	// Refetch on mount, Reload (nonce) and a new show_view rev; a stale response never overwrites a newer one.
 	useEffect(() => {
 		let live = true;
-		setState({ phase: "loading" });
 		loads.current = 0;
+		// Never fetch with an empty wolf: that is /api/wolves//..., a 404 that reads as "gone".
+		if (!wolf) {
+			setState({ phase: "nowolf" });
+			return;
+		}
+		setState({ phase: "loading" });
 		fetch(frameUrl(wolf, path), { cache: "no-store" })
 			.then(async (res) => {
 				if (!live) return;
@@ -62,6 +66,13 @@ export function FrameViewRenderer({ descriptor, onTitle }: ViewRendererProps) {
 	useViewerReload(reload);
 
 	if (state.phase === "loading") return <p className="p-4 text-sm text-muted-foreground" role="status">Loading frame…</p>;
+	if (state.phase === "nowolf") {
+		return (
+			<div className="p-4 text-sm text-muted-foreground" role="alert" data-testid="frame-error">
+				This frame cannot be loaded here: no wolf is known for this view.
+			</div>
+		);
+	}
 	if (state.phase === "navigated") {
 		return (
 			<div className="flex flex-col items-start gap-3 p-4 text-sm" role="alert" data-testid="frame-navigated">

@@ -177,7 +177,7 @@ export function ViewerPanel(props: ({ wolf: string; threadId: string } | { host:
 			</div>
 			<div className="min-h-0 flex-1 overflow-y-auto" data-testid="viewer-body" style={props.fill ? { paddingBottom: "calc(var(--chat-bar-h, 0px) + 1rem)" } : undefined}>
 				<ViewerActionsContext.Provider value={actions}>
-					<Renderer key={key} descriptor={top} onPush={v.pushView} onTitle={(t) => onTitle(key, t)} onClose={closeViewer} />
+					<Renderer key={key} descriptor={top} wolf={viewerHost.id.startsWith("thread:") ? wolf : undefined} onPush={v.pushView} onTitle={(t) => onTitle(key, t)} onClose={closeViewer} />
 				</ViewerActionsContext.Provider>
 			</div>
 		</aside>

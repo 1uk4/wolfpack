@@ -52,7 +52,7 @@ async function mount(rev?: number) {
 		act(async () =>
 			root!.render(
 				<ViewerActionsContext.Provider value={actions}>
-					<FrameViewRenderer descriptor={desc(r)} onPush={() => {}} onTitle={() => {}} onClose={() => {}} />
+					<FrameViewRenderer descriptor={desc(r)} wolf="hal" onPush={() => {}} onTitle={() => {}} onClose={() => {}} />
 				</ViewerActionsContext.Provider>,
 			),
 		);

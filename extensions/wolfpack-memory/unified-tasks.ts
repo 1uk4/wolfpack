@@ -1708,7 +1708,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             const preview = await graduation.preview(args.id);
             const shown = renderGraduationPreview(preview);
             if (preview.blocked) return text(`${shown}\n\nNothing can be requested from this preview. Tell the owner and try again later.`, true);
-            const { requestId, existing } = await fileRequest(args.id, { kind: "graduate", preview: { contributions: preview.contributions } });
+            const { requestId, existing } = await fileRequest(args.id, { kind: "graduate", preview: { contributions: preview.contributions, ...(preview.summary ? { summary: preview.summary } : {}) } });
             return text(`${queuedText(requestId, existing, args.id, `${preview.contributions.length} contributions`)}\n\n${shown}`);
           } catch (err) {
             // Never the outbox "queued" success: only a request the hub holds counts.

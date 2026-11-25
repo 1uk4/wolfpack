@@ -163,6 +163,8 @@ describe("graduation: preview then confirm", () => {
     expect(p.contributions[1].history[0]).toBe(`- 2026-10-22: compose stack delivered (${f.id})`);
     expect(p.warnings).toEqual([]);
     expect(p.archive.map((a) => a.id)).toEqual([f.id, t1.id, t2.id]);
+    // no dedicated summary in the answer: the item's own entry summary stands in, kept next to the full contributions
+    expect(p.summary).toBe("The stack runs with compose up.");
 
     const text = renderGraduationPreview(p);
     expect(text).toContain('Graduating "Compose" (feature): 2 contributions for the wp knowledge base.');
@@ -173,6 +175,35 @@ describe("graduation: preview then confirm", () => {
     // cancel = the caller never confirms: nothing was written or changed
     expect(calls).toEqual([]);
     expect(sentTopics()).toEqual([]);
+  });
+
+  it("the distill's own owner-facing summary wins over the entry summary, and the distill is asked for it", async () => {
+    const { client } = fakeClient([init, f, t1, t2], { [f.id]: PLAN + RECORD });
+    const { engine, call } = engineOf({ ...answer(f.id), summary: "The KB gains how one compose command starts the stack." });
+    const p = await previewGraduation({ client, engine, id: f.id as string, today: "2026-10-22" });
+    expect(p.summary).toBe("The KB gains how one compose command starts the stack.");
+    expect((call.mock.calls[0] as any)[2].system).toContain('"summary"');
+  });
+
+  it("a summary over the cap is cut at a word boundary to 160 characters; the fallback is cut the same way", async () => {
+    const long = "The KB gains " + "a thorough description of the compose stack ".repeat(8).trim() + ".";
+    const { client } = fakeClient([init, f, t1, t2], { [f.id]: PLAN + RECORD });
+    const own = await previewGraduation({ client, engine: engineOf({ ...answer(f.id), summary: long }).engine, id: f.id as string, today: "2026-10-22" });
+    expect(own.summary!.length).toBeLessThanOrEqual(160);
+    expect(own.summary!.endsWith("…")).toBe(true);
+    expect(long.startsWith(own.summary!.slice(0, -1))).toBe(true);
+    expect(long[own.summary!.length - 1]).toBe(" "); // the cut falls on a space: no word is split
+    const fallback = { contributions: [{ ...answer(f.id).contributions[0], summary: long }, answer(f.id).contributions[1]] };
+    const fb = await previewGraduation({ client, engine: engineOf(fallback).engine, id: f.id as string, today: "2026-10-22" });
+    expect(fb.summary).toBe(own.summary);
+  });
+
+  it("an item with no contribution of its own takes the first contribution's summary as the fallback", async () => {
+    const { client } = fakeClient([init, f, t1, t2], { [f.id]: PLAN + RECORD });
+    const onlyInitiative = { contributions: [answer(f.id).contributions[1]] };
+    const p = await previewGraduation({ client, engine: engineOf(onlyInitiative).engine, id: f.id as string, today: "2026-10-22" });
+    expect(p.contributions.map((c) => c.id)).toEqual([init.id]); // nothing under the item's own id
+    expect(p.summary).toBe("Everything runs in containers.");
   });
 
   it("folds pending observations into the Record before distill: the preview shows the count, the distill input has them", async () => {

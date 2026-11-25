@@ -44,7 +44,7 @@ export interface GraduationDeps {
    * Files an owner-approval request on the hub (never acts on the item): resolves with the request id and whether one was
    * already pending; throws when the hub does not hold the request. A wolf's worker token cannot graduate, so the hub does it on approval.
    */
-  fileRequest: (id: string, body: { kind: "graduate"; preview: { contributions: GraduationPreview["contributions"] } }) => Promise<{ requestId: string; existing: boolean }>;
+  fileRequest: (id: string, body: { kind: "graduate"; preview: { contributions: GraduationPreview["contributions"]; summary?: string } }) => Promise<{ requestId: string; existing: boolean }>;
   /** Called with every item that graduated (cache invalidation). */
   forget?: (id: string) => void;
   /** Called once a graduation has happened (after the unbind), with the graduated item: the promote pass for its topics. Never breaks the graduation. */
@@ -117,7 +117,7 @@ export function createGraduation(deps: GraduationDeps) {
       const roots = needRoots();
       const p = await loadPreview(id, token);
       const prepared = await prepareGraduation({ client, roots, preview: p, ship: deps.ship, drain: deps.drain, finalPass: deps.finalPass, engine: deps.engine() });
-      const { requestId, existing } = await deps.fileRequest(id, { kind: "graduate", preview: { contributions: prepared.preview.contributions } });
+      const { requestId, existing } = await deps.fileRequest(id, { kind: "graduate", preview: { contributions: prepared.preview.contributions, ...(prepared.preview.summary ? { summary: prepared.preview.summary } : {}) } });
       await unlink(previewFile(token)).catch(() => { /* used once */ });
       return { preview: prepared.preview, requestId, existing, lateFolded: prepared.lateFolded };
     } catch (err) {

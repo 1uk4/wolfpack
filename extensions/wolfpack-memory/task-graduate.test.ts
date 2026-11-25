@@ -80,6 +80,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchImpl);
   const call = vi.fn(async (_step: string, schema: { parse: (v: unknown) => unknown }) =>
     schema.parse({
+      summary: "The KB gains how the change works now.",
       contributions: [{ slug: "main", title: "The change", summary: "How it works now.", body: "## How\n\nLike this.\n\n## History\n\n- 2026-10-22: changed (work-wolfpack-T000002)" }],
     }));
   const engine = { call, usage: { summarize: () => ({}) } } as unknown as Engine;
@@ -101,6 +102,7 @@ describe("task_graduate files an owner-approval request and never graduates", ()
     expect(filed).toHaveLength(1);
     expect(filed[0]).toMatchObject({ path: `/v1/work/${f.id}/requests`, auth: "Bearer hub-secret", body: { kind: "graduate", wolf: "1uk4" } });
     expect(filed[0].body.preview.contributions).toMatchObject([{ title: "The change" }]);
+    expect(filed[0].body.preview.summary).toBe("The KB gains how the change works now.");
     expect(inboxFiles()).toEqual([]);
     expect(items.get(f.id)!.graduated).toBeNull();
     expect(items.get(f.id)!.stage).toBe("shipped");

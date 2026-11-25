@@ -42,10 +42,16 @@ import {
   TaskSummaryResult,
   WorkRecordSchema,
 } from "@wolfpack/memory";
+import { checkReadOnlyCommand, checkWorkerCommand } from "@wolfpack/agents";
+import type { AgentDefinition } from "@wolfpack/agents";
+import { CONTINUE_PROMPT, DROPPED_CALL_MESSAGE, EMPTY_ACK_MESSAGE, EMPTY_ACK_NUDGE } from "../providers/dropped-call.js";
+import { ANSWER_ANSWERED, ANSWER_SKIPPED, ANSWER_SUBMITTED, REVISE_NOT_APPLIED, subAgentHead } from "../injected-text.js";
 import type { PromptBlock } from "./context.js";
+import { childInstructions } from "./subagents.js";
+import { describeChange } from "./task-notice.js";
 import { contractText } from "./zod-contract.js";
 
-export type CatalogKind = "system-block" | "tool" | "pipeline" | "compaction";
+export type CatalogKind = "system-block" | "tool" | "pipeline" | "compaction" | "request-section" | "delivery";
 
 export interface CatalogEntry {
   id: string;
@@ -163,6 +169,86 @@ function pipelineEntries(): CatalogEntry[] {
   ];
 }
 
+/**
+ * Sections wolfd re-renders on EVERY request (extension `sections`), after the start-up blocks. Their text depends on the wolf's
+ * den, KB and binding, so each entry is a TEMPLATE: the shape the model sees with `<angle>` slots (sample data, not a live
+ * render). The static lines follow the source named in `file`; change the source first, then here.
+ */
+function requestSectionEntries(): CatalogEntry[] {
+  const user = "main wolf, every request (extension section, re-rendered per request)";
+  const sec = (id: string, label: string, file: string, text: string): CatalogEntry => ({ id: `request.${id}`, group: "Per-request sections", label, kind: "request-section", user, scope: "wolf", file, text, placeholders: placeholdersOf(text) });
+  return [
+    sec("wolf_memory", "wolf_memory: den topics not yet in the KB (template)", "packages/memory/src/prompt-context.ts renderDenContext", [
+      "Wolf <wolf>'s den topics not yet in the shared KB (<count>), in <den>/memory/topics/:",
+      "- <topic>.md [<status>] -- <summary>",
+      "Read a topic file when you need its details. Everything else lives in the KB.",
+    ].join("\n")),
+    sec("wolf_memory_retired", "wolf_memory_retired: notes now in the KB (template)", "packages/memory/src/prompt-context.ts renderRetiredContext", [
+      "Notes this wolf kept locally were moved into the shared KB (read them with kb_access):",
+      "- <entry title> (<entry id>): <entry summary>",
+    ].join("\n")),
+    sec("kb_access", "kb_access: subscribed domains and their section trees (template)", "packages/memory/src/prompt-context.ts renderKbAccess", [
+      "You have access to <n> shared knowledge domain(s):",
+      "- <domain> (<entries> entries):",
+      "  - <Section title> (<entries in subtree>) — <section summary>",
+      "    - <child section> (<entries>) — <summary>",
+      "(N) = entries in that section. Each domain lives at <kb mirror>/domains/<domain>/. Entry ids are in <domain>/_digest.json; browse INDEX.md; read entries/<id>.md on demand.",
+    ].join("\n")),
+    sec("task_tools", "task_tools: task tool list, domains and work-id rule (template)", "extensions/wolfpack-memory/unified-tasks.ts section task_tools", [
+      "## Task Tools",
+      "Available: task_query, task_bind, task_claim, task_release, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features",
+      "Domains: <domain list>",
+      "Work item IDs: always write the full `work-<domain>-<id>` ... (rule about chips and code blocks)",
+      "<binding rules, omitted for subagents and read-only task conversations>",
+    ].join("\n\n")),
+    sec("active_task", "active_task: the bound work item (template)", "extensions/wolfpack-memory/unified-tasks.ts section active_task", [
+      "## Active Task",
+      "<unbound: the 'item completed' notice once, then the unbound context and: Use `task_query` to see available work.>",
+      "<bound: the stable header (id, title, kind, parent feature, success criteria). Stage, counts and the Record are left out on purpose: they arrive as the Task update notice and via task_current.>",
+      "Empty for subagents.",
+    ].join("\n\n")),
+    sec("telegram-suffix", "Telegram suffix (terminal pi only; wolfd does not load it)", "extensions/wolfpack-telegram/index.ts SYSTEM_PROMPT_SUFFIX", [
+      "Telegram bridge extension is active.",
+      '- Messages forwarded from Telegram are prefixed with "[telegram]".',
+      "- [telegram] messages may include local temp file paths for Telegram attachments. Read those files as needed.",
+      "- If a [telegram] user asked for a file or generated artifact, use the telegram_attach tool ...",
+    ].join("\n")),
+  ];
+}
+
+/**
+ * Text wolfd and the harness write themselves and the model reads: user-role deliveries, nudges, the child's instructions and guard
+ * refusals. Built from the real exported constants and functions where the source exports them; the rest are templates (`<slots>`).
+ */
+function deliveryEntries(): CatalogEntry[] {
+  const group = "Injected messages, nudges and guards";
+  const del = (id: string, label: string, user: string, file: string, text: string): CatalogEntry => ({ id: `delivery.${id}`, group, label, kind: "delivery", user, scope: "wolf", file, text, placeholders: placeholdersOf(text) });
+  const profile = { body: "<the profile's prompt (agent .md body)>" } as unknown as AgentDefinition;
+  const worktree = { ws: { path: "<worktree path>", branch: "<branch>", repo: { mainDir: "<main checkout>", toplevel: "<main checkout>" } }, offLimits: ["<main checkout>", "<feature worktree>"] };
+  const guard = (r: string | null): string => r ?? "(not blocked)";
+  const SUB = "packages/harness/src/wolfd/subagents.ts";
+  const DROP = "packages/harness/src/providers/dropped-call.ts";
+  return [
+    del("task-notice", "Task update notice (one line before the next user message)", "main wolf; written by wolfd, no model call", "packages/harness/src/wolfd/task-notice.ts describeChange",
+      describeChange({ workId: "<id>", stage: "in_build", record: "a" }, { workId: "<id>", stage: "shipped", record: "b" })),
+    del("ask-answer-submitted", "Ask answer: submitted", "main wolf; a card answer becomes this user-role message", "packages/harness/src/wolfd/cards.ts", `${ANSWER_SUBMITTED}<tool> questionnaire (call <call id>), <n> pages:\n<page title, each question and its answer>`),
+    del("ask-answer-answered", "Ask answer: single question answered", "main wolf", "packages/harness/src/wolfd/cards.ts", `${ANSWER_ANSWERED}<tool> question (call <call id>):\n<the answer>`),
+    del("ask-answer-skipped", "Ask answer: skipped", "main wolf", "packages/harness/src/wolfd/cards.ts", `${ANSWER_SKIPPED}<tool> question (call <call id>).`),
+    del("ask-revise-not-applied", "Ask revise: not applied note", "main wolf", "packages/harness/src/wolfd/cards.ts", `${REVISE_NOT_APPLIED}: <reason>`),
+    del("subagent-completed", "Sub-agent delivery: completed", "parent thread; steer message", SUB, `${subAgentHead("<name>", "completed")}<elapsed>).\n\n<the child's last message>\n\n[delivery <id>]`),
+    del("subagent-failed", "Sub-agent delivery: failed", "parent thread; steer message", SUB, `${subAgentHead("<name>", "failed")}<elapsed>: <why>.\n\nYou can resume the session with subagent_message.\n\n[delivery <id>]`),
+    del("subagent-asks", "Sub-agent delivery: asks the parent", "parent thread; steer message", SUB, `${subAgentHead("<name>", "asks")}<elapsed>):\n\n<question>\n\nReply with subagent_message({ name: "<name>", message: "…" }) — the same name works whether it is still running or has since exited. It stays open until you reply.\n\n[delivery <id>]`),
+    del("subagent-stopped", "Sub-agent delivery: stopped by the operator", "parent thread; steer message", SUB, `${subAgentHead("<name>", "stopped")}.\n\nFollow up with subagent_message({ name: "<name>", message: "…" }) to resume it.\n\n[delivery <id>]`),
+    del("subagent-child-instructions", "Sub-agent child instructions (profile body, worktree note, role line)", "every sub-agent thread", `${SUB} childInstructions`, childInstructions(profile, "<name>", worktree as never)),
+    del("continue-prompt", "Continue prompt (sent after every tool-result round)", "every model round after a tool result (claude bridge)", `${DROP} CONTINUE_PROMPT`, CONTINUE_PROMPT),
+    del("empty-ack-nudge", "Empty-acknowledgement nudge (appended on retry)", "retry after an empty reply", `${DROP} EMPTY_ACK_NUDGE`, EMPTY_ACK_NUDGE),
+    del("dropped-call-message", "Dropped tool call error shown to the owner", "shown, not sent to a model", `${DROP} DROPPED_CALL_MESSAGE`, DROPPED_CALL_MESSAGE),
+    del("empty-ack-message", "Empty acknowledgement error shown to the owner", "shown, not sent to a model", `${DROP} EMPTY_ACK_MESSAGE`, EMPTY_ACK_MESSAGE),
+    del("guard-read-only", "Command guard refusal: read-only agents (sample: `rm -rf x`)", "read-only agents' bash tool result", "packages/agents/src/command-guard.ts block", guard(checkReadOnlyCommand("rm -rf x"))),
+    del("guard-worker", "Command guard refusal: worker git lockdown (sample: `git push`)", "worker agents' bash tool result", "packages/agents/src/command-guard.ts checkWorkerCommand", guard(checkWorkerCommand("git push"))),
+  ];
+}
+
 /** Everything read-only the wolf shows: its system-prompt blocks and tools (built at start-up), then the static pipeline and compaction prompts. */
 export function readOnlyCatalog(input: { blocks: readonly PromptBlock[]; tools: readonly ToolInfo[] }): CatalogEntry[] {
   const blocks = input.blocks.map(
@@ -176,5 +262,5 @@ export function readOnlyCatalog(input: { blocks: readonly PromptBlock[]; tools: 
     { id: "compaction.pi-durable-system", group: "Compaction", label: "Wolf thread compaction: summarizer system prompt", kind: "compaction", user: "wolfd (pi-durable), every wolf's threads, automatic and manual", scope: "global", file: `${pd.file} SUMMARIZATION_SYSTEM_PROMPT`, text: pd.system, placeholders: placeholdersOf(pd.system) },
     { id: "compaction.pi-durable-instructions", group: "Compaction", label: "Wolf thread compaction: summary instructions", kind: "compaction", user: "wolfd (pi-durable), every wolf's threads, automatic and manual", scope: "global", file: `${pd.file} SUMMARIZATION_PROMPT`, text: pd.instructions, placeholders: placeholdersOf(pd.instructions) },
   ];
-  return [...blocks, ...tools, ...pipelineEntries(), ...compaction];
+  return [...blocks, ...requestSectionEntries(), ...tools, ...deliveryEntries(), ...pipelineEntries(), ...compaction];
 }

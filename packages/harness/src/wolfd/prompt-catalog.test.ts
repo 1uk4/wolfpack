@@ -40,6 +40,16 @@ describe("read-only prompt catalog", () => {
     for (const id of ids) expect(catalog().find((e) => e.id === id)?.contract, id).toBeUndefined();
   });
 
+  it("lists the per-request sections and the injected messages, with the wording the code really sends", () => {
+    const all = catalog();
+    for (const s of ["wolf_memory", "wolf_memory_retired", "kb_access", "task_tools", "active_task"]) expect(all.find((e) => e.id === `request.${s}`)?.kind, s).toBe("request-section");
+    expect(all.find((e) => e.id === "delivery.continue-prompt")?.text).toMatch(/^If more work remains, call the next tool\./);
+    expect(all.find((e) => e.id === "delivery.task-notice")?.text).toBe("Task update: stage in_build → shipped; Record updated");
+    expect(all.find((e) => e.id === "delivery.subagent-completed")?.text).toMatch(/^Sub-agent "<name>" completed \(/);
+    expect(all.find((e) => e.id === "delivery.subagent-child-instructions")?.text).toContain('You are the sub-agent "<name>"');
+    expect(all.find((e) => e.id === "delivery.guard-worker")?.text).toMatch(/^Blocked by/);
+  });
+
   it("returns the real pi-durable compaction text, read from the installed package", () => {
     const all = catalog();
     expect(all.find((e) => e.id === "compaction.pi-durable-system")?.text).toMatch(/^You are a context summarization assistant\./);

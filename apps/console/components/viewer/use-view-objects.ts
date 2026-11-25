@@ -3,6 +3,7 @@
 import { createContext, useEffect, useRef } from "react";
 import { pinView } from "@/components/thread/pin-store";
 import { openView, refreshView } from "@/components/viewer/viewer-store";
+import { recordFrames } from "@/components/viewer/frame-store";
 import { parseFrameDescriptor, type ViewDescriptor } from "@/components/viewer/view-descriptor";
 
 /** Which thread the view card sits in (the card gets no wolf/thread props); provided by thread-chat. */
@@ -67,6 +68,7 @@ export function useViewObjectArrivals(wolf: string, threadId: string, messages: 
 	const seen = useRef<Set<string>>(new Set());
 	const primed = useRef(false);
 	useEffect(() => {
+		recordFrames(wolf, threadId, messages);
 		const live = primed.current && streaming;
 		primed.current = true;
 		for (const a of viewArrivals(messages, seen.current, live, wolf)) {

@@ -106,14 +106,23 @@ export function PlanGraphView({
 	};
 	const [zoom, setZoom] = useState(1);
 	const viewport = () => ({ w: pan.ref.current?.clientWidth || 0, h: pan.ref.current?.clientHeight || 0 });
+	// The view the last fit produced: a resize refits only while the view is still that one (the user has not zoomed or panned since).
+	const lastFit = useRef<{ zoom: number; x: number; y: number } | null>(null);
 	const fit = () => {
 		const v = fitFloorView({ w: layout.width, h: layout.height }, viewport(), FIT_MIN_SCALE);
+		lastFit.current = v;
 		setZoom(v.zoom);
 		pan.setOffset({ x: v.x, y: v.y });
 	};
 	const recenter = () => (zoomable ? fit() : pan.setOffset(centreOffset()));
 	const centreRef = useRef(recenter);
 	centreRef.current = recenter;
+	const resizeRef = useRef(recenter);
+	resizeRef.current = () => {
+		const l = lastFit.current;
+		if (zoomable && l && (l.zoom !== zoom || l.x !== pan.offset.x || l.y !== pan.offset.y)) return;
+		recenter();
+	};
 	const zoomBy = (factor: number, focus?: { x: number; y: number }) => {
 		const vp = viewport();
 		const next = zoomedGraphView({ zoom, x: pan.offset.x, y: pan.offset.y }, factor, ZOOM_FLOOR, focus ?? { x: vp.w / 2, y: vp.h / 2 }, { w: layout.width, h: layout.height }, vp);
@@ -128,7 +137,7 @@ export function PlanGraphView({
 	useEffect(() => {
 		const box = pan.ref.current;
 		if (!draggable || !zoomable || !box || typeof ResizeObserver === "undefined") return;
-		const ro = new ResizeObserver(() => centreRef.current());
+		const ro = new ResizeObserver(() => resizeRef.current());
 		ro.observe(box);
 		// wheel and trackpad pinch (ctrl + wheel) zoom to the cursor; a native listener so the page does not scroll or zoom
 		const onWheel = (e: WheelEvent) => {

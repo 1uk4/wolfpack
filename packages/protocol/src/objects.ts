@@ -13,6 +13,11 @@
  * object with the most recent event (upsert, or pin with pinned true) whose resulting state is not `pinned: false`;
  * an object never explicitly pinned auto-pins. Omitting `pinned` on a revision keeps the current pin state, so an object
  * shown with `pinned: false` stays unpinned until pinned explicitly. A client compares its local dismissal against pinRev: a higher pinRev wins.
+ * Every explicit pin bumps pinRev, so an explicit pin:true revives an object the owner dismissed with no content change.
+ *
+ * TASK CHIP: the reserved `pin` objectId "task" is the bound-task chip, not an object. A successful `pin({objectId:"task", pinned})`
+ * call (an error when no task is bound; the binding never changes) travels as an ordinary tool call, with no object-pin event;
+ * the console reads the transcript's last successful one and applies it once to the owner's hidden state (latest event wins).
  */
 
 /** Object types this version knows. A new type adds its name here, a parser below and a schemas.ts entry. */
@@ -20,6 +25,7 @@ export const OBJECT_TYPES = [
   "decision",
   "checklist",
   "graph",
+  "view",
 ] as const;
 export type KnownObjectType = (typeof OBJECT_TYPES)[number];
 
@@ -28,6 +34,7 @@ export const OBJECT_TOOL_TYPES = {
   show_decision: "decision",
   show_checklist: "checklist",
   show_graph: "graph",
+  show_view: "view",
 } as const satisfies Record<string, KnownObjectType>;
 export type ObjectToolName = keyof typeof OBJECT_TOOL_TYPES;
 
@@ -188,16 +195,36 @@ export function checklistProgress(data: ChecklistData): { done: number; total: n
   return { done: data.items.filter((i) => i.state === "done").length, total: data.items.length - skipped, skipped };
 }
 
+/** `data` of a `view` object: what the console viewer opens. `kind` uses the console's registry kinds ("work", "kb"). */
+export interface ViewData {
+  kind: "work" | "kb";
+  id: string;
+  title?: string;
+}
+
+/** The show_view tool's public kind names and the console kind each maps to. */
+const VIEW_KINDS: Record<string, ViewData["kind"]> = { "work-item": "work", "kb-entry": "kb", work: "work", kb: "kb" };
+
+/** `data` of a view (public or already-mapped kind), normalised to the console kind; undefined for an unknown kind or empty id. */
+export function parseViewData(data: unknown): ViewData | undefined {
+  const d = data as { kind?: unknown; id?: unknown; title?: unknown } | null | undefined;
+  if (!d || typeof d !== "object" || !isStr(d.kind) || !Object.hasOwn(VIEW_KINDS, d.kind) || !isStr(d.id) || d.id === "") return undefined;
+  if (d.title !== undefined && !isStr(d.title)) return undefined;
+  return { kind: VIEW_KINDS[d.kind]!, id: d.id, ...(isStr(d.title) ? { title: d.title } : {}) };
+}
+
 const PARSERS: Record<KnownObjectType, (data: unknown) => unknown> = {
   decision: parseDecisionData,
   checklist: parseChecklistData,
   graph: parseGraphData,
+  view: parseViewData,
 };
 
 /** Validate `data` for a known type; undefined for an unknown type or invalid data (consumers skip the object). */
 export function parseObjectData(type: "decision", data: unknown): DecisionData | undefined;
 export function parseObjectData(type: "checklist", data: unknown): ChecklistData | undefined;
 export function parseObjectData(type: "graph", data: unknown): GraphData | undefined;
+export function parseObjectData(type: "view", data: unknown): ViewData | undefined;
 export function parseObjectData(type: string, data: unknown): unknown;
 export function parseObjectData(type: string, data: unknown): unknown {
   return Object.hasOwn(PARSERS, type) ? PARSERS[type as KnownObjectType](data) : undefined;

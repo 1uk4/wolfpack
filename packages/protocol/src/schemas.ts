@@ -613,6 +613,16 @@ export const ShowGraphParamsSchema = GraphDataSchema.extend({
 });
 export type ShowGraphParams = z.infer<typeof ShowGraphParamsSchema>;
 
+/** Parameters of the `show_view` tool: open a work item or KB entry in the owner's viewer; reuse objectId to revise. */
+export const ShowViewParamsSchema = z.object({
+  kind: z.enum(["work-item", "kb-entry"]).describe("work-item | kb-entry"),
+  id: z.string().min(1).describe("The full id of the work item or KB entry (e.g. work-wolfpack-AbC1234)"),
+  title: z.string().optional().describe("Optional title for the card and the chip"),
+  pinned: SHOW_PINNED,
+  objectId: z.string().min(1).describe("Stable id for this view; call again with the same id to point it at something else"),
+});
+export type ShowViewParams = z.infer<typeof ShowViewParamsSchema>;
+
 /** Parameters of the `pin` tool: pin or unpin an object already shown in this thread, without resending it. */
 export const PinParamsSchema = z.object({
   objectId: z.string().min(1).describe("The objectId of a checklist, decision or graph already shown in this thread"),
@@ -633,6 +643,7 @@ export const OBJECT_TOOL_PARAMS = {
   show_decision: { type: "decision", schema: ShowDecisionParamsSchema },
   show_checklist: { type: "checklist", schema: ShowChecklistParamsSchema },
   show_graph: { type: "graph", schema: ShowGraphParamsSchema },
+  show_view: { type: "view", schema: ShowViewParamsSchema },
 } as const satisfies Record<ObjectToolName, { type: KnownObjectType; schema: z.ZodType }>;
 
 /** JSON Schema of an object tool's parameters (draft 2020-12 minus `$schema`). */

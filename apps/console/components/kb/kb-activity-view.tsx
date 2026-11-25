@@ -36,6 +36,8 @@ import {
 	type KbActivityState,
 } from "@/src/core";
 import { fetchKbActivity } from "./kb-activity-client";
+import { PageViewer } from "../viewer/page-viewer";
+import { openKbLink, useOpenView } from "../viewer/viewer-context";
 import { useOptionalServerEvent, useOptionalServerResync } from "../shell/server-events";
 import { ledgerTimeIso, parseLedgerTime } from "@wolfpack/protocol/ledger-time";
 
@@ -54,13 +56,14 @@ export function KbActivityUnavailable({ message }: { message: string }) {
 }
 
 function Row({ row, now }: { row: FeedRow; now: number }) {
+	const openView = useOpenView();
 	return (
 		<li className="flex items-baseline gap-2 text-[12px]" data-outcome={row.outcome} data-action={row.outcome ? undefined : row.label} data-decision={row.outcome ? row.key : undefined} data-provisional={row.provisional ? "true" : undefined}>
 			<span className="w-24 shrink-0 text-muted-foreground" data-testid="kb-row-label">
 				{row.mark} {row.label}
 			</span>
 			{row.entryId ? (
-				<Link href={entryHref(row.entryId)} className="truncate text-foreground underline underline-offset-2">
+				<Link href={entryHref(row.entryId)} className="truncate text-foreground underline underline-offset-2" onClick={(e) => openKbLink(e, openView, "kb", row.entryId!)}>
 					{row.title}
 				</Link>
 			) : (
@@ -111,6 +114,7 @@ export function DomainBlockView({ block, now, loading, onShowAll }: { block: Dom
 
 /** The live Contributions list: each incoming item by wolf, topic, domain and age, with queued / in progress / decided. */
 export function ContributionsList({ data, now }: { data: KbActivityResponse; now: number }) {
+	const openView = useOpenView();
 	const { rows, more }: { rows: ContributionRow[]; more: number } = contributionList(data, now);
 	return (
 		<section className="mb-6" data-testid="kb-contributions">
@@ -129,7 +133,7 @@ export function ContributionsList({ data, now }: { data: KbActivityResponse; now
 							{r.domain ? <span className="shrink-0 text-muted-foreground/70">{r.domain}</span> : null}
 							{r.route ? <span className="truncate text-muted-foreground" data-testid="kb-contribution-route">{r.route}</span> : null}
 							{r.entryId ? (
-								<Link href={entryHref(r.entryId)} className="truncate text-foreground underline underline-offset-2">
+								<Link href={entryHref(r.entryId)} className="truncate text-foreground underline underline-offset-2" onClick={(e) => openKbLink(e, openView, "kb", r.entryId!)}>
 									{r.entryId}
 								</Link>
 							) : r.reason ? (
@@ -243,7 +247,16 @@ export interface KbActivityTiming {
 	pollMs?: number;
 }
 
+/** The KB activity page with the shared KB page viewer: entry links open in the side panel. */
 export function KbActivityView({ timing }: { timing?: KbActivityTiming } = {}) {
+	return (
+		<PageViewer scope="kb" allowedKinds={["kb", "work"]}>
+			<KbActivityInner timing={timing} />
+		</PageViewer>
+	);
+}
+
+function KbActivityInner({ timing }: { timing?: KbActivityTiming }) {
 	const debounceMs = timing?.debounceMs ?? 500;
 	const pollMs = timing?.pollMs ?? 60_000;
 	const [load, setLoad] = useState<Load>({ kind: "loading" });

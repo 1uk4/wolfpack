@@ -7,26 +7,29 @@
  * A save changes one wolf's wolf.yaml through /api/wolves/:name/settings (If-Match); it restarts nothing.
  * dev: ?packFixture=wolves | wolves-relay (components/pack/pack-wolves-fixtures.ts).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeftIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import type { Draft } from "@/src/core";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { PromptGraphCanvas } from "@/components/settings/prompt-graph-view";
-import { WolfAllSettings, type WolfSettingsView } from "@/components/pack/wolf-all-settings";
+import { PageViewer } from "@/components/viewer/page-viewer";
+import { useOpenView } from "@/components/viewer/viewer-context";
+import { closeViewer } from "@/components/viewer/viewer-store";
+import { parseWolfPath, wolfPath, wolfRedirect, DEFAULT_WOLF_TAB } from "@/src/core/pack/wolf-path";
+import { VIEW_PARAM, noteUrlWrite } from "@/components/viewer/viewer-url";
+import { buildPromptBlocks, PromptBlocksContext } from "@/components/viewer/renderers/prompt-view";
+import { WolfAllSettings, WolfRestartBar, type WolfSectionId, type WolfSettingsView } from "@/components/pack/wolf-all-settings";
 import {
 	buildGraphs,
-	filterByScope,
 	groupWolves,
 	keysNeeded,
 	mainProviderOf,
 	memoryIgnoredOn,
 	modelPickers,
 	PROMPT_SCOPES,
-	promptScope,
 	saveMessage,
 	SCOPE_GRAPH,
 	settingsAnswerFor,
-	sizeText,
-	sourceText,
 	transportLabel,
 	wolfAccess,
 	type ConsoleReach,
@@ -53,7 +56,16 @@ interface PromptRow {
 	file?: string;
 }
 
+/** The switcher's option value: both parts encoded, so the first "/" is always the separator even if a host id or name contains one. */
+const wolfValue = (hostId: string, name: string): string => `${encodeURIComponent(hostId)}/${encodeURIComponent(name)}`;
+
 const getAt = (o: Record<string, unknown>, path: string): unknown => path.split(".").reduce<unknown>((c, k) => (c && typeof c === "object" ? (c as Record<string, unknown>)[k] : undefined), o);
+
+/** The prompts graph; a node click opens that prompt block in the page's viewer. */
+function PromptsGraphBox({ graph, selected, onSelect, toolbar }: { graph: Parameters<typeof PromptGraphCanvas>[0]["graph"]; selected: string | null; onSelect: (id: string) => void; toolbar?: ReactNode }) {
+	const open = useOpenView();
+	return <PromptGraphCanvas graph={graph} toolbar={toolbar} selected={selected} onSelect={(id) => (onSelect(id), open?.({ kind: "prompt", id }))} />;
+}
 
 /** One picker: a select of the offered models, or the plain reason there is none. */
 function PickerField({ label, picker, current, editable, onPick, testid, hint, note }: { note?: string; label: string; picker: Picker; current: string; editable: boolean; onPick: (id: string) => void; testid: string; hint?: string }) {
@@ -79,7 +91,7 @@ function PickerField({ label, picker, current, editable, onPick, testid, hint, n
 	);
 }
 
-export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; catalog: PickerModel[]; reach: ConsoleReach | undefined; call: Fetcher; onBack: () => void }) {
+export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; machines?: KeyMachine[]; catalog: PickerModel[]; reach: ConsoleReach | undefined; call: Fetcher }) {
 	const { machine, wolf, catalog, call } = props;
 	const access = wolfAccess(props.reach, machine, wolf.name);
 	const base = `/api/wolves/${encodeURIComponent(wolf.name)}/settings`;
@@ -89,6 +101,9 @@ export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; cata
 	const [saved, setSaved] = useState(false);
 	const [scope, setScope] = useState<PromptScope>("all");
 	const [node, setNode] = useState<string | null>(null);
+	// Unsaved edits and revealed secrets live here, not in the tab panel, so they survive tab switches; a restart clears them.
+	const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+	const [revealed, setRevealed] = useState<Record<string, string>>({});
 
 	const reachable = access.reachable;
 	const load = useCallback(async () => {
@@ -136,71 +151,175 @@ export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; cata
 		const gs = buildGraphs(flow, null);
 		return gs.find((g) => g.key === SCOPE_GRAPH[scope]) ?? gs[0]!;
 	}, [rows, scope]);
-	const shown = filterByScope(rows, scope).filter((r) => !node || (graph.nodes.find((n) => n.id === node)?.ids ?? []).includes(r.id));
+	const blocks = useMemo(() => {
+		const flow = rows.map((r) => ({ id: r.id, group: r.group, label: r.label, editable: false, text: r.text, file: r.file }));
+		return buildPromptBlocks(buildGraphs(flow, null), rows);
+	}, [rows]);
+
+	// The wolf page's tabs. One entry per tab; the last path segment picks it (Models is the default and leaves no segment).
+	// An open prompt (?view=prompt:<id>) always shows the Prompts tab.
+	const router = useRouter();
+	const pathname = usePathname();
+	const search = useSearchParams()?.toString() ?? "";
+	// The settings sections a tab shows, open. One shared view and etag (this component's `view`), so a save on any tab shows on the others.
+	const sectionsFor = (sections: WolfSectionId[], quiet = false): ReactNode =>
+		!access.reachable ? (quiet ? null : <p data-testid="wolf-readonly" className="text-muted-foreground">{access.note}</p>) : view ? <WolfAllSettings wolfName={wolf.name} view={view} call={call} onView={setView} sections={sections} drafts={drafts} setDrafts={setDrafts} revealed={revealed} setRevealed={setRevealed} /> : error ? <p role="alert" className="text-destructive" data-testid="wolf-all-settings-error">{error}</p> : <p className="text-muted-foreground">Loading…</p>;
+	const panel = (id: string, label: string, children: ReactNode): ReactNode => <div role="tabpanel" id={`wolf-panel-${id}`} aria-labelledby={`wolf-tab-${id}`} aria-label={label} className="flex min-w-0 flex-col gap-4">{children}</div>;
+	const tabs: { id: string; label: string; render: () => ReactNode }[] = [
+		{ id: "appearance", label: "Appearance", render: () => panel("appearance", "Appearance", sectionsFor(["color"])) },
+		{
+			id: "models",
+			label: "Models",
+			render: () =>
+				panel(
+					"models", "Models",
+					<>
+						<section className="flex flex-col gap-3 rounded-md border p-3" data-testid="wolf-models">
+							<h4 className="font-medium text-foreground">Chat and Memory</h4>
+							<p data-testid="wolf-transport">Runs on: <span className="text-foreground">{transportLabel(wolf.transport)}</span> <span className="text-muted-foreground">(set in wolf.yaml, not here)</span></p>
+							{!access.reachable ? <p data-testid="wolf-readonly" className="text-muted-foreground">{access.note}</p> : null}
+							{access.reachable ? <PickerField label="Chat" testid="picker-chat" picker={pickers.chat} current={String(getAt(view?.config ?? {}, "models.main.model") ?? "")} editable={canEdit("models.main.model")} onPick={(id) => void save("models.main.model", id)} /> : null}
+							{access.reachable ? <PickerField label="Memory" testid="picker-memory" hint="Used for memory's main steps; quick steps keep the fast model." picker={pickers.memory} current={String(getAt(view?.config ?? {}, "memory.model") ?? "")} editable={canEdit("memory.model") && !memoryIgnored} note={memoryIgnored ? `Memory runs on ${memoryIgnored} for this wolf; this setting has no effect.` : undefined} onPick={(id) => void save("memory.model", id)} /> : null}
+							{saved ? <p data-testid="wolf-saved" className="text-muted-foreground">Saved to wolf.yaml for {wolf.name} only. Takes effect after the wolf restarts.</p> : null}
+						</section>
+						{sectionsFor(["models"], true)}
+						<section className="flex flex-col gap-1 rounded-md border p-3" data-testid="wolf-keys">
+							<h4 className="font-medium text-foreground">Keys it needs (on {machine.machine})</h4>
+							{needed.map((k) => (
+								<p key={k.capability} data-testid={`wolf-key-${k.capability}`} className={cn(k.missing && "text-destructive")}>
+									{k.capability === "chat" ? "Chat" : "Memory"} · {k.provider}: {k.state === "subscription" ? "none needed (Claude subscription)" : k.state === "unknown" ? "not known" : k.missing ? "missing, add it in Keys" : `${k.masked ?? "set"}`}
+								</p>
+							))}
+						</section>
+					</>,
+				),
+		},
+		{ id: "behaviour", label: "Behaviour", render: () => panel("behaviour", "Behaviour", sectionsFor(["subagents", "compaction", "memory", "other"])) },
+		{
+			id: "access",
+			label: "Access",
+			render: () =>
+				panel(
+					"access", "Access",
+					<>
+						<section className="flex flex-col gap-1 rounded-md border p-3" data-testid="wolf-domains">
+							<h4 className="font-medium text-foreground">Domains</h4>
+							<p>{domains.length ? domains.join(", ") : "None subscribed."}</p>
+						</section>
+						{sectionsFor(["env"], true)}
+					</>,
+				),
+		},
+		{ id: "yaml", label: "wolf.yaml", render: () => panel("yaml", "wolf.yaml", sectionsFor(["config"])) },
+		{
+			id: "prompts",
+			label: "Prompts",
+			render: () => (
+				<div role="tabpanel" id="wolf-panel-prompts" aria-labelledby="wolf-tab-prompts" aria-label="Prompts" className="flex min-h-0 min-w-0 flex-1 flex-col">
+					<section className="flex min-h-0 min-w-0 flex-1 flex-col gap-2" data-testid="wolf-prompts">
+						<div data-testid="wolf-prompts-graph" className="min-h-[22rem] min-w-0 flex-1 rounded-md border">
+							<PromptsGraphBox
+								graph={graph}
+								selected={node}
+								onSelect={setNode}
+								toolbar={
+									<div role="group" aria-label="Prompt scope" className="mr-auto inline-flex gap-0.5 p-0.5 max-md:overflow-x-auto">
+										{PROMPT_SCOPES.map((s) => <button key={s.key} type="button" aria-pressed={scope === s.key} data-testid={`scope-${s.key}`} className={cn("shrink-0 rounded-md border px-2 py-0.5 text-xs transition-colors hover:bg-accent max-md:min-h-11 max-md:px-3", scope === s.key ? "border-foreground bg-accent font-medium text-foreground" : "border-transparent text-muted-foreground")} onClick={() => (setScope(s.key), setNode(null))}>{s.label}</button>)}
+									</div>
+								}
+							/>
+						</div>
+					</section>
+				</div>
+			),
+		},
+	];
+	const pathTab = parseWolfPath(pathname)?.tab ?? DEFAULT_WOLF_TAB;
+	const promptOpen = (new URLSearchParams(search).get(VIEW_PARAM) ?? "").startsWith("prompt:");
+	// The tab is the last path segment (/pack/wolves/<host>/<name>/<tab>, Models when absent). An open prompt always shows Prompts.
+	const wantTab = promptOpen ? "prompts" : pathTab;
+	const active = tabs.find((t) => t.id === wantTab) ?? tabs.find((t) => t.id === DEFAULT_WOLF_TAB)!;
+	// ?view=prompt:<id> on a non-prompts path: make the URL honest (redirect to /prompts, view kept), so closing the viewer stays on Prompts.
+	useEffect(() => {
+		const to = wolfRedirect(pathname, search);
+		if (to) router.replace(to);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [pathname, search]);
+	// Whenever the path is not on Prompts (and no prompt is being deep-linked), the viewer must be closed: otherwise browser Back from
+	// /prompts?view=... leaves the store open, the URL sync rewrites `view`, and the redirect above sends the user back to Prompts.
+	useEffect(() => {
+		if (pathTab !== "prompts" && !promptOpen) closeViewer("page", `settings:${wolf.name}`);
+	}, [pathTab, promptOpen, wolf.name]);
+	// A tab change is a navigation (Back steps through tabs). Leaving Prompts closes the viewer and drops `view` in the SAME write:
+	// the URL sync is told the new (empty) query first, so it does not build a second replace from the stale params and undo it.
+	const pickTab = (id: string) => {
+		if (id !== "prompts") {
+			noteUrlWrite("");
+			closeViewer("page", `settings:${wolf.name}`);
+		}
+		router.push(wolfPath(machine.hostId, wolf.name, id));
+	};
+	const wolfList = (props.machines ?? [machine]).flatMap((m) => (m.wolves ?? []).map((w) => ({ hostId: m.hostId, machine: m.machine, name: w.name })));
+	const manyMachines = new Set(wolfList.map((w) => w.hostId)).size > 1;
+	const switchWolf = (value: string) => {
+		const cut = value.indexOf("/");
+		if (cut <= 0) return;
+		const [hostId, name] = [decodeURIComponent(value.slice(0, cut)), decodeURIComponent(value.slice(cut + 1))];
+		noteUrlWrite("");
+		closeViewer("page", `settings:${wolf.name}`); // the old wolf's viewer must not write its view onto the new wolf's URL
+		router.push(wolfPath(hostId, name, active.id));
+	};
+	// Manual activation: Arrow, Home and End only move focus (no history entry); Enter or Space (the button's click) opens the tab.
+	const onTabKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+		const from = tabs.findIndex((t) => `wolf-tab-${t.id}` === e.currentTarget.id);
+		const to = e.key === "ArrowRight" ? (from + 1) % tabs.length : e.key === "ArrowLeft" ? (from - 1 + tabs.length) % tabs.length : e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : -1;
+		if (to < 0) return;
+		e.preventDefault();
+		document.getElementById(`wolf-tab-${tabs[to]!.id}`)?.focus();
+	};
 
 	return (
-		<div data-testid={`wolf-detail-${wolf.name}`} className="flex min-w-0 flex-col gap-4">
-			<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-				<button type="button" className={cn(BTN, "inline-flex items-center gap-1")} onClick={props.onBack} data-testid="wolf-back"><ArrowLeftIcon className="size-3.5" aria-hidden />Wolves</button>
-				<h3 className="text-sm font-medium text-foreground">{wolf.name}</h3>
+		<PromptBlocksContext.Provider value={{ blocks: rows.length ? blocks : null }}>
+		<PageViewer scope={`settings:${wolf.name}`} allowedKinds={["prompt"]} urlSync={pathTab === "prompts" || promptOpen}>
+		<div data-testid={`wolf-detail-${wolf.name}`} className="flex h-full min-h-[32rem] min-w-0 flex-col gap-3">
+			<div data-testid="wolf-row" className="flex flex-wrap items-center gap-x-2 gap-y-1">
+				<select aria-label="Wolf" data-testid="wolf-switcher" className={cn(SELECT, "text-sm font-medium text-foreground")} value={wolfValue(machine.hostId, wolf.name)} onChange={(e) => switchWolf(e.target.value)}>
+					{manyMachines
+						? [...new Set(wolfList.map((w) => w.hostId))].map((h) => <optgroup key={h} label={wolfList.find((w) => w.hostId === h)!.machine}>{wolfList.filter((w) => w.hostId === h).map((w) => <option key={w.name} value={wolfValue(h, w.name)}>{w.name}</option>)}</optgroup>)
+						: wolfList.map((w) => <option key={wolfValue(w.hostId, w.name)} value={wolfValue(w.hostId, w.name)}>{w.name}</option>)}
+				</select>
 				<span className="text-muted-foreground">on {machine.machine}</span>
+				{access.reachable && view ? <WolfRestartBar wolfName={wolf.name} view={view} call={call} onView={setView} onReload={() => void load()} onRestarted={() => (setDrafts({}), setRevealed({}))} /> : null}
 			</div>
 			{error ? <p role="alert" data-testid="wolf-error" className="text-destructive">{error}</p> : null}
-			<section className="flex flex-col gap-3 rounded-md border p-3" data-testid="wolf-models">
-				<h4 className="font-medium text-foreground">Models</h4>
-				<p data-testid="wolf-transport">Runs on: <span className="text-foreground">{transportLabel(wolf.transport)}</span> <span className="text-muted-foreground">(set in wolf.yaml, not here)</span></p>
-				{!access.reachable ? <p data-testid="wolf-readonly" className="text-muted-foreground">{access.note}</p> : null}
-				{access.reachable ? <PickerField label="Chat" testid="picker-chat" picker={pickers.chat} current={String(getAt(view?.config ?? {}, "models.main.model") ?? "")} editable={canEdit("models.main.model")} onPick={(id) => void save("models.main.model", id)} /> : null}
-				{access.reachable ? <PickerField label="Memory" testid="picker-memory" hint="Used for memory's main steps; quick steps keep the fast model." picker={pickers.memory} current={String(getAt(view?.config ?? {}, "memory.model") ?? "")} editable={canEdit("memory.model") && !memoryIgnored} note={memoryIgnored ? `Memory runs on ${memoryIgnored} for this wolf; this setting has no effect.` : undefined} onPick={(id) => void save("memory.model", id)} /> : null}
-				{saved ? <p data-testid="wolf-saved" className="text-muted-foreground">Saved to wolf.yaml for {wolf.name} only. Takes effect after the wolf restarts.</p> : null}
-			</section>
-			{access.reachable ? (
-				<details className="rounded-md border p-3" data-testid="wolf-all-settings">
-					<summary className="cursor-pointer font-medium text-foreground max-md:min-h-11">All settings</summary>
-					<div className="mt-3">
-						{view ? <WolfAllSettings wolfName={wolf.name} view={view} call={call} onView={setView} onReload={() => void load()} /> : error ? <p role="alert" className="text-destructive" data-testid="wolf-all-settings-error">{error}</p> : <p className="text-muted-foreground">Loading…</p>}
-					</div>
-				</details>
-			) : null}
-			<section className="flex flex-col gap-1 rounded-md border p-3" data-testid="wolf-domains">
-				<h4 className="font-medium text-foreground">Domains</h4>
-				<p>{domains.length ? domains.join(", ") : "None subscribed."}</p>
-			</section>
-			<section className="flex flex-col gap-1 rounded-md border p-3" data-testid="wolf-keys">
-				<h4 className="font-medium text-foreground">Keys it needs (on {machine.machine})</h4>
-				{needed.map((k) => (
-					<p key={k.capability} data-testid={`wolf-key-${k.capability}`} className={cn(k.missing && "text-destructive")}>
-						{k.capability === "chat" ? "Chat" : "Memory"} · {k.provider}: {k.state === "subscription" ? "none needed (Claude subscription)" : k.state === "unknown" ? "not known" : k.missing ? "missing, add it in Keys" : `${k.masked ?? "set"}`}
-					</p>
-				))}
-			</section>
-			<section className="flex min-w-0 flex-col gap-2 rounded-md border p-3" data-testid="wolf-prompts">
-				<h4 className="font-medium text-foreground">Prompts <span className="font-normal text-muted-foreground">(view only)</span></h4>
-				<div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Prompt scope">
-					{PROMPT_SCOPES.map((s) => <button key={s.key} role="tab" aria-selected={scope === s.key} data-testid={`scope-${s.key}`} className={cn(BTN, scope === s.key && "bg-accent")} onClick={() => (setScope(s.key), setNode(null))}>{s.label}</button>)}
-				</div>
-				<div className="h-[320px] min-w-0 rounded-md border"><PromptGraphCanvas graph={graph} selected={node} onSelect={setNode} /></div>
-				<ul className="flex flex-col gap-1.5" data-testid="wolf-prompt-list">
-					{shown.map((r) => (
-						<li key={r.id} className="rounded-sm border p-2" data-testid={`prompt-${r.id}`}>
-							<p className="text-foreground">{r.label} <span className="text-muted-foreground">· {promptScope(r.id)}</span></p>
-							<p className="text-muted-foreground">{sourceText(r)}</p>
-							<p className="text-muted-foreground">{sizeText(r.text)}</p>
-						</li>
-					))}
-					{shown.length === 0 ? <li className="text-muted-foreground">No prompts in this scope.</li> : null}
-				</ul>
-			</section>
+			<div role="tablist" aria-label="Wolf page" className="flex shrink-0 gap-1 overflow-x-auto border-b">
+				{tabs.map((t) => <button key={t.id} id={`wolf-tab-${t.id}`} type="button" role="tab" aria-controls={`wolf-panel-${t.id}`} aria-selected={t.id === active.id} tabIndex={t.id === active.id ? 0 : -1} data-testid={`wolf-tab-${t.id}`} className={cn("shrink-0 border-b-2 px-3 py-1.5 text-xs transition-colors hover:bg-accent max-md:min-h-11", t.id === active.id ? "border-foreground text-foreground" : "border-transparent text-muted-foreground")} onClick={() => pickTab(t.id)} onKeyDown={onTabKey}>{t.label}</button>)}
+			</div>
+			{active.render()}
 		</div>
+		</PageViewer>
+		</PromptBlocksContext.Provider>
 	);
 }
 
 export function WolvesView(props: { machines: KeyMachine[]; catalog: PickerModel[]; reach?: ConsoleReach; call: Fetcher }) {
-	const [sel, setSel] = useState<{ hostId: string; name: string } | null>(null);
+	// The open wolf lives in the path (/pack/wolves/<hostId>/<name>/<tab>), so reload, links and Back restore it. An old ?wolf=<h>/<n>&wolfTab=<t> link is redirected there.
+	const router = useRouter();
+	const pathname = usePathname();
+	const search = useSearchParams()?.toString() ?? "";
+	const sel = parseWolfPath(pathname);
+	useEffect(() => {
+		if (sel) return;
+		const to = wolfRedirect(pathname, search);
+		if (to) router.replace(to);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [pathname, search]);
+	const setSel = (next: { hostId: string; name: string }) => router.push(wolfPath(next.hostId, next.name));
 	const groups = groupWolves(props.machines);
 	const m = sel ? props.machines.find((x) => x.hostId === sel.hostId) : undefined;
 	const w = sel ? m?.wolves?.find((x) => x.name === sel.name) : undefined;
-	if (sel && m && w) return <WolfDetail key={`${sel.hostId}/${sel.name}`} machine={m} wolf={w} catalog={props.catalog} reach={props.reach} call={props.call} onBack={() => setSel(null)} />;
+	if (sel && m && w) return <WolfDetail key={`${sel.hostId}/${sel.name}`} machine={m} wolf={w} machines={props.machines} catalog={props.catalog} reach={props.reach} call={props.call} />;
+	if (sel) return <p className="text-xs text-muted-foreground" data-testid="wolf-not-found">Wolf not found: {sel.name} on {sel.hostId}. <a href="/pack/wolves" className="underline" onClick={(e) => (e.preventDefault(), router.push("/pack/wolves"))}>All wolves</a></p>;
 	if (groups.length === 0) return <p className="text-xs text-muted-foreground">No wolves have reported yet.</p>;
 	return (
 		<div data-testid="pack-wolves" className="flex flex-col gap-4 text-xs">

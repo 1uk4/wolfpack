@@ -8,7 +8,7 @@ import { useSubagentModal } from "@/components/thread/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle, ReplyNotifier } from "@/components/shell/needs-you";
 import { UpdateNotice } from "@/components/shell/update-notice";
 import { PackHealthHost } from "@/components/pack/pack-health";
-import { PackSettingsEntry } from "@/components/pack/pack-panel";
+import { PackSettingsEntry } from "@/components/pack/pack-settings-entry";
 import { useMultiMachine } from "@/components/shell/single-mac";
 import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";

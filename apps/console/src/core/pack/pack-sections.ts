@@ -71,7 +71,7 @@ export function parsePackSection(raw: string | null | undefined): PackSectionId 
 	return PACK_SECTIONS.find((s) => s.id === raw)?.id ?? "machines";
 }
 
-/** `?pack=<section>` from a page URL's query: null when absent (the Pack stays closed), else the parsed section (unknown means Machines). */
+/** `?pack=<section>` from a page URL's query: null when absent (no ?pack= means no redirect), else the parsed section (unknown means Machines). */
 export function packSectionFromSearch(search: string): PackSectionId | null {
 	const raw = new URLSearchParams(search).get("pack");
 	return raw === null ? null : parsePackSection(raw);

@@ -11,10 +11,9 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/thread/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/thread/card-registry";
-import { PINNED_OBJECT_ROW_REM, PinnedObjects, pinnedObjectDismissKey } from "@/components/thread/pinned-objects";
-import { activeDismissKey, useDismissed } from "@/components/thread/pin-store";
-import { PINNED_CHECKLIST_RESERVE, PinnedChecklist } from "@/components/thread/pinned-checklist";
-import { FEATURE_PROGRESS_RESERVE, FeatureProgressPanel, useFeatureProgress } from "@/components/thread/feature-progress";
+import { PinnedStrip, useSyncObjectPins, type StripObject } from "@/components/thread/pinned-strip";
+import { useFeatureProgress } from "@/components/thread/feature-progress";
+import { TaskPinToggle, applyAgentTaskPin, lastAgentTaskPin, syncTaskPin } from "@/components/thread/task-pin";
 import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread/thread-compaction-divider";
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/thread/subagent-message";
@@ -25,6 +24,9 @@ import { submitToThread } from "@/components/chat-bar/chat-bar-io";
 import { useAttachedStripRow } from "@/components/chat-bar/attached-strip-row";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/thread/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/shell/panel-host";
+import { ViewerPanel } from "@/components/viewer/viewer-panel";
+import { ViewHostContext, useViewObjectArrivals } from "@/components/viewer/use-view-objects";
+import { ViewerProvider } from "@/components/viewer/viewer-context";
 import { AttachmentChips, Composer } from "@/components/composer/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer/composer-controls";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
@@ -49,8 +51,6 @@ import type { ThreadWorkspace } from "@wolfpack/client";
 import {
 	ASSISTANT_CONTENT_CLASS,
 	NO_CARDS,
-	activeChecklist,
-	activeObject,
 	PROSE_BLOCK_CLASS,
 	foldCardEvent,
 	withHeldSkip,
@@ -72,6 +72,7 @@ import {
 } from "@/src/core";
 import { useThreadColor } from "@/components/thread/use-thread-color";
 import type { CardAnswers } from "@wolfpack/client";
+import { parseObjectData } from "@wolfpack/protocol/objects";
 import { ApprovalThreadCard } from "@/components/work/approval-request";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
@@ -521,23 +522,50 @@ function ThreadChatInner({
 		[],
 	);
 	// Per assistant message, its render items; a message with none (e.g. a revision-only turn whose tool row is hidden) draws no shell.
+	// show_view objects that stream in while this thread is on screen open the viewer (desktop) and may pin a chip.
+	useViewObjectArrivals(wolf, threadId, messages, status === "streaming" || status === "submitted");
 	const itemsByMessage = useMemo(
 		() => messages.map((m, mi) => (m.role === "assistant" ? renderItems(m.parts, status === "streaming" && mi === messages.length - 1) : null)),
 		[messages, status],
 	);
 	// A thread bound to a feature (or one of its tasks) pins the feature's progress panel INSTEAD of the floating checklist.
 	const featureProgress = useFeatureProgress(wolf, threadId, bound, progressTick);
-	const progressShown = featureProgress.state.phase === "ready";
-	const checklistReplaced = progressShown || (featureProgress.state.phase === "pending" && bound !== undefined);
-	const active = useMemo(() => activeChecklist(messages), [messages]);
-	const dismissedChecklist = useDismissed(active ? activeDismissKey(threadId, active) : undefined);
-	const pinned = dismissedChecklist || checklistReplaced ? undefined : active;
-	// Decisions and graphs pin in any thread (stacked under the checklist / feature progress), updating in place per objectId.
-	const activeDecision = useMemo(() => activeObject(messages, "decision"), [messages]);
-	const activeGraph = useMemo(() => activeObject(messages, "graph"), [messages]);
-	const decisionDismissed = useDismissed(pinnedObjectDismissKey(threadId, activeDecision));
-	const graphDismissed = useDismissed(pinnedObjectDismissKey(threadId, activeGraph));
-	const pinnedObjects = [decisionDismissed ? undefined : activeDecision, graphDismissed ? undefined : activeGraph].filter((a): a is NonNullable<typeof a> => a !== undefined);
+	// The transcript's checklist / decision / graph blocks feed the unified pin store (newest of each type auto-pins); the strip renders the store.
+	const stripObjects = useMemo<StripObject[]>(() => {
+		const out: StripObject[] = [];
+		for (const m of messages) {
+			if (m.role !== "assistant") continue;
+			for (const p of m.parts) {
+				if (p.type !== "object" || (p.objectType !== "checklist" && p.objectType !== "decision" && p.objectType !== "graph")) continue;
+				const data = parseObjectData(p.objectType, p.data);
+				if (!data) continue;
+				out.push({ type: p.objectType, id: p.objectId as string, rev: p.rev as number, data, ...(typeof p.pinned === "boolean" ? { pinned: p.pinned } : {}), ...(typeof p.pinRev === "number" ? { pinRev: p.pinRev } : {}), ...(typeof p.recency === "number" ? { recency: p.recency } : {}) });
+			}
+		}
+		return out;
+	}, [messages]);
+	useSyncObjectPins(threadId, stripObjects);
+	// The bound item pins the task chip (removed on unbind); the owner's x hides it for that item without unbinding.
+	useEffect(() => {
+		syncTaskPin(threadId, bound);
+	}, [threadId, bound]);
+	// The agent's pin({objectId: "task"}) calls hide/show the same chip (latest event wins against the owner's x).
+	useEffect(() => {
+		applyAgentTaskPin(threadId, bound, lastAgentTaskPin(messages));
+	}, [threadId, bound, messages]);
+	// The pinned column's measured height is the transcript's top reserve (any number of chips, an expanded card, the progress panel).
+	const pinnedColumnRef = useRef<HTMLDivElement | null>(null);
+	const [pinnedHeight, setPinnedHeight] = useState(0);
+	useLayoutEffect(() => {
+		const el = pinnedColumnRef.current;
+		if (!el) return;
+		const measure = () => setPinnedHeight(Math.ceil(el.getBoundingClientRect().height));
+		measure();
+		if (typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(measure);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const recordingHere = recordingAt(null, dictation?.phase ?? "idle");
 	// Starting dictation (button, ⌘D) puts the caret at the end of this composer (the note box in note mode: same textarea).
@@ -718,6 +746,7 @@ function ThreadChatInner({
 					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
 					<TurnTimer startedAt={turnStart} />
 					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} />
+					<TaskPinToggle threadId={threadId} bound={bound} />
 					{kind === "feature" && (
 						<ThreadActionsMenu
 							testid="thread-header-actions"
@@ -743,8 +772,7 @@ function ThreadChatInner({
 				<div className="relative flex min-h-0 flex-1" data-testid="thread-tint" data-thread-color={tintHex}>
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
-							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${progressShown ? FEATURE_PROGRESS_RESERVE : pinned ? PINNED_CHECKLIST_RESERVE : "pt-4 max-md:pt-14"}`}>
-								{pinnedObjects.length > 0 && <div aria-hidden style={{ height: `${pinnedObjects.length * PINNED_OBJECT_ROW_REM}rem` }} className="-mb-4 shrink-0" />}
+							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${pinnedHeight > 0 ? "" : "pt-4 max-md:pt-14"}`} style={pinnedHeight > 0 ? { paddingTop: `${pinnedHeight + 8}px` } : undefined} data-testid="transcript-column">
 								{messages.length === 0 && !busy && (
 									<ConversationEmptyState title={title} description="Say something to start a turn." />
 								)}
@@ -808,7 +836,12 @@ function ThreadChatInner({
 																// One part per object (projectView folds revisions): latest data, first position.
 																const { objectId, objectType, rev, data } = item.part as unknown as { objectId: string; objectType: string; rev: number; data: unknown };
 																const Card = lookupCard("object", objectType)?.Renderer;
-																return Card ? <Card key={`obj-${objectId}`} objectId={objectId} type={objectType} rev={rev} data={data} /> : null;
+																if (!Card) return null;
+																return (
+																	<ViewHostContext.Provider key={`obj-${objectId}`} value={{ wolf, threadId }}>
+																		<Card objectId={objectId} type={objectType} rev={rev} data={data} />
+																	</ViewHostContext.Provider>
+																);
 															}
 															case "separator":
 																return <Separator key={`sep-${item.index}`} className="my-3" />;
@@ -961,15 +994,12 @@ function ThreadChatInner({
 						</div>
 					</Conversation>
 					{/* One flex column for everything pinned: checklist / feature progress, then the decision and graph pins. The pins sit below whichever panel is open, at its real height; the column's max height (the thread area minus the composer reserve) caps what is open. */}
-					<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-h-0 flex-col" style={{ maxHeight: `max(6rem, calc(100% - ${dockHeight ?? 160}px))` }} data-testid="pinned-column">
-						{featureProgress.state.phase === "ready" && (
-							<FeatureProgressPanel threadId={threadId} model={featureProgress.state.model} busy={busy} />
-						)}
-						<PinnedChecklist active={pinned} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
-						<PinnedObjects items={pinnedObjects} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
+					<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-h-0 flex-col" style={{ maxHeight: `max(6rem, calc(100% - ${dockHeight ?? 160}px))` }} data-testid="pinned-column" ref={pinnedColumnRef}>
+						<PinnedStrip wolf={wolf} threadId={threadId} objects={stripObjects} task={featureProgress.state.phase === "ready" ? { model: featureProgress.state.model, busy } : undefined} onDismiss={() => inputRef.current?.focus()} />
 					</div>
 				</div>
 			</div>
+			<ViewerPanel wolf={wolf} threadId={threadId} />
 			<RightPanelHost />
 		</div>
 	);
@@ -988,7 +1018,9 @@ function scrollParent(el: HTMLElement | null): HTMLElement | null {
 export function ThreadChat(props: ComponentProps<typeof ThreadChatInner>) {
 	return (
 		<PanelHostProvider wolf={props.wolf} slug={props.slug} threadId={props.threadId}>
-			<ThreadChatInner {...props} />
+			<ViewerProvider wolf={props.wolf} threadId={props.threadId}>
+				<ThreadChatInner {...props} />
+			</ViewerProvider>
 		</PanelHostProvider>
 	);
 }

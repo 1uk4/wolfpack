@@ -336,6 +336,20 @@ describe("structured objects", () => {
     expect(ThreadObjectSchema.parse(o)).toMatchObject({ pinned: false, pinRev: 3 });
   });
 
+  it("show_view maps the public kinds to the console view kinds and rejects an empty id", () => {
+    const spec = OBJECT_TOOL_PARAMS.show_view;
+    expect(spec.type).toBe("view");
+    expect(parseObjectData("view", { kind: "work-item", id: "work-wolfpack-r6P99xx", title: "T" })).toEqual({ kind: "work", id: "work-wolfpack-r6P99xx", title: "T" });
+    expect(parseObjectData("view", { kind: "kb-entry", id: "kb-wolfpack-abc" })).toEqual({ kind: "kb", id: "kb-wolfpack-abc" });
+    // already-mapped data (history replay) is accepted unchanged
+    expect(parseObjectData("view", { kind: "kb", id: "x" })).toEqual({ kind: "kb", id: "x" });
+    expect(parseObjectData("view", { kind: "work-item", id: "" })).toBeUndefined();
+    expect(parseObjectData("view", { kind: "graph", id: "x" })).toBeUndefined();
+    expect(spec.schema.safeParse({ kind: "work-item", id: "", objectId: "o" }).success).toBe(false);
+    expect(spec.schema.safeParse({ kind: "work-item", id: "w" }).success).toBe(false);
+    expect(spec.schema.parse({ kind: "kb-entry", id: "k", objectId: "o", pinned: true })).toMatchObject({ pinned: true });
+  });
+
   it("parseObjectData validates per type and chosen against option ids", () => {
     expect(parseObjectData("decision", decision)).toMatchObject({ chosen: "a" });
     expect(parseObjectData("decision", { ...decision, chosen: "zzz" })).toBeUndefined();

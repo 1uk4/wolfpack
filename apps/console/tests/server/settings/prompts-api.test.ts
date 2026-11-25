@@ -28,6 +28,12 @@ describe("prompts API", () => {
 		assert.equal((await saved.json()).code, "invalid_request");
 		assert.equal((await api.reset("hal", "p", new Request("http://c/x", { method: "DELETE" }))).status, 400);
 	});
+	it("hub returns only the hub's prompts (no config), and 503 when the client has no hub settings", async () => {
+		const hub = { id: "sweep.produce", group: "KB sweep", label: "Write the entry", text: "t" };
+		const res = await createPromptsApi(stub({ getHubSettings: async () => ({ version: "1", prompts: [hub], config: { secret: { set: true } } }) })).hub();
+		assert.deepEqual(await res.json(), { prompts: [hub] });
+		assert.equal((await createPromptsApi(stub({})).hub()).status, 503);
+	});
 	it("answers 503 when the client has no prompts support (mock mode)", async () => {
 		assert.equal((await createPromptsApi(stub({})).list("hal")).status, 503);
 	});

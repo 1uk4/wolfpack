@@ -97,6 +97,8 @@ export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; mach
 	const base = `/api/wolves/${encodeURIComponent(wolf.name)}/settings`;
 	const [view, setView] = useState<SettingsView | null>(null);
 	const [rows, setRows] = useState<PromptRow[]>([]);
+	// The hub's KB sweep and reorg prompts (read-only); null until loaded or when the hub does not answer.
+	const [hubRows, setHubRows] = useState<PromptRow[] | null>(null);
 	const [error, setError] = useState("");
 	const [saved, setSaved] = useState(false);
 	const [scope, setScope] = useState<PromptScope>("all");
@@ -119,6 +121,7 @@ export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; mach
 			setError("This console's server is not answering.");
 			return;
 		}
+		void call("/api/hub/prompts").then(async (r) => setHubRows(r.ok ? ((await r.json()) as { prompts: PromptRow[] }).prompts : null)).catch(() => setHubRows(null));
 		void call(`/api/wolves/${encodeURIComponent(wolf.name)}/prompts`).then(async (r) => (r.ok ? setRows(((await r.json()) as { prompts: PromptRow[] }).prompts) : setRows([]))).catch(() => setRows([]));
 	}, [base, call, wolf.name, reachable]);
 	useEffect(() => void load(), [load]);
@@ -146,15 +149,15 @@ export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; mach
 	const needed = keysNeeded(machine, wolf);
 	const domains = (view?.config.domains as string[] | undefined) ?? [];
 	const canEdit = (k: string) => !!view?.editable.includes(k);
-	const graph = useMemo(() => {
+	// Every row is read-only on this page by design: the wolf's own settings tabs edit the editable prompts (identity, orchestrator rules,
+	// profiles), and the prompts the wolf cannot override are read-only in wolfd. So `editable: false` here is not a gap.
+	const graphs = useMemo(() => {
 		const flow = rows.map((r) => ({ id: r.id, group: r.group, label: r.label, editable: false, text: r.text, file: r.file }));
-		const gs = buildGraphs(flow, null);
-		return gs.find((g) => g.key === SCOPE_GRAPH[scope]) ?? gs[0]!;
-	}, [rows, scope]);
-	const blocks = useMemo(() => {
-		const flow = rows.map((r) => ({ id: r.id, group: r.group, label: r.label, editable: false, text: r.text, file: r.file }));
-		return buildPromptBlocks(buildGraphs(flow, null), rows);
-	}, [rows]);
+		const hub = hubRows?.map((r) => ({ id: r.id, group: r.group, label: r.label, editable: false, text: r.text }));
+		return buildGraphs(flow, hub ?? null);
+	}, [rows, hubRows]);
+	const graph = useMemo(() => graphs.find((g) => g.key === SCOPE_GRAPH[scope]) ?? graphs[0]!, [graphs, scope]);
+	const blocks = useMemo(() => buildPromptBlocks(graphs, [...rows, ...(hubRows ?? []).map((r) => ({ ...r, id: `hub:${r.id}`, source: "default" as const }))]), [graphs, rows, hubRows]);
 
 	// The wolf page's tabs. One entry per tab; the last path segment picks it (Models is the default and leaves no segment).
 	// An open prompt (?view=prompt:<id>) always shows the Prompts tab.

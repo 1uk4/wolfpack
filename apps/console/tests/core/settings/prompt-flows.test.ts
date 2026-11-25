@@ -14,7 +14,9 @@ const IDS = [
 	"tool.read", "tool.bash", "tool.subagent",
 	"pipeline.observer", "pipeline.observer-user", "pipeline.consolidate", "pipeline.consolidate-user", "pipeline.pack-digest",
 	"pipeline.crawl-observer", "pipeline.crawl-observer-user", "pipeline.crawl-consolidate", "pipeline.crawl-consolidate-user", "pipeline.crawl-journey", "pipeline.crawl-journey-user",
-	"pipeline.distill", "pipeline.distill-graduation", "pipeline.distill-graduation-standing", "pipeline.work-record", "pipeline.task-summary", "pipeline.breakdown-suggestion",
+	"pipeline.distill", "pipeline.distill-graduation", "pipeline.distill-graduation-standing", "pipeline.work-record", "pipeline.work-log", "pipeline.work-compact", "pipeline.work-distill", "pipeline.work-tidy", "pipeline.task-summary", "pipeline.breakdown-suggestion",
+	"request.wolf_memory", "request.wolf_memory_retired", "request.kb_access", "request.task_tools", "request.active_task", "request.telegram-suffix",
+	"delivery.task-notice", "delivery.ask-answer-answered", "delivery.subagent-completed", "delivery.subagent-child-instructions", "delivery.continue-prompt", "delivery.guard-worker",
 	"pipeline.active-work-header", "pipeline.success-criteria-line",
 	...["idea", "plan", "feasibility", "approved", "in_build", "shipped", "live"].map((s) => `pipeline.stage-context.${s}`),
 	"compaction.pi-durable-system", "compaction.pi-durable-instructions",
@@ -27,7 +29,7 @@ const TEXTS: Record<string, string> = {
 	"agent.scout": profile("scout"),
 };
 const TOOL_FILES: Record<string, string> = { "tool.read": "extension coding-tools", "tool.bash": "extension coding-tools", "tool.subagent": "extension wolfd-subagents" };
-const rows = (ids = IDS): FlowRow[] => ids.map((id) => ({ id, group: "g", label: id, editable: !/^(system|tool|pipeline|compaction)\./.test(id), text: TEXTS[id] ?? "t", ...(TOOL_FILES[id] ? { file: TOOL_FILES[id] } : {}) }));
+const rows = (ids = IDS): FlowRow[] => ids.map((id) => ({ id, group: "g", label: id, editable: !/^(system|tool|pipeline|compaction|request|delivery)\./.test(id), text: TEXTS[id] ?? "t", ...(TOOL_FILES[id] ? { file: TOOL_FILES[id] } : {}) }));
 const count = (xs: string[], id: string) => xs.filter((x) => x === id).length;
 
 describe("prompt tree", () => {
@@ -86,7 +88,7 @@ const edgeSet = (g: PromptGraph) => g.edges.map((e) => `${e.from}>${e.to}`);
 describe("prompt graphs", () => {
 	it("offers one graph per tab, in order, with no dangling edge and no cycle", () => {
 		const gs = graphs();
-		assert.deepEqual(gs.map((g) => g.key), ["system", "subagents", "tools", "work", "kb", "crawl", "sweep", "compaction"]);
+		assert.deepEqual(gs.map((g) => g.key), ["system", "request", "subagents", "tools", "work", "kb", "memory", "crawl", "sweep", "compaction"]);
 		for (const g of gs) {
 			const ids = new Set(g.nodes.map((n) => n.id));
 			assert.equal(ids.size, g.nodes.length, `${g.key}: unique node ids`);
@@ -143,6 +145,20 @@ describe("prompt graphs", () => {
 		assert.equal(crawl.nodes.find((n) => n.id === "step:crawl:4")!.marker, "no prompt");
 		assert.deepEqual(graphOf(gs, "compaction").nodes.map((n) => n.id).slice(-2), ["compaction.pi-durable-system", "compaction.pi-durable-instructions"]);
 		assert.equal(graphOf(gs, "work").nodes[0]!.id, "new-work");
+	});
+
+	it("draws the Memory graph as the memory prompt chain, with work memory and work context on it, and the Per request graph with sections and injected messages", () => {
+		const gs = graphs();
+		const mem = graphOf(gs, "memory");
+		const edges = edgeSet(mem);
+		for (const e of ["pipeline.observer>pipeline.observer-user", "pipeline.distill>hub-curation", "pipeline.work-log>pipeline.work-compact", "pipeline.work-compact>pipeline.work-distill", "pipeline.work-distill>pipeline.work-record", "pipeline.work-record>pipeline.work-tidy", "pipeline.active-work-header>pipeline.success-criteria-line"]) assert.ok(edges.includes(e), e);
+		assert.ok(mem.nodes.some((n) => n.id === "pipeline.stage-context.in_build"));
+		const req = graphOf(gs, "request");
+		assert.deepEqual(edgeSet(req).slice(0, 2), ["request.wolf_memory>request.wolf_memory_retired", "request.wolf_memory_retired>request.kb_access"]);
+		assert.deepEqual(req.nodes.find((n) => n.id === "delivery.continue-prompt")?.marker, "read-only");
+		assert.ok(edgeSet(req).includes("group:nudges>delivery.continue-prompt"));
+		// The work memory ids no longer fall under Other on the System graph.
+		assert.equal(graphOf(gs, "system").nodes.find((n) => n.id === "other"), undefined);
 	});
 
 	it("draws the Tools graph: the wolf to one node per extension to each tool", () => {

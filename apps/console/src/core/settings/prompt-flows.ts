@@ -192,15 +192,17 @@ function buildFlows(allRows: FlowRow[]): Flow[] {
 
 // ---- One dependency graph per flow (the Prompts page draws these; there is no list view). ----
 
-export type GraphKey = "system" | "subagents" | "tools" | "work" | "kb" | "crawl" | "sweep" | "compaction";
+export type GraphKey = "system" | "request" | "subagents" | "tools" | "work" | "kb" | "memory" | "crawl" | "sweep" | "compaction";
 export type PromptsTab = GraphKey;
 /** The tabs, in order. */
 export const PROMPT_TABS: ReadonlyArray<{ key: PromptsTab; title: string }> = [
 	{ key: "system", title: "System prompt" },
+	{ key: "request", title: "Per request" },
 	{ key: "subagents", title: "Subagents" },
 	{ key: "tools", title: "Tools" },
 	{ key: "work", title: "Work creation" },
 	{ key: "kb", title: "Conversation to KB" },
+	{ key: "memory", title: "Memory" },
 	{ key: "crawl", title: "Crawl" },
 	{ key: "sweep", title: "KB sweep" },
 	{ key: "compaction", title: "Compaction" },
@@ -367,8 +369,57 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 	}
 	const sweep: PromptGraph = { key: "sweep", title: "KB sweep", nodes: sweepNodes, edges: sweepEdges };
 
+	// Per request: the extension sections wolfd re-renders every request (in the order the model sees them), then the text wolfd and the
+	// harness inject (task notices, ask answers, sub-agent deliveries, child instructions, nudges, guard refusals). All read-only.
+	const reqNodes: GraphNodeDef[] = [];
+	const reqEdges: GraphEdgeDef[] = [];
+	const sections = ["wolf_memory", "wolf_memory_retired", "kb_access", "task_tools", "active_task", "telegram-suffix"].map((s) => `request.${s}`).filter((id) => byId.has(id));
+	reqNodes.push(...sections.map((id) => leaf(id)));
+	reqEdges.push(...chain(sections));
+	const DELIVERY_GROUPS: Array<{ id: string; title: string; note: string; ids: string[] }> = [
+		{ id: "group:notices", title: "Notices and answers", note: "User-role messages wolfd writes into the main wolf's turn.", ids: ["delivery.task-notice", "delivery.ask-answer-submitted", "delivery.ask-answer-answered", "delivery.ask-answer-skipped", "delivery.ask-revise-not-applied"] },
+		{ id: "group:subagents", title: "Sub-agent deliveries and instructions", note: "What a parent receives from a child, and what the child is told at spawn.", ids: ["delivery.subagent-completed", "delivery.subagent-failed", "delivery.subagent-asks", "delivery.subagent-stopped", "delivery.subagent-child-instructions"] },
+		{ id: "group:nudges", title: "Continue and retry nudges", note: "Sent after tool rounds and on retries, and the errors the owner sees.", ids: ["delivery.continue-prompt", "delivery.empty-ack-nudge", "delivery.dropped-call-message", "delivery.empty-ack-message"] },
+		{ id: "group:guards", title: "Guard refusals", note: "What a subagent's bash tool answers when the command guard blocks a command.", ids: ["delivery.guard-read-only", "delivery.guard-worker"] },
+	];
+	for (const g of DELIVERY_GROUPS) {
+		const have = g.ids.filter((id) => byId.has(id));
+		if (!have.length) continue;
+		reqNodes.push({ id: g.id, title: g.title, host: "wolf", marker: markerOf(have), ids: [], note: g.note }, ...have.map((id) => leaf(id)));
+		reqEdges.push(...have.map((to) => ({ from: g.id, to })));
+	}
+	const request: PromptGraph = { key: "request", title: "Per request", nodes: reqNodes, edges: reqEdges };
+
+	// Memory: the whole memory prompt chain on one graph. Live memory (observe, consolidate, promote), then the KB hand-off to the hub's
+	// sweep; work memory (log, compact, distill, record, tidy, summary) fed by work-tagged observations; graduation; and the work context
+	// injected into a thread bound to an item. Crawl keeps its own tab.
+	const memNodes: GraphNodeDef[] = [];
+	const memEdges: GraphEdgeDef[] = [];
+	const memChain = (want: string[]): string[] => {
+		const ids = want.filter((id) => byId.has(id));
+		for (const id of ids) if (!memNodes.some((n) => n.id === id)) memNodes.push(leaf(id));
+		memEdges.push(...chain(ids));
+		return ids;
+	};
+	memChain(["pipeline.observer", "pipeline.observer-user", "pipeline.consolidate", "pipeline.consolidate-user", "pipeline.pack-digest", "pipeline.distill"]);
+	if (byId.has("pipeline.distill")) {
+		memNodes.push({ id: "hub-curation", title: "Hub curation (KB sweep)", host: "hub", marker: markerOf(SWEEP.map((x) => hubId(x.id))), ids: [], link: "sweep", note: "The contribution lands in the KB inbox; the hub's sweep prompts are on the KB sweep tab.", ...(hubRows === null ? { hubMissing: true } : {}) });
+		memEdges.push({ from: "pipeline.distill", to: "hub-curation" });
+	}
+	const workChain = memChain(["pipeline.work-log", "pipeline.work-compact", "pipeline.work-distill", "pipeline.work-record", "pipeline.work-tidy", "pipeline.task-summary"]);
+	if (workChain[0] && byId.has("pipeline.observer")) memEdges.push({ from: "pipeline.observer", to: workChain[0] });
+	const grad = memChain(["pipeline.work-tidy", "pipeline.distill-graduation", "pipeline.distill-graduation-standing"]);
+	if (grad.length > 1 && byId.has("pipeline.distill")) memEdges.push({ from: "pipeline.distill", to: grad[1]! });
+	memChain(["pipeline.active-work-header", "pipeline.success-criteria-line", ...STAGES.map((s) => `pipeline.stage-context.${s}`)]);
+	// With the hub connected the sweep and reorg prompts follow the hand-off on this same graph, so the chain is whole (the KB sweep tab keeps its own view).
+	if (hubRows !== null && byId.has(hubId("sweep.match-subject"))) {
+		memNodes.push(...sweepNodes.filter((n) => n.id !== "inbox"));
+		memEdges.push(...sweepEdges.filter((e) => e.from !== "inbox"), { from: "hub-curation", to: hubId("sweep.match-subject") });
+	}
+	const memory: PromptGraph = { key: "memory", title: "Memory", nodes: memNodes, edges: memEdges };
+
 	// Anything no graph places gets its own node under Other on the System prompt graph, so a new prompt never vanishes.
-	const graphs = [system, subagents, tools, work, kb, crawl, sweep, compaction];
+	const graphs = [system, request, subagents, tools, work, kb, memory, crawl, sweep, compaction];
 	const placed = new Set(graphs.flatMap((g) => g.nodes.flatMap((n) => n.ids)));
 	const otherIds = rows.filter((r) => !placed.has(r.id)).map((r) => r.id);
 	if (otherIds.length) {

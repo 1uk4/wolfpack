@@ -4,8 +4,14 @@ import { describe, it } from "node:test";
 import { SCOPE_GRAPH, filterByScope, promptScope, sizeText, sourceText } from "../../../src/core/pack/wolf-prompt-scopes.ts";
 
 describe("Wolf prompt scopes", () => {
-	it("shows each scope on a graph that exists in the prompt flows: Memory the background jobs, Workspace the subagents, the rest the system prompt", () => {
-		assert.deepEqual(SCOPE_GRAPH, { all: "system", wolf: "system", memory: "background", workspace: "subagents", system: "system" });
+	it("shows each scope on its own graph: Memory the memory chain, Wolf the per-request text, Workspace the subagents", () => {
+		assert.deepEqual(SCOPE_GRAPH, { all: "system", wolf: "request", memory: "memory", workspace: "subagents", system: "system" });
+	});
+
+	it("puts work memory, work context and hub sweep prompts under Memory, and per-request sections and injected messages under Wolf", () => {
+		for (const id of ["pipeline.work-log", "pipeline.work-compact", "pipeline.work-distill", "pipeline.work-tidy", "pipeline.breakdown-suggestion", "pipeline.stage-context.plan", "pipeline.active-work-header", "pipeline.success-criteria-line", "hub:sweep.produce"]) assert.equal(promptScope(id), "memory", id);
+		assert.equal(promptScope("request.kb_access"), "wolf");
+		assert.equal(promptScope("delivery.continue-prompt"), "wolf");
 	});
 
 	it("puts the background observe and consolidate prompts under Memory, the composed blocks under System", () => {

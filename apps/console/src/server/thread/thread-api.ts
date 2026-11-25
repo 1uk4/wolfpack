@@ -303,6 +303,8 @@ export function createThreadApi(source: ClientSource) {
 				const code = isError(err, "ProtocolError") ? (err as Error & { code?: string }).code : undefined;
 				if (code === "forbidden") return json({ error: (err as Error).message }, 403);
 				if (code === "too_large") return json({ error: (err as Error).message }, 413);
+				// A host older than the frame route answers 404 "no route ..." / "no such path: ..."; a real missing file says "no such frame file".
+				if (isNotFound(err) && /^(no route|no such path)\b/.test(err.message)) return json({ error: err.message, code: "host_outdated" }, 404);
 				return failure(err);
 			}
 		},

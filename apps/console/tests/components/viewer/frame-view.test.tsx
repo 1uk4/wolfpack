@@ -135,6 +135,15 @@ describe("frame renderer", () => {
 		await flush();
 		assert.ok(attr(iframe()!, "srcdoc")!.endsWith("<p>back</p>"));
 	});
+
+	it("a host without the frame route says it needs an update, not that the frame is gone", async () => {
+		reply = { status: 404, body: JSON.stringify({ error: "no route /v1/wolves/hal/frame-file", code: "host_outdated" }) };
+		await mount();
+		const err = document.querySelector('[data-testid="frame-error"]')!;
+		assert.equal(err.getAttribute("data-gone"), null);
+		assert.match(err.textContent ?? "", /host needs an update/);
+		assert.doesNotMatch(err.textContent ?? "", /gone/);
+	});
 });
 
 describe("frame descriptor", () => {

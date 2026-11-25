@@ -24,7 +24,7 @@ export function buildSrcdoc(html: string): string {
 	return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">${html.replace(META_REFRESH, "")}`;
 }
 
-type State = { phase: "loading" } | { phase: "nowolf" } | { phase: "navigated" } | { phase: "ready"; html: string } | { phase: "error"; status: number | null };
+type State = { phase: "loading" } | { phase: "nowolf" } | { phase: "navigated" } | { phase: "ready"; html: string } | { phase: "error"; status: number | null; outdated?: boolean };
 
 export const frameUrl = (wolf: string, path: string) => `/api/wolves/${encodeURIComponent(wolf)}/frame-file?path=${encodeURIComponent(path)}`;
 
@@ -54,7 +54,10 @@ export function FrameViewRenderer({ descriptor, wolf = "", onTitle }: ViewRender
 		fetch(frameUrl(wolf, path), { cache: "no-store" })
 			.then(async (res) => {
 				if (!live) return;
-				setState(res.ok ? { phase: "ready", html: await res.text() } : { phase: "error", status: res.status });
+				if (res.ok) return setState({ phase: "ready", html: await res.text() });
+				// A 404 from a host that predates the frame route is not a missing file: the console tags it host_outdated.
+				const outdated = res.status === 404 && ((await res.json().catch(() => null)) as { code?: string } | null)?.code === "host_outdated";
+				if (live) setState({ phase: "error", status: res.status, ...(outdated ? { outdated: true } : {}) });
 			})
 			.catch(() => live && setState({ phase: "error", status: null }));
 		return () => {
@@ -82,11 +85,11 @@ export function FrameViewRenderer({ descriptor, wolf = "", onTitle }: ViewRender
 		);
 	}
 	if (state.phase === "error") {
-		const gone = state.status === 404;
+		const gone = state.status === 404 && !state.outdated;
 		return (
 			<div className="flex flex-col items-start gap-3 p-4 text-sm" role="alert" data-testid="frame-error" data-gone={gone ? "true" : undefined}>
 				<p className="text-muted-foreground">
-					{gone ? `This frame is gone: ${path}` : state.status === null ? "Could not load the frame (network error)." : `Could not load the frame (status ${state.status}).`}
+					{gone ? `This frame is gone: ${path}` : state.outdated ? `This wolf's host needs an update to show frames (${path}).` : state.status === null ? "Could not load the frame (network error)." : `Could not load the frame (status ${state.status}).`}
 				</p>
 				<Button variant="outline" size="sm" onClick={reload}>Reload</Button>
 			</div>

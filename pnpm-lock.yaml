@@ -581,8 +581,8 @@ importers:
         specifier: ^1.21.0
         version: 1.46.0(supports-color@10.2.2)
       pi-claude-bridge-stateless:
-        specifier: git+https://github.com/1uk4/pi-claude-bridge.git#91b1fc4d1f7be552c8e88913aaa7fa00c3058c8d
-        version: pi-claude-bridge@https://codeload.github.com/1uk4/pi-claude-bridge/tar.gz/91b1fc4d1f7be552c8e88913aaa7fa00c3058c8d(@anthropic-ai/sdk@0.131.0(zod@4.6.7))(@earendil-works/pi-ai@1.4.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7))(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(undici@8.10.2)(ws@8.22.0)(zod@4.6.7))(@earendil-works/pi-coding-agent@1.4.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7))(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(ws@8.22.0)(zod@4.6.7))(@earendil-works/pi-tui@1.4.0)(supports-color@10.2.2)(typebox@1.3.27)(zod@4.6.7)
+        specifier: git+https://github.com/1uk4/pi-claude-bridge.git#91f9437eeb3175d27ec01ec4aa3b63cff54e6bdd
+        version: pi-claude-bridge@https://codeload.github.com/1uk4/pi-claude-bridge/tar.gz/91f9437eeb3175d27ec01ec4aa3b63cff54e6bdd(@anthropic-ai/sdk@0.131.0(zod@4.6.7))(@earendil-works/pi-ai@1.4.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7))(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(undici@8.10.2)(ws@8.22.0)(zod@4.6.7))(@earendil-works/pi-coding-agent@1.4.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7))(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(ws@8.22.0)(zod@4.6.7))(@earendil-works/pi-tui@1.4.0)(supports-color@10.2.2)(typebox@1.3.27)(zod@4.6.7)
       typebox:
         specifier: ^1.3.27
         version: 1.3.27
@@ -5695,8 +5695,8 @@ packages:
     resolution: {integrity: sha512-eRWB5LBz7PpDu4PUlwT0PhnQfTQJlDDdPa35urV4Osrm0t0AqQFGn+UIkU3klZvwJ8KPO3VbBFsXquA6p6kqZw==}
     engines: {node: '>=12', npm: '>=6'}
 
-  pi-claude-bridge@https://codeload.github.com/1uk4/pi-claude-bridge/tar.gz/91b1fc4d1f7be552c8e88913aaa7fa00c3058c8d:
-    resolution: {gitHosted: true, integrity: sha512-PpjyUp7r8t5Gt3vShA22y6OpvVqDtS2MxXCcLQWmB8Hpfmp0dXuNE3m0HG+v3WINxgwdEVqFmTyTwicwLt/46g==, tarball: https://codeload.github.com/1uk4/pi-claude-bridge/tar.gz/91b1fc4d1f7be552c8e88913aaa7fa00c3058c8d}
+  pi-claude-bridge@https://codeload.github.com/1uk4/pi-claude-bridge/tar.gz/91f9437eeb3175d27ec01ec4aa3b63cff54e6bdd:
+    resolution: {gitHosted: true, integrity: sha512-x5KO4PKen8wHyg6Tm7Zaj7H+GyKYR0aYZr0Cpc64ZT2ZCNqBBhSDCYIn9iyMJNXFAaVSe1pS8tqALTg0PBlAfA==, tarball: https://codeload.github.com/1uk4/pi-claude-bridge/tar.gz/91f9437eeb3175d27ec01ec4aa3b63cff54e6bdd}
     version: 0.9.3
     engines: {node: '>=20'}
     peerDependencies:
@@ -12583,7 +12583,7 @@ snapshots:
 
   pe-library@0.4.1: {}
 
-  pi-claude-bridge@https://codeload.github.com/1uk4/pi-claude-bridge/tar.gz/91b1fc4d1f7be552c8e88913aaa7fa00c3058c8d(@anthropic-ai/sdk@0.131.0(zod@4.6.7))(@earendil-works/pi-ai@1.4.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7))(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(undici@8.10.2)(ws@8.22.0)(zod@4.6.7))(@earendil-works/pi-coding-agent@1.4.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7))(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(ws@8.22.0)(zod@4.6.7))(@earendil-works/pi-tui@1.4.0)(supports-color@10.2.2)(typebox@1.3.27)(zod@4.6.7):
+  pi-claude-bridge@https://codeload.github.com/1uk4/pi-claude-bridge/tar.gz/91f9437eeb3175d27ec01ec4aa3b63cff54e6bdd(@anthropic-ai/sdk@0.131.0(zod@4.6.7))(@earendil-works/pi-ai@1.4.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7))(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(undici@8.10.2)(ws@8.22.0)(zod@4.6.7))(@earendil-works/pi-coding-agent@1.4.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7))(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(ws@8.22.0)(zod@4.6.7))(@earendil-works/pi-tui@1.4.0)(supports-color@10.2.2)(typebox@1.3.27)(zod@4.6.7):
     dependencies:
       '@anthropic-ai/claude-agent-sdk': 0.3.321(@anthropic-ai/sdk@0.131.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7))(zod@4.6.7)
       '@earendil-works/pi-ai': 1.4.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7))(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(undici@8.10.2)(ws@8.22.0)(zod@4.6.7)

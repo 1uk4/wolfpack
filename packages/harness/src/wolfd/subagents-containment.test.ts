@@ -358,6 +358,16 @@ describe("review follow-ups", () => {
     rmSync(outside, { recursive: true, force: true });
   });
 
+  it("still isolates a writer whose profile pins a cwd inside a git repo that is not a fenced root", async () => {
+    const { w, r } = await boot();
+    writeFileSync(join(w.root, "agent", "agents", "pinned.md"), `---\nname: pinned\ndescription: pinned writer\nmodel: fast\ntools: read, write, edit, bash\ncwd: ${r.dir}\n---\n\nYou are a test agent.\n`);
+    await say(w, "spawn pinned: MODE_QUIET");
+    await settled(w, 1);
+    const [rec] = regOf(w).children;
+    expect(rec.workspace.path).toContain(r.root);
+    expect(existsSync(join(r.dir, "quiet.txt"))).toBe(false);
+  });
+
   it("rewriteBrief covers $HOME and ${HOME} forms", () => {
     const home = homedir();
     const out = rewriteBrief("cd $HOME/x/repo && cd ${HOME}/x/repo/src", [`${home}/x/repo`], "/w/child");

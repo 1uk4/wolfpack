@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { sectionSummary } from "./summarize.js";
+import { sectionSummary, labelSection } from "./summarize.js";
 import { SectionSummarySchema } from "../shared/index.js";
 import type { Engine } from "@wolfpack/engine";
 
@@ -81,5 +81,16 @@ describe("sectionSummary", () => {
     expect(SectionSummarySchema.parse({ summary: "  Glicko-2 ratings  " }).summary).toBe(
       "Glicko-2 ratings"
     );
+  });
+});
+
+describe("labelSection", () => {
+  const titled = (title: string): Engine =>
+    ({ call: vi.fn(async (_s: unknown, schema: { parse: (v: unknown) => unknown }) => schema.parse({ title })) }) as unknown as Engine;
+
+  it("clips a sentence-long label to a short title at a word boundary", async () => {
+    const long = "Planning guidance for a simple bus management app on whether HIPAA applies, where to host it and which database to use";
+    expect(await labelSection(titled(long), "x")).toBe("Planning guidance for a simple bus management app on whether HIPAA");
+    expect(await labelSection(titled(" Platform Authentication "), "x")).toBe("Platform Authentication");
   });
 });

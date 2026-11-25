@@ -256,7 +256,7 @@ export async function produceEntry(
   // findings, then strip what can be stripped safely.
   const before = lintOpinion(opinion, previous, liveIds);
   let retried = false;
-  if (hardFindings(before).length || before.some((f) => f.code === "oversize")) {
+  if (hardFindings(before).length || before.some((f) => f.code === "oversize" || f.code === "long-title")) {
     retried = true;
     opinion = shape(
       await engine.call("produce", LlmOpinion, {

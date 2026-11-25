@@ -48,6 +48,7 @@ WRITING RULES:
   kind "decision" (the pipeline keeps the old one and links the new one to it).
   Otherwise leave "supersedesDecision" false; your output is then discarded and
   the decision stays as it is.
+- TITLE: a noun phrase naming the subject, at most 70 characters, never a sentence or a clause with a verb. Put the facts in the summary.
 - LAYOUT: the entry is rendered as "# <title>", then the summary as the lede,
   then the detail. The summary is the whole lede (one paragraph, however many
   sentences it needs). Start the detail at its first "## " section: do NOT

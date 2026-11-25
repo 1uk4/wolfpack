@@ -2,7 +2,7 @@
  * summarize — confined section-summary LLM call for crystallize + digest.
  */
 import type { Engine } from "@wolfpack/engine";
-import { SECTION_SUMMARY_SYSTEM, LABEL_SECTION_SYSTEM, SPLIT_SECTION_SYSTEM, HIERARCHY } from "@wolfpack/engine";
+import { SECTION_SUMMARY_SYSTEM, LABEL_SECTION_SYSTEM, SPLIT_SECTION_SYSTEM, HIERARCHY, KB_TITLE_MAX } from "@wolfpack/engine";
 import { SectionSummarySchema, LabelSectionSchema, SplitSectionSchema } from "../shared/index.js";
 
 /** One member entry of a section, as fed to sectionSummary. */
@@ -82,7 +82,11 @@ export async function labelSection(
     prompt,
   });
 
-  return result.title;
+  // The prompt asks for 2-6 words but nothing enforced it: a sentence-long label reached the tree and the wolves' kb_access listing.
+  const title = result.title.trim();
+  if (title.length <= KB_TITLE_MAX) return title;
+  const cut = title.slice(0, KB_TITLE_MAX);
+  return cut.slice(0, Math.max(cut.lastIndexOf(" "), 1)).replace(/[\s,;:.\-–—]+$/, "");
 }
 
 /** One member of an oversized section, as fed to proposeSplit. */

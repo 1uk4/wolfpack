@@ -4,6 +4,15 @@ import { lintKnowledge, brokenLinks, wikilinkTargets, stripBrokenLinks, stripPro
 const codes = (body: string, extra: Partial<Parameters<typeof lintKnowledge>[0]> = {}) =>
   lintKnowledge({ body, ...extra }).map((f) => f.code);
 
+describe("lintKnowledge: title length", () => {
+  it("flags a sentence-long title and accepts a short noun phrase", () => {
+    const long = "SPOT Dispatch is a rebuild of the Base44 dispatcher app, kept to its ideas and look, living in a private repo";
+    expect(codes("x", { title: long })).toContain("long-title");
+    expect(codes("x", { title: "SPOT Dispatch rebuild of the Base44 dispatcher" })).not.toContain("long-title");
+    expect(hardFindings(lintKnowledge({ body: "x", title: long }))).toEqual([]);
+  });
+});
+
 describe("lintKnowledge: positives (text from real den topics)", () => {
   it("commit hashes in commit context", () => {
     expect(codes("## Fix (commit ee17088)\nThe helper connects.")).toContain("commit-hash");

@@ -312,6 +312,9 @@ Output JSON only: {"verdict": "merge" | "different", "reason": "<one short sente
  */
 export const KB_NO_NOISE = "commit hashes, task ids, test counts, or deploy/build status";
 
+/** Longest KB entry or section title, in characters. One limit for the produce prompt, its lint (long-title) and section labels. */
+export const KB_TITLE_MAX = 70;
+
 /**
  * stage: distill (promote) · model: smart · in: one den topic (+ previous slugs) · out: 1-4 KB contributions
  *
@@ -502,6 +505,7 @@ WRITING RULES:
   kind "decision" (the pipeline keeps the old one and links the new one to it).
   Otherwise leave "supersedesDecision" false; your output is then discarded and
   the decision stays as it is.
+- TITLE: a noun phrase naming the subject, at most ${KB_TITLE_MAX} characters, never a sentence or a clause with a verb. Put the facts in the summary.
 - LAYOUT: the entry is rendered as "# <title>", then the summary as the lede,
   then the detail. The summary is the whole lede (one paragraph, however many
   sentences it needs). Start the detail at its first "## " section: do NOT

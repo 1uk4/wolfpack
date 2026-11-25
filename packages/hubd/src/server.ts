@@ -74,7 +74,7 @@ import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed }
 import { createLinkContributions, type LinkContributions } from "./link-contributions.js";
 import { createLink, type Link, type LinkTimers } from "./link.js";
 import { createApprovalStore } from "./work-approvals.js";
-import { CreateApprovalRequestBodySchema } from "@wolfpack/protocol";
+import { CreateApprovalRequestBodySchema, DirectGraduateBodySchema } from "@wolfpack/protocol";
 import { CommandRequestSchema, INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES, InventoryReportBodySchema, LINK_PATH, MachineKeyAckBodySchema, wolfForRoute } from "@wolfpack/protocol";
 import { createInventory, type Inventory } from "./inventory.js";
 import { createCommandHub, type CommandHub } from "./commands.js";
@@ -1077,6 +1077,20 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           });
           bus.emit({ type: "work-request-changed", requestId: made.id, itemId: made.workId, kind: made.kind, status: "pending" });
           return send(res, 201, { request: made });
+        }
+        case "hubGraduateDirect": {
+          // Explicit even though ownerCaller refuses a worker too: this keeps the `request_forbidden` code (and its message) that a wolf
+          // sees on every owner-only work route; ownerCaller alone answers with a different code.
+          if (identity?.kind === "worker") throw new HubError("request_forbidden", "only the owner can graduate a work item directly");
+          ownerCaller(identity);
+          const actor = writeActor(req);
+          if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
+          const body = parseBody(DirectGraduateBodySchema, await readBody(req));
+          const by = { actor: actor.id, device: identity?.tokenId ?? "unknown" };
+          const { done, closed } = await writeWork(actor, () => approvals.graduateDirect(params.id, body, by, actor.id));
+          for (const c of closed) bus.emit({ type: "work-request-changed", requestId: c.id, itemId: c.workId, kind: c.kind, status: c.status });
+          bus.emit({ type: "work-graduated", itemId: params.id, domain: done.domain, via: done.via });
+          return send(res, 200, done);
         }
         case "hubListApprovals": {
           if (identity?.kind === "worker") throw new HubError("request_forbidden", "a worker token can only file approval requests");

@@ -1,10 +1,23 @@
 import { z } from "zod";
 
+/**
+ * An option link must stay on this origin: one leading `/` that is not followed by `/` or `\` (browsers read `/\` like `//`),
+ * and no whitespace or control characters anywhere (a tab or newline inside a URL is stripped by browsers).
+ */
+export function isSameOriginPath(href: unknown): href is string {
+  return typeof href === "string" && /^\/(?![/\\])/.test(href) && !/[\s\u0000-\u001f\u007f]/.test(href);
+}
+
 export const CardOptionSchema = z.object({
   label: z.string(),
   /** Machine-readable value returned when picked. Defaults to the label. */
   value: z.string(),
   description: z.string().optional(),
+  /** App-relative link to more detail about this option (shown as "more details"). Optional; old cards have none. */
+  href: z
+    .string()
+    .refine(isSameOriginPath, { message: "href must be a same-origin path (start with a single /, no //, /\\, whitespace or control characters)" })
+    .optional(),
   /** The `ask` tool: what picking this option costs or implies (required there). */
   tradeoff: z.string().optional(),
 });

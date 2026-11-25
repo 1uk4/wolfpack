@@ -5,6 +5,7 @@ import { InlineMarkdown } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import { multiInBounds } from "@/src/core";
 import type { CardField } from "@wolfpack/client";
+import { isSameOriginPath } from "@wolfpack/protocol";
 import { CardTextInput, Indicator, OPTION_ROW } from "./shared";
 import type { FieldRendererProps } from "./types";
 
@@ -36,7 +37,10 @@ export function MultiRenderer({
 		<div className="flex flex-col gap-1.5 text-sm" role="group" aria-labelledby={labelledBy} data-testid="card-multi">
 			{rows.map((o) => {
 				const sel = picked.includes(o.value);
-				return (
+				const href = "href" in o ? o.href : undefined;
+				// A link is never nested in the option button (it would be invalid HTML and tick the box): it sits beside it. Same-origin paths only.
+				const link = isSameOriginPath(href) ? href : undefined;
+				const row = (
 					<button
 						key={o.value}
 						type="button"
@@ -60,6 +64,15 @@ export function MultiRenderer({
 							{o.description && <InlineMarkdown className="block text-xs text-muted-foreground">{o.description}</InlineMarkdown>}
 						</span>
 					</button>
+				);
+				if (!link) return row;
+				return (
+					<div key={o.value} className="flex items-start gap-2">
+						{row}
+						<a href={link} target="_blank" rel="noopener" data-testid="card-option-link" onClick={(e) => e.stopPropagation()} className="shrink-0 self-center whitespace-nowrap text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+							more details
+						</a>
+					</div>
 				);
 			})}
 			{field.allowOther === true && !readOnly && (

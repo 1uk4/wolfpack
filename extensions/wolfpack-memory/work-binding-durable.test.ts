@@ -77,6 +77,7 @@ describe("durable task tools: binding", () => {
     expect(await sectionText("active_task")).toContain("No work item bound: what you learn now goes to den topics, not to a work item. Bind the item you're working on (task_bind).");
     expect(await sectionText("task_tools")).not.toContain("workItem");
     expect(await sectionText("task_tools")).toContain("always write the full `work-<domain>-<id>`");
+    expect(await sectionText("task_tools")).toContain("Graduation:\n- Never graduate on your own.");
   });
 
   it("task_create binds a new task when nothing is bound (feature = a real parent), and not twice", async () => {
@@ -223,6 +224,7 @@ describe("durable task tools: subagent sessions (PI_SUBAGENT_AGENT)", () => {
     expect(await section("active_task")).toBe("");
     expect(await section("task_tools")).not.toContain("Work item binding");
     expect(await section("task_tools")).toContain("always write the full `work-<domain>-<id>`"); // a subagent child gets the work-id rule too
+    expect(await section("task_tools")).not.toContain("Graduation:");
     for (const [tool, args] of [["task_bind", { id: mine.id }], ["task_unbind", {}]] as const) {
       const r = await call(tool, args);
       expect(r.isError, tool).toBe(true);
@@ -251,7 +253,7 @@ describe("durable task tools: finishing the last task stays bound until graduate
     expect(await run("task_done", { confirm: false })).toContain(`Bound to next: [${t2.id}]`);
     const last = await run("task_done", { confirm: false });
     expect(last.split("\n").at(-1)).toBe("Bound to F (all tasks done — ready to graduate)");
-    expect(last).toContain("Tell the user");
+    expect(last).toContain("Make ONE light offer to graduate it");
     expect(await readBoundTask(den)).toEqual({ taskId: f.id, featureId: f.id });
     // the section is a stable header; the ready label and stage live in task_query current
     expect(await sectionText("active_task")).toContain("**Feature:** [");

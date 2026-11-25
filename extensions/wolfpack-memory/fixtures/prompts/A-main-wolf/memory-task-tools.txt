@@ -31,9 +31,12 @@ parameters:
   ids: Several work items to ship at once, confirmed with ONE multi-select card. Combined with id when both are given.
 
 ===== task_graduate (wolfpack-tasks) =====
-Ask the owner to graduate a finished work item into the knowledge base. You cannot graduate on your own: task_graduate(id) distills the item, previews what would be sent, and files an approval request on the hub. Nothing is sent until the owner approves it from the thread card, the Work page or Needs-you. The reply names the request id; report it to the owner and move on, there is nothing to call again. If it returns an error, no request exists and the owner has not been asked: say so plainly. Eligible: a feature whose tasks are all done, a loose Inbox task, an initiative whose features have all graduated.
+Ask the owner to graduate finished work into the knowledge base. You cannot graduate on your own and there is no auto-graduate: the owner decides. task_graduate(id) distills one item, previews what would be sent, and files an approval request on the hub (the reply names the request id; report it and move on). task_graduate(ids: [...]) offers SEVERAL items in ONE multi-select card (features first, each with a short summary and a more-details link); the owner picks, and their console graduates the picked ones. Your turn ends there. When they answer, call task_graduate once more with the same ids and reconcile: true: it checks each one on the hub and reports which graduated and which did not. Unpicked items stay eligible; offer them again later. named is the list of loose tasks the owner explicitly named; a loose task not in named is not offered (the single id argument counts as named). Features and initiatives need no naming. Where no card can be shown (Telegram, headless), ids files one approval request per eligible item instead. If it returns an error, no request exists and the owner has not been asked: say so plainly. Eligible: a feature whose tasks are all done, an initiative whose features have all graduated, and a loose task only when the owner names it.
 parameters:
-  id*: Work item to graduate
+  id: Work item to graduate
+  ids: Several work items to offer in ONE multi-select card. Combined with id when both are given.
+  named: The loose tasks the OWNER explicitly named. A loose task in ids that is not listed here is not offered; the single id argument counts as named. Features and initiatives need no naming.
+  reconcile: With ids, after the owner answered the card: check each item on the hub and report which graduated. Raises no card.
 
 ===== task_link (wolfpack-tasks) =====
 Add dependency links between work items, or remove them with remove:true. Pass rel + target, or several in links. A link's source is its own id, else id, else the active task.

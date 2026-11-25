@@ -287,7 +287,7 @@ export function createThreadApi(source: ClientSource) {
 			try {
 				if (!path) return json({ error: "path is required" }, 400);
 				const client = source();
-				if (!client.getFrameFile) return json({ error: "unknown frame file" }, 404);
+				if (!client.getFrameFile) return json({ error: "this client cannot serve frames", reason: "route_missing" }, 404);
 				const { bytes } = await client.getFrameFile(wolf, path);
 				return new Response(bytes as BodyInit, {
 					headers: {
@@ -301,6 +301,8 @@ export function createThreadApi(source: ClientSource) {
 			} catch (err) {
 				// 403/413 are mapped here only: other routes keep their previous behaviour for these codes.
 				const code = isError(err, "ProtocolError") ? (err as Error & { code?: string }).code : undefined;
+				// A 404 is either wolfd's "no such frame file" or an older host that has no frame route ("no such path" from workerd, "no route" from hubd/wolfd).
+				if (isNotFound(err)) return json({ error: err.message, reason: /no such frame file/i.test(err.message) ? "file_missing" : "route_missing" }, 404);
 				if (code === "forbidden") return json({ error: (err as Error).message }, 403);
 				if (code === "too_large") return json({ error: (err as Error).message }, 413);
 				return failure(err);

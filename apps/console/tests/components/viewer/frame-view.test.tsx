@@ -137,6 +137,17 @@ describe("frame renderer", () => {
 	});
 });
 
+describe("frame renderer, host without the frame route", () => {
+	it("a 404 with reason route_missing says the host needs an update, not that the frame is gone", async () => {
+		reply = { status: 404, body: JSON.stringify({ error: "no such path", reason: "route_missing" }) };
+		await mount();
+		const err = document.querySelector('[data-testid="frame-error"]')!;
+		assert.equal(err.getAttribute("data-gone"), null);
+		assert.match(err.textContent ?? "", /This wolf's host needs an update to show frames/);
+		assert.doesNotMatch(err.textContent ?? "", /gone/);
+	});
+});
+
 describe("frame descriptor", () => {
 	it("accepts path (or id), keeps title and rev, and always uses the thread's wolf, ignoring a wolf named in the data", () => {
 		assert.deepEqual(parseFrameDescriptor({ kind: "frame", path: "a.html", title: "A", rev: 3 }, "hal"), { kind: "frame", id: "a.html", wolf: "hal", title: "A", rev: 3 });

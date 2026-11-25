@@ -24,7 +24,7 @@ export function buildSrcdoc(html: string): string {
 	return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">${html.replace(META_REFRESH, "")}`;
 }
 
-type State = { phase: "loading" } | { phase: "navigated" } | { phase: "ready"; html: string } | { phase: "error"; status: number | null };
+type State = { phase: "loading" } | { phase: "navigated" } | { phase: "ready"; html: string } | { phase: "error"; status: number | null; reason?: string };
 
 export const frameUrl = (wolf: string, path: string) => `/api/wolves/${encodeURIComponent(wolf)}/frame-file?path=${encodeURIComponent(path)}`;
 
@@ -50,7 +50,9 @@ export function FrameViewRenderer({ descriptor, onTitle }: ViewRendererProps) {
 		fetch(frameUrl(wolf, path), { cache: "no-store" })
 			.then(async (res) => {
 				if (!live) return;
-				setState(res.ok ? { phase: "ready", html: await res.text() } : { phase: "error", status: res.status });
+				if (res.ok) return setState({ phase: "ready", html: await res.text() });
+				const body = (await res.json().catch(() => null)) as { reason?: unknown } | null;
+				if (live) setState({ phase: "error", status: res.status, reason: typeof body?.reason === "string" ? body.reason : undefined });
 			})
 			.catch(() => live && setState({ phase: "error", status: null }));
 		return () => {
@@ -71,11 +73,12 @@ export function FrameViewRenderer({ descriptor, onTitle }: ViewRendererProps) {
 		);
 	}
 	if (state.phase === "error") {
-		const gone = state.status === 404;
+		const hostOld = state.status === 404 && state.reason === "route_missing";
+		const gone = state.status === 404 && !hostOld;
 		return (
 			<div className="flex flex-col items-start gap-3 p-4 text-sm" role="alert" data-testid="frame-error" data-gone={gone ? "true" : undefined}>
 				<p className="text-muted-foreground">
-					{gone ? `This frame is gone: ${path}` : state.status === null ? "Could not load the frame (network error)." : `Could not load the frame (status ${state.status}).`}
+					{hostOld ? "This wolf's host needs an update to show frames." : gone ? `This frame is gone: ${path}` : state.status === null ? "Could not load the frame (network error)." : `Could not load the frame (status ${state.status}).`}
 				</p>
 				<Button variant="outline" size="sm" onClick={reload}>Reload</Button>
 			</div>

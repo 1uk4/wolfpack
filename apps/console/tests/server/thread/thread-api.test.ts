@@ -317,6 +317,17 @@ describe("frame file proxy", () => {
 		assert.equal((await withFrames(async () => ({ bytes: html, mimeType: "" })).frameFile("1uk4", null)).status, 400);
 	});
 
+	it("tells a host without the frame route (404 'no such path'/'no route') from a missing file (404 'no such frame file')", async () => {
+		const reason = async (message: string) => {
+			const res = await withFrames(async () => { throw Object.assign(new Error(message), { name: "NotFoundError" }); }).frameFile("1uk4", "a.html");
+			return [res.status, ((await res.json()) as { reason?: string }).reason];
+		};
+		assert.deepEqual(await reason("no such frame file"), [404, "file_missing"]);
+		assert.deepEqual(await reason("no such path: /v1/wolves/1uk4/frame-file"), [404, "route_missing"]);
+		assert.deepEqual(await reason("no route /v1/wolves/1uk4/frame-file"), [404, "route_missing"]);
+		assert.deepEqual(await reason("not found: no such path: /v1/wolves/1uk4/frame-file"), [404, "route_missing"]);
+	});
+
 	it("keeps the 403/413 mapping local: another route still answers forbidden and too_large with 500", async () => {
 		const other = (code: string) =>
 			createThreadApi(() =>

@@ -1613,92 +1613,41 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       // ─── task_link ───────────────────────────────────────────────────────
       defineTool({
         name: "task_link",
-        description: "Add a dependency link between work items. Uses the active task if no id provided.",
+        description: "Add dependency links between work items, or remove them with remove:true. Pass rel + target, or several in links. A link's source is its own id, else id, else the active task.",
         parameters: Type.Object({
-          rel: Type.String({ description: "Relation: depends_on or blocks" }),
-          target: Type.String({ description: "Target work item ID" }),
+          rel: Type.Optional(Type.String({ description: "Relation: depends_on or blocks" })),
+          target: Type.Optional(Type.String({ description: "Target work item ID" })),
           id: Type.Optional(Type.String({ description: "Source work item ID (defaults to active task)" })),
+          links: Type.Optional(Type.Array(Type.Object({
+            id: Type.Optional(Type.String()),
+            rel: Type.String(),
+            target: Type.String(),
+          }), { description: "Several links in one call" })),
+          remove: Type.Optional(Type.Boolean({ description: "Remove the links instead of adding them" })),
         }),
-        async execute(args: { rel: string; target: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
-          let sourceId = args.id;
-          let domain: string | undefined;
-
-          if (!sourceId) {
-            const binding = await readBinding(ctx);
-            if (!binding) {
-              return {
-                content: [{ type: "text", text: "No active task and no id provided." }],
-                isError: true,
-              };
+        async execute(args: { rel?: string; target?: string; id?: string; links?: Array<{ id?: string; rel: string; target: string }>; remove?: boolean }, ctx: ToolContext): Promise<ToolResult> {
+          const links = args.links ?? (args.rel && args.target ? [{ rel: args.rel, target: args.target }] : []);
+          if (links.length === 0) return { content: [{ type: "text", text: "Pass rel and target, or links." }], isError: true };
+          const lines: string[] = [];
+          let failures = 0;
+          for (const link of links) {
+            let sourceId = link.id ?? args.id;
+            if (!sourceId) sourceId = (await readBinding(ctx))?.taskId;
+            if (!sourceId) {
+              lines.push("Error: No active task and no id provided.");
+              failures++;
+              continue;
             }
-            sourceId = binding.taskId;
-            domain = binding.domain;
-          }
-
-          if (!domain) {
-            const match = sourceId.match(/^work-(\w+)-/);
-            domain = match?.[1];
-          }
-          if (!domain) {
-            return { content: [{ type: "text", text: "Cannot determine domain from item ID." }], isError: true };
-          }
-
-          
-          
-          try {
-            await client.link(sourceId, args.rel, args.target);
-            return {
-              content: [{ type: "text", text: `${sourceId} ${args.rel} ${args.target}` }],
-            };
-          } catch (err) {
-            return failed(err);
-          }
-        },
-      }),
-
-      // ─── task_unlink ─────────────────────────────────────────────────────
-      defineTool({
-        name: "task_unlink",
-        description: "Remove a dependency link between work items. Uses the active task if no id provided.",
-        parameters: Type.Object({
-          rel: Type.String({ description: "Relation: depends_on or blocks" }),
-          target: Type.String({ description: "Target work item ID" }),
-          id: Type.Optional(Type.String({ description: "Source work item ID (defaults to active task)" })),
-        }),
-        async execute(args: { rel: string; target: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
-          let sourceId = args.id;
-          let domain: string | undefined;
-
-          if (!sourceId) {
-            const binding = await readBinding(ctx);
-            if (!binding) {
-              return {
-                content: [{ type: "text", text: "No active task and no id provided." }],
-                isError: true,
-              };
+            try {
+              if (args.remove) await client.unlink(sourceId, link.rel, link.target);
+              else await client.link(sourceId, link.rel, link.target);
+              lines.push(`${args.remove ? "Removed: " : ""}${sourceId} ${link.rel} ${link.target}`);
+            } catch (err) {
+              failures++;
+              lines.push(`Error: ${sourceId} ${link.rel} ${link.target}: ${err instanceof Error ? err.message : err}`);
             }
-            sourceId = binding.taskId;
-            domain = binding.domain;
           }
-
-          if (!domain) {
-            const match = sourceId.match(/^work-(\w+)-/);
-            domain = match?.[1];
-          }
-          if (!domain) {
-            return { content: [{ type: "text", text: "Cannot determine domain from item ID." }], isError: true };
-          }
-
-          
-          
-          try {
-            await client.unlink(sourceId, args.rel, args.target);
-            return {
-              content: [{ type: "text", text: `Removed: ${sourceId} ${args.rel} ${args.target}` }],
-            };
-          } catch (err) {
-            return failed(err);
-          }
+          return { content: [{ type: "text", text: lines.join("\n") }], isError: failures === links.length || undefined };
         },
       }),
 

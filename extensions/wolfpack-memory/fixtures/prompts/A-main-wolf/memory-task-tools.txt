@@ -36,11 +36,13 @@ parameters:
   id*: Work item to graduate
 
 ===== task_link (wolfpack-tasks) =====
-Add a dependency link between work items. Uses the active task if no id provided.
+Add dependency links between work items, or remove them with remove:true. Pass rel + target, or several in links. A link's source is its own id, else id, else the active task.
 parameters:
-  rel*: Relation: depends_on or blocks
-  target*: Target work item ID
+  rel: Relation: depends_on or blocks
+  target: Target work item ID
   id: Source work item ID (defaults to active task)
+  links: Several links in one call
+  remove: Remove the links instead of adding them
 
 ===== task_move (wolfpack-tasks) =====
 Move a task under a different parent (default: the bound task). Pass id to move another item: that never binds it or changes your binding, so never bind an item just to move it. Moving the bound task itself does not refresh its cached feature (the memory fold resolves the feature at fold time anyway).
@@ -87,13 +89,6 @@ parameters:
 ===== task_unbind (wolfpack-tasks) =====
 Unbind from the current task without shipping it.
 parameters: none described
-
-===== task_unlink (wolfpack-tasks) =====
-Remove a dependency link between work items. Uses the active task if no id provided.
-parameters:
-  rel*: Relation: depends_on or blocks
-  target*: Target work item ID
-  id: Source work item ID (defaults to active task)
 
 ===== task_update (wolfpack-tasks) =====
 Update the active work item's working document (plan, notes, findings). Replaces the body of the .md file. Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).

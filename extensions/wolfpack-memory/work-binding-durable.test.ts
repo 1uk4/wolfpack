@@ -107,6 +107,18 @@ describe("durable task tools: binding", () => {
     expect(await readBoundTask(den)).toBeNull();
   });
 
+  it("task_link with links adds each link, and remove:true removes them, one reply line per link", async () => {
+    const a = add({ kind: "task", title: "A" });
+    const b = add({ kind: "task", title: "B" });
+    const c = add({ kind: "task", title: "C" });
+    const added = await run("task_link", { id: a.id, links: [{ rel: "depends_on", target: b.id }, { rel: "blocks", target: c.id }] });
+    expect(added.split("\n")).toEqual([`${a.id} depends_on ${b.id}`, `${a.id} blocks ${c.id}`]);
+    expect(items.get(a.id)!.links).toEqual([{ rel: "depends_on", target: b.id }, { rel: "blocks", target: c.id }]);
+    const removed = await run("task_link", { remove: true, links: [{ id: a.id, rel: "depends_on", target: b.id }] });
+    expect(removed).toBe(`Removed: ${a.id} depends_on ${b.id}`);
+    expect(items.get(a.id)!.links).toEqual([{ rel: "blocks", target: c.id }]);
+    expect(ext.tools!.find((t) => t.name === "task_unlink")).toBeUndefined();
+  });
 
   it("task_move with an id moves that item and leaves the binding alone", async () => {
     const f = add({ kind: "feature", title: "F" });

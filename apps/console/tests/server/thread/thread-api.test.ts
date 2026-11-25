@@ -316,6 +316,18 @@ describe("frame file proxy", () => {
 		assert.equal(await status(named("ProtocolError", "invalid_request")), 400);
 		assert.equal((await withFrames(async () => ({ bytes: html, mimeType: "" })).frameFile("1uk4", null)).status, 400);
 	});
+
+	it("keeps the 403/413 mapping local: another route still answers forbidden and too_large with 500", async () => {
+		const other = (code: string) =>
+			createThreadApi(() =>
+				Object.assign(new MockConsoleClient({ delayMs: 0 }), {
+					getThreadSettings: async () => ({}),
+					listThreads: async () => { throw named("ProtocolError", code); },
+				}),
+			).getSettings({ wolf: "1uk4", slug: "x" });
+		assert.equal((await other("forbidden")).status, 500);
+		assert.equal((await other("too_large")).status, 500);
+	});
 });
 
 describe("hub-auth failures (relay mode, unpaired or revoked browser)", () => {

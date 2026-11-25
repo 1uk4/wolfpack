@@ -87,8 +87,6 @@ function failure(err: unknown): Response {
 	if (isBusy(err)) return json({ error: err.message, code: "busy" }, 409);
 	// A refusal the user can act on (unsupported type, too large, unknown attachment).
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "invalid_request") return json({ error: err.message }, 400);
-	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "forbidden") return json({ error: err.message }, 403);
-	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "too_large") return json({ error: err.message }, 413);
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "conflict") return json({ error: err.message, code: "conflict" }, 409);
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "thread_closed") return json({ error: err.message, code: "thread_closed" }, 409);
 	for (const code of ["thread_open", "thread_graduated"]) {
@@ -301,6 +299,10 @@ export function createThreadApi(source: ClientSource) {
 					},
 				});
 			} catch (err) {
+				// 403/413 are mapped here only: other routes keep their previous behaviour for these codes.
+				const code = isError(err, "ProtocolError") ? (err as Error & { code?: string }).code : undefined;
+				if (code === "forbidden") return json({ error: (err as Error).message }, 403);
+				if (code === "too_large") return json({ error: (err as Error).message }, 413);
 				return failure(err);
 			}
 		},

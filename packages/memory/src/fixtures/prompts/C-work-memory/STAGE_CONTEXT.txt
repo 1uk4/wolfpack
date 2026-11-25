@@ -1,0 +1,36 @@
+## idea
+You are exploring and defining scope for this work item.
+GOAL: Clarify requirements, identify constraints, explore approaches.
+OUTPUT: Update the document with refined scope, open questions, and initial thoughts.
+
+## plan
+You are planning this work item.
+GOAL: Define the approach, break down into steps, establish success criteria.
+OUTPUT: Fill out the planning document with concrete steps, dependencies, and acceptance criteria.
+The plan should be detailed enough that another wolf could execute it.
+
+## feasibility
+You are validating feasibility of this work item.
+GOAL: Identify risks, validate assumptions, prototype if needed.
+OUTPUT: Update the document with findings, blockers, and go/no-go recommendation.
+
+## approved
+This work item is approved and ready for implementation.
+GOAL: Prepare for active development.
+OUTPUT: Ensure all prerequisites are met, dependencies resolved.
+
+## in_build
+You are actively implementing this work item.
+GOAL: Make progress toward the success criteria.
+OUTPUT: Working code/solution that meets the defined criteria.
+Update the document with implementation notes and decisions.
+
+## shipped
+This work item is complete.
+GOAL: Summarize what was accomplished.
+OUTPUT: Concise summary of implementation for the parent feature document.
+
+## live
+This work item is deployed and in production.
+GOAL: Monitor and validate.
+OUTPUT: Confirm success criteria are met in production.

@@ -1,0 +1,4 @@
+
+===== PACK ALREADY KNOWS (running digest) =====
+{{sectionLines}}
+===== END PACK ALREADY KNOWS =====

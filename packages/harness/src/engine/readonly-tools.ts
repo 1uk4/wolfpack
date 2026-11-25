@@ -3,7 +3,7 @@
  * them, so ls is a small in-process version on the call's execution environment and grep/find search in a worker thread
  * under a hard deadline (so they respect the conversation's cwd, a worktree included, and cannot block wolfd). All cap
  * their output and say when a cap or the deadline stopped a search. `guarded_bash` is the durable `bash` tool behind the
- * same read-only command guard the terminal pi uses (@wolfpack/agents command-guard, shared with extensions/wolfpack-subagents).
+ * same read-only command guard (@wolfpack/agents command-guard).
  */
 import { Worker } from "node:worker_threads";
 import { Type } from "typebox";

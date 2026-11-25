@@ -142,9 +142,9 @@ describe("resendDenTopics (the path /wolf:resend-all and --emit-den share)", () 
     expect(passed.onHold).toBeUndefined();
   });
 
-  it("the extension and the CLI both go through readResendSet + resendDenTopics", () => {
+  it("the CLI goes through readResendSet + resendDenTopics", () => {
     const src = (rel: string) => readFileSync(join(__dirname, rel), "utf-8");
-    for (const file of ["../../../extensions/wolfpack-memory/index.ts", "./cli.ts"]) {
+    for (const file of ["./cli.ts"]) {
       const code = src(file);
       expect(code, file).toMatch(/readResendSet\(/);
       expect(code, file).toMatch(/resendDenTopics\(/);

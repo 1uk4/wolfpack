@@ -14,7 +14,6 @@ import { adaptToDurable } from "./adapters/durable.js";
 // Name aliases — wolf.yaml uses short names
 const ALIASES: Record<string, string> = {
   memory: "wolfpack-memory",
-  subagents: "wolfpack-subagents",
   telegram: "wolfpack-telegram",
   tasks: "wolfpack-tasks",
   browser: "wolfpack-browser",

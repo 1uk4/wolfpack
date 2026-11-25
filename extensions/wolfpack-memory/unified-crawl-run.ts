@@ -1,6 +1,5 @@
 /**
- * Running and releasing a crawl for durable wolves (pi-durable): the console-card port of pi's /wolf:crawl-run and
- * /wolf:crawl-release (index.ts), whose steps come from the TUI wizard (crawl-wizard.ts).
+ * Running and releasing a crawl for durable wolves (pi-durable): the console-card form of the crawl run / release steps.
  *
  * Tools (added to the crawl extension by unified-crawl.ts):
  *   crawl_run      start a finalized plan. Without `resume` / `concurrency` it raises the wizard as ONE stepped card:

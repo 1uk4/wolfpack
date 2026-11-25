@@ -5,7 +5,7 @@
  * packages/extensions that back them, and groups them into profiles that
  * match how a wolf is used:
  *
- *   - worker    — local, keyboard-driven working agent (memory + subagents)
+ *   - worker    — local, keyboard-driven working agent (memory)
  *   - assistant — 24/7 VPS assistant reachable via Telegram (+ telegram)
  *
  * The CLI uses this to generate a wolf's `.pi/settings.json` so the Pi runtime
@@ -54,14 +54,7 @@ export const AVAILABLE_EXTENSIONS: WolfExtension[] = [
     label: "Memory",
     description: "Observer + consolidator + den management (wolfpack-memory)",
     dir: "wolfpack-memory",
-    runtimes: ["pi", "pi-durable"],
-  },
-  {
-    key: "subagents",
-    label: "Interactive sub agents",
-    description: "Delegate tasks to specialized agents with isolated context",
-    dir: "wolfpack-subagents",
-    runtimes: ["pi"],
+    runtimes: ["pi-durable"],
   },
   {
     key: "telegram",
@@ -88,12 +81,12 @@ export const PROFILES: Record<
   worker: {
     label: "Worker",
     description: "Local, keyboard-driven working agent",
-    extensions: ["memory", "subagents"],
+    extensions: ["memory"],
   },
   assistant: {
     label: "Assistant",
     description: "24/7 VPS assistant reachable via Telegram",
-    extensions: ["memory", "subagents", "telegram"],
+    extensions: ["memory", "telegram"],
   },
 };
 

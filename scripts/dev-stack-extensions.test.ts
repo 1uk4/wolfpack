@@ -8,7 +8,7 @@ import { bundleState, main, planExtensionInstalls, runPlans } from "./dev-stack-
 
 const REPO_REAL = path.resolve(__dirname, "..");
 const engine = await import(pathToFileURL(path.join(REPO_REAL, "packages/engine/dist/index.js")).href);
-const extensions = [{ key: "memory", dir: "wolfpack-memory" }, { key: "subagents", dir: "wolfpack-subagents" }];
+const extensions = [{ key: "memory", dir: "wolfpack-memory" }];
 
 let tmp: string;
 let repo: string;

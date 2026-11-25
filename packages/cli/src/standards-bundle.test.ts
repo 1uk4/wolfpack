@@ -12,31 +12,6 @@ const agentsSrc = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "std-bundle-"));
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-describe("den extension bundle", () => {
-  it("gives the worker the testing standard when the agents loader runs from the bundled subagents extension", async () => {
-    const built = await buildRemoteBundle({ name: "t", role: "tester", extensions: ["subagents"] });
-    const tar = path.join(tmp, "agent.tgz");
-    fs.writeFileSync(tar, Buffer.from(built.bundleB64, "base64"));
-    execFileSync("tar", ["-xzf", tar, "-C", tmp]);
-    const extDir = path.join(tmp, "extensions", "wolfpack-subagents");
-
-    // Inline the loader into a file next to the shipped extension, as the extension build inlines it into index.js.
-    const probe = path.join(extDir, "probe.mjs");
-    await esbuild.build({
-      stdin: {
-        contents: [
-          `import { loadAgent } from ${JSON.stringify(agentsSrc)};`,
-          `const opts = { cwd: ${JSON.stringify(tmp)}, agentDir: ${JSON.stringify(tmp)}, packageDirs: [${JSON.stringify(path.join(extDir, "agents"))}] };`,
-          `console.log(loadAgent("worker", opts)?.body);`,
-        ].join("\n"),
-        resolveDir: tmp },
-      outfile: probe, bundle: true, platform: "node", format: "esm", logLevel: "silent",
-    });
-    const body = execFileSync("node", [probe], { encoding: "utf8" });
-    expect(body).toContain("# Testing standard");
-  }, 30_000);
-});
-
 describe("den bundle default prompts", () => {
   it("lets the bundled memory extension read the work-creation prompts with no repo checkout beside it", async () => {
     const dir = fs.mkdtempSync(path.join(tmp, "prompts-"));
@@ -88,9 +63,9 @@ describe("extension build with shipped standards", () => {
     expect(after.hash).not.toBe(before.hash);
   });
 
-  it("gives the status stamp of the real subagents extension the same hash as its build, so drift detection can't disagree with the bundle", async () => {
-    const ext = getExtension("subagents")!;
+  it("gives the status stamp of the real memory extension the same hash as its build, so drift detection can't disagree with the bundle", async () => {
+    const ext = getExtension("memory")!;
     const built = await bundleExtension(ext, path.join(extensionsDir(), ext.dir), path.join(tmp, "real-out"));
-    expect((await stampExtension("subagents"))?.hash).toBe(built.hash);
+    expect((await stampExtension("memory"))?.hash).toBe(built.hash);
   });
 });

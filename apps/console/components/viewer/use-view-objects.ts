@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useEffect, useRef } from "react";
-import { pinView } from "@/components/thread/pin-store";
+import { pinView, unpinView } from "@/components/thread/pin-store";
 import { openView, refreshView } from "@/components/viewer/viewer-store";
 import { recordFrames } from "@/components/viewer/frame-store";
 import { parseFrameDescriptor, type ViewDescriptor } from "@/components/viewer/view-descriptor";
@@ -57,6 +57,29 @@ export function viewArrivals(messages: ReadonlyArray<{ role?: string; parts?: un
 	return out;
 }
 
+/**
+ * The pin tool's explicit pin state on view objects (work, kb, frame): each object part whose pinRev is newer than the one in
+ * `applied` is marked applied and, while `live`, reported so the strip can follow pinned:true / pinned:false.
+ * History replays only mark: the pin store already persists the owner's own pin state.
+ */
+export function viewPinChanges(messages: ReadonlyArray<{ role?: string; parts?: unknown[] }>, applied: Map<string, number>, live: boolean, wolf: string): ViewArrival[] {
+	const out: ViewArrival[] = [];
+	for (const m of messages) {
+		if (m.role !== "assistant") continue;
+		for (const p of (m.parts ?? []) as ViewPartLike[]) {
+			if (p.type !== "object" || p.objectType !== "view" || typeof p.objectId !== "string") continue;
+			const pinRev = (p as { pinRev?: unknown }).pinRev;
+			if (typeof pinRev !== "number" || typeof p.pinned !== "boolean" || pinRev <= (applied.get(p.objectId) ?? 0)) continue;
+			applied.set(p.objectId, pinRev);
+			if (!live) continue;
+			const d = p.data as { kind?: unknown; id?: unknown; title?: unknown } | undefined;
+			const descriptor: ViewDescriptor | null = d?.kind === "frame" ? parseFrameDescriptor({ ...d, rev: p.rev }, wolf) : d && typeof d.kind === "string" && typeof d.id === "string" ? { kind: d.kind, id: d.id, ...(typeof d.title === "string" ? { title: d.title } : {}) } : null;
+			if (descriptor) out.push({ descriptor, pinned: p.pinned });
+		}
+	}
+	return out;
+}
+
 const isWide = () => typeof window !== "undefined" && (typeof window.matchMedia === "function" ? window.matchMedia(`(min-width: ${VIEWER_WIDE_PX}px)`).matches : window.innerWidth >= VIEWER_WIDE_PX);
 const isVisible = () => typeof document === "undefined" || document.visibilityState !== "hidden";
 
@@ -67,6 +90,7 @@ const isVisible = () => typeof document === "undefined" || document.visibilitySt
 export function useViewObjectArrivals(wolf: string, threadId: string, messages: ReadonlyArray<{ role?: string; parts?: unknown[] }>, streaming: boolean) {
 	const seen = useRef<Set<string>>(new Set());
 	const primed = useRef(false);
+	const pinApplied = useRef<Map<string, number>>(new Map());
 	useEffect(() => {
 		recordFrames(wolf, threadId, messages);
 		const live = primed.current && streaming;
@@ -75,6 +99,10 @@ export function useViewObjectArrivals(wolf: string, threadId: string, messages: 
 			if (a.descriptor.kind === "frame") refreshView(wolf, threadId, a.descriptor);
 			if (shouldOpenOnArrival({ isNew: true, onScreen: isVisible(), viewportWide: isWide() })) openView(wolf, threadId, a.descriptor);
 			if (a.pinned) pinView(threadId, a.descriptor);
+		}
+		for (const c of viewPinChanges(messages, pinApplied.current, live, wolf)) {
+			if (c.pinned) pinView(threadId, c.descriptor);
+			else unpinView(threadId, c.descriptor);
 		}
 	}, [messages, streaming, wolf, threadId]);
 }

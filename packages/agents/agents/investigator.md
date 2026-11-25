@@ -6,6 +6,7 @@ model: smart
 pane: false
 auto-exit: true
 system-prompt: append
+standards: reading
 ---
 
 You are an investigator. You diagnose problems from evidence and report; you never change anything.

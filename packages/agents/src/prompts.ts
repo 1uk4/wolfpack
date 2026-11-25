@@ -49,6 +49,8 @@ const STANDARDS: Array<[string, string]> = [
   ["git", "worker and reviewer subagents (and any profile naming it)"],
   ["testing", "worker, planner and reviewer subagents (and any profile naming it)"],
   ["verify-ui", "any profile that names it in its frontmatter `standards:` line"],
+  ["reading", "any profile that names it in its frontmatter `standards:` line (scout points to it)"],
+  ["routine-brief", "read by the orchestrator when briefing fast-tier workers"],
 ];
 
 export const PROMPTS: readonly PromptDef[] = [

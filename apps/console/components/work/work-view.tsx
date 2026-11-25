@@ -49,7 +49,7 @@ import {
 } from "@/src/core";
 import { createWorkClient, type WorkClient, type WorkDomain } from "./work-client";
 import { createGraduateClient, type GraduateClient } from "../kb/graduate-client";
-import { GraduateControl } from "../kb/graduate-dialog";
+import { GraduateButton } from "./graduate-button";
 import { useApprovals } from "./approval-request";
 import { useGraduated } from "../kb/graduation-signal";
 
@@ -424,7 +424,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 							<span className="hidden md:inline">awaiting approval</span>
 						</button>
 					) : (
-						<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
+						row.graduate.show && row.graduate.ready && <GraduateButton itemId={row.id} title={row.title} assignee={row.assignee || undefined} via="work" client={ctx.graduate} testid={`work-graduate-${row.key}`} />
 					)}
 					</span>
 					<AssigneeCell row={row} ctx={ctx} />

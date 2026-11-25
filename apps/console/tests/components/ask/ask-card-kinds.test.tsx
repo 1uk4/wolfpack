@@ -81,6 +81,19 @@ describe("AskCard multi", () => {
 		assert.deepEqual(sent, [{ m: { value: ["c", "a"] } }]);
 	});
 
+	it("shows an option's description and a same-origin more-details link that does not tick the box", async () => {
+		await mount(multi({ options: [{ label: "Alpha", value: "a", description: "What it adds.", href: "/work/w1?view=graduation&wolf=1uk4" }, { label: "Beta", value: "b", href: "//evil.example/x" }, { label: "Gamma", value: "c", href: "/\\evil.example/x" }, { label: "Delta", value: "d", href: "/ok\tbad" }, { label: "Eps", value: "e", href: "/ok\nbad" }] }));
+		const links = qa('[data-testid="card-option-link"]');
+		assert.equal(links.length, 1, "a protocol-relative href is never rendered");
+		assert.equal(links[0]!.getAttribute("href"), "/work/w1?view=graduation&wolf=1uk4");
+		assert.equal(links[0]!.getAttribute("target"), "_blank", "the card stays open in the thread");
+		assert.equal(links[0]!.getAttribute("rel"), "noopener");
+		assert.match(links[0]!.textContent ?? "", /more details/i);
+		assert.match(qa('[data-testid="card-option"]')[0]!.textContent ?? "", /What it adds\./);
+		await click(links[0]!);
+		assert.deepEqual(checked(), ["false", "false", "false", "false", "false"], "clicking the link must not pick the option");
+	});
+
 	it("defaults pre-select but never submit", async () => {
 		await mount(multi({ default: ["a", "b"] }));
 		assert.deepEqual(checked(), ["true", "true", "false"]);

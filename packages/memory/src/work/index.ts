@@ -133,6 +133,7 @@ export { syncFeatureStage, BEFORE_BUILD, type StageSyncClient } from "./stage-sy
 export {
   UNBOUND_CONTEXT,
   BINDING_RULES,
+  GRADUATION_RULES,
   completeLine,
   unboundCompleteNotice,
   shouldBindOnCreate,

@@ -337,7 +337,7 @@ describe("graduate routes", () => {
     const r = await confirm(feature, p.token);
     expect(r).toMatchObject({ graduated: false, requestId: "req-new", status: "filed", entries: [p.contributions[0]!.id], lateFolded: 0, archived: [], closedThreads: [] });
     expect(filed).toHaveLength(1);
-    expect(filed[0]).toMatchObject({ id: feature, auth: "Bearer wolf-token", body: { kind: "graduate", preview: { contributions: [{ id: p.contributions[0]!.id, title: "How caching works" }] } } });
+    expect(filed[0]).toMatchObject({ id: feature, auth: "Bearer wolf-token", body: { kind: "graduate", preview: { summary: "Session lookups are cached.", contributions: [{ id: p.contributions[0]!.id, title: "How caching works" }] } } });
     // nothing is sent, graduated, archived, unbound or closed here
     expect(inbox(tw)).toEqual([]);
     expect((await item(tw, feature)).graduated).toBeFalsy();

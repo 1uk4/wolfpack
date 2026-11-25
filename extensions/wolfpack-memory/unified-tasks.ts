@@ -34,6 +34,7 @@ import {
   replaceRecordSection,
   syncFeatureStage,
   readyToGraduate,
+  readinessOf,
   readyBoundContext,
   readyBoundReply,
   renderGraduationPreview,
@@ -50,6 +51,7 @@ import {
   withHeadsUp,
   UNBOUND_CONTEXT,
   BINDING_RULES,
+  GRADUATION_RULES,
   completeLine,
   unboundCompleteNotice,
   unbindCompleted,
@@ -503,6 +505,130 @@ export default function createTasksExtension(
     };
   }
 
+  // ── Batch graduation ────────────────────────────────────────────────────
+  // task_graduate(ids) distills the eligible items in parallel (previews land in the same per-wolf store wolfd's
+  // pendingPreview reads), then raises ONE multi-select card. The owner's console graduates the picked ones; this wolf
+  // never graduates anything. Without a card surface it files one approval request per eligible item.
+  const GRAD_PREVIEW_PARALLEL = 3;
+  const kindRank = (k: string): number => (k === "feature" ? 0 : k === "initiative" ? 1 : 2);
+  /** When the item finished, as a timestamp (shipped date, else last update); the dates are compared as instants, not as text. Unparseable = oldest. */
+  const finishedAt = (i: WorkItem): number => {
+    const t = Date.parse(String((i as { shipped?: string }).shipped ?? i.updated ?? ""));
+    return Number.isNaN(t) ? 0 : t;
+  };
+  const oneLine = (s: string): string => s.replace(/\s+/g, " ").trim();
+  const LOOSE_KINDS = ["task", "issue", "spike"];
+
+  /** After the owner answered: per id, graduated / picked but not graduated / not picked / could not be checked. Reads the hub and the card answer; claims nothing it cannot see. */
+  async function reconcileGraduation(ctx: ToolContext, ids: string[]): Promise<ToolResult> {
+    const lines: string[] = [];
+    for (const id of ids) {
+      let item: WorkItem;
+      try {
+        item = await client.get(id);
+      } catch (err) {
+        lines.push(`${id}: could not be checked (${err instanceof Error ? err.message : err})`);
+        continue;
+      }
+      if (item.graduated) { lines.push(`${id}: graduated`); continue; }
+      // The newest task_graduate card that offered this id, when the conversation can show it: tells "not picked" from "picked but not done".
+      let picked: boolean | undefined;
+      try {
+        const found = await ctx.conversation?.latestCard?.("task_graduate", (c) => c.fields.some((f) => f.id === "picked" && f.kind === "multi" && f.options.some((o) => o.value === id)));
+        if (found?.status === "answered") {
+          const v = (found.answers?.picked as { value?: unknown } | undefined)?.value;
+          picked = Array.isArray(v) && v.includes(id);
+        }
+      } catch { /* the card is not readable: say so below */ }
+      lines.push(picked === true
+        ? `${id}: picked but NOT graduated (the owner's console could not finish it; the answer note says why): still eligible, offer it again later`
+        : picked === false
+          ? `${id}: not picked: still eligible, offer it again later`
+          : `${id}: NOT graduated (the card answer could not be read, so picked or not is unknown): still eligible`);
+    }
+    return text(`Graduation check:\n${lines.join("\n")}\nReport only what is listed as graduated as done.`);
+  }
+
+  async function graduateMany(ctx: ToolContext, ids: string[], named: ReadonlySet<string>, reconcile: boolean): Promise<ToolResult> {
+    if (reconcile) return reconcileGraduation(ctx, ids);
+    const byId = new Map<string, WorkItem>();
+    const domains = new Map<string, WorkItem[]>();
+    const lines: string[] = [];
+    for (const id of ids) {
+      const found = await findItem(id);
+      if (!found) { lines.push(`${id}: not found`); continue; }
+      if (!domains.has(found.domain)) domains.set(found.domain, await getItems(found.domain));
+      byId.set(id, found.item);
+    }
+    const eligible: WorkItem[] = [];
+    for (const id of ids.filter((x) => byId.has(x))) {
+      const item = byId.get(id)!;
+      // Gathering offers features and initiatives; a loose task graduates only when the owner named it.
+      if (LOOSE_KINDS.includes(item.kind) && !named.has(id)) { lines.push(`${id}: not eligible (a loose task graduates only when the owner names it)`); continue; }
+      const r = readinessOf(item, domains.get(item.domain as string) ?? []);
+      if (r.ready) eligible.push(item);
+      else lines.push(`${id}: not eligible (${r.reason})`);
+    }
+    // Distill in parallel, a few at a time; a failed item is dropped and reported.
+    const previews = new Map<string, GraduationPreview>();
+    // The workers share `next` on purpose: `next++` runs synchronously between awaits, so each item is taken exactly once.
+    // Three at a time here (model distill calls); the console graduates two at a time (hub writes).
+    let next = 0;
+    const worker = async () => {
+      while (next < eligible.length) {
+        const item = eligible[next++];
+        const [res] = await Promise.allSettled([graduation.preview(item.id as string)]);
+        if (res.status === "rejected") lines.push(`${item.id}: could not be prepared (${res.reason instanceof Error ? res.reason.message : res.reason})`);
+        else if (res.value.blocked) lines.push(`${item.id}: blocked (${res.value.blocked})`);
+        else previews.set(item.id as string, res.value);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(GRAD_PREVIEW_PARALLEL, eligible.length) }, worker));
+    const ready = eligible.filter((i) => previews.has(i.id as string)).sort((a, b) => kindRank(a.kind) - kindRank(b.kind) || finishedAt(b) - finishedAt(a));
+    if (!ready.length) return text(`Nothing to offer the owner.\n${lines.join("\n")}`, true);
+
+    if (!(await canAsk(ctx))) {
+      const out: string[] = [];
+      for (const item of ready) {
+        const p = previews.get(item.id as string)!;
+        try {
+          const { requestId, existing } = await fileRequest(item.id as string, { kind: "graduate", preview: { contributions: p.contributions, ...(p.summary ? { summary: p.summary } : {}) } });
+          out.push(queuedText(requestId, existing, item.id as string, `${p.contributions.length} contributions`));
+        } catch (err) {
+          out.push(`${item.id}: request failed, the owner has not been asked: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+      return text([...out, ...lines].join("\n"));
+    }
+    const card: Card = pagedCard({
+      tool: "task_graduate",
+      title: `Graduate ${ready.length} item${ready.length === 1 ? "" : "s"}?`,
+      meta: { wolf: wolfName, via: "card" },
+      fields: [
+        {
+          id: "picked",
+          kind: "multi",
+          label: "Pick the ones to graduate into the knowledge base",
+          options: ready.map((i) => {
+            const p = previews.get(i.id as string)!;
+            return {
+              value: i.id as string,
+              label: i.title,
+              description: oneLine(p.summary ?? `${p.contributions.length} contributions`),
+              href: `/work/${i.id}?view=graduation&wolf=${encodeURIComponent(wolfName)}`,
+            };
+          }),
+          min: 0,
+        },
+      ],
+    });
+    const idList = ready.map((i) => i.id).join(", ");
+    return {
+      content: [{ type: "text", text: `Asked the owner which of ${idList} to graduate (one card). Your turn ends here. When they answer, call task_graduate once more with ids [${idList}] and reconcile: true.${lines.length ? `\nNot offered:\n${lines.join("\n")}` : ""}` }],
+      card,
+    };
+  }
+
   type TaskDoneArgs = { confirm?: boolean; bindNext?: boolean; id?: string; ids?: string[] };
 
   /** task_done: one id or several (`ids`), default the bound task. */
@@ -821,7 +947,7 @@ export default function createTasksExtension(
             if (!realFeature) {
               // A shipped loose task is complete: nobody stays bound to it. Graduating it is still the owner's call.
               if (readyToGraduate(shippedItem, all)) {
-                result.push(`🎓 "${shippedItem.title}" is done and ready to graduate on its own (task_graduate files an approval request; the owner decides). Tell the user.`);
+                result.push(`🎓 "${shippedItem.title}" is done and ready to graduate on its own (task_graduate files an approval request; the owner decides). Make ONE light offer to graduate it, expecting "no" (there is often more to do in the feature). Never graduate on your own.`);
               }
               if (await clearBinding(ctx)) clearCache(binding.taskId);
               else result.push(STAYS_BOUND);
@@ -846,10 +972,10 @@ export default function createTasksExtension(
                 if (refused) {
                   if (await clearBinding(ctx)) clearCache(binding.taskId);
                   result.push(`Not bound to the feature [${realFeature.id}]: ${refused}`);
-                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate files an approval request; the owner decides). Tell the user.`);
+                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate files an approval request; the owner decides). Make ONE light offer to graduate it, expecting "no" (there is often more to do in the feature). Never graduate on your own.`);
                 } else {
                   await writeCache(realFeature);
-                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate files an approval request; the owner decides). Tell the user.`);
+                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate files an approval request; the owner decides). Make ONE light offer to graduate it, expecting "no" (there is often more to do in the feature). Never graduate on your own.`);
                   result.push(readyBoundReply(realFeature));
                 }
               } else if (await clearBinding(ctx)) {
@@ -932,7 +1058,7 @@ export default function createTasksExtension(
 
 Available: task_query, task_bind, task_claim, task_release, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features
 
-Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<id>\` (e.g. \`work-wolfpack-cEg92qS\`), never the bare short id (\`cEg92qS\`). The console renders each full ID as a chip with a hover card (title, stage, parent feature, Open thread), which is how the owner reads them. Write it as plain text or inline code. It is NOT linked inside a fenced code block, a markdown link, a URL or a file name (\`work-wolfpack-cEg92qS.md\`). Write every ID in full, even in lists of several items.${quiet ? "" : `\n\n${BINDING_RULES}`}`;
+Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<id>\` (e.g. \`work-wolfpack-cEg92qS\`), never the bare short id (\`cEg92qS\`). The console renders each full ID as a chip with a hover card (title, stage, parent feature, Open thread), which is how the owner reads them. Write it as plain text or inline code. It is NOT linked inside a fenced code block, a markdown link, a URL or a file name (\`work-wolfpack-cEg92qS.md\`). Write every ID in full, even in lists of several items.${quiet ? "" : `\n\n${BINDING_RULES}\n\n${GRADUATION_RULES}`}`;
       }),
 
       // Active task section — shows current binding with feature context
@@ -1695,25 +1821,37 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       // ─── task_graduate ───────────────────────────────────────────────────
       defineTool({
         name: "task_graduate",
+        raisesCard: true,
         description:
-          "Ask the owner to graduate a finished work item into the knowledge base. You cannot graduate on your own: task_graduate(id) distills the item, previews what would be sent, and files an approval request on the hub. " +
-          "Nothing is sent until the owner approves it from the thread card, the Work page or Needs-you. The reply names the request id; report it to the owner and move on, there is nothing to call again. " +
+          "Ask the owner to graduate finished work into the knowledge base. You cannot graduate on your own and there is no auto-graduate: the owner decides. " +
+          "task_graduate(id) distills one item, previews what would be sent, and files an approval request on the hub (the reply names the request id; report it and move on). " +
+          "task_graduate(ids: [...]) offers SEVERAL items in ONE multi-select card (features first, each with a short summary and a more-details link); the owner picks, and their console graduates the picked ones. Your turn ends there. When they answer, call task_graduate once more with the same ids and reconcile: true: it checks each one on the hub and reports which graduated and which did not. Unpicked items stay eligible; offer them again later. named is the list of loose tasks the owner explicitly named; a loose task not in named is not offered (the single id argument counts as named). Features and initiatives need no naming. " +
+          "Where no card can be shown (Telegram, headless), ids files one approval request per eligible item instead. " +
           "If it returns an error, no request exists and the owner has not been asked: say so plainly. " +
-          "Eligible: a feature whose tasks are all done, a loose Inbox task, an initiative whose features have all graduated.",
+          "Eligible: a feature whose tasks are all done, an initiative whose features have all graduated, and a loose task only when the owner names it.",
         parameters: Type.Object({
-          id: Type.String({ description: "Work item to graduate" }),
+          id: Type.Optional(Type.String({ description: "Work item to graduate" })),
+          ids: Type.Optional(Type.Array(Type.String(), { description: "Several work items to offer in ONE multi-select card. Combined with id when both are given." })),
+          named: Type.Optional(Type.Array(Type.String(), { description: "The loose tasks the OWNER explicitly named. A loose task in ids that is not listed here is not offered; the single id argument counts as named. Features and initiatives need no naming." })),
+          reconcile: Type.Optional(Type.Boolean({ description: "With ids, after the owner answered the card: check each item on the hub and report which graduated. Raises no card." })),
         }),
-        async execute(args: { id: string }): Promise<ToolResult> {
-          try {
-            const preview = await graduation.preview(args.id);
-            const shown = renderGraduationPreview(preview);
-            if (preview.blocked) return text(`${shown}\n\nNothing can be requested from this preview. Tell the owner and try again later.`, true);
-            const { requestId, existing } = await fileRequest(args.id, { kind: "graduate", preview: { contributions: preview.contributions } });
-            return text(`${queuedText(requestId, existing, args.id, `${preview.contributions.length} contributions`)}\n\n${shown}`);
-          } catch (err) {
-            // Never the outbox "queued" success: only a request the hub holds counts.
-            return text(`Graduation request failed, the owner has not been asked: ${err instanceof Error ? err.message : err}`, true);
+        async execute(args: { id?: string; ids?: string[]; named?: string[]; reconcile?: boolean }, ctx: ToolContext): Promise<ToolResult> {
+          const wanted = [...new Set([...(args.ids ?? []), ...(args.id ? [args.id] : [])].filter((x) => typeof x === "string" && x))];
+          if (!wanted.length) return text("Give an id or ids.", true);
+          if (!args.ids?.length) {
+            const id = wanted[0];
+            try {
+              const preview = await graduation.preview(id);
+              const shown = renderGraduationPreview(preview);
+              if (preview.blocked) return text(`${shown}\n\nNothing can be requested from this preview. Tell the owner and try again later.`, true);
+              const { requestId, existing } = await fileRequest(id, { kind: "graduate", preview: { contributions: preview.contributions, ...(preview.summary ? { summary: preview.summary } : {}) } });
+              return text(`${queuedText(requestId, existing, id, `${preview.contributions.length} contributions`)}\n\n${shown}`);
+            } catch (err) {
+              // Never the outbox "queued" success: only a request the hub holds counts.
+              return text(`Graduation request failed, the owner has not been asked: ${err instanceof Error ? err.message : err}`, true);
+            }
           }
+          return graduateMany(ctx, wanted, new Set([...(args.named ?? []), ...(args.id ? [args.id] : [])]), args.reconcile === true);
         },
       }),
 

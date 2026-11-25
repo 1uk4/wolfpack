@@ -18,6 +18,7 @@ import { newUploadState, startUploads } from "@/components/composer/attachment-u
 import { readyRefs, type PendingAttachment } from "@/components/composer/attachments";
 import { imagesOf, withImages } from "@/components/ask/ask-images";
 import { applyTyped, pageBody, pageFieldIds, reconcile, seedAll, unanswered } from "@/components/ask/ask-answers";
+import { GRADUATE_CARD_TOOL, graduationNoteFor } from "@/components/work/graduate-card-answer";
 import { joinDictation } from "@/lib/composer-draft";
 import { threadSlug, visibleFields, type AttachedRef } from "@/src/core";
 
@@ -367,8 +368,15 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 		if (timer.current) clearTimeout(timer.current);
 		timer.current = null;
 		dirty.current = false; // the submit body carries the note
-		const n = noteBody(noteRef.current);
-		const r = await request(cardSubmitUrl(wolf, slug, cid), "POST", { answers: pageBody(fieldsOf(pageRef.current), shownRef.current, pcRef.current.card), ...(Object.keys(n).length ? { note: n } : {}), stepsKey: stepsKey(pcRef.current.card) });
+		let n = noteBody(noteRef.current);
+		const answers = pageBody(fieldsOf(pageRef.current), shownRef.current, pcRef.current.card);
+		// A task_graduate card: the owner's console graduates the picked items (the wolf cannot); the result rides to the wolf as the note.
+		if (pcRef.current.card.tool === GRADUATE_CARD_TOOL) {
+			// The thread's own wolf, never the card's say-so; graduationNoteFor never throws, so the answer always goes out.
+			const result = await graduationNoteFor(pcRef.current.card as never, answers, wolf);
+			if (result) n = { ...n, text: n.text ? `${result}\n\n${n.text}` : result };
+		}
+		const r = await request(cardSubmitUrl(wolf, slug, cid), "POST", { answers, ...(Object.keys(n).length ? { note: n } : {}), stepsKey: stepsKey(pcRef.current.card) });
 		flying.current.delete(cid);
 		setBusyIds((s) => {
 			const o = new Set(s);

@@ -39,6 +39,7 @@ import { numberRecordLines, stripSources } from "../record-sources.js";
 import { staleBuildWarning } from "./build-stamp.js";
 import { hasRollupZone, outcomesText, stripRollupMarkers, totalsText, totalsValues, withoutRollup } from "./rollup.js";
 import { scanSecrets } from "./secrets.js";
+import { capSummary } from "@wolfpack/protocol";
 
 // ════════════════════════════════════════════════════════════════════════════
 // 1 · ELIGIBILITY
@@ -392,6 +393,8 @@ export interface GraduationPreview {
   title: string;
   domain: string;
   contributions: PreviewContribution[];
+  /** 1-2 line summary of what graduating the item puts in the KB: the item's own entry summary. Absent on older previews. */
+  summary?: string;
   /** Pending observations folded into the Record just before distill. */
   foldedObservations?: number;
   /** Non-blocking: Totals values not carried over, a missing History line… */
@@ -538,6 +541,9 @@ async function distillPreview(opts: {
   ];
   const blocked = r.heldCodes.length ? `the distilled text still breaks the knowledge lint (${r.heldCodes.join(", ")}); run g again` : undefined;
   const archive = archiveSet(item, all).map((a) => ({ id: a.id as string, title: a.title }));
+  // The owner-facing summary: the distill's own, else the item's entry summary (the first contribution's when none is the item's), cut at a word boundary.
+  const own = contributions.find((c) => c.id === (id as string)) ?? contributions[0];
+  const itemSummary = capSummary(scanSecrets(r.summary ?? own?.summary ?? "").text);
   const token = createHash("sha256")
     .update(JSON.stringify({ id, c: contributions.map((c) => [c.id, c.body]) }))
     .digest("hex")
@@ -548,6 +554,7 @@ async function distillPreview(opts: {
     title: item.title,
     domain: item.domain as string,
     contributions,
+    ...(itemSummary ? { summary: itemSummary } : {}),
     warnings,
     ...(blocked ? { blocked } : {}),
     ...(folded > 0 ? { foldedObservations: folded } : {}),

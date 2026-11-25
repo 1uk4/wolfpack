@@ -99,6 +99,140 @@ describe("owner approvals", () => {
     expect(sent.length).toBe(2);
   });
 
+  const direct = (r: Awaited<ReturnType<typeof rig>>, key: string, body: unknown) => r.api(key, "POST", `/v1/work/${r.id}/graduate-direct`, body);
+  const sentCount = (r: Awaited<ReturnType<typeof rig>>) => {
+    const inbox = join(r.dataDir, "kb", "ops", "contributions", "wa");
+    return existsSync(inbox) ? readdirSync(inbox).filter((f) => !f.startsWith(".")).length : 0;
+  };
+  /** Every event frame seen on the hub stream while `trigger` runs (and for a moment after). */
+  async function eventsDuring(r: Awaited<ReturnType<typeof rig>>, trigger: () => Promise<unknown>, key: string = OP_TOKEN): Promise<Array<Record<string, unknown>>> {
+    const ac = new AbortController();
+    const res = await fetch(`${r.hub.url}/v1/events`, { headers: { Accept: "text/event-stream", Authorization: `Bearer ${key}` }, signal: ac.signal });
+    const reader = res.body!.getReader();
+    await trigger();
+    const dec = new TextDecoder();
+    let buf = "";
+    const deadline = Date.now() + 1500;
+    try {
+      while (Date.now() < deadline) {
+        const got = await Promise.race([reader.read(), new Promise<{ done: true; value?: undefined }>((ok) => setTimeout(() => ok({ done: true }), 400))]);
+        if (got.done) break;
+        buf += dec.decode(got.value, { stream: true });
+      }
+    } finally {
+      ac.abort();
+    }
+    return [...buf.matchAll(/^data: (.*)$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>);
+  }
+
+  it("direct graduate refuses a worker token with request_forbidden and sends nothing", async () => {
+    const r = await rig();
+    const w = await direct(r, r.W, { contributions: preview.contributions, via: "work" });
+    expect(w.status).toBe(403);
+    expect(((await w.json()) as { code: string }).code).toBe("request_forbidden");
+    expect(sentCount(r)).toBe(0);
+    expect((await r.item()).graduated).toBeFalsy();
+  });
+
+  it("direct graduate refuses an empty set and a via outside card/work/graph", async () => {
+    const r = await rig();
+    expect((await direct(r, OP_TOKEN, { contributions: [], via: "work" })).status).toBe(400);
+    expect((await direct(r, OP_TOKEN, { contributions: preview.contributions, via: "somewhere" })).status).toBe(400);
+    expect((await r.item()).graduated).toBeFalsy();
+    expect(sentCount(r)).toBe(0);
+  });
+
+  it("direct graduate: a double submit is rejected as already graduated and sends nothing more", async () => {
+    const r = await rig();
+    const body = { contributions: preview.contributions, via: "work" };
+    expect((await direct(r, OP_TOKEN, body)).status).toBe(200);
+    const again = await direct(r, OP_TOKEN, body);
+    expect(again.status).toBe(400);
+    expect(((await again.json()) as { message: string }).message).toMatch(/already graduated/);
+    expect(sentCount(r)).toBe(2);
+  });
+
+  it("direct graduate: the owner sends the set with no request, approval is recorded inline, the item graduates and archives", async () => {
+    const r = await rig();
+    const x = await direct(r, OP_TOKEN, { contributions: preview.contributions, summary: "Two entries about F.", via: "card" });
+    expect(x.status).toBe(200);
+    expect(await x.json()).toMatchObject({ itemId: r.id, sent: 2, archived: 1, via: "card" });
+    const it = await r.item();
+    expect(it.graduated).toBeTruthy();
+    expect(it.stage).toBe("archived");
+    const rec = JSON.stringify(await r.record());
+    expect(rec).toContain("Approved by");
+    expect(rec).toContain("via card");
+    expect(rec).toContain("Two entries about F.");
+    expect(sentCount(r)).toBe(2);
+    expect(((await (await r.api(OP_TOKEN, "GET", "/v1/work/requests?status=approved")).json()) as { requests: unknown[] }).requests).toEqual([]);
+  });
+
+  it("direct graduate emits a work-graduated event with item, domain and via, and no work-request-changed event", async () => {
+    const r = await rig();
+    const evs = await eventsDuring(r, () => direct(r, OP_TOKEN, { contributions: preview.contributions, via: "graph" }));
+    expect(evs.filter((e) => e.type === "work-graduated")).toEqual([expect.objectContaining({ type: "work-graduated", itemId: r.id, domain: "personal", via: "graph" })]);
+    expect(evs.some((e) => e.type === "work-request-changed")).toBe(false);
+  });
+
+  it("a direct graduate closes the item's pending graduate request as rejected (superseded) and announces it with work-request-changed", async () => {
+    const r = await rig();
+    const q = ((await (await r.file({ kind: "graduate", preview })).json()) as Req).request;
+    const evs = await eventsDuring(r, () => direct(r, OP_TOKEN, { contributions: preview.contributions, via: "card" }));
+    expect(evs.filter((e) => e.type === "work-request-changed")).toEqual([expect.objectContaining({ requestId: q.id, itemId: r.id, kind: "graduate", status: "rejected" })]);
+    expect(((await (await r.api(OP_TOKEN, "GET", "/v1/work/requests")).json()) as { requests: unknown[] }).requests).toEqual([]);
+    const got = ((await (await r.api(OP_TOKEN, "GET", `/v1/work/requests/${q.id}`)).json()) as { request: { status: string; reason?: string } }).request;
+    expect(got).toMatchObject({ status: "rejected", reason: expect.stringContaining("superseded") });
+  });
+
+  it("approving a stale graduate request after a direct graduation is refused with 400 and sends nothing again", async () => {
+    const r = await rig();
+    const q = ((await (await r.file({ kind: "graduate", preview })).json()) as Req).request;
+    // the request goes stale without the direct route's auto-close: the item is graduated and archived by other means while it is pending
+    expect((await r.work(OP_TOKEN, "POST", `/${r.id}/graduate`)).status).toBe(200);
+    expect((await r.work(OP_TOKEN, "PATCH", `/${r.id}`, { stage: "archived" })).status).toBe(200);
+    const x = await r.api(OP_TOKEN, "POST", `/v1/work/requests/${q.id}/approve`);
+    expect(x.status).toBe(400);
+    expect(((await x.json()) as { message: string }).message).toMatch(/already graduated/);
+    expect(sentCount(r)).toBe(0);
+    const got = ((await (await r.api(OP_TOKEN, "GET", `/v1/work/requests/${q.id}`)).json()) as { request: { status: string } }).request;
+    expect(got.status).toBe("rejected"); // not left pending or half-approved
+  });
+
+  it("the hub event stream delivers work-graduated to a worker-token subscriber (what wolfd uses)", async () => {
+    const r = await rig();
+    const evs = await eventsDuring(r, () => direct(r, OP_TOKEN, { contributions: preview.contributions, via: "work" }), r.W);
+    expect(evs.filter((e) => e.type === "work-graduated")).toEqual([expect.objectContaining({ itemId: r.id, domain: "personal" })]);
+  });
+
+  it("approving a pending graduate request on an item that graduated but never archived resumes the archive without sending again", async () => {
+    const r = await rig();
+    const q = ((await (await r.file({ kind: "graduate", preview })).json()) as Req).request;
+    expect((await r.work(OP_TOKEN, "POST", `/${r.id}/graduate`)).status).toBe(200);
+    expect((await r.api(OP_TOKEN, "POST", `/v1/work/requests/${q.id}/approve`)).status).toBe(200);
+    expect((await r.item()).stage).toBe("archived");
+    expect(sentCount(r)).toBe(0);
+    const rec = JSON.stringify(await r.record());
+    expect(rec).toContain("Archive resumed");
+    expect(rec).toContain("the set was already sent");
+    expect(rec).not.toContain("sent: 2 contributions");
+  });
+
+  it("direct graduate resumes the archive of an item that graduated but never archived, without sending the set again", async () => {
+    const r = await rig();
+    // the half-finished state: marked graduated, stage not archived (the work route marks only)
+    expect((await r.work(OP_TOKEN, "POST", `/${r.id}/graduate`)).status).toBe(200);
+    const before = await r.item();
+    expect(before.graduated).toBeTruthy();
+    expect(before.stage).not.toBe("archived");
+    const evs = await eventsDuring(r, async () => expect((await direct(r, OP_TOKEN, { contributions: preview.contributions, via: "work" })).status).toBe(200));
+    expect((await r.item()).stage).toBe("archived");
+    expect(sentCount(r)).toBe(0);
+    expect(evs.filter((e) => e.type === "work-graduated").length).toBe(1);
+    // fully archived now: refused
+    expect((await direct(r, OP_TOKEN, { contributions: preview.contributions, via: "work" })).status).toBe(400);
+  });
+
   it("approving a graduate archives the feature and its not-yet-archived tasks, leaves archived ones, and counts them in the audit line", async () => {
     const r = await rig();
     const mk = async (stage: string) => {

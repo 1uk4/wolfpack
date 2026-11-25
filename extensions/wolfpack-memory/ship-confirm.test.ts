@@ -317,7 +317,7 @@ describe("structured yes detection", () => {
     const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
     expect((await tw.client.skipCard!(tw.home, p.callId)).disposition).toBe("started");
     await drain(tw);
-    expect(seen).toBe(`The user skipped your task_done question (call ${p.callId}).`);
+    expect(seen).toBe(`The user skipped your task_done question (call ${p.callId}).\nReply to the owner or continue the work.`);
     expect(items.get(t.id)!.stage).toBe("approved");
     const d = await tw.client.getThread(tw.home);
     expect(d.messages.flatMap((m) => m.tools ?? []).find((c) => c.callId === p.callId)).toMatchObject({ closed: "skipped" });

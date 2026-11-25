@@ -87,7 +87,8 @@ export async function readFrameFile(wolfHome: string, rel: string | null): Promi
   try {
     const st = await fh.stat();
     if (!st.isFile() || st.dev !== found.dev || st.ino !== found.ino) throw new HttpError("forbidden", "the frame file changed while it was read");
-    const buf = Buffer.alloc(FRAME_MAX_BYTES + 1);
+    // (one byte over the file's size at most, capped: a file that grew since the stat still reads to the cap plus one)
+    const buf = Buffer.alloc(Math.min(st.size + 1, FRAME_MAX_BYTES + 1));
     let n = 0;
     while (n < buf.length) {
       const { bytesRead } = await fh.read(buf, n, buf.length - n, n);

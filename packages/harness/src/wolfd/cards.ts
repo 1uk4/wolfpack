@@ -17,6 +17,7 @@
  * new transcript entry kind for little gain.
  */
 import { ATTACHMENT_MAX_PER_SUBMIT, BIND_TEXT_MAX, pageCard, reviseCard, visibleFields, type AnyField, type Card, type CardAnswers, type CardClosed, type CardFieldAnswer, type PendingCard } from "@wolfpack/protocol";
+import { ANSWER_ANSWERED, ANSWER_SKIPPED, ANSWER_SUBMITTED, REVISE_NOT_APPLIED } from "../injected-text.js";
 import { fieldKind, type AnyAnswer } from "./card-kinds/index.js";
 import { attachmentIds } from "./card-kinds/types.js";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData, type EngineEvent } from "../engine/index.js";
@@ -468,16 +469,18 @@ export function questionNumbers(card: Card): Map<string, number> {
   return new Map(order.map((id, i) => [id, i + 1]));
 }
 
+const REPLY_EXPECTED = "Reply to the owner or continue the work.";
+
 /** The model-facing user message for an answer submission: every card's questions with their answers (or skip), in raise order. */
 export function answerText(cards: readonly ReadyAnswer[]): string {
   const lines: string[] = [];
   for (const { callId, card, answers, skipped, note, reviseNote } of cards) {
     if (card.paged && !skipped) {
-      if (reviseNote) lines.push(`Note: your earlier ask_revise was NOT applied: ${reviseNote}`);
+      if (reviseNote) lines.push(`${REVISE_NOT_APPLIED}: ${reviseNote}`);
       const steps = card.steps ?? [{ fields: card.fields.map((f) => f.id) }];
       const nums = questionNumbers(card);
       const what = card.tool === "ask" ? "ask questionnaire" : `${card.tool} confirmation`;
-      lines.push(`The user submitted your ${what} (call ${callId}), ${steps.length} page${steps.length === 1 ? "" : "s"}:`);
+      lines.push(`${ANSWER_SUBMITTED}${what} (call ${callId}), ${steps.length} page${steps.length === 1 ? "" : "s"}:`);
       steps.forEach((step, i) => {
         const title = (step as { title?: string }).title;
         lines.push(`Page ${i + 1} of ${steps.length}${title ? ` ("${title}")` : ""}:`);
@@ -491,12 +494,15 @@ export function answerText(cards: readonly ReadyAnswer[]): string {
       continue;
     }
     if (skipped) {
-      lines.push(`The user skipped your ${card.tool} question (call ${callId}).`);
+      lines.push(`${ANSWER_SKIPPED}${card.tool} question (call ${callId}).`);
       continue;
     }
-    lines.push(`The user answered your ${card.tool} question (call ${callId}):`);
+    lines.push(`${ANSWER_ANSWERED}${card.tool} question (call ${callId}):`);
     for (const f of visibleFields(card, answers)) lines.push(`- ${f.label}: ${answerValue(f, answers[f.id])}`);
   }
+  // A result that reads like a status line was answered with a bare "No response requested."; say a reply is expected.
+  // A paged questionnaire already ends with its own "you may proceed" line.
+  if (lines.length > 0 && !lines[lines.length - 1].startsWith("The questionnaire is complete")) lines.push(REPLY_EXPECTED);
   return lines.join("\n");
 }
 

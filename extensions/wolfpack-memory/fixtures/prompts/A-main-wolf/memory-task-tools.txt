@@ -1,0 +1,107 @@
+===== task_bind (wolfpack-tasks) =====
+Bind to the task/issue/spike you are working on. Do it BEFORE you start: the bound item decides where what you learn is kept (its feature's Record, not den topics). One bound item per session; call it again to switch.
+parameters:
+  id*: Work item ID to bind to
+
+===== task_claim (wolfpack-tasks) =====
+Claim a work item on the hub so no other wolf works on it (an approved item moves to in_build). Fails naming the holder if another wolf has it. Needs a configured hub. Does not bind; use task_bind on a feature to claim and bind.
+parameters:
+  id*: Work item ID to claim
+
+===== task_create (wolfpack-tasks) =====
+Create a new work item. Tasks/issues/spikes default to the bound task's feature if partOf is not specified. PARENT MUST BE IN THE SAME DOMAIN as the new item — a task in one domain cannot sit under a feature in another. If no fitting feature exists in that domain, OMIT partOf and the item lands in the domain's Inbox. Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else. Under a feature the item always takes the feature's assignee (an `assignee` that differs is ignored, and the reply says so). A loose item (no partOf, or the Inbox) can be created only for yourself; only the owner can give one to another wolf.
+parameters:
+  kind*: Type: initiative, feature, task, issue, spike
+  assignee: Wolf to assign a loose item to (default: you). Ignored under a feature for a wolf (the feature's assignee wins); the owner can create for anyone.
+  domain*: Domain: one of your subscribed domains
+  title*: Short title
+  partOf: Parent work item ID
+  successCriteria: Done condition (required for tasks)
+  standing: Initiatives only: never completes; it keeps gaining features (e.g. a new week each week)
+  bind: Bind the new item (task/issue/spike) so what you learn goes to its Record. Default: true when nothing is bound and the item is assigned to you, else false.
+
+===== task_current (wolfpack-tasks) =====
+Get the currently bound task in full: its current stage, its feature's tasks and progress, success criteria, the whole working document (plan + Record) and the feature Record. The system prompt only names the task; changes to it arrive as short 'Task update' notices, so call this for the details.
+parameters: none described
+
+===== task_done (wolfpack-tasks) =====
+Ship the active task and optionally bind to the next unfinished sibling. Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item). Shipping another item leaves your binding as it is. To ship SEVERAL tasks, call task_done ONCE with ids: [...] (never one call per task, never parallel calls): the user then answers a single multi-select card, and after their answer you call task_done again with the same ids and confirm: false; only the ones they picked ship, the rest are reported as not shipped.
+parameters:
+  confirm: Override auto-ship policy
+  bindNext: Auto-bind to next unfinished sibling (default: true)
+  id: Work item to ship (default: the bound one)
+  ids: Several work items to ship at once, confirmed with ONE multi-select card. Combined with id when both are given.
+
+===== task_features (wolfpack-tasks) =====
+List open features in a domain. Useful for showing parent options when creating tasks.
+parameters:
+  domain*: Domain to list features from
+
+===== task_graduate (wolfpack-tasks) =====
+Ask the owner to graduate a finished work item into the knowledge base. You cannot graduate on your own: task_graduate(id) distills the item, previews what would be sent, and files an approval request on the hub. Nothing is sent until the owner approves it from the thread card, the Work page or Needs-you. The reply names the request id; report it to the owner and move on, there is nothing to call again. If it returns an error, no request exists and the owner has not been asked: say so plainly. Eligible: a feature whose tasks are all done, a loose Inbox task, an initiative whose features have all graduated.
+parameters:
+  id*: Work item to graduate
+
+===== task_link (wolfpack-tasks) =====
+Add a dependency link between work items. Uses the active task if no id provided.
+parameters:
+  rel*: Relation: depends_on or blocks
+  target*: Target work item ID
+  id: Source work item ID (defaults to active task)
+
+===== task_move (wolfpack-tasks) =====
+Move a task under a different parent (default: the bound task). Pass id to move another item: that never binds it or changes your binding, so never bind an item just to move it. Moving the bound task itself does not refresh its cached feature (the memory fold resolves the feature at fold time anyway).
+parameters:
+  to*: New parent ID, 'inbox', or 'none'
+  id: Work item to move (default: the bound one)
+
+===== task_note (wolfpack-tasks) =====
+Add a progress note to the active task. Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).
+parameters:
+  text*: Progress note content
+  id: Work item to note (default: the bound one)
+
+===== task_query (wolfpack-tasks) =====
+Query work items across subscribed domains. Returns hierarchical view with parents and children.
+parameters:
+  domain: Filter to specific domain
+  kind: Filter by kind: initiative, feature, task, issue, spike
+  stage: Filter by stage
+  id: Get specific item with its context
+  depth: Include children to this depth (default: 1)
+
+===== task_release (wolfpack-tasks) =====
+Release a work item you claimed on the hub, so another wolf can take it. Needs a configured hub. Does not unbind; use task_unbind for that.
+parameters:
+  id*: Work item ID to release
+
+===== task_schedule (wolfpack-tasks) =====
+Pin a task to a calendar slot. scheduledFor is 'YYYY-MM-DD HH:MM' (local time). durationMinutes defaults to 60 when omitted. Pass scheduledFor='' or clear=true to unschedule. Uses the active task if no id provided.
+parameters:
+  scheduledFor: YYYY-MM-DD HH:MM local time. Empty string unschedules.
+  durationMinutes: Block length in minutes (default 60)
+  clear: Unschedule the task (clears both fields)
+  id: Work item ID (defaults to active task)
+
+===== task_stage (wolfpack-tasks) =====
+Advance the active task to a new stage. Moving an item to in_build binds it when nothing is bound. Moving to archived does not archive: it files an owner-approval request, approved from the thread card, the Work page or Needs-you. Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).
+parameters:
+  to*: Target stage: idea, plan, feasibility, approved, in_build, shipped, live, archived
+  id: Work item to move (default: the bound one)
+
+===== task_unbind (wolfpack-tasks) =====
+Unbind from the current task without shipping it.
+parameters: none described
+
+===== task_unlink (wolfpack-tasks) =====
+Remove a dependency link between work items. Uses the active task if no id provided.
+parameters:
+  rel*: Relation: depends_on or blocks
+  target*: Target work item ID
+  id: Source work item ID (defaults to active task)
+
+===== task_update (wolfpack-tasks) =====
+Update the active work item's working document (plan, notes, findings). Replaces the body of the .md file. Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).
+parameters:
+  body*: The full updated markdown body (everything below frontmatter)
+  id: Work item to update (default: the bound one)

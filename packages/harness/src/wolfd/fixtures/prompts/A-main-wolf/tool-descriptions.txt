@@ -1,0 +1,59 @@
+===== tool.ask (extension ask) =====
+Ask the owner structured questions after you have given the big picture in your normal chat message. pages[] each with a title and questions[]; every question has its own markdown `context`. kinds: single, multi, confirm, free, slider. Every choice needs a non-empty `tradeoff`. Questions are skippable unless `required`; single/multi offer an Other box unless `noOther`. A question may show a `diagram` you rendered with a diagram tool and persisted (pass the returned filename). The answers come back together in one message when the owner submits. The owner fills in the pages at their own pace, going back and forth, and submits ONCE: you then get one message with every page's answers and an optional note from the owner. Nothing arrives before that. `ask_revise` can still replace the pages the owner has not moved past yet. A plain chat message from the owner replaces the whole set and arrives with whatever was already answered.
+
+===== tool.ask_revise (extension ask) =====
+Replace the pages of an open `ask` questionnaire that the owner has not moved past yet (use the call id from the ask result). Keeps the pages they moved past. Errors if the call id is not an open questionnaire or a question id repeats an answered one.
+
+===== tool.bash (extension coding-tools) =====
+Execute a bash command in the current working directory. Returns combined stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.
+
+===== tool.edit (extension coding-tools) =====
+Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.
+
+===== tool.find (extension wolfd-readonly-tools) =====
+Find files by glob pattern (e.g. '*.ts', 'src/**/*.test.ts'); returns paths relative to the search directory. A pattern without '/' matches file names (basenames) at any depth. Skips .git and node_modules and does not follow symlinked directories. Output is capped at 1000 results or 50KB; a search stops after 20000 entries or 10s and says so.
+
+===== tool.grep (extension wolfd-readonly-tools) =====
+Search file contents for a regex (or literal) pattern; returns 'path:line: text' matches. Skips .git, node_modules, binary files, symlinked files and files over 1MB; only the first 2000 chars of a line are searched. Output is capped at 100 matches or 50KB, lines at 500 chars; a search stops after 20000 entries or 10s and says so.
+
+===== tool.guarded_bash (extension wolfd-readonly-tools) =====
+Execute a read-only bash command. Writes, deletes, redirects to files (except /dev/null, and /tmp/ locally), service/package/git/network changes are blocked, including inside ssh '...', bash -c, sudo and $(...). Execute a bash command in the current working directory. Returns combined stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.
+
+===== tool.ls (extension wolfd-readonly-tools) =====
+List a directory's entries (directories end in "/"), sorted, including dotfiles. Defaults to the working directory. Output is capped at 500 entries or 50KB.
+
+===== tool.pin (extension wolfpack-objects) =====
+Pin or unpin a checklist, decision or graph already shown in this thread, without resending it. Pinned objects show in the strip at the top of the chat (new objects pin automatically, the newest of each type); pin an older one to show it instead of the newest, or unpin one to take it out. Errors if no object has that objectId. The reserved objectId "task" is the bound-task chip: pinned false hides it, true shows it again (the binding never changes; errors when no task is bound).
+
+===== tool.read (extension coding-tools) =====
+Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.
+
+===== tool.show_checklist (extension wolfpack-objects) =====
+Show the user a live checklist of the steps of a multi-step task, each todo, doing, done or skipped. Call it when you start, then again with the same objectId as items change state; each call revises the card in place and must resend the full checklist (every item, unique ids), not a diff.
+
+===== tool.show_decision (extension wolfpack-objects) =====
+Show the user a decision card: the options you weighed, which you chose and why. Use it when you settle a real choice (approach, design, trade-off), not for trivia. Calling it again with the same objectId revises the card in place; each revision must resend the full decision, not a diff.
+
+===== tool.show_graph (extension wolfpack-objects) =====
+Show the user a plan/task graph: nodes (kind step|task|milestone, status todo|doing|done|blocked|skipped) and edges {from,to} meaning `from` depends on `to`. Edges must reference node ids, with no self-loops or cycles. Call it again with the same objectId as work progresses to update statuses in place; each revision must resend the full graph, not a diff.
+
+===== tool.show_view (extension wolfpack-objects) =====
+Open a work item (kind work-item) or a KB entry (kind kb-entry) in the owner's viewer panel and leave a small card in the transcript. Pass the full id. Calling it again with the same objectId revises it in place; pinned: true also pins it as a chip. Do not pin frames unless the owner asks. Kind frame shows an HTML file the visualizer wrote in your frames dir: pass wolf (your own name) and path (relative to the frames dir, e.g. pack-health.html). For visuals, delegate to the visualizer, then call show_view with kind frame and the path it returns; after it rewrites the file, call again with the same objectId to reload.
+
+===== tool.subagent (extension wolfd-subagents) =====
+Delegate a task to a specialist sub-agent (see `subagents_list` for the roster and tiers). Delegate anything that needs more than a couple of reads or commands, so your context stays small; spawn independent pieces in parallel. Fire-and-forget: returns immediately; the result arrives automatically as a steer message. Do not poll, sleep, tail logs or check status, and never fabricate or assume results: end your turn or do other independent work. When the child's task is shipped (task_done), its branch is merged into the feature branch automatically. Don't merge by hand; use subagent_merge only after a merge conflict or when asked.
+
+===== tool.subagent_merge (extension wolfd-subagents) =====
+Act on a worktree sub-agent's branch. When the child's task is shipped (task_done), its branch is merged into the feature branch automatically. Don't merge by hand; use subagent_merge only after a merge conflict or when asked. action "retry": merge now (after committing or stashing a dirty tree, or fixing a conflict by hand). "resolve": a worker subagent rebases the branch onto the feature branch and resolves the conflict, then it is merged again. "manual": the steps for the owner to resolve it by hand (the worktree and branch stay). "abandon": discard the worktree and branch (unmerged commits first ask the user to confirm with a card; the conflict card's Abandon branch answer counts).
+
+===== tool.subagent_message (extension wolfd-subagents) =====
+Message a sub-agent by name (names persist after it finishes). Running: steers it. Finished, failed, stopped or waiting for your answer: resumes it with your message. Fire-and-forget; the result arrives as a steer message. Don't poll.
+
+===== tool.subagent_stop (extension wolfd-subagents) =====
+Cancel a running or waiting sub-agent by name. It stops (state stopped) and keeps its history; message it later to resume it. With abandon: true it also discards the sub-agent's worktree and branch (it can no longer be resumed); a branch with unmerged commits first asks the user to confirm with a card.
+
+===== tool.subagents_list (extension wolfd-subagents) =====
+List the subagent roster: each agent's tier and role (project-local agents override the wolf's, which override the package's), then your own sub-agents with their state.
+
+===== tool.write (extension coding-tools) =====
+Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.

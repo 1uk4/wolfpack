@@ -83,6 +83,7 @@ const { AttachedThreadProvider } = await import("../../../components/chat-bar/at
 const { ChatBar } = await import("../../../components/chat-bar/chat-bar.tsx");
 const { registerViewRenderer } = await import("../../../components/viewer/registry.tsx");
 const vs = await import("../../../components/viewer/viewer-store.ts");
+const pinStore = await import("../../../components/thread/pin-store.ts");
 const { ATTACHED_KEY, BAR_EXTRAS } = await import("../../../src/core/thread/chat-bar.ts");
 const { setVizActive, vizKey } = await import("../../../components/viewer/viz-mode.ts");
 
@@ -198,6 +199,36 @@ describe("thread visualization mode", () => {
 		await mount();
 		assert.equal(store.has(OLD), false);
 		assert.equal(mainHidden(), false);
+	});
+
+	it("the pinned strip is hidden with the chat in visualization mode and back when it is off", async () => {
+		pinStore.pin(TID, { kind: "kb", id: "e1", title: "Entry", pinnedBy: "owner" });
+		await mount();
+		await openKb();
+		assert.ok(q('[data-testid="thread-main"] [data-testid="pinned-strip"]'), "strip lives in the chat column");
+		assert.equal(mainHidden(), false);
+		await click(q('[data-testid="viz-toggle"]')!);
+		await settle(60);
+		assert.equal(mainHidden(), true, "the strip's container is hidden with the transcript");
+		await click(q('[data-testid="viz-toggle"]')!);
+		await settle(60);
+		assert.equal(mainHidden(), false);
+		assert.ok(q('[data-testid="thread-main"] [data-testid="pinned-strip"]'));
+	});
+
+	it("on the phone the pinned strip is a flow sibling above the transcript scroller; from md up it stays an overlay", async () => {
+		pinStore.pin(TID, { kind: "kb", id: "e1", title: "Entry", pinnedBy: "owner" });
+		await mount();
+		const tint = q('[data-testid="thread-tint"]')!;
+		const col = q('[data-testid="pinned-column"]')!;
+		assert.equal(col.parentElement, tint);
+		assert.equal(tint.firstElementChild, col, "the column comes first on phones (flex-col order)");
+		assert.match(tint.getAttribute("class") ?? "", /max-md:flex-col/);
+		const cls = (col.getAttribute("class") ?? "").split(" ");
+		assert.ok(cls.includes("max-md:relative"), "in flow on phones");
+		assert.ok(cls.includes("md:absolute"), "desktop keeps the overlay");
+		assert.ok(!cls.includes("absolute"), "no unconditional absolute");
+		assert.match(q('[data-testid="transcript-column"]')!.getAttribute("class") ?? "", /md:pt-\[var\(--pin-pt\)\]/);
 	});
 
 	it("the choice is kept per thread across a reload", async () => {

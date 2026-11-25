@@ -161,7 +161,7 @@ describe("ThreadChat objects", () => {
 		assert.doesNotMatch(card.textContent ?? "", /Concurrent writers\.$/);
 		assert.match(card.querySelector('[data-testid="object-updated"]')?.textContent ?? "", /updated 1 time/);
 		// First position: between "Weighing it." and "Rethinking.".
-		const text = document.body.textContent ?? "";
+		const text = document.querySelector('[data-testid="transcript-column"]')!.textContent ?? "";
 		assert.ok(text.indexOf("Weighing it.") < text.indexOf("Datastore") && text.indexOf("Datastore") < text.indexOf("Rethinking."));
 	});
 

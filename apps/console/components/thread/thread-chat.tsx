@@ -815,10 +815,14 @@ function ThreadChatInner({
 				)}
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />
-				<div className="relative flex min-h-0 flex-1" data-testid="thread-tint" data-thread-color={tintHex}>
-					<Conversation className="h-full min-w-0 flex-1" initial="instant">
+				<div className="relative flex min-h-0 flex-1 max-md:flex-col" data-testid="thread-tint" data-thread-color={tintHex}>
+					{/* One flex column for everything pinned: checklist / feature progress, then the decision and graph pins. The pins sit below whichever panel is open, at its real height; the column's max height (the thread area minus the composer reserve) caps what is open. On phones it is a flow sibling above the transcript scroller, so it never scrolls away; from md up it overlays the scroller's top. */}
+					<div className="pointer-events-none z-10 flex min-h-0 flex-col max-md:relative md:absolute md:inset-x-0 md:top-0" style={{ maxHeight: `max(6rem, calc(100% - ${dockHeight ?? 160}px))` }} data-testid="pinned-column" ref={pinnedColumnRef}>
+						<PinnedStrip wolf={wolf} threadId={threadId} objects={stripObjects} task={featureProgress.state.phase === "ready" ? { model: featureProgress.state.model, busy } : undefined} onDismiss={() => inputRef.current?.focus()} />
+					</div>
+					<Conversation className="h-full min-w-0 flex-1 max-md:h-auto max-md:min-h-0" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
-							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${pinnedHeight > 0 ? "" : "pt-4 max-md:pt-14"}`} style={pinnedHeight > 0 ? { paddingTop: `${pinnedHeight + 8}px` } : undefined} data-testid="transcript-column">
+							<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4 md:pt-[var(--pin-pt)]`} style={{ "--pin-pt": pinnedHeight > 0 ? `${pinnedHeight + 8}px` : "1rem" } as React.CSSProperties} data-testid="transcript-column">
 								{messages.length === 0 && !busy && (
 									<ConversationEmptyState title={title} description="Say something to start a turn." />
 								)}
@@ -1039,10 +1043,6 @@ function ThreadChatInner({
 							</div>
 						</div>
 					</Conversation>
-					{/* One flex column for everything pinned: checklist / feature progress, then the decision and graph pins. The pins sit below whichever panel is open, at its real height; the column's max height (the thread area minus the composer reserve) caps what is open. */}
-					<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-h-0 flex-col" style={{ maxHeight: `max(6rem, calc(100% - ${dockHeight ?? 160}px))` }} data-testid="pinned-column" ref={pinnedColumnRef}>
-						<PinnedStrip wolf={wolf} threadId={threadId} objects={stripObjects} task={featureProgress.state.phase === "ready" ? { model: featureProgress.state.model, busy } : undefined} onDismiss={() => inputRef.current?.focus()} />
-					</div>
 				</div>
 			</div>
 			<ViewerPanel

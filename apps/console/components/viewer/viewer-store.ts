@@ -34,7 +34,13 @@ function parse(raw: string | null): ViewerState {
 		if (!Array.isArray(v.stack)) return EMPTY;
 		const stack = (v.stack as unknown[])
 			.filter((d): d is ViewDescriptor => !!d && typeof (d as ViewDescriptor).kind === "string" && typeof (d as ViewDescriptor).id === "string")
-			.map((d) => (typeof d.title === "string" ? { kind: d.kind, id: d.id, title: d.title } : { kind: d.kind, id: d.id }))
+			.map((d) => ({
+				kind: d.kind,
+				id: d.id,
+				...(typeof d.title === "string" ? { title: d.title } : {}),
+				...(typeof d.wolf === "string" ? { wolf: d.wolf } : {}),
+				...(typeof d.rev === "number" ? { rev: d.rev } : {}),
+			}))
 			.slice(-VIEWER_MAX_DEPTH);
 		return { stack, open: v.open === true && stack.length > 0 };
 	} catch {
@@ -101,6 +107,14 @@ const topIs = (s: ViewerState, d: ViewDescriptor) => s.stack.length > 0 && viewK
 export function openView(wolf: string, threadId: string, d: ViewDescriptor) {
 	const s = getViewerState(wolf, threadId);
 	set(wolf, threadId, { stack: topIs(s, d) ? s.stack : cap([...s.stack, d]), open: true });
+}
+
+/** A newer show_view rev for a view already in the stack: replaces that entry in place (same key) so its renderer refetches. No-op when absent or the rev is unchanged. */
+export function refreshView(wolf: string, threadId: string, d: ViewDescriptor) {
+	const s = getViewerState(wolf, threadId);
+	const k = viewKey(d);
+	if (!s.stack.some((x) => viewKey(x) === k && x.rev !== d.rev)) return;
+	set(wolf, threadId, { stack: s.stack.map((x) => (viewKey(x) === k ? d : x)), open: s.open });
 }
 
 /** Push without changing open. A duplicate of the top is ignored. */

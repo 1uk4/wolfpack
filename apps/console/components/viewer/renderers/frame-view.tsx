@@ -1,0 +1,81 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import type { ViewRendererProps } from "../registry";
+import { useViewerReload } from "../viewer-actions";
+
+/**
+ * The CSP the wolf's HTML runs under: inline script and style and data: images and fonts, nothing else, so it cannot fetch,
+ * open sockets, load remote files or navigate. Together with `sandbox="allow-scripts"` (no allow-same-origin: opaque origin,
+ * no cookies, no storage, no access to the console) this is the whole trust boundary.
+ */
+export const FRAME_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:";
+
+/**
+ * Puts the CSP meta before everything the author wrote. A meta CSP only governs what is parsed after it, so it must be the first
+ * thing in the document; prepending a doctype and the meta means author markup (its own head, metas, scripts) can never come first.
+ * An author `<!doctype>` or `<head>` after ours is tolerated by the parser, and a second CSP can only tighten the policy.
+ */
+export function buildSrcdoc(html: string): string {
+	return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">${html}`;
+}
+
+type State = { phase: "loading" } | { phase: "ready"; html: string } | { phase: "error"; status: number | null };
+
+export const frameUrl = (wolf: string, path: string) => `/api/wolves/${encodeURIComponent(wolf)}/frame-file?path=${encodeURIComponent(path)}`;
+
+/** Kind "frame": a workspace HTML file in a sandboxed iframe. Frames send no messages to the console: there is no message listener. */
+export function FrameViewRenderer({ descriptor, onTitle }: ViewRendererProps) {
+	const wolf = descriptor.wolf ?? "";
+	const path = descriptor.id;
+	const rev = descriptor.rev;
+	const [state, setState] = useState<State>({ phase: "loading" });
+	const [nonce, setNonce] = useState(0);
+
+	useEffect(() => {
+		onTitle(descriptor.title ?? path);
+	}, [descriptor.title, path, onTitle]);
+
+	// Refetch on mount, Reload (nonce) and a new show_view rev; a stale response never overwrites a newer one.
+	useEffect(() => {
+		let live = true;
+		setState({ phase: "loading" });
+		fetch(frameUrl(wolf, path), { cache: "no-store" })
+			.then(async (res) => {
+				if (!live) return;
+				setState(res.ok ? { phase: "ready", html: await res.text() } : { phase: "error", status: res.status });
+			})
+			.catch(() => live && setState({ phase: "error", status: null }));
+		return () => {
+			live = false;
+		};
+	}, [wolf, path, rev, nonce]);
+
+	const reload = useCallback(() => setNonce((n) => n + 1), []);
+	useViewerReload(reload);
+
+	if (state.phase === "loading") return <p className="p-4 text-sm text-muted-foreground" role="status">Loading frame…</p>;
+	if (state.phase === "error") {
+		const gone = state.status === 404;
+		return (
+			<div className="flex flex-col items-start gap-3 p-4 text-sm" role="alert" data-testid="frame-error" data-gone={gone ? "true" : undefined}>
+				<p className="text-muted-foreground">
+					{gone ? `This frame is gone: ${path}` : state.status === null ? "Could not load the frame (network error)." : `Could not load the frame (status ${state.status}).`}
+				</p>
+				<Button variant="outline" size="sm" onClick={reload}>Reload</Button>
+			</div>
+		);
+	}
+	return (
+		<iframe
+			key={nonce}
+			title={descriptor.title ?? path}
+			data-testid="frame-iframe"
+			sandbox="allow-scripts"
+			referrerPolicy="no-referrer"
+			srcDoc={buildSrcdoc(state.html)}
+			className="block h-full w-full border-0 bg-white"
+		/>
+	);
+}

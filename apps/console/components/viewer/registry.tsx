@@ -3,6 +3,8 @@ import type { ViewDescriptor } from "./view-descriptor";
 
 export interface ViewRendererProps {
 	descriptor: ViewDescriptor;
+	/** The wolf of the thread this viewer sits in; undefined on a page host. Frames load only from this wolf, never from the descriptor. */
+	wolf?: string;
 	/** Open another view on top of this one (back returns here). */
 	onPush: (descriptor: ViewDescriptor) => void;
 	/** Report the title to show in the shell header. */

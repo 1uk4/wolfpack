@@ -6,6 +6,7 @@ import { parseViewKey, viewKey } from "./view-descriptor";
 import { getViewerState, setViewerState, useViewer, type ViewerState } from "./viewer-store";
 import { hostAllows, type ViewerHost } from "./viewer-host";
 import { setVizMode } from "./viz-mode";
+import { recordFrameFromLink } from "./frame-store";
 
 /** The thread URL's `?view=` param: the viewKey of the top descriptor while the viewer is open. */
 export const VIEW_PARAM = "view";
@@ -72,6 +73,7 @@ export function useViewerUrlSync(wolf: string, threadId: string, host?: Pick<Vie
 		if (!merged) return;
 		skip.current = true; // the store update re-runs the sync below with the merged state
 		setViewerState(wolf, threadId, merged);
+		if (parsed?.kind === "frame") recordFrameFromLink(threadId, parsed.id); // the link's frame gets a badge too
 		if (parsed?.kind === "frame") setVizMode(wolf, threadId, true); // a frame link (a chat-bar badge from another page) arrives in visualization mode; once, on arrival
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- on mount (per thread) only
 	}, [wolf, threadId]);

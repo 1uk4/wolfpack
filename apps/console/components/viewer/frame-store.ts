@@ -112,6 +112,24 @@ export function recordFrames(wolf: string, threadId: string, messages: ReadonlyA
 	emit();
 }
 
+/**
+ * A frame opened by link (`?view=frame:<path>`, or a reload of that page) gets a badge like one from show_view, titled with the path.
+ * Skipped when the thread already has a badge for that path (a show_view one, dismissed or not), so a dismissal is never undone by the link.
+ * Its objectId is stable (`link:<path>`), so dismissing it sticks across reloads.
+ */
+export function recordFrameFromLink(threadId: string, path: string): void {
+	if (!safePath(path)) return;
+	const stored = readFrames(threadId);
+	if (stored.some((f) => f.path === path)) return;
+	const kept = [...stored, { objectId: `link:${path}`, path, title: path }].slice(-MAX_FRAMES);
+	try {
+		storage()?.setItem(framesKey(threadId), JSON.stringify(kept));
+	} catch {
+		/* best effort */
+	}
+	emit();
+}
+
 export function isFrameDismissed(threadId: string, objectId: string): boolean {
 	try {
 		return storage()?.getItem(dismissedKey(threadId, objectId)) === "1";

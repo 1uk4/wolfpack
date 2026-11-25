@@ -13,14 +13,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import { stringify as yamlStringify } from "yaml";
-import { AgentClient } from "../agent-client.js";
-import { buildRemoteBundle } from "../bundle.js";
-import { ensureDenMirror } from "./host-sync.js";
-import { loadConfig, getHost, localWolfDir, kbBaseDir, librarianDir } from "../config.js";
+import { loadConfig, localWolfDir, kbBaseDir, librarianDir } from "../config.js";
 import { loadRegistry, listDomainNames, unknownDomains } from "../domains.js";
 import { c } from "../render.js";
-import { ModelConfigError, type ResolvedTier } from "@wolfpack/engine";
-import { resolveLocalWolfModels } from "../models.js";
 import { select, multiSelect, prompt } from "../prompts.js";
 import {
   AVAILABLE_EXTENSIONS,
@@ -28,7 +23,7 @@ import {
   defaultExtensionKeys,
   needsTelegram,
   extensionsForRuntime,
-  writePiSettings,
+  resolveExtensionDirs,
   type WolfProfile,
 } from "../extensions.js";
 
@@ -181,7 +176,7 @@ export async function wolfAdd(name: string, opts: AddWolfOpts): Promise<void> {
   const choices = await resolveChoices(opts);
   const targetHost = choices.host ?? opts.host;
   if (targetHost) {
-    await addRemote(name, { ...opts, host: targetHost }, choices);
+    addRemote(name, { ...opts, host: targetHost });
   } else {
     addLocal(name, opts, choices);
   }
@@ -255,109 +250,20 @@ function addLocal(
     mode: 0o600,
   });
 
-  // Wire up PI extensions
-  // Main tier comes from the pack's models (wolf.yaml is already written);
-  // with no pack models yet, writePiSettings falls back to its default.
-  let mainTier: ResolvedTier | undefined;
-  try {
-    mainTier = resolveLocalWolfModels(config, name).tiers.main;
-  } catch (err) {
-    if (!(err instanceof ModelConfigError)) throw err;
-  }
-  const missing = writePiSettings(wolfDir, choices.extensions, mainTier);
-
+  const { missing } = resolveExtensionDirs(choices.extensions);
   reportCreated(wolfDir, id, choices, missing);
   console.log(c.dim(`  Config:  ${path.join(wolfDir, "wolf.yaml")}`));
 }
 
-/** Create wolf on a remote host via agent */
-async function addRemote(
-  name: string,
-  opts: AddWolfOpts,
-  choices: ResolvedChoices,
-): Promise<void> {
-  const config = loadConfig();
-  const host = getHost(config, opts.host);
-
-  if (!host) {
-    console.error(
-      c.red(`Host '${opts.host}' not found. Run \`wolfpack host list\`.`),
-    );
-    process.exit(1);
-  }
-
-  console.log(c.bold(`Creating wolf '${name}' on ${opts.host}...`));
-
-  // Build the portable identity bundle (single source of truth) locally.
-  console.log(c.dim("Building identity bundle (extensions + settings)..."));
-  const built = await buildRemoteBundle({
-    name,
-    role: opts.role ?? name,
-    specialty: opts.specialty,
-    domains: choices.domains,
-    extensions: choices.extensions,
-  });
-  if (built.missing.length) {
-    console.log(
-      c.yellow(`  ! Skipped (not vendored in repo): ${built.missing.join(", ")}`),
-    );
-  }
-
-  // Secrets + runtime env shipped to the agent to write into the wolf's .env.
-  const env: Record<string, string> = {};
-  if (choices.telegram?.token) env[choices.telegram.tokenEnv] = choices.telegram.token;
-  if (choices.telegram?.ownerId) env.TELEGRAM_OWNER_ID = String(choices.telegram.ownerId);
-  const providerKey = process.env.ANTHROPIC_API_KEY;
-  if (providerKey) env.ANTHROPIC_API_KEY = providerKey;
-  // KB paths for remote wolves are host-relative (<wolf home>/...), so the
-  // agent fills KB_OPS/KB_BASE when it writes the wolf's .env.
-
-  const client = new AgentClient(host);
-  try {
-    const result = (await client.createWolf({
-      name,
-      runtime: choices.runtime,
-      profile: choices.profile,
-      role: opts.role ?? name,
-      specialty: opts.specialty,
-      domains: choices.domains,
-      extensions: built.included,
-      telegram: choices.telegram
-        ? { tokenEnv: choices.telegram.tokenEnv, ownerId: choices.telegram.ownerId }
-        : undefined,
-      env: Object.keys(env).length ? env : undefined,
-      bundle: built.bundleB64,
-      bundleManifest: built.manifest,
-    })) as { wolf: { id: string; name: string } };
-
-    console.log(c.green(`✓ Wolf created on ${opts.host}`));
-    console.log(c.dim(`  ID:      ${result.wolf.id}`));
-    console.log(c.dim(`  Name:    ${result.wolf.name}`));
-    console.log(c.dim(`  Profile: ${choices.profile}`));
-    console.log(
-      c.dim(
-        `  Exts:    ${built.manifest.extensions
-          .map((e) => `${e.key}@${e.version}`)
-          .join(", ") || "(none)"}`,
-      ),
-    );
-
-    // Verify the den backup folder (read-only; wiring is `wolfpack mesh`).
-    try {
-      const { macDen, warnings } = await ensureDenMirror(opts.host!, result.wolf);
-      console.log(c.dim(`  Mirror:  ${macDen}`));
-      for (const w of warnings) console.log(c.yellow(`  ! ${w}`));
-    } catch (err) {
-      console.log(
-        c.yellow(
-          `  Next: wolfpack mesh to wire the den backup (${err instanceof Error ? err.message : err})`,
-        ),
-      );
-    }
-  } catch (err) {
-    console.error(c.red(`Failed: ${err}`));
-    process.exit(1);
-  }
+/** Remote create is not wired to the pi-durable harness bundle yet. */
+function addRemote(name: string, opts: AddWolfOpts): never {
+  console.error(
+    c.red(
+      `Remote wolf add for pi-durable is not supported yet (wolf '${name}' on ${opts.host}). ` +
+        "Create the wolf's config on the host, then deploy it with `wolfpack sync <wolf> --host <host>`.",
+    ),
+  );
+  process.exit(1);
 }
 
 function reportCreated(

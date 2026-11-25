@@ -38,7 +38,6 @@ import {
   defaultExtensionKeys,
   extensionSupportsRuntime,
   needsTelegram,
-  writePiSettings,
 } from "../extensions.js";
 import { checkModelId } from "./wolf-models.js";
 

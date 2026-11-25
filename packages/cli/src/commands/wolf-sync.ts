@@ -16,7 +16,7 @@ import path from "node:path";
 import { parse as yamlParse } from "yaml";
 import { AgentClient } from "../agent-client.js";
 import { smokeCheckBundle, smokeStartBundle, watchAfterRestart } from "../sync-safety.js";
-import { buildRemoteBundle, buildHarnessBundle, stampExtension, skipReasons } from "../bundle.js";
+import { buildHarnessBundle, stampExtension, skipReasons } from "../bundle.js";
 import {
   loadConfig,
   getHost,
@@ -28,10 +28,9 @@ import {
   type CliConfig,
   type HostEntry,
 } from "../config.js";
-import { isLibrarian, isLibrarianConfig, writePiSettings } from "../extensions.js";
+import { isLibrarianConfig, resolveExtensionDirs } from "../extensions.js";
 import { buildWolfdSyncBody } from "../wolfd-release.js";
 import { provisionKbEngine } from "../deployer.js";
-import { deployDomainsRegistry } from "../librarian-registry.js";
 import { c } from "../render.js";
 import { resolveLocalWolfModels, resolveRemoteWolfModels } from "../models.js";
 import { readEnvValue } from "./wolf-models.js";
@@ -142,8 +141,7 @@ export async function wolfSync(
 
 /**
  * Reconcile a LOCAL wolf from its wolf.yaml: regenerate the managed .env keys
- * (WOLF_*, KB_BASE, KB_OPS) preserving any secrets already present, and rewrite
- * .pi/settings.json from the declared extensions. Local wolves ride the Mac hub
+ * (WOLF_*, KB_BASE, KB_OPS) preserving any secrets already present. Local wolves ride the Mac hub
  * for KB, so there is no per-wolf Syncthing to wire here.
  */
 function syncLocal(config: CliConfig, name: string, resetKbBase = false): void {
@@ -179,13 +177,12 @@ function syncLocal(config: CliConfig, name: string, resetKbBase = false): void {
   const lines = [...Object.entries(managed).map(([k, v]) => `${k}=${v}`), ...kept];
   fs.writeFileSync(envPath, lines.join("\n") + "\n", { mode: 0o600 });
 
-  // pi's default model follows the resolved main tier (settings.json default).
   const table = resolveModelsOrExit(() => resolveLocalWolfModels(config, name));
-  const missing = writePiSettings(dir, wolf.extensions ?? [], table.tiers.main);
+  const { missing } = resolveExtensionDirs(wolf.extensions ?? []);
   console.log(c.green(`\u2713 Reconciled local wolf ${wolf.name} from config`));
   console.log(c.dim(`  .env:    ${Object.keys(managed).join(", ")} (+${kept.length} preserved)`));
   console.log(c.dim(`  Exts:    ${wolf.extensions?.length ? wolf.extensions.join(", ") : "(none)"}`));
-  console.log(c.dim(`  Model:   ${piModelArg(table.tiers.main)} (pi settings.json default)`));
+  console.log(c.dim(`  Model:   ${piModelArg(table.tiers.main)} (main tier)`));
   if (missing.length) {
     console.log(c.yellow(`  ! Not installed: ${missing.join(", ")}`));
   }
@@ -433,56 +430,13 @@ async function syncOne(
     return;
   }
 
-  console.log(c.bold(`Syncing ${cfg.name} on ${hostName}...`));
-  const built = await buildRemoteBundle({
-    name: cfg.name,
-    role: cfg.role,
-    specialty: cfg.specialty,
-    domains: cfg.domains ?? [],
-    extensions: cfg.extensions ?? [],
-  });
-  if (built.missing.length) {
-    console.log(c.yellow(`  ! Skipped (not vendored): ${built.missing.join(", ")}`));
-  }
-
-  try {
-    await client.updateWolfBundle(wolf.id, {
-      bundle: built.bundleB64,
-      manifest: built.manifest,
-    });
-    console.log(
-      c.green(
-        `✓ Synced: ${built.manifest.extensions
-          .map((e) => `${e.key}@${e.version}`)
-          .join(", ") || "(none)"} — restarted`,
-      ),
-    );
-  } catch (err) {
-    console.error(c.red(`Sync failed: ${err}`));
-    process.exit(1);
-  }
-
-  // Librarian-only: stand up / refresh the host KB engine (Ollama + sweep timer).
-  // Gated on the `kb` extension so it only touches hosts running a librarian.
-  if (isLibrarian(cfg.extensions ?? [])) {
-    try {
-      await provisionKbEngine(host, {
-        id: wolf.id,
-        name: cfg.name,
-        ownerId: cfg.telegram?.ownerId,
-      });
-    } catch (err) {
-      console.error(c.red(`KB engine provisioning failed: ${err}`));
-      process.exit(1);
-    }
-    // Deploy the declared-domain registry so the sweep's gate is current.
-    const reg = await deployDomainsRegistry();
-    console.log(
-      reg.ok
-        ? c.green(`\u2713 Declared-domain registry deployed (${reg.note})`)
-        : c.dim(`  \u00b7 Domain registry not deployed: ${reg.note}`),
-    );
-  }
+  console.error(
+    c.red(
+      `Cannot sync ${cfg.name} on ${hostName}: runtime '${String((cfg as Record<string, unknown>).runtime ?? "unknown")}' is not supported. ` +
+        "Only pi-durable and wolfd wolves sync; the terminal pi runtime was removed.",
+    ),
+  );
+  process.exit(1);
 }
 
 /** Sync every wolf on every registered host. */

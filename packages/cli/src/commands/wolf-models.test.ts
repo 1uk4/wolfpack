@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
 import { resolveModelTable, type PackModels } from "@wolfpack/engine";
-import { agentsForWolf, modelRows, parseBridgeModels, readEnvValue, readRepoAgents } from "./wolf-models.js";
+import { agentsForWolf, modelRows, readEnvValue, readRepoAgents } from "./wolf-models.js";
 import { deepMerge, remoteModelUpdates, setTierOverride } from "./wolf-config.js";
 import { defaultPackModels } from "./setup.js";
 import { savePackModels } from "../config.js";
@@ -102,16 +102,6 @@ describe("shadowed agents", () => {
 });
 
 describe("live model list helpers", () => {
-  it("takes only claude-bridge rows from pi --list-models", () => {
-    const out = [
-      "provider       model                     context  max-out  thinking  images",
-      "claude-bridge  claude-opus-5-5           1M       128K     yes       yes",
-      "claude-bridge  claude-haiku-5-5          200K     128K     yes       yes",
-      "openai         gpt-5                     400K     128K     yes       yes",
-    ].join("\n");
-    expect(parseBridgeModels(out)).toEqual(["claude-opus-5-5", "claude-haiku-5-5"]);
-  });
-
   it("reads a key from a dotenv file", () => {
     const file = path.join(tmpDir(), ".env");
     fs.writeFileSync(file, "# c\nOTHER=1\nexport ANTHROPIC_API_KEY=\"sk-test\"\n");

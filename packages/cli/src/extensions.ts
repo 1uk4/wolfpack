@@ -8,14 +8,12 @@
  *   - worker    — local, keyboard-driven working agent (memory)
  *   - assistant — 24/7 VPS assistant reachable via Telegram (+ telegram)
  *
- * The CLI uses this to generate a wolf's `.pi/settings.json` so the Pi runtime
- * loads the right extensions.
+ * The CLI uses this to pick and validate the extensions a wolf is built with.
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ResolvedTier } from "@wolfpack/engine";
 
 export interface WolfExtension {
   /** Stable key stored in wolf.yaml `extensions: [...]` */
@@ -172,96 +170,4 @@ export function resolveExtensionDirs(keys: string[]): {
     else missing.push(key);
   }
   return { dirs, missing };
-}
-
-/** The wolf's Pi agent directory (PI_CODING_AGENT_DIR): <wolf>/agent/ */
-export function agentDir(wolfDir: string): string {
-  return path.join(wolfDir, "agent");
-}
-
-/**
- * Write (or refresh) the wolf's agent-level `settings.json` so Pi loads the
- * selected extensions regardless of the working directory. This lives in the
- * wolf's agent dir (PI_CODING_AGENT_DIR), not a project `.pi/`, so you can run
- * as the wolf inside any project. Returns keys whose package dir was missing.
- *
- * With `main` (the resolved table's main tier), also sets pi's
- * `defaultProvider` / `defaultModel` (and `defaultThinkingLevel` when the tier
- * sets thinking), so pi lands on the right
- * model. All other keys are preserved.
- */
-export function writePiSettings(wolfDir: string, keys: string[], main?: ResolvedTier): string[] {
-  const dir = agentDir(wolfDir);
-  fs.mkdirSync(dir, { recursive: true });
-
-  const settingsPath = path.join(dir, "settings.json");
-  let settings: Record<string, unknown> = {};
-  try {
-    settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  } catch {
-    // start fresh
-  }
-
-  const { dirs, missing } = resolveExtensionDirs(keys);
-
-  // Preserve machine-local `npm:` packages (e.g. npm:pi-claude-bridge, which
-  // only exists on a Mac with a Claude Code subscription and cannot ship in the
-  // shared bundle; pi subagent children use it as their subscription provider,
-  // wolfd itself runs claude-stateless in-process). The bundle manages the extension *dirs*; it must not clobber
-  // locally-installed npm extensions a user added to this specific wolf.
-  const existing = Array.isArray(settings.packages) ? (settings.packages as unknown[]) : [];
-  const localNpm = existing.filter(
-    (p): p is string => typeof p === "string" && p.startsWith("npm:"),
-  );
-  settings.packages = [...localNpm, ...dirs];
-
-  if (main) setPiModelDefaults(settings, main);
-  else {
-    // No resolved tier (pack has no models: block yet): keep what the wolf has,
-    // else the subscription default, so the file always lands on a working model.
-    settings.defaultProvider ??= FALLBACK_MAIN_PROVIDER;
-    settings.defaultModel ??= FALLBACK_MAIN_MODEL;
-  }
-  // Thinking blocks stay hidden unless the wolf's owner chose otherwise.
-  settings.hideThinkingBlock ??= true;
-
-  // Inline images under a multiplexer: pi's `auto` protocol detection fails
-  // through Herdr/tmux (they report TERM=xterm-256color), so diagrams never
-  // render in the TUI. When this wolf runs its subagents under Herdr
-  // (WOLFPACK_SUBAGENT_MUX=herdr in its .env), force the kitty graphics
-  // protocol so renders display inline. Only set it when absent, so a user's
-  // explicit terminal config always wins. (Herdr also needs
-  // experimental.kitty_graphics=true in ~/.config/herdr/config.toml.)
-  if (wolfSubagentMux(wolfDir) === "herdr") {
-    const terminal = (settings.terminal as Record<string, unknown> | undefined) ?? {};
-    if (terminal.images === undefined) terminal.images = "kitty";
-    if (terminal.showImages === undefined) terminal.showImages = true;
-    settings.terminal = terminal;
-  }
-
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-  return missing;
-}
-
-/** Main model used when the pack has no `models:` block to resolve (the subscription default). */
-const FALLBACK_MAIN_PROVIDER = "claude-stateless";
-const FALLBACK_MAIN_MODEL = "claude-opus-5-5";
-
-/** pi's model defaults from the main tier: `<provider>/<id>` split in two. */
-function setPiModelDefaults(settings: Record<string, unknown>, main: ResolvedTier): void {
-  const slash = main.piModel.indexOf("/");
-  settings.defaultProvider = main.piModel.slice(0, slash);
-  settings.defaultModel = main.piModel.slice(slash + 1);
-  if (main.thinking) settings.defaultThinkingLevel = main.thinking;
-}
-
-/** Read the wolf's configured subagent multiplexer from its `.env`, if any. */
-function wolfSubagentMux(wolfDir: string): string | null {
-  try {
-    const env = fs.readFileSync(path.join(wolfDir, ".env"), "utf8");
-    const m = env.match(/^\s*WOLFPACK_SUBAGENT_MUX\s*=\s*(.+?)\s*$/m);
-    return m ? m[1].trim().toLowerCase() : null;
-  } catch {
-    return null;
-  }
 }

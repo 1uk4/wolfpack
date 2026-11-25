@@ -20,6 +20,11 @@ import { effectiveConsolidationInterval, parseConsolidationInterval } from "@wol
 import createMemoryExtension from "./unified.js";
 import { memoryActionsFor } from "./memory-actions.js";
 
+// Each test boots a real durable harness (sqlite, scripted model) and then polls with `eventually` (up to 5s per wait).
+// The default 5s test timeout is shorter than boot plus two such waits on a loaded CI runner, so the test died on the
+// clock instead of on its assertion. 30s lets the 5s waits be the failure signal.
+vi.setConfig({ testTimeout: 30_000 });
+
 const dirs: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();

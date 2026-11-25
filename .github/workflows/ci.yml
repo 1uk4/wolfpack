@@ -176,8 +176,15 @@ jobs:
     if: needs.detect.outputs.any == 'true' && needs.detect.outputs.coveredByPr != 'true' && fromJSON(needs.detect.outputs.affected).consoleTests
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # 3 shards of the sorted test-file list (apps/console/scripts/shard-files.mjs); the `ci` aggregate needs all of them
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/3', '2/3', '3/3']
+    name: console-tests (${{ matrix.shard }})
     env:
       A: ${{ needs.detect.outputs.affected }}
+      CONSOLE_TEST_SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v6
         with:

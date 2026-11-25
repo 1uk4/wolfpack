@@ -107,11 +107,11 @@ const PIN_DESCRIPTION =
 /** Frame support: the wolf's name and a check of a frame path against its frames dir (an error message, or undefined when the file is fine). */
 export interface FrameOptions {
   wolf: string;
-  check(path: string): string | undefined;
+  check(path: string): string | undefined | Promise<string | undefined>;
 }
 
 /** Why a frame view cannot be shown (wrong wolf, missing or oversize file), or undefined. Other view kinds pass. */
-function frameRefusal(data: unknown, frames: FrameOptions | undefined): string | undefined {
+async function frameRefusal(data: unknown, frames: FrameOptions | undefined): Promise<string | undefined> {
   const v = data as { kind?: string; path?: string; wolf?: string };
   if (v.kind !== "frame") return undefined;
   if (!frames) return "This wolf has no frames dir, so it cannot show frames.";
@@ -130,7 +130,7 @@ export function createObjectsExtension(den: string, frames?: FrameOptions) {
           parameters: objectToolJsonSchema(name) as never,
           async execute(args: unknown) {
             const o = objectFromCall(name, args);
-            const refused = o && name === "show_view" ? frameRefusal(o.data, frames) : undefined;
+            const refused = o && name === "show_view" ? await frameRefusal(o.data, frames) : undefined;
             if (refused) return { output: [{ type: "text" as const, text: refused }], isError: true };
             return o
               ? { output: [{ type: "text" as const, text: `Shown ${o.type} "${o.objectId}".` }] }

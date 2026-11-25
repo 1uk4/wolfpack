@@ -1094,7 +1094,7 @@ export class WolfServer {
       case "getFrameFile": {
         this.checkWolf(params.name);
         if (!this.opts.wolfHome) throw new HttpError("not_found", "this wolf has no home to keep frames in");
-        const bytes = readFrameFile(this.opts.wolfHome, url.searchParams.get("path"));
+        const bytes = await readFrameFile(this.opts.wolfHome, url.searchParams.get("path"));
         res.writeHead(200, {
           "Content-Type": "text/html; charset=utf-8",
           "Content-Length": bytes.length,

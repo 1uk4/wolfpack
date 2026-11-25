@@ -185,6 +185,7 @@ jobs:
     env:
       A: ${{ needs.detect.outputs.affected }}
       CONSOLE_TEST_SHARD: ${{ matrix.shard }}
+      CONSOLE_TEST_TIMINGS: "1"   # spec reporter plus the 15 slowest files at the end
     steps:
       - uses: actions/checkout@v6
         with:

@@ -20,5 +20,10 @@ if [ "$#" -eq 0 ]; then
     set -- $(node scripts/shard-files.mjs "$CONSOLE_TEST_SHARD" "$@")
   fi
 fi
+REPORTERS=()
+if [ -n "${CONSOLE_TEST_TIMINGS:-}" ]; then
+  # CI: keep the readable spec output, then list the slowest files.
+  REPORTERS=(--test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/slowest-reporter.mjs --test-reporter-destination=stdout)
+fi
 # Per-file limit; keep the default equal to CONSOLE_FILE_TIMEOUT_MS in packages/cli/src/test-runner.ts.
-NODE_ENV=test exec "$TSX" --test --test-timeout="${CONSOLE_TEST_TIMEOUT_MS:-120000}" "$@"
+NODE_ENV=test exec "$TSX" --test --test-timeout="${CONSOLE_TEST_TIMEOUT_MS:-120000}" ${REPORTERS[@]+"${REPORTERS[@]}"} "$@"

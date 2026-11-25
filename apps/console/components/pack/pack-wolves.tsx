@@ -226,7 +226,7 @@ export function WolfDetail(props: { machine: KeyMachine; wolf: MachineWolf; mach
 								selected={node}
 								onSelect={setNode}
 								toolbar={
-									<div role="group" aria-label="Prompt scope" className="mr-auto inline-flex gap-0.5 p-0.5 max-md:overflow-x-auto">
+									<div role="group" aria-label="Prompt scope" className="mr-auto flex min-w-0 gap-0.5 overflow-x-auto p-0.5">
 										{PROMPT_SCOPES.map((s) => <button key={s.key} type="button" aria-pressed={scope === s.key} data-testid={`scope-${s.key}`} className={cn("shrink-0 rounded-md border px-2 py-0.5 text-xs transition-colors hover:bg-accent max-md:min-h-11 max-md:px-3", scope === s.key ? "border-foreground bg-accent font-medium text-foreground" : "border-transparent text-muted-foreground")} onClick={() => (setScope(s.key), setNode(null))}>{s.label}</button>)}
 									</div>
 								}

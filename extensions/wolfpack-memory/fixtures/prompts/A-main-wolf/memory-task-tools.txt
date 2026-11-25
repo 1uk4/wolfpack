@@ -9,16 +9,18 @@ parameters:
   id*: Work item ID to claim
 
 ===== task_create (wolfpack-tasks) =====
-Create a new work item. Tasks/issues/spikes default to the bound task's feature if partOf is not specified. PARENT MUST BE IN THE SAME DOMAIN as the new item — a task in one domain cannot sit under a feature in another. If no fitting feature exists in that domain, OMIT partOf and the item lands in the domain's Inbox. Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else. Under a feature the item always takes the feature's assignee (an `assignee` that differs is ignored, and the reply says so). A loose item (no partOf, or the Inbox) can be created only for yourself; only the owner can give one to another wolf.
+Create a work item, or several with items (created in order, nothing bound, one reply line each; partOf "$0" names an earlier item). Tasks/issues/spikes default to the bound task's feature if partOf is not specified. PARENT MUST BE IN THE SAME DOMAIN as the new item — a task in one domain cannot sit under a feature in another. If no fitting feature exists in that domain, OMIT partOf and the item lands in the domain's Inbox. Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else. Under a feature the item always takes the feature's assignee (an `assignee` that differs is ignored, and the reply says so). A loose item (no partOf, or the Inbox) can be created only for yourself; only the owner can give one to another wolf.
 parameters:
-  kind*: Type: initiative, feature, task, issue, spike
+  kind: Type: initiative, feature, task, issue, spike
   assignee: Wolf to assign a loose item to (default: you). Ignored under a feature for a wolf (the feature's assignee wins); the owner can create for anyone.
-  domain*: Domain: one of your subscribed domains
-  title*: Short title
+  domain: Domain: one of your subscribed domains
+  title: Short title
   partOf: Parent work item ID
   successCriteria: Done condition (required for tasks)
   standing: Initiatives only: never completes; it keeps gaining features (e.g. a new week each week)
   bind: Bind the new item (task/issue/spike) so what you learn goes to its Record. Default: true when nothing is bound and the item is assigned to you, else false.
+  items: Batch: create several items in order instead of the top-level fields. Binds nothing; one reply line per item; a failure keeps the earlier items.
+  items[].partOf: Parent ID, or "$0", "$1"... for an earlier item of this batch
 
 ===== task_done (wolfpack-tasks) =====
 Ship the active task and optionally bind to the next unfinished sibling. Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item). Shipping another item leaves your binding as it is. To ship SEVERAL tasks, call task_done ONCE with ids: [...] (never one call per task, never parallel calls): the user then answers a single multi-select card, and after their answer you call task_done again with the same ids and confirm: false; only the ones they picked ship, the rest are reported as not shipped.

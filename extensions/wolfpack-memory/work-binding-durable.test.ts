@@ -38,6 +38,8 @@ async function fetchImpl(url: string | URL, init: RequestInit = {}) {
   if (init.method === "PATCH") {
     if (body.stage) it.stage = body.stage;
     if ("moveTo" in body) it.partOf = body.moveTo;
+    if (body.link) it.links = [...(it.links ?? []), body.link];
+    if (body.unlink) it.links = (it.links ?? []).filter((l: any) => !(l.rel === body.unlink.rel && l.target === body.unlink.target));
     if (body.note) it.log.push({ at: "now", text: body.note });
     if (typeof body.body === "string") it.body = body.body;
     return json({ item: it });
@@ -86,6 +88,25 @@ describe("durable task tools: binding", () => {
     expect(r2).toContain("Not bound: another item is already bound");
     expect((await readBoundTask(den))?.taskId).toBe("work-2");
   });
+
+  it("task_create with items creates each in order, binds nothing, resolves $N parents and keeps earlier items when a later one fails", async () => {
+    const r = await run("task_create", { items: [
+      { kind: "feature", domain: "wolfpack", title: "Feat" },
+      { kind: "task", domain: "wolfpack", title: "Child", partOf: "$0", successCriteria: "done" },
+      { kind: "task", domain: "nope", title: "Bad" },
+      { kind: "task", domain: "wolfpack", title: "Orphan", partOf: "$2" },
+    ] });
+    const lines = r.split("\n");
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toBe("1. Created work-1 Feat");
+    expect(lines[1]).toBe("2. Created work-2 Child");
+    expect(lines[2]).toBe("3. Error: Not subscribed to domain: nope");
+    expect(lines[3]).toMatch(/^4\. Error: /);
+    expect(items.get("work-2")!.partOf).toBe("work-1");
+    expect(items.size).toBe(2);
+    expect(await readBoundTask(den)).toBeNull();
+  });
+
 
   it("task_move with an id moves that item and leaves the binding alone", async () => {
     const f = add({ kind: "feature", title: "F" });

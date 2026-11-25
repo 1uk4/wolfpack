@@ -1266,31 +1266,43 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       defineTool({
         name: "task_create",
         description:
-          "Create a new work item. Tasks/issues/spikes default to the bound task's feature if partOf is not specified. " +
+          "Create a work item, or several with items (created in order, nothing bound, one reply line each; partOf \"$0\" names an earlier item). Tasks/issues/spikes default to the bound task's feature if partOf is not specified. " +
           "PARENT MUST BE IN THE SAME DOMAIN as the new item — a task in one domain cannot sit under a feature in another. " +
           "If no fitting feature exists in that domain, OMIT partOf and the item lands in the domain's Inbox. " +
           "Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else. " +
           "Under a feature the item always takes the feature's assignee (an `assignee` that differs is ignored, and the reply says so). A loose item (no partOf, or the Inbox) can be created only for yourself; only the owner can give one to another wolf.",
         parameters: Type.Object({
-          kind: Type.String({ description: "Type: initiative, feature, task, issue, spike" }),
+          kind: Type.Optional(Type.String({ description: "Type: initiative, feature, task, issue, spike" })),
           assignee: Type.Optional(Type.String({ description: "Wolf to assign a loose item to (default: you). Ignored under a feature for a wolf (the feature's assignee wins); the owner can create for anyone." })),
-          domain: Type.String({ description: `Domain: ${formatDomainChoices(listSubscribedDomains())}` }),
-          title: Type.String({ description: "Short title" }),
+          domain: Type.Optional(Type.String({ description: `Domain: ${formatDomainChoices(listSubscribedDomains())}` })),
+          title: Type.Optional(Type.String({ description: "Short title" })),
           partOf: Type.Optional(Type.String({ description: "Parent work item ID" })),
           successCriteria: Type.Optional(Type.String({ description: "Done condition (required for tasks)" })),
           standing: Type.Optional(Type.Boolean({ description: "Initiatives only: never completes; it keeps gaining features (e.g. a new week each week)" })),
           bind: Type.Optional(Type.Boolean({ description: "Bind the new item (task/issue/spike) so what you learn goes to its Record. Default: true when nothing is bound and the item is assigned to you, else false." })),
+          items: Type.Optional(Type.Array(Type.Object({
+            kind: Type.String(),
+            domain: Type.String(),
+            title: Type.String(),
+            assignee: Type.Optional(Type.String()),
+            partOf: Type.Optional(Type.String({ description: "Parent ID, or \"$0\", \"$1\"... for an earlier item of this batch" })),
+            successCriteria: Type.Optional(Type.String()),
+            standing: Type.Optional(Type.Boolean()),
+          }), { description: "Batch: create several items in order instead of the top-level fields. Binds nothing; one reply line per item; a failure keeps the earlier items." })),
         }),
         async execute(args: {
-          kind: string;
-          domain: string;
-          title: string;
+          kind?: string;
+          domain?: string;
+          title?: string;
           partOf?: string;
           successCriteria?: string;
           standing?: boolean;
           bind?: boolean;
           assignee?: string;
+          items?: Array<{ kind: string; domain: string; title: string; assignee?: string; partOf?: string; successCriteria?: string; standing?: boolean }>;
         }, ctx: ToolContext): Promise<ToolResult> {
+          type One = { kind: string; domain: string; title: string; partOf?: string; successCriteria?: string; standing?: boolean; bind?: boolean; assignee?: string };
+          const createOne = async (args: One, batch: boolean): Promise<ToolResult> => {
           if (!domains.includes(args.domain)) {
             return {
               content: [{ type: "text", text: `Not subscribed to domain: ${args.domain}` }],
@@ -1347,7 +1359,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             if (result.assignedTo) reply += handoffText([{ id: result.item.id as string, from: null, to: result.assignedTo }]);
             reply += overrideNote(args.assignee, result.item.assignee as string | undefined, ctx.wolfName, result.assignedTo);
             // One at a time, reading the binding file inside: parallel creates see each other's binding.
-            reply += await bindSerial(async () => {
+            if (!batch) reply += await bindSerial(async () => {
               const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx)), bind: args.bind };
               if (isSubagent()) return ""; // a subagent never binds
               if ((await resolveBindingRoot(ctx)).readOnly) return `\nNot bound: ${TASK_CONV_NO_BIND}`;
@@ -1364,6 +1376,29 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             if (err instanceof WorkQueuedError) return { content: [{ type: "text", text: `${err.message} The new item has no ID until then and is not bound; find it with task_query once the hub is back.` }] };
             return failed(err, "Failed to create");
           }
+          };
+
+          if (!args.items) {
+            if (!args.kind || !args.domain || !args.title) return { content: [{ type: "text", text: "kind, domain and title are required (or pass items)." }], isError: true };
+            return createOne(args as One, false);
+          }
+          const ids: Array<string | undefined> = [];
+          const lines: string[] = [];
+          for (const [i, raw] of args.items.entries()) {
+            const ref = raw.partOf?.match(/^\$(\d+)$/);
+            const parent = ref ? ids[Number(ref[1])] : raw.partOf;
+            if (ref && !parent) {
+              ids.push(undefined);
+              lines.push(`${i + 1}. Error: partOf ${raw.partOf} was not created`);
+              continue;
+            }
+            const res = await createOne({ ...raw, partOf: parent }, true);
+            const text = res.content[0].text as string;
+            const made = text.match(/^Created: \[([^\]]+)\] (.*)/);
+            ids.push(made?.[1]);
+            lines.push(made && !res.isError ? `${i + 1}. Created ${made[1]} ${made[2]}` : `${i + 1}. ${res.isError ? "Error: " : ""}${text.split("\n")[0]}`);
+          }
+          return { content: [{ type: "text", text: lines.join("\n") }], isError: lines.every((l) => l.includes(". Error: ")) || undefined };
         },
       }),
 

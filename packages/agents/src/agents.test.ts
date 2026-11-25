@@ -113,11 +113,13 @@ describe("orchestrator UI-check rule", () => {
 });
 
 describe("bundled visualizer", () => {
-  it("is in the bundled roster with read-only tools only", () => {
+  it("writes frames: write and edit but no bash, cwd in the frames dir, no worktree", () => {
     const def = loadAgent("visualizer", { cwd: tmp(), agentDir: tmp() });
     expect(def).not.toBeNull();
     const tools = (def?.tools ?? "").split(",").map((t) => t.trim());
-    expect(tools).toEqual(["read", "grep", "find", "ls"]);
+    expect(tools).toEqual(["read", "write", "edit", "grep", "find", "ls"]);
+    expect(def?.cwd).toBe("../frames");
+    expect(def?.isolation).toBe("none");
   });
 });
 

@@ -195,22 +195,45 @@ export function checklistProgress(data: ChecklistData): { done: number; total: n
   return { done: data.items.filter((i) => i.state === "done").length, total: data.items.length - skipped, skipped };
 }
 
-/** `data` of a `view` object: what the console viewer opens. `kind` uses the console's registry kinds ("work", "kb"). */
+/** `data` of a `view` object: what the console viewer opens. `kind` uses the console's registry kinds ("work", "kb", "frame"). */
 export interface ViewData {
-  kind: "work" | "kb";
+  kind: "work" | "kb" | "frame";
+  /** A work/KB id; for a frame, the same as `path`. */
   id: string;
   title?: string;
+  /** frame only: the HTML file, relative to the wolf's frames dir. */
+  path?: string;
+  /** frame only: the wolf whose frames dir holds it. */
+  wolf?: string;
 }
 
 /** The show_view tool's public kind names and the console kind each maps to. */
-const VIEW_KINDS: Record<string, ViewData["kind"]> = { "work-item": "work", "kb-entry": "kb", work: "work", kb: "kb" };
+const VIEW_KINDS: Record<string, ViewData["kind"]> = { "work-item": "work", "kb-entry": "kb", work: "work", kb: "kb", frame: "frame" };
+
+/** Why `path` is not a valid frame path (relative, no `..`, no dotfiles, `.html`), or undefined when it is. Mirrors wolfd's frame-file route. */
+export function framePathProblem(path: string): string | undefined {
+  if (path === "" || path.includes("\0")) return "path is required";
+  if (path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:/.test(path)) return "path must be relative to the frames dir";
+  const segments = path.split(/[\\/]+/).filter((s) => s !== "" && s !== ".");
+  if (segments.length === 0) return "path is required";
+  if (segments.includes("..")) return "path must not contain ..";
+  if (segments.some((s) => s.startsWith("."))) return "dotfiles are not allowed";
+  if (!/\.html$/i.test(segments[segments.length - 1]!)) return "only .html files can be shown as a frame";
+  return undefined;
+}
 
 /** `data` of a view (public or already-mapped kind), normalised to the console kind; undefined for an unknown kind or empty id. */
 export function parseViewData(data: unknown): ViewData | undefined {
-  const d = data as { kind?: unknown; id?: unknown; title?: unknown } | null | undefined;
-  if (!d || typeof d !== "object" || !isStr(d.kind) || !Object.hasOwn(VIEW_KINDS, d.kind) || !isStr(d.id) || d.id === "") return undefined;
+  const d = data as { kind?: unknown; id?: unknown; title?: unknown; path?: unknown; wolf?: unknown } | null | undefined;
+  if (!d || typeof d !== "object" || !isStr(d.kind) || !Object.hasOwn(VIEW_KINDS, d.kind)) return undefined;
   if (d.title !== undefined && !isStr(d.title)) return undefined;
-  return { kind: VIEW_KINDS[d.kind]!, id: d.id, ...(isStr(d.title) ? { title: d.title } : {}) };
+  const title = isStr(d.title) ? { title: d.title } : {};
+  if (VIEW_KINDS[d.kind] === "frame") {
+    if (!isStr(d.path) || framePathProblem(d.path) !== undefined || !isStr(d.wolf) || d.wolf === "") return undefined;
+    return { kind: "frame", id: d.path, path: d.path, wolf: d.wolf, ...title };
+  }
+  if (!isStr(d.id) || d.id === "") return undefined;
+  return { kind: VIEW_KINDS[d.kind] as "work" | "kb", id: d.id, ...title };
 }
 
 const PARSERS: Record<KnownObjectType, (data: unknown) => unknown> = {

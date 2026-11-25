@@ -14,6 +14,17 @@ export function framesRoot(wolfHome: string): string {
   return join(wolfHome, "frames");
 }
 
+/** Why `rel` cannot be shown as a frame (bad path, missing, over 2 MB), or undefined when readFrameFile would serve it. */
+export function frameProblem(wolfHome: string, rel: string): string | undefined {
+  try {
+    readFrameFile(wolfHome, rel);
+    return undefined;
+  } catch (e) {
+    if (!(e instanceof HttpError)) throw e;
+    return e.code === "not_found" ? `No frame file "${rel}" in your frames dir (${framesRoot(wolfHome)}). Have the visualizer write it first.` : `Cannot show frame "${rel}": ${e.message}.`;
+  }
+}
+
 /** The file's bytes, or an HttpError: 400 bad path / extension, 403 refused, 404 missing, 413 too large. */
 export function readFrameFile(wolfHome: string, rel: string | null): Buffer {
   if (!rel || rel.includes("\0")) throw new HttpError("invalid_request", "path is required");

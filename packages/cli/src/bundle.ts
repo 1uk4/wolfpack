@@ -127,7 +127,7 @@ function assertStandardsShipped(dest: string, agentGlobs: string[] | undefined):
     for (const file of fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md"))) {
       const def = parseAgentDefinition(fs.readFileSync(path.join(agentsDir, file), "utf8"), file.replace(/\.md$/, ""));
       if (!def) continue;
-      for (const name of standardsFor(def.name, def.standards, file.replace(/\.md$/, ""))) {
+      for (const name of standardsFor(def.standards)) {
         const shipped = path.join(dest, "standards", `${name}.md`);
         if (!fs.existsSync(shipped)) throw new Error(`Agent profile ${file} needs standard "${name}" but ${shipped} is not in the built extension (add the standards folder to wolfpack.assets)`);
       }

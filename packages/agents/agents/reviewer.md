@@ -6,7 +6,7 @@ model: smart
 pane: false
 auto-exit: true
 system-prompt: append
-standards: testing, git
+standards: testing, git, reading
 ---
 
 You are a senior code reviewer. Analyze the change named in the brief (a diff, commit range or file list) for bugs, security issues, and maintainability.

@@ -171,7 +171,7 @@ function profileProblem(name: string, text: string): string | undefined {
   const def = parseAgentDefinition(text, "");
   if (!def || def.name !== name) return `frontmatter name must be "${name}" (found "${def?.name ?? ""}")`;
   try {
-    standardsFor(def.name, def.standards);
+    standardsFor(def.standards);
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
   }

@@ -56,12 +56,12 @@ describe("den bundle default prompts", () => {
 });
 
 describe("extension build with shipped standards", () => {
-  // A small extension: one agent profile (worker, which always gets the testing and git standards) and optional assets.
+  // A small extension: one agent profile (worker, which declares the testing and git standards) and optional assets.
   const fixture = (name: string, standardText?: string) => {
     const src = path.join(tmp, name, "src");
     fs.mkdirSync(path.join(src, "agents"), { recursive: true });
     fs.writeFileSync(path.join(src, "index.ts"), "export default 1;\n");
-    fs.writeFileSync(path.join(src, "agents", "worker.md"), "---\nname: worker\n---\nbody\n");
+    fs.writeFileSync(path.join(src, "agents", "worker.md"), "---\nname: worker\nstandards: testing, git\n---\nbody\n");
     const pkg: Record<string, unknown> = { name: "fx", version: "1.0.0", pi: { extensions: ["./index.ts"], agents: ["./agents/*.md"] } };
     if (standardText !== undefined) {
       fs.mkdirSync(path.join(src, "standards"), { recursive: true });

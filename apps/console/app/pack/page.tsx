@@ -4,3 +4,5 @@ import { redirect } from "next/navigation";
 export default function Page(): never {
 	redirect("/pack/machines");
 }
+
+export const dynamic = "force-dynamic"; // like [section]: the production build refuses unexpected prerendered routes

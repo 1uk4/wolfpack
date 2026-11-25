@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { PackPage } from "@/components/pack/pack-page";
-import { parseWolfPath } from "@/src/core/pack/wolf-path";
+import { parseWolfPath } from "@/src/core";
 
 export const dynamic = "force-dynamic";
 

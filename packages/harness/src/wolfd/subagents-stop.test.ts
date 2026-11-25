@@ -137,6 +137,63 @@ describe("what counts as a stop", () => {
     expect(e.some((x) => x.endsWith(":stop"))).toBe(false);
   });
 
+  const IDLE = "Claude connection lost: no message from Claude Code for 90 s (idle timeout), query killed";
+  const idleKill = async (w: TestWolf, childId: string) => {
+    const t = mgr(w).port.thread(childId) as unknown as { abort(): Promise<void>; emit(e: unknown): void; running?: { turnId: string } };
+    t.emit({ type: "error", turnId: t.running?.turnId ?? "t", message: IDLE });
+    await t.abort();
+  };
+
+  it("an idle-timeout kill is retried once automatically; the child then finishes done", async () => {
+    const { w, childId, open } = await bootToolChild();
+    await new Promise((r) => setTimeout(r, 150));
+    await idleKill(w, childId);
+    await vi.waitFor(async () => expect((await w.client.getLedger!(childId)).some((e) => e.kind === "steer" || e.kind === "resume")).toBe(true), { timeout: 5000 });
+    open();
+    await vi.waitFor(async () => expect((await w.client.listChildren!(w.home))[0]!.state).toBe("done"), { timeout: 5000 });
+    const ledger = await w.client.getLedger!(childId);
+    expect(ledger.some((e) => e.kind === "error" && /90 s idle timeout/.test(e.text ?? ""))).toBe(true);
+    // the resume tells the child to look before repeating anything
+    const steer = ledger.find((e) => e.kind === "steer" || e.kind === "resume")?.text ?? "";
+    expect(steer).toMatch(/git status/);
+    expect(steer).toMatch(/do not repeat a commit, push or merge that already happened/);
+  });
+
+  it("a stale idle error from an earlier turn does not make a later unrelated abort read as an idle kill", async () => {
+    const { w, childId } = await bootToolChild();
+    await new Promise((r) => setTimeout(r, 150));
+    const t = mgr(w).port.thread(childId) as unknown as { abort(): Promise<void>; emit(e: unknown): void };
+    t.emit({ type: "error", turnId: "old", message: IDLE });
+    t.emit({ type: "turn-start", turnId: "new" });
+    await t.abort();
+    await vi.waitFor(async () => expect((await w.client.listChildren!(w.home))[0]!.state).toBe("failed"), { timeout: 5000 });
+    const texts = (await w.client.getLedger!(childId)).map((e) => e.text ?? "");
+    expect(texts.some((x) => /without a stop request/.test(x))).toBe(true);
+    expect(texts.some((x) => /idle timeout/.test(x))).toBe(false);
+  });
+
+  it("a failed idle resume settles the child as failed with the reason, instead of leaving it running", async () => {
+    const { w, childId } = await bootToolChild();
+    await new Promise((r) => setTimeout(r, 150));
+    const m = mgr(w) as unknown as { send(...a: unknown[]): Promise<unknown> };
+    vi.spyOn(m, "send").mockRejectedValueOnce(new Error("thread gone"));
+    await idleKill(w, childId);
+    await vi.waitFor(async () => expect((await w.client.listChildren!(w.home))[0]!.state).toBe("failed"), { timeout: 5000 });
+    expect((await w.client.getLedger!(childId)).some((e) => /resume failed: thread gone/.test(e.text ?? ""))).toBe(true);
+  });
+
+  it("a second idle-timeout kill fails the child with the idle message, not 'aborted although nobody stopped it'", async () => {
+    const { w, childId } = await bootToolChild();
+    await new Promise((r) => setTimeout(r, 150));
+    await idleKill(w, childId);
+    await vi.waitFor(async () => expect((await w.client.getLedger!(childId)).some((e) => e.kind === "steer" || e.kind === "resume")).toBe(true), { timeout: 5000 });
+    await idleKill(w, childId);
+    await vi.waitFor(async () => expect((await w.client.listChildren!(w.home))[0]!.state).toBe("failed"), { timeout: 5000 });
+    const texts = (await w.client.getLedger!(childId)).map((e) => e.text ?? "");
+    expect(texts.some((t) => /killed by the 90 s idle timeout twice/.test(t))).toBe(true);
+    expect(texts.some((t) => /although nobody stopped it/.test(t))).toBe(false);
+  });
+
   it("an explicit operator stop still stops the child", async () => {
     const { w, childId } = await bootToolChild();
     await new Promise((r) => setTimeout(r, 150));

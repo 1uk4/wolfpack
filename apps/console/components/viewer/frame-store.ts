@@ -45,11 +45,26 @@ function storage(): Storage | null {
 	}
 }
 
+/** Newest frames kept per thread; older ones (and their dismissal keys) are dropped. */
+const MAX_FRAMES = 50;
+
+/** A stored path is a relative, forward-slash `.html` path with no `..` segment, NUL or backslash. */
+function safePath(p: string): boolean {
+	return !p.startsWith("/") && !p.includes("\\") && !p.includes("\0") && /\.html$/i.test(p) && !p.split("/").includes("..");
+}
+
 function readFrames(threadId: string): StoredFrame[] {
 	try {
 		const v = JSON.parse(storage()?.getItem(framesKey(threadId)) ?? "[]") as unknown;
 		if (!Array.isArray(v)) return [];
-		return v.filter((f): f is StoredFrame => !!f && typeof f.objectId === "string" && typeof f.path === "string" && !!f.path);
+		const out: StoredFrame[] = [];
+		for (const f of v as Array<Record<string, unknown> | null>) {
+			if (!f || typeof f.objectId !== "string" || typeof f.path !== "string" || !safePath(f.path)) continue;
+			const d = parseFrameDescriptor({ kind: "frame", path: f.path, title: f.title, rev: f.rev }, "w");
+			if (!d) continue;
+			out.push({ objectId: f.objectId, path: d.id, ...(d.title ? { title: d.title } : {}), ...(d.rev !== undefined ? { rev: d.rev } : {}) });
+		}
+		return out;
 	} catch {
 		return [];
 	}
@@ -65,6 +80,8 @@ interface ViewPartLike {
 
 /** Folds the thread's messages: every frame view (history too) is upserted by objectId, a higher rev replacing the stored one. Only writes on a change. */
 export function recordFrames(wolf: string, threadId: string, messages: ReadonlyArray<{ role?: string; parts?: unknown[] }>): void {
+	const viewParts = messages.some((m) => m.role === "assistant" && ((m.parts ?? []) as ViewPartLike[]).some((p) => p.type === "object" && p.objectType === "view" && (p.data as { kind?: unknown } | undefined)?.kind === "frame"));
+	if (!viewParts) return;
 	const byId = new Map(readFrames(threadId).map((f) => [f.objectId, f]));
 	let changed = false;
 	for (const m of messages) {
@@ -84,8 +101,11 @@ export function recordFrames(wolf: string, threadId: string, messages: ReadonlyA
 		}
 	}
 	if (!changed) return;
+	const all = [...byId.values()];
+	const kept = all.slice(-MAX_FRAMES);
 	try {
-		storage()?.setItem(framesKey(threadId), JSON.stringify([...byId.values()]));
+		for (const f of all.slice(0, all.length - kept.length)) storage()?.removeItem(dismissedKey(threadId, f.objectId));
+		storage()?.setItem(framesKey(threadId), JSON.stringify(kept));
 	} catch {
 		/* best effort */
 	}

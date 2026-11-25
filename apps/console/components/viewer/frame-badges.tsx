@@ -20,8 +20,9 @@ export function FrameBadges({ wolf, threadId, vizOn, onNavigate }: { wolf: strin
 	return (
 		<div
 			data-testid="frame-badges"
+			role="toolbar"
+			aria-label="Frames"
 			className="pointer-events-auto flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto overflow-y-hidden px-1 pb-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-			style={{ scrollbarWidth: "none" }}
 		>
 			{vizOn && (
 				<button
@@ -51,8 +52,9 @@ export function FrameBadges({ wolf, threadId, vizOn, onNavigate }: { wolf: strin
 							title={b.label}
 							onClick={() => {
 								openView(wolf, threadId, b.descriptor);
-								setVizMode(wolf, threadId, true);
-								onNavigate?.(viewKey(b.descriptor));
+								// Another page: navigate first; the thread page turns viz mode on when it arrives, so a failed navigation leaves the chat visible.
+								if (onNavigate) onNavigate(viewKey(b.descriptor));
+								else setVizMode(wolf, threadId, true);
 							}}
 							className="flex max-w-[12rem] items-center gap-1 py-1 pl-2 pr-1 hover:text-foreground"
 						>

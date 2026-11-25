@@ -164,6 +164,34 @@ describe("frame badges", () => {
 		assert.ok(badge, "the bar lists the thread's frame");
 		await click(badge);
 		assert.equal(currentUrl(), "/wolf/1uk4/thread/home?view=frame%3Aa.html");
-		assert.equal(store.get(VIZ), "1");
+		assert.equal(store.get(VIZ), undefined, "viz mode is left to the thread page on arrival, so a failed navigation hides nothing");
+	});
+
+	it("stored frames: malformed JSON gives no badges, hostile paths are dropped, and only the newest 50 are kept with older dismissals cleared", async () => {
+		store.set(ATTACHED_KEY, JSON.stringify({ wolf: "1uk4", slug: "home", threadId: TID }));
+		store.set(`wolfpack:frames:${TID}`, "{not json");
+		await mount([], { chat: false, start: "/kb" });
+		assert.deepEqual(labels(), []);
+		await act(async () => root?.unmount());
+		root = null;
+		document.body.innerHTML = "";
+		const ok = { objectId: "ok", path: "ok.html", title: "Fine" };
+		const bad = ["../x.html", "/etc/p.html", "a\\b.html", "a\u0000.html", "notes.txt"].map((path, i) => ({ objectId: `bad${i}`, path }));
+		store.set(`wolfpack:frames:${TID}`, JSON.stringify([...bad, ok]));
+		store.set(`wolfpack:frame-dismissed:${TID}:old0`, "1");
+		await mount([], { chat: false, start: "/kb" });
+		assert.deepEqual(labels(), ["Fine"]);
+		await act(async () => root?.unmount());
+		root = null;
+		document.body.innerHTML = "";
+		store.set(`wolfpack:frames:${TID}`, JSON.stringify(Array.from({ length: 50 }, (_, i) => ({ objectId: `old${i}`, path: `o${i}.html` }))));
+		await mount([], { chat: false, start: "/kb" });
+		const { recordFrames } = await import("../../../components/viewer/frame-store.ts");
+		await act(async () => recordFrames("1uk4", TID, [{ role: "assistant", parts: [framePart("new1", 1, "n.html", "Newest")] }]));
+		const kept = JSON.parse(store.get(`wolfpack:frames:${TID}`)!) as Array<{ objectId: string }>;
+		assert.equal(kept.length, 50);
+		assert.equal(kept[0]!.objectId, "old1");
+		assert.equal(kept[49]!.objectId, "new1");
+		assert.equal(store.get(`wolfpack:frame-dismissed:${TID}:old0`), undefined);
 	});
 });

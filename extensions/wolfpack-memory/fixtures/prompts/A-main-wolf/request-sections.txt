@@ -1,0 +1,21 @@
+## wolf_memory
+Wolf fixture-wolf's den topics not yet in the shared KB (2), in <TMP>/den/memory/topics/:
+- alpha.md [pending promote] -- First pending topic
+- beta.md [pending promote] -- Second pending topic
+Read a topic file when you need its details. Everything else lives in the KB.
+
+## wolf_memory_retired
+Notes this wolf kept locally were moved into the shared KB (read them with kb_access):
+- Title e1 (e1): About e1
+
+## kb_access
+You have access to 2 shared knowledge domain(s):
+- snapjack (1 entries)
+- wolfpack (2 entries):
+  - Hub (2) — Hub work
+    - Sync (1) — Mirror sync
+(N) = entries in that section. Each domain lives at <TMP>/kb/domains/<domain>/.
+When a question touches one of these sections, find its entry ids in
+<domain>/_digest.json (sections[].entryIds) or browse <domain>/INDEX.md (every
+entry with title + summary), then read entries/<id>.md on demand.
+Trust entries (authority: curated).

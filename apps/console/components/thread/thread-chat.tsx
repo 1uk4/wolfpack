@@ -818,7 +818,7 @@ function ThreadChatInner({
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />
 				<div className="relative flex min-h-0 flex-1 max-md:flex-col" data-testid="thread-tint" data-thread-color={tintHex}>
 					{/* One flex column for everything pinned: checklist / feature progress, then the decision and graph pins. The pins sit below whichever panel is open, at its real height; the column's max height (the thread area minus the composer reserve) caps what is open. On phones it is a flow sibling above the transcript scroller, so it never scrolls away; from md up it overlays the scroller's top. */}
-					<div className="pointer-events-none z-10 flex min-h-0 flex-col max-md:relative md:absolute md:inset-x-0 md:top-0" style={{ maxHeight: `max(6rem, calc(100% - ${dockHeight ?? 160}px))` }} data-testid="pinned-column" ref={pinnedColumnRef}>
+					<div className="pointer-events-none z-10 flex min-h-0 flex-col max-md:relative max-md:[--pin-max:40%] md:absolute md:inset-x-0 md:top-0 md:[--pin-max:var(--pin-desk)]" style={{ "--pin-desk": `max(6rem, calc(100% - ${dockHeight ?? 160}px))`, maxHeight: "var(--pin-max)" } as React.CSSProperties} data-testid="pinned-column" ref={pinnedColumnRef}>
 						<PinnedStrip wolf={wolf} threadId={threadId} objects={stripObjects} task={featureProgress.state.phase === "ready" ? { model: featureProgress.state.model, busy } : undefined} onDismiss={() => inputRef.current?.focus()} />
 					</div>
 					<Conversation className="h-full min-w-0 flex-1 max-md:h-auto max-md:min-h-0" initial="instant">

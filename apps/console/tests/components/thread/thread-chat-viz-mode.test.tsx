@@ -228,6 +228,8 @@ describe("thread visualization mode", () => {
 		assert.ok(cls.includes("max-md:relative"), "in flow on phones");
 		assert.ok(cls.includes("md:absolute"), "desktop keeps the overlay");
 		assert.ok(!cls.includes("absolute"), "no unconditional absolute");
+		assert.ok(cls.includes("max-md:[--pin-max:40%]"), "capped at 40% of the area on phones");
+		assert.ok(cls.includes("md:[--pin-max:var(--pin-desk)]"), "desktop keeps the dock-based cap");
 		assert.match(q('[data-testid="transcript-column"]')!.getAttribute("class") ?? "", /md:pt-\[var\(--pin-pt\)\]/);
 	});
 

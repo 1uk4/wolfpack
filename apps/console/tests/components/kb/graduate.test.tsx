@@ -39,7 +39,7 @@ Object.assign(globalThis, {
 const { WorkList } = await import("../../../components/work/work-view.tsx");
 const { FakeNav } = await import("../../helpers/fake-nav.tsx");
 const { GraphPane, clearPaneCache } = await import("../../../components/graph/graph-pane.tsx");
-const { GraduateStartDialog, GraduateToasts } = await import("../../../components/kb/graduate-dialog.tsx");
+const { GraduateToasts } = await import("../../../components/kb/graduate-toasts.tsx");
 const { graduateStore } = await import("../../../components/kb/graduate-store.ts");
 const { onGraduated } = await import("../../../components/kb/graduation-signal.ts");
 const { graduateState, graduationWolf } = await import("../../../src/core/kb/graduate.ts");

@@ -119,6 +119,14 @@ async function frameRefusal(data: unknown, frames: FrameOptions | undefined): Pr
   return frames.check(v.path ?? "");
 }
 
+/** "Invalid arguments." plus the schema's own issue messages (e.g. "path must not contain .."), so the model can correct the call. */
+function invalidArguments(name: string, args: unknown): string {
+  if (!isObjectTool(name)) return "Invalid arguments.";
+  const r = OBJECT_TOOL_PARAMS[name].schema.safeParse(args);
+  if (r.success) return "Invalid arguments.";
+  return `Invalid arguments: ${r.error.issues.map((i) => (i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message)).join("; ")}.`;
+}
+
 export function createObjectsExtension(den: string, frames?: FrameOptions) {
   return defineExtension({
     name: "wolfpack-objects",
@@ -134,7 +142,7 @@ export function createObjectsExtension(den: string, frames?: FrameOptions) {
             if (refused) return { output: [{ type: "text" as const, text: refused }], isError: true };
             return o
               ? { output: [{ type: "text" as const, text: `Shown ${o.type} "${o.objectId}".` }] }
-              : { output: [{ type: "text" as const, text: "Invalid arguments." }], isError: true };
+              : { output: [{ type: "text" as const, text: invalidArguments(name, args) }], isError: true };
           },
         }),
       ),

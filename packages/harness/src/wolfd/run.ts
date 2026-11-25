@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fenceRoot } from "../engine/fence.js";
-import { frameProblem, framesRoot } from "./frames.js";
+import { frameProblem, frameWriteProblem, framesRoot } from "./frames.js";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
 import { effectiveConsolidationInterval, applyWolfMemoryModel, applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
@@ -213,7 +213,7 @@ async function startConfigured(
   const loaded = await loadConfiguredExtensions(config, env, memoryTable, extra, log, sweep, cardGuard.register);
   // The frames dir: the visualizer's cwd (profile `cwd: ../frames`), so the write fence keeps its write/edit inside it.
   mkdirSync(framesRoot(dirname(config.file)), { recursive: true });
-  fenceRoot(framesRoot(dirname(config.file)));
+  fenceRoot(framesRoot(dirname(config.file)), [], frameWriteProblem);
   const askBridge = new AskBridge();
   const ask = adaptToDurable(createAskExtension(askBridge, { diagramCheck: (id) => diagramProblem(config.den, id, env) }), { wolfDen: config.den, wolfName: config.identity.name, onCardTool: cardGuard.register });
   // The card guard ends a whole round that contains a card-raising call (see engine/cards.ts). Tools adapted through

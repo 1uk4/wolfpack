@@ -15,6 +15,8 @@ import {
   section,
   Type,
   type ExtensionContext,
+  type Section,
+  type SectionContext,
   type ToolContext,
   type ToolResult,
 } from "@wolfpack/harness/extension";
@@ -936,7 +938,10 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       }),
 
       // Active task section — shows current binding with feature context
-      section("active_task", async (sc) => {
+      ((): Section => {
+        // `peek` is the side-effect-free read the context notice uses between requests: it neither consumes the one-shot
+        // "item completed" notice nor fetches from the Work API. Only a real render (`peek` false) does.
+        const render = async (sc: SectionContext, peek: boolean): Promise<string> => {
         if (isSubagent()) return "";
         try {
           // Per conversation: a fork shows its lineage's binding, a task conversation its owner's (read-only).
@@ -945,7 +950,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             // Unbound because its item completed: say so once.
             const notice = readOnly ? null : peekUnboundNotice(wolfDen, root);
             const text = `## Active Task\n\n${notice ? `${unboundCompleteNotice(notice.title)}\n\n` : ""}${UNBOUND_CONTEXT}\nUse \`task_query\` to see available work.`;
-            if (notice) clearUnboundNotice(wolfDen, root); // shown once: removed only now that the text exists
+            if (notice && !peek) clearUnboundNotice(wolfDen, root); // shown once: removed only now that the text exists
             return text;
           }
 
@@ -953,18 +958,21 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           const cached = readCache(binding.taskId);
           if (!cached || cached.task.id !== binding.taskId) {
             // Bound without a tool call here (a feature thread is bound when it is created): fill the cache for the next render.
-            refreshCacheSoon({ task: { id: binding.taskId } });
+            if (!peek) refreshCacheSoon({ task: { id: binding.taskId } });
             return `## Active Task\n\nBound to ${binding.taskId} (loading...). Use \`task_query\` to refresh.`;
           }
 
           // Only what is fixed while bound: stage, counts and the Record change under us and would break prompt caching,
           // so wolfd announces them as a short user-turn notice and task_current returns them in full.
-          refreshCacheSoon(cached);
+          if (!peek) refreshCacheSoon(cached);
           return renderStableHeader(cached.task, cached.parent);
         } catch (err) {
           return `## Active Task\n\nError: ${err instanceof Error ? err.message : err}`;
         }
-      }),
+        };
+        // Frozen: a rebind or unbind reaches the model as a "Context update" notice (call task_current).
+        return section("active_task", (sc) => render(sc, false), { frozen: true, peek: (sc) => render(sc, true) });
+      })(),
     ],
 
     tools: [

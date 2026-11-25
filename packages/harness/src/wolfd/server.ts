@@ -64,7 +64,7 @@ import { prepareSocketPath } from "./socket.js";
 import type { AskBridge } from "../extensions/ask.js";
 import { diagramPath } from "../diagrams.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
-import { pendingTaskNotice, workApiReader } from "./task-notice.js";
+import { pendingNotices, workApiReader } from "./task-notice.js";
 import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
 import { PutWolfSettingsBodySchema, RevealBodySchema } from "@wolfpack/protocol";
 import { postStartRejectionCount } from "../crash-guard.js";
@@ -369,7 +369,7 @@ export class WolfServer {
       descendantsOf: (id) => this.relatives(id, "down"),
       onError: (e) => this.opts.onError?.(e),
       applyTier: (c, tier) => (this.opts.conversations?.setTier ? this.opts.conversations.setTier(c, tier) : Promise.resolve()),
-      ...(this.opts.den && this.opts.work?.endpoint ? { taskNotice: (cid: string) => pendingTaskNotice(this.opts.den as string, cid, workApiReader(this.opts.work ?? {})) } : {}),
+      ...(this.opts.den ? { taskNotice: (cid: string, deadlineMs?: number) => pendingNotices(this.opts.den as string, cid, this.opts.work?.endpoint ? workApiReader(this.opts.work) : undefined, deadlineMs) } : {}),
     });
     this.threads.set(summary.id, t);
     if (this.opts.onTurnEnd) {

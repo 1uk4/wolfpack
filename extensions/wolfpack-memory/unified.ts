@@ -1393,7 +1393,7 @@ export default function createMemoryExtension(
       section("wolf_memory", (ctx) => {
         const content = renderDenContext(ctx.wolfDen, ctx.wolfName, kbRoots ?? undefined);
         return content ?? undefined;
-      }),
+      }, { frozen: true }),
       section("wolf_memory_retired", (ctx) => {
         const roots = kbRoots;
         if (!roots) return undefined;
@@ -1409,11 +1409,11 @@ export default function createMemoryExtension(
           },
         });
         return content ?? undefined;
-      }),
+      }, { frozen: true }),
       section("kb_access", (ctx) => {
         const content = renderKbAccess(kbBase, domains);
         return content ?? undefined;
-      }),
+      }, { frozen: true }),
     ],
 
     hooks: {

@@ -23,6 +23,7 @@ import { abortThread as abortBarThread, onOwnThreadPage } from "@/components/cha
 import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/composer/dictation";
 import { appendToDraft, draftKey } from "@/lib/composer-draft";
 import { getVizActive, useVizActive } from "@/components/viewer/viz-mode";
+import { FrameBadges } from "@/components/viewer/frame-badges";
 import { useThreadColor } from "@/components/thread/use-thread-color";
 import { useBarCards, type BarCards } from "@/components/chat-bar/chat-bar-cards";
 import type { Answering } from "@/components/ask/ask-sheet";
@@ -367,6 +368,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	const wolfColor = api.wolves.find((w) => w.name === target.wolf)?.color;
 	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.kind ? { kind: attachedThread.kind } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all, wolfColor).hex;
 	const router = useRouter();
+	const onThreadPage = onOwnThreadPage(usePathname(), target);
 	const rawCards = useBarCards(target, working, BAR_EXTRAS.cards || BAR_EXTRAS.peek || BAR_EXTRAS.ask);
 	// A paged `ask` questionnaire has its own sheet (never the classic card path: the whole-card route refuses it). The other cards and the peek follow their extras.
 	const queue = useAskQueue(BAR_EXTRAS.ask ? askQueue(rawCards.pending) : []);
@@ -641,6 +643,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 				{sheetCard}
 				{hasSurface && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
 			</div>
+			<FrameBadges wolf={target.wolf} threadId={target.threadId} vizOn={vizOn} onNavigate={onThreadPage ? undefined : (view) => router.push(`${threadHref(target.wolf, target.threadId)}?view=${encodeURIComponent(view)}`)} />
 			<div className={cn("relative rounded-2xl border bg-card shadow-lg", askCard && session.expanded ? "rounded-t-none border-t-0" : "focus-within:ring-1 focus-within:ring-(color:--thread-accent)")} style={composing ? undefined : { borderColor: color }}>
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}

@@ -27,6 +27,7 @@ import { PanelHostProvider, RightPanelHost } from "@/components/shell/panel-host
 import { ViewerPanel } from "@/components/viewer/viewer-panel";
 import { useViewer } from "@/components/viewer/viewer-store";
 import { setVizActive, useVizMode } from "@/components/viewer/viz-mode";
+import { FrameBadges } from "@/components/viewer/frame-badges";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { ViewHostContext, useViewObjectArrivals } from "@/components/viewer/use-view-objects";
 import { ViewerProvider } from "@/components/viewer/viewer-context";
@@ -995,6 +996,7 @@ function ThreadChatInner({
 										</div>
 									) : barOwnsInput ? null : (
 									<>
+									<FrameBadges wolf={wolf} threadId={threadId} vizOn={viz} />
 									{ask.sheet}
 									{ask.pending && isSupersedable(session.pc) && !noteMode && !ask.composing && text.trim() !== "" && <p data-testid="ask-replace-hint" className="pointer-events-auto px-1 pb-1 font-ui text-xs text-muted-foreground">{session.pc.source?.kind === "tool" ? "Sending a message cancels this confirmation." : "Sending a message replaces the open questions."}</p>}
 									{!ask.composing && (
@@ -1050,6 +1052,7 @@ function ThreadChatInner({
 				threadId={threadId}
 				fill={viz}
 				headerExtra={
+					viewerState.stack[viewerState.stack.length - 1]?.kind === "frame" ? null : (
 					<button
 						type="button"
 						data-testid="viz-toggle"
@@ -1061,6 +1064,7 @@ function ThreadChatInner({
 					>
 						{viz ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
 					</button>
+					)
 				}
 			/>
 			<RightPanelHost />

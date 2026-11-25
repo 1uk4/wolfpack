@@ -183,10 +183,21 @@ describe("thread visualization mode", () => {
 		assert.ok(q('[data-testid="chat-bar"]'), "bar shows");
 		assert.equal(q('[data-testid="thread-main"] [data-testid="composer"]'), null, "no page composer");
 		assert.ok(q('[data-testid="chat-bar"] [data-testid="composer"]'), "the bar has the input");
+		assert.match(q('[data-testid="viewer-body"]')!.getAttribute("style") ?? "", /padding-bottom:\s*calc\(var\(--chat-bar-h, 0px\) \+ 1rem\)/);
+		assert.notEqual(document.documentElement.style.getPropertyValue("--chat-bar-h"), "", "the bar publishes its height");
 		await click(q('[data-testid="viz-toggle"]')!);
 		await settle(60);
 		assert.equal(mainHidden(), false);
 		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(document.documentElement.style.getPropertyValue("--chat-bar-h"), "", "cleared when the bar hides");
+	});
+
+	it("reading a thread's choice deletes the old wolf-prefixed key without migrating it", async () => {
+		const OLD = `wolfpack:viz:1uk4:${TID}`;
+		store.set(OLD, "1");
+		await mount();
+		assert.equal(store.has(OLD), false);
+		assert.equal(mainHidden(), false);
 	});
 
 	it("the choice is kept per thread across a reload", async () => {

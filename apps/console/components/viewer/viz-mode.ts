@@ -25,6 +25,8 @@ function storage(): Storage | null {
 
 export function getVizMode(wolf: string, threadId: string): boolean {
 	try {
+		// The key used to be `wolfpack:viz:<wolf>:<threadId>`; drop the stale one (value not migrated).
+		if (threadId.startsWith(`${wolf}/`)) storage()?.removeItem(`wolfpack:viz:${wolf}:${threadId}`);
 		return storage()?.getItem(vizKey(wolf, threadId)) === "1";
 	} catch {
 		return false;

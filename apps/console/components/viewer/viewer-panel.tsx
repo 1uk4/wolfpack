@@ -114,7 +114,7 @@ export function ViewerPanel(props: ({ wolf: string; threadId: string } | { host:
 	const title = top.title ?? titles[key] ?? top.id;
 	return (
 		<aside
-			className={`relative flex ${props.fill ? "min-w-0 flex-1" : "w-[480px] shrink-0"} flex-col border-l border-border bg-background text-sm max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full max-md:border-l-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)] ${props.fill ? "pb-28" : ""}`}
+			className={`relative flex ${props.fill ? "min-w-0 flex-1" : "w-[480px] shrink-0"} flex-col border-l border-border bg-background text-sm max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full max-md:border-l-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]`}
 			data-testid="viewer-panel"
 			data-kind={top.kind}
 			data-fill={props.fill ? "true" : undefined}
@@ -175,7 +175,7 @@ export function ViewerPanel(props: ({ wolf: string; threadId: string } | { host:
 					<XIcon />
 				</Button>
 			</div>
-			<div className="min-h-0 flex-1 overflow-y-auto" data-testid="viewer-body">
+			<div className="min-h-0 flex-1 overflow-y-auto" data-testid="viewer-body" style={props.fill ? { paddingBottom: "calc(var(--chat-bar-h, 0px) + 1rem)" } : undefined}>
 				<ViewerActionsContext.Provider value={actions}>
 					<Renderer key={key} descriptor={top} onPush={v.pushView} onTitle={(t) => onTitle(key, t)} onClose={closeViewer} />
 				</ViewerActionsContext.Provider>

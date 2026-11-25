@@ -289,6 +289,27 @@ export function ChatBar() {
 		};
 	}, [full, scrolls, wide, attached?.wolf, attached?.threadId]);
 
+	// Viz mode: the viewer's scroller pads its bottom by the bar's real height (--chat-bar-h) so the last lines clear the floating bar.
+	useLayoutEffect(() => {
+		const root = document.documentElement;
+		if (!vizHere || !wrapRef.current) {
+			root.style.removeProperty("--chat-bar-h");
+			return;
+		}
+		const el = wrapRef.current;
+		const set = () => {
+			if (el.dataset.state === "sheet") return;
+			root.style.setProperty("--chat-bar-h", `${Math.ceil(el.getBoundingClientRect().height)}px`);
+		};
+		set();
+		const ro = new ResizeObserver(set);
+		ro.observe(el);
+		return () => {
+			ro.disconnect();
+			root.style.removeProperty("--chat-bar-h");
+		};
+	}, [vizHere, minimized, wide, attached?.wolf, attached?.threadId]);
+
 	// Focus returns to the chip; after a pick the re-keyed Bar has a NEW chip, so the focus waits for it.
 	const refocus = useRef(false);
 	const closeSwitcher = useCallback(() => {

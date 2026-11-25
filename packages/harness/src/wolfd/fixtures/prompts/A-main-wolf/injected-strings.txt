@@ -1,8 +1,8 @@
 ## CONTINUE_PROMPT
-If more work remains, call the next tool. Otherwise write your closing message to the owner: what you did and what is pending. Never reply with 'No response requested' or an empty acknowledgement.
+If more work remains, call the next tool; otherwise send your closing message: what you did and what is pending (see Ending a turn). Never reply 'No response requested' or an empty acknowledgement.
 
 ## EMPTY_ACK_NUDGE
-Your previous reply was empty. Reply to the owner now: what you did, what you found, what is pending; or call the next tool.
+Your previous reply was empty. Send your closing message to the owner now: what you did, what you found, what is pending (see Ending a turn), or call the next tool.
 
 ## DROPPED_CALL_MESSAGE
 The model's tool call was lost (bridge dropped it); please resend

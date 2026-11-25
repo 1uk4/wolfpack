@@ -74,6 +74,7 @@ describe("durable task tools: binding", () => {
     for (const t of ["task_bind", "task_unbind", "task_current"]) expect(tool(t)).toBeDefined();
     expect(await sectionText("active_task")).toContain("No work item bound: what you learn now goes to den topics, not to a work item. Bind the item you're working on (task_bind).");
     expect(await sectionText("task_tools")).not.toContain("workItem");
+    expect(await sectionText("task_tools")).toContain("always write the full `work-<domain>-<id>`");
   });
 
   it("task_create binds a new task when nothing is bound (feature = a real parent), and not twice", async () => {
@@ -180,6 +181,7 @@ describe("durable task tools: subagent sessions (PI_SUBAGENT_AGENT)", () => {
 
     expect(await section("active_task")).toBe("");
     expect(await section("task_tools")).not.toContain("Work item binding");
+    expect(await section("task_tools")).toContain("always write the full `work-<domain>-<id>`"); // a subagent child gets the work-id rule too
     for (const [tool, args] of [["task_bind", { id: mine.id }], ["task_unbind", {}]] as const) {
       const r = await call(tool, args);
       expect(r.isError, tool).toBe(true);

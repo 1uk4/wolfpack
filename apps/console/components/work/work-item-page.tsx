@@ -8,20 +8,21 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { TaskGraph } from "@/components/work/task-graph";
 import { KbMarkdown } from "@/components/kb/kb-markdown";
-import { fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb/kb-client";
+import { fetchWolves, fetchWorkRecord } from "@/components/kb/kb-client";
 import { openReaderLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { TopBar } from "@/components/shell/top-bar";
 import { WorkBadges } from "@/components/work/work-badges";
 import { PendingApprovalBlock } from "@/components/work/approval-request";
 import { useLibrarian } from "@/components/kb/use-librarian";
-import { buildTaskGraph, featureThreadWolves, resolveWork, threadHref, workHref, composeItemDocument, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
+import { loadThreadButtons, runThreadButton } from "@/components/work/feature-thread-actions";
+import { buildTaskGraph, featureThreadWolves, resolveWork, threadButtonLabel, workHref, composeItemDocument, workRecordView, workWolfCandidates, type FeatureThreadButton, type WorkRecordResponse } from "@/src/core";
 
 export type WorkPageState =
 	| { kind: "loading" }
 	| { kind: "unavailable" }
 	| { kind: "not_found" }
 	| { kind: "error"; message: string }
-	| { kind: "ready"; item: WorkRecordResponse; parent: WorkRecordResponse | null; /** Wolves a feature thread can open on (features only). */ threadWolves?: string[] };
+	| { kind: "ready"; item: WorkRecordResponse; parent: WorkRecordResponse | null; /** Wolves a feature thread can open on (features only). */ threadWolves?: string[]; /** Per-wolf thread state (none / open / closed); without it every wolf offers "Open thread". */ threadButtons?: FeatureThreadButton[] };
 
 export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id: string; /** "none" hides the page top bar (title, Full page, close) when a shell hosts the page. Default "full". */ chrome?: "full" | "none"; /** Called with the item title once loaded, and again if it changes. */ onTitle?: (title: string) => void; /** Reader-panel mode: draws a close button and fills its container. */ onClose?: () => void; /** Overrides the default navigation to the full page (the reader switches item in place). */ onOpenTask?: (id: string) => void }) {
 	const { librarian, loading } = useLibrarian();
@@ -49,7 +50,9 @@ export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id:
 				const p = await fetchWorkRecord(hit.wolf, item.partOf);
 				if (p.ok) parent = p.data;
 			}
-			done({ kind: "ready", item, parent, threadWolves: item.kind === "feature" && w.ok ? featureThreadWolves(w.data.wolves) : [] });
+			const threadWolves = item.kind === "feature" && w.ok ? featureThreadWolves(w.data.wolves) : [];
+			const threadButtons = threadWolves.length > 0 && !item.container ? await loadThreadButtons(item.id, threadWolves) : undefined;
+			done({ kind: "ready", item, parent, threadWolves, threadButtons });
 		})();
 		return () => {
 			cancelled = true;
@@ -58,10 +61,10 @@ export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id:
 
 	const state: WorkPageState = fetched?.id === id && !loading ? fetched.state : { kind: "loading" };
 	const [threadError, setThreadError] = useState<string | null>(null);
-	const openThread = async (wolf: string) => {
+	const openThread = async (b: FeatureThreadButton) => {
 		setThreadError(null);
-		const r = await openFeatureThread(wolf, id);
-		if (r.ok) router.push(threadHref(wolf, r.data.id));
+		const r = await runThreadButton(b, id);
+		if (r.ok) router.push(r.href);
 		else setThreadError(r.message);
 	};
 	return <WorkItemView id={id} state={state} onOpenTask={onOpenTask ?? openWork} onOpenThread={openThread} threadError={threadError} onClose={onClose} chrome={chrome} onTitle={onTitle} />;
@@ -70,7 +73,7 @@ export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id:
 const LABEL = "font-mono text-[11px] uppercase tracking-wide text-muted-foreground";
 
 /** Presentational half (SSR-testable). */
-export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError, onClose, chrome = "full", onTitle }: { id: string; chrome?: "full" | "none"; onTitle?: (title: string) => void; onClose?: () => void; state: WorkPageState; onOpenTask?: (id: string) => void; onOpenThread?: (wolf: string) => void; threadError?: string | null }) {
+export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError, onClose, chrome = "full", onTitle }: { id: string; chrome?: "full" | "none"; onTitle?: (title: string) => void; onClose?: () => void; state: WorkPageState; onOpenTask?: (id: string) => void; onOpenThread?: (b: FeatureThreadButton) => void; threadError?: string | null }) {
 	const item = state.kind === "ready" ? state.item : null;
 	const title = item?.title;
 	const titleRef = useRef(onTitle);
@@ -111,14 +114,14 @@ export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError,
 							Could not load this work item: {state.message}
 						</p>
 					)}
-					{state.kind === "ready" && <WorkBody item={state.item} parent={state.parent} onOpenTask={onOpenTask} threadWolves={state.threadWolves} onOpenThread={onOpenThread} threadError={threadError} />}
+					{state.kind === "ready" && <WorkBody item={state.item} parent={state.parent} onOpenTask={onOpenTask} threadWolves={state.threadWolves} threadButtons={state.threadButtons} onOpenThread={onOpenThread} threadError={threadError} />}
 				</div>
 			</div>
 		</div>
 	);
 }
 
-function WorkBody({ item, parent, onOpenTask, threadWolves = [], onOpenThread, threadError }: { item: WorkRecordResponse; parent: WorkRecordResponse | null; onOpenTask?: (id: string) => void; threadWolves?: string[]; onOpenThread?: (wolf: string) => void; threadError?: string | null }) {
+function WorkBody({ item, parent, onOpenTask, threadWolves = [], threadButtons, onOpenThread, threadError }: { item: WorkRecordResponse; parent: WorkRecordResponse | null; onOpenTask?: (id: string) => void; threadWolves?: string[]; threadButtons?: FeatureThreadButton[]; onOpenThread?: (b: FeatureThreadButton) => void; threadError?: string | null }) {
 	const record = workRecordView(item, parent);
 	const doc = composeItemDocument(item, { record: record.markdown, inheritedFrom: record.fromParent });
 	const graph = item.kind === "feature" ? buildTaskGraph(item, item) : null;
@@ -127,7 +130,7 @@ function WorkBody({ item, parent, onOpenTask, threadWolves = [], onOpenThread, t
 		<article>
 			<WorkBadges kind={item.kind} stage={item.stage} domain={item.domain} className="mb-4" />
 			<PendingApprovalBlock workId={item.id} />
-			{item.kind === "feature" && !item.container && threadWolves.length > 0 && <OpenThread wolves={threadWolves} onOpen={onOpenThread} error={threadError} />}
+			{item.kind === "feature" && !item.container && threadWolves.length > 0 && <OpenThread buttons={threadButtons ?? threadWolves.map((wolf): FeatureThreadButton => ({ wolf, state: "none" }))} onOpen={onOpenThread} error={threadError} />}
 			<dl className="mb-6 flex flex-wrap gap-x-6 gap-y-2 text-sm">
 				{item.partOf && (
 					<div data-fact="parent">
@@ -175,18 +178,19 @@ function WorkBody({ item, parent, onOpenTask, threadWolves = [], onOpenThread, t
 
 
 /** "Open thread": a thread on a wolf bound to this feature (one wolf: a button; several: a button per wolf). */
-function OpenThread({ wolves, onOpen, error }: { wolves: string[]; onOpen?: (wolf: string) => void; error?: string | null }) {
+function OpenThread({ buttons, onOpen, error }: { buttons: FeatureThreadButton[]; onOpen?: (b: FeatureThreadButton) => void; error?: string | null }) {
 	return (
 		<div className="mb-4 flex flex-wrap items-center gap-2" data-testid="open-feature-thread">
-			{wolves.map((w) => (
+			{buttons.map((b) => (
 				<button
-					key={w}
+					key={b.wolf}
 					type="button"
-					data-wolf={w}
-					onClick={() => onOpen?.(w)}
+					data-wolf={b.wolf}
+					data-thread-state={b.state}
+					onClick={() => onOpen?.(b)}
 					className="rounded-md border border-border px-3 py-1 text-sm hover:bg-accent"
 				>
-					{wolves.length > 1 ? `Open thread on ${w}` : "Open thread"}
+					{threadButtonLabel(b, buttons.length > 1)}
 				</button>
 			))}
 			{error && (

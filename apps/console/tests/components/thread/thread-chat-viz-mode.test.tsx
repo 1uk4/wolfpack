@@ -247,6 +247,33 @@ describe("thread visualization mode", () => {
 		assert.equal(mainHidden(), true);
 	});
 
+	it("arriving on ?view=frame:<path> turns the mode on, a work or kb ?view= key leaves it off, and leaving the mode is not undone", async () => {
+		await mount({ start: "/wolf/1uk4/thread/home?view=frame%3Aa.html" });
+		await settle(60);
+		assert.equal(store.get(VIZ), "1");
+		assert.equal(mainHidden(), true);
+		await act(async () => vs.closeViewer("1uk4", TID));
+		await settle(60);
+		assert.equal(store.get(VIZ), undefined, "later renders do not re-enable it");
+		assert.equal(mainHidden(), false);
+		await act(async () => root?.unmount());
+		root = null;
+		setVizActive(null);
+		vs.resetViewerCache();
+		document.body.innerHTML = "";
+		for (const key of ["work%3Ax", "kb%3Ae1"]) {
+			await mount({ start: `/wolf/1uk4/thread/home?view=${key}` });
+			await settle(60);
+			assert.equal(store.get(VIZ), undefined, key);
+			assert.equal(mainHidden(), false, key);
+			await act(async () => root?.unmount());
+			root = null;
+			setVizActive(null);
+			vs.resetViewerCache();
+			document.body.innerHTML = "";
+		}
+	});
+
 	it("the open view closing leaves the mode and shows the transcript again", async () => {
 		await mount();
 		await openKb();

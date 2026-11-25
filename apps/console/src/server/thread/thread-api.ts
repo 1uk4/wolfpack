@@ -283,14 +283,18 @@ export function createThreadApi(source: ClientSource) {
 		 * so that opened directly it is never a same-origin page; the renderer fetches it as text into a sandboxed srcdoc iframe.
 		 * 404 when the wolf cannot serve frames or the file is gone; 400/403/413 as the wolf refused it.
 		 */
-		async frameFile(wolf: string, path: string | null): Promise<Response> {
+		async frameFile(wolf: string, path: string | null, ifNoneMatch?: string | null): Promise<Response> {
 			try {
 				if (!path) return json({ error: "path is required" }, 400);
 				const client = source();
 				if (!client.getFrameFile) return json({ error: "this client cannot serve frames", reason: "route_missing" }, 404);
-				const { bytes } = await client.getFrameFile(wolf, path);
+				const file = await client.getFrameFile(wolf, path, ifNoneMatch ?? undefined);
+				const bytes = file.bytes;
+				const version: Record<string, string> = file.etag ? { ETag: file.etag } : {};
+				if (file.notModified) return new Response(null, { status: 304, headers: { ...version, "Cache-Control": "no-store" } });
 				return new Response(bytes as BodyInit, {
 					headers: {
+						...version,
 						"Content-Type": "text/html; charset=utf-8",
 						"Content-Length": String(bytes.byteLength),
 						"X-Content-Type-Options": "nosniff",

@@ -37,6 +37,8 @@ export function FrameViewRenderer({ descriptor, onTitle }: ViewRendererProps) {
 	const [nonce, setNonce] = useState(0);
 	// Load events seen by the current iframe: the first is our srcdoc; any later one means the frame navigated away.
 	const loads = useRef(0);
+	// The version (ETag) of the html on screen; the poll sends it as If-None-Match.
+	const etag = useRef<string | null>(null);
 
 	useEffect(() => {
 		onTitle(descriptor.title ?? path);
@@ -50,7 +52,10 @@ export function FrameViewRenderer({ descriptor, onTitle }: ViewRendererProps) {
 		fetch(frameUrl(wolf, path), { cache: "no-store" })
 			.then(async (res) => {
 				if (!live) return;
-				if (res.ok) return setState({ phase: "ready", html: await res.text() });
+				if (res.ok) {
+					etag.current = res.headers.get("etag");
+					return setState({ phase: "ready", html: await res.text() });
+				}
 				const body = (await res.json().catch(() => null)) as { reason?: unknown } | null;
 				if (live) setState({ phase: "error", status: res.status, reason: typeof body?.reason === "string" ? body.reason : undefined });
 			})
@@ -59,6 +64,35 @@ export function FrameViewRenderer({ descriptor, onTitle }: ViewRendererProps) {
 			live = false;
 		};
 	}, [wolf, path, rev, nonce]);
+
+	// While a frame is open and the tab is visible, ask every 3 s whether the file changed; only a changed file swaps the srcdoc.
+	const ready = state.phase === "ready";
+	useEffect(() => {
+		if (!ready) return;
+		let live = true;
+		let busy = false;
+		const timer = setInterval(async () => {
+			if (busy || document.visibilityState === "hidden") return;
+			busy = true;
+			try {
+				const res = await fetch(frameUrl(wolf, path), { cache: "no-store", headers: etag.current ? { "If-None-Match": etag.current } : {} });
+				if (!live || !res.ok) return; // 304 (unchanged) or a transient failure: keep what is on screen
+				const html = await res.text();
+				if (!live) return;
+				etag.current = res.headers.get("etag");
+				loads.current = 0; // the new srcdoc fires a load event of its own
+				setState((s) => (s.phase === "ready" && s.html === html ? s : { phase: "ready", html }));
+			} catch {
+				/* keep the current frame */
+			} finally {
+				busy = false;
+			}
+		}, 3000);
+		return () => {
+			live = false;
+			clearInterval(timer);
+		};
+	}, [ready, wolf, path, nonce]);
 
 	const reload = useCallback(() => setNonce((n) => n + 1), []);
 	useViewerReload(reload);

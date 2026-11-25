@@ -3,7 +3,7 @@ import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { parseHTML } from "linkedom";
 
@@ -23,14 +23,19 @@ const { parseFrameDescriptor } = await import("../../../components/viewer/view-d
 
 let root: Root | null = null;
 let calls: string[] = [];
-let reply: { status: number; body: string } = { status: 200, body: "<p>hi</p>" };
+let reply: { status: number; body: string; etag?: string } = { status: 200, body: "<p>hi</p>" };
+let sent: Array<string | undefined> = [];
 const realFetch = globalThis.fetch;
 beforeEach(() => {
 	calls = [];
+	sent = [];
 	reply = { status: 200, body: "<p>hi</p>" };
-	globalThis.fetch = (async (url: string) => {
+	globalThis.fetch = (async (url: string, init?: { headers?: Record<string, string> }) => {
 		calls.push(String(url));
-		return new Response(reply.body, { status: reply.status });
+		const inm = init?.headers?.["If-None-Match"];
+		sent.push(inm);
+		if (reply.etag && inm === reply.etag) return new Response(null, { status: 304 });
+		return new Response(reply.body, { status: reply.status, headers: reply.etag ? { ETag: reply.etag } : {} });
 	}) as typeof fetch;
 });
 afterEach(() => {
@@ -134,6 +139,46 @@ describe("frame renderer", () => {
 		await act(async () => (err.querySelector("button") as HTMLElement).click());
 		await flush();
 		assert.ok(attr(iframe()!, "srcdoc")!.endsWith("<p>back</p>"));
+	});
+});
+
+describe("frame renderer, live refresh", () => {
+	const setVisibility = (v: string) => Object.defineProperty(document, "visibilityState", { value: v, configurable: true });
+	beforeEach(() => mock.timers.enable({ apis: ["setInterval"] }));
+	afterEach(() => {
+		mock.timers.reset();
+		setVisibility("visible");
+	});
+	const tick = () => act(async () => { mock.timers.tick(3000); await new Promise((r) => setTimeout(r, 20)); });
+
+	it("polls with If-None-Match and reloads the srcdoc when the file changed", async () => {
+		reply = { status: 200, body: "<p>one</p>", etag: '"a"' };
+		await mount();
+		reply = { status: 200, body: "<p>two</p>", etag: '"b"' };
+		await tick();
+		assert.deepEqual(sent, [undefined, '"a"']);
+		assert.ok(attr(iframe()!, "srcdoc")!.endsWith("<p>two</p>"));
+	});
+
+	it("leaves the iframe alone when the file is unchanged (304)", async () => {
+		reply = { status: 200, body: "<p>one</p>", etag: '"a"' };
+		await mount();
+		const before = iframe();
+		await tick();
+		assert.deepEqual(sent, [undefined, '"a"']);
+		assert.equal(iframe(), before);
+		assert.ok(attr(iframe()!, "srcdoc")!.endsWith("<p>one</p>"));
+	});
+
+	it("does not poll while the tab is hidden", async () => {
+		reply = { status: 200, body: "<p>one</p>", etag: '"a"' };
+		await mount();
+		setVisibility("hidden");
+		await tick();
+		assert.equal(calls.length, 1);
+		setVisibility("visible");
+		await tick();
+		assert.equal(calls.length, 2);
 	});
 });
 

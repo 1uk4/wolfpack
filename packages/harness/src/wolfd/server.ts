@@ -76,7 +76,7 @@ import { readOnlyCatalog, type ToolInfo } from "./prompt-catalog.js";
 import { GraduationJobs } from "./graduation-jobs.js";
 import { watchApprovals, type ApprovedRequest, type HubEventsTarget } from "./hub-approvals.js";
 import { GitInfo } from "./workspace-info.js";
-import { readFrameFile } from "./frames.js";
+import { readFrameFile, statFrame } from "./frames.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
 import { SubagentManager, type SubagentOptions } from "./subagents.js";
 import { readFeatureClosed, unbindOnGraduation, writeThreadAutoShip } from "@wolfpack/memory";
@@ -1094,8 +1094,20 @@ export class WolfServer {
       case "getFrameFile": {
         this.checkWolf(params.name);
         if (!this.opts.wolfHome) throw new HttpError("not_found", "this wolf has no home to keep frames in");
-        const bytes = await readFrameFile(this.opts.wolfHome, url.searchParams.get("path"));
+        const framePath = url.searchParams.get("path");
+        // A cheap version for pollers: the file's mtime and size. A matching If-None-Match is a 304 without reading the file.
+        const st = await statFrame(this.opts.wolfHome, framePath);
+        const etag = `"${Math.floor(st.mtimeMs).toString(36)}-${st.size.toString(36)}"`;
+        const lastModified = new Date(st.mtimeMs).toUTCString();
+        if (req.headers["if-none-match"] === etag) {
+          res.writeHead(304, { ETag: etag, "Last-Modified": lastModified, "Cache-Control": "no-store" });
+          res.end();
+          return;
+        }
+        const bytes = await readFrameFile(this.opts.wolfHome, framePath);
         res.writeHead(200, {
+          ETag: etag,
+          "Last-Modified": lastModified,
           "Content-Type": "text/html; charset=utf-8",
           "Content-Length": bytes.length,
           "X-Content-Type-Options": "nosniff",

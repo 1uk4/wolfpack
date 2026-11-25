@@ -22,6 +22,7 @@ import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 import { abortThread as abortBarThread, onOwnThreadPage } from "@/components/chat-bar/chat-bar-io";
 import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/composer/dictation";
 import { appendToDraft, draftKey } from "@/lib/composer-draft";
+import { getVizActive, useVizActive } from "@/components/viewer/viz-mode";
 import { useThreadColor } from "@/components/thread/use-thread-color";
 import { useBarCards, type BarCards } from "@/components/chat-bar/chat-bar-cards";
 import type { Answering } from "@/components/ask/ask-sheet";
@@ -104,7 +105,11 @@ export function ChatBar() {
 	const pathname = usePathname();
 	const wide = useWide();
 	const attached = api?.attached ?? null;
-	const onOwn = onOwnThreadPage(pathname, attached);
+	const onOwnPage = onOwnThreadPage(pathname, attached);
+	// Visualization mode on the attached thread's own page: the page composer is hidden, so the bar shows there (chat and questionnaires only).
+	const viz = useVizActive();
+	const vizHere = onOwnPage && !!viz && !!attached && viz.wolf === attached.wolf && viz.threadId === attached.threadId;
+	const onOwn = onOwnPage && !vizHere;
 	const [switcher, setSwitcher] = useState(false);
 	const chipRef = useRef<HTMLButtonElement | null>(null);
 	const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -113,7 +118,7 @@ export function ChatBar() {
 	// A thread page's strip row can ask for the sheet (phoneSheet); otherwise the dock stays off there.
 	// Wide: a requested bar that gets collapsed goes back to the row, not to a pill over the composer.
 	const threadPage = !!pathname && THREAD_PAGE.test(pathname);
-	const dockless = threadPage && (!phoneSheet || (wide && minimized));
+	const dockless = threadPage && !vizHere && (!phoneSheet || (wide && minimized));
 	const scrolls = !!pathname && SCROLLING.test(pathname);
 
 	// Shortcuts: the dispatcher hands over the KeyboardEvent; the browser's own key (Cmd+J = downloads) is swallowed only
@@ -174,7 +179,7 @@ export function ChatBar() {
 	}, [wide, minimized, setPhoneSheet]);
 	useEffect(() => {
 		const l = live.current;
-		if (api?.ready && onOwnThreadPage(pathname, l.attached) && !l.dictating) afterBarDictation(l.dock);
+		if (api?.ready && onOwnThreadPage(pathname, l.attached) && !l.dictating && !getVizActive()) afterBarDictation(l.dock);
 	}, [pathname, api?.ready]);
 
 	// Stopping decides where the chat goes (mic, Cmd+D, Esc cancel, Enter-to-send all end the run the same way): stopped on
@@ -283,6 +288,27 @@ export function ChatBar() {
 			root.style.removeProperty("--chat-bar-reserve");
 		};
 	}, [full, scrolls, wide, attached?.wolf, attached?.threadId]);
+
+	// Viz mode: the viewer's scroller pads its bottom by the bar's real height (--chat-bar-h) so the last lines clear the floating bar.
+	useLayoutEffect(() => {
+		const root = document.documentElement;
+		if (!vizHere || !wrapRef.current) {
+			root.style.removeProperty("--chat-bar-h");
+			return;
+		}
+		const el = wrapRef.current;
+		const set = () => {
+			if (el.dataset.state === "sheet") return;
+			root.style.setProperty("--chat-bar-h", `${Math.ceil(el.getBoundingClientRect().height)}px`);
+		};
+		set();
+		const ro = new ResizeObserver(set);
+		ro.observe(el);
+		return () => {
+			ro.disconnect();
+			root.style.removeProperty("--chat-bar-h");
+		};
+	}, [vizHere, minimized, wide, attached?.wolf, attached?.threadId]);
 
 	// Focus returns to the chip; after a pick the re-keyed Bar has a NEW chip, so the focus waits for it.
 	const refocus = useRef(false);
@@ -471,7 +497,10 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	}, [askId, phone]);
 	const hasSurface = (BAR_EXTRAS.cards || BAR_EXTRAS.peek) && (cards.pending.length > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error);
 
-	const badge = BAR_EXTRAS.badge && (waiting.length > 0 || approvals.length > 0) ? <NeedsYouBadge waiting={waiting} all={all} approvals={approvals} /> : null;
+	// Visualization mode: chat and questionnaires only (no needs-you badge, no thread switcher), and on the phone the dock sits over the viewer's full-screen sheet (z-60).
+	const vizActive = useVizActive();
+	const vizOn = !!vizActive && vizActive.wolf === target.wolf && vizActive.threadId === target.threadId;
+	const badge = BAR_EXTRAS.badge && !vizOn && (waiting.length > 0 || approvals.length > 0) ? <NeedsYouBadge waiting={waiting} all={all} approvals={approvals} /> : null;
 	const chip = (
 		<button
 			ref={chipRef}
@@ -479,7 +508,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 			data-testid="chat-bar-chip"
 			aria-haspopup={BAR_EXTRAS.switcher ? "dialog" : undefined}
 			aria-expanded={BAR_EXTRAS.switcher ? switcher : undefined}
-			onClick={() => (minimized ? setMinimized(false) : BAR_EXTRAS.switcher ? setSwitcher((s) => !s) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
+			onClick={() => (minimized ? setMinimized(false) : BAR_EXTRAS.switcher ? (vizOn ? undefined : setSwitcher((s) => !s)) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
 			className={cn("flex items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-11 max-w-[60vw]" : "max-w-56")}
 			title={`${target.wolf} · ${title}`}
 		>
@@ -510,7 +539,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 				data-layout="dock"
 				data-state={minimized ? "minimized" : sheet ? "sheet" : "open"}
 				{...(sheet && !minimized ? { role: "dialog", "aria-modal": true, "aria-label": `Chat with ${title}` } : {})}
-				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? cn("z-[70]", askCard ? "" : "rounded-t-2xl") : "z-30")}
+				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? cn("z-[70]", askCard ? "" : "rounded-t-2xl") : vizOn ? "z-[65]" : "z-30")}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
 				style={{ bottom: inset, paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
@@ -579,7 +608,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						</div>
 					)}
 				</div>
-				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
+				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 			</>

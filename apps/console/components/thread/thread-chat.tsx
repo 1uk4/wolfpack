@@ -25,6 +25,9 @@ import { useAttachedStripRow } from "@/components/chat-bar/attached-strip-row";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/thread/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/shell/panel-host";
 import { ViewerPanel } from "@/components/viewer/viewer-panel";
+import { useViewer } from "@/components/viewer/viewer-store";
+import { setVizActive, useVizMode } from "@/components/viewer/viz-mode";
+import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { ViewHostContext, useViewObjectArrivals } from "@/components/viewer/use-view-objects";
 import { ViewerProvider } from "@/components/viewer/viewer-context";
 import { AttachmentChips, Composer } from "@/components/composer/composer";
@@ -486,6 +489,49 @@ function ThreadChatInner({
 	const barOwnsInput = !!attachedApi?.attached && attachedApi.attached.wolf === wolf && attachedApi.attached.threadId === threadId && barShown;
 	const ownedByBar = useRef(false);
 	ownedByBar.current = barOwnsInput;
+
+	// Visualization mode: the owner's per-thread choice (localStorage `wolfpack:viz:<wolf>:<threadId>`) while a view is open. The transcript
+	// and the page composer hide, the viewer fills the width, and the floating chat bar attaches to this thread and shows over it. The
+	// bar owning the input is the existing draft handoff (inert draft hook + re-read on dock). A closing view leaves the mode.
+	const [vizChoice, setVizChoice] = useVizMode(wolf, threadId);
+	const viewerState = useViewer(wolf, threadId);
+	const viewOpen = viewerState.open && viewerState.stack.length > 0;
+	const viz = vizChoice && viewOpen;
+	const vizAttach = attachedApi?.attach;
+	const vizDock = attachedApi?.dock;
+	const vizWasOn = useRef(false);
+	// Only a real open -> closed transition clears the stored choice: on a reload the viewer hydrates after this effect first runs.
+	const prevViewOpen = useRef(viewOpen);
+	useEffect(() => {
+		const wasOpen = prevViewOpen.current;
+		prevViewOpen.current = viewOpen;
+		if (wasOpen && !viewOpen && vizChoice) setVizChoice(false);
+	}, [vizChoice, viewOpen, setVizChoice]);
+	const vizDockRef = useRef(vizDock);
+	vizDockRef.current = vizDock;
+	useEffect(() => {
+		if (viz) {
+			vizWasOn.current = true;
+			setVizActive({ wolf, threadId });
+			vizAttach?.({ wolf, threadId, slug });
+		} else if (vizWasOn.current) {
+			vizWasOn.current = false;
+			setVizActive(null);
+			vizDock?.();
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- attach/dock identities change with the attached state; the mode flip is the trigger
+	}, [viz, wolf, threadId, slug]);
+	// Leaving the page while the mode is on: the bar must not stay attached to this thread on other pages.
+	useEffect(
+		() => () => {
+			setVizActive(null);
+			if (vizWasOn.current) {
+				vizWasOn.current = false;
+				vizDockRef.current?.();
+			}
+		},
+		[],
+	);
 	const draftSchedule = useComposerDraft(
 		wolf,
 		threadId,
@@ -740,7 +786,7 @@ function ThreadChatInner({
 				(getInlineDropSink() ?? (noteMode ? session.addNoteFiles : onFiles))(droppedFiles(e.dataTransfer));
 			}}
 		>
-			<div className="flex min-w-0 flex-1 flex-col">
+			<div className={viz ? "hidden" : "flex min-w-0 flex-1 flex-col"} data-testid="thread-main">
 				<TopBar>
 					<span className="min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl">{title}</span>
 					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
@@ -999,7 +1045,24 @@ function ThreadChatInner({
 					</div>
 				</div>
 			</div>
-			<ViewerPanel wolf={wolf} threadId={threadId} />
+			<ViewerPanel
+				wolf={wolf}
+				threadId={threadId}
+				fill={viz}
+				headerExtra={
+					<button
+						type="button"
+						data-testid="viz-toggle"
+						aria-pressed={viz}
+						aria-label={viz ? "Leave visualization mode" : "Visualization mode"}
+						title={viz ? "Show the transcript again" : "Visualization mode: full-width viewer and the chat bar"}
+						onClick={() => setVizChoice(!viz)}
+						className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent max-md:size-11"
+					>
+						{viz ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
+					</button>
+				}
+			/>
 			<RightPanelHost />
 		</div>
 	);

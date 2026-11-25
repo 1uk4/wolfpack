@@ -3,7 +3,7 @@
  * rewritten to the child's worktree, its prompt says where it works, write and edit refuse paths outside it, a commit
  * that lands on the main checkout is reported, and a child without a worktree is left alone.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -51,7 +51,7 @@ function scripted(mainDir: () => string, gate?: Promise<void>) {
       const m = /^spawn (\w+)((?: \w+=\S+)*): (.*)$/s.exec(textOf(last.content));
       if (m) {
         const opt = Object.fromEntries([...m[2].matchAll(/(\w+)=(\S+)/g)].map((x) => [x[1], x[2]]));
-        return call("subagent", { agent: m[1], task: m[3], ...(opt.iso ? { isolation: opt.iso } : {}) });
+        return call("subagent", { agent: m[1], task: m[3], ...(opt.iso ? { isolation: opt.iso } : {}), ...(opt.cwd ? { cwd: opt.cwd } : {}) });
       }
       return fauxAssistantMessage("parent");
     }
@@ -71,6 +71,13 @@ function scripted(mainDir: () => string, gate?: Promise<void>) {
         ["write", { path: "../outside.txt", content: "leak" }],
         ["write", { path: "work.txt", content: "real work" }],
         ["bash", { command: "git add -A -- work.txt && git commit -q -m work" }],
+      ];
+      if (n < plan.length) return call(...plan[n]);
+    } else if (brief.includes("MODE_VIZ")) {
+      const plan: Array<[string, Record<string, any>]> = [
+        ["write", { path: "../x.html", content: "leak" }],
+        ["write", { path: "escape/via-link.html", content: "leak" }],
+        ["write", { path: "ok.html", content: "<p>fine</p>" }],
       ];
       if (n < plan.length) return call(...plan[n]);
     } else if (brief.includes("MODE_BASH")) {
@@ -326,6 +333,39 @@ describe("review follow-ups", () => {
     const [rec] = regOf(w).children;
     expect(rec.originalBrief).toBe(`MODE_NOOP Repo: ${r.dir}`);
     expect(rec.brief).not.toContain(r.dir + " ");
+  });
+
+  it("keeps the visualizer in its frames dir: refuses a cwd or worktree override, ../ and symlinked-dir writes, allows a write inside, and ignores a git repo above frames", async () => {
+    const { w, s } = await boot();
+    const frames = join(w.root, "frames");
+    mkdirSync(frames, { recursive: true });
+    // (a repo above the frames dir, like a $HOME that is a git repo: it must not become the visualizer's checkout)
+    mkdirSync(join(w.root, ".git"));
+    const outside = mkdtempSync(join(tmpdir(), "viz-outside-"));
+    symlinkSync(outside, join(frames, "escape"));
+    await say(w, "spawn visualizer cwd=/tmp: MODE_VIZ");
+    await say(w, "spawn visualizer iso=worktree: MODE_VIZ");
+    expect(s.parentResults[0]).toContain("pinned to its own working directory");
+    expect(s.parentResults[1]).toContain("pinned to its own working directory");
+    expect(await w.client.listChildren!(w.home)).toHaveLength(0);
+    await say(w, "spawn visualizer: MODE_VIZ");
+    await settled(w, 1);
+    expect(s.childResults[0]).toContain("Refused");
+    expect(s.childResults[1]).toContain("Refused");
+    expect(existsSync(join(w.root, "x.html"))).toBe(false);
+    expect(existsSync(join(outside, "via-link.html"))).toBe(false);
+    expect(readFileSync(join(frames, "ok.html"), "utf8")).toBe("<p>fine</p>");
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("still isolates a writer whose profile pins a cwd inside a git repo that is not a fenced root", async () => {
+    const { w, r } = await boot();
+    writeFileSync(join(w.root, "agent", "agents", "pinned.md"), `---\nname: pinned\ndescription: pinned writer\nmodel: fast\ntools: read, write, edit, bash\ncwd: ${r.dir}\n---\n\nYou are a test agent.\n`);
+    await say(w, "spawn pinned: MODE_QUIET");
+    await settled(w, 1);
+    const [rec] = regOf(w).children;
+    expect(rec.workspace.path).toContain(r.root);
+    expect(existsSync(join(r.dir, "quiet.txt"))).toBe(false);
   });
 
   it("rewriteBrief covers $HOME and ${HOME} forms", () => {

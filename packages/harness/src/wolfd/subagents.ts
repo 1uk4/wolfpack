@@ -30,7 +30,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { discoverAgents, formatRosterLines, loadAgent, parseCommaList, type AgentDefinition, type AgentIsolation, type DiscoverOptions } from "@wolfpack/agents";
 import { TIERS, isTier } from "@wolfpack/engine";
 import { readBindingFile } from "@wolfpack/memory";
@@ -38,7 +38,7 @@ import { WriterGuard, abandonChild, dependenciesLine, installDependencies, wants
 import type { Card, LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
 import { runDir } from "@wolfpack/protocol/runtime-home";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
-import { fenceRoot, markSubagentConversation, offLimitsRegex, unfenceRoot, unmarkSubagentConversation } from "../engine/fence.js";
+import { fenceRoot, fenceViolation, markSubagentConversation, offLimitsRegex, unfenceRoot, unmarkSubagentConversation } from "../engine/fence.js";
 import { HttpError } from "./http-error.js";
 import { DEFAULT_HOST_MAX, SlotPool } from "./subagent-slots.js";
 import { conflictBrief, conflictText, dirtyText, homeText, manualText, mergedText, ShipEvents } from "./subagent-merge.js";
@@ -412,6 +412,12 @@ export class SubagentManager {
       return fail(`Cannot resolve model tier "${tier}": ${e instanceof Error ? e.message : String(e)}`);
     }
     if (params.isolation !== undefined && params.isolation !== "worktree" && params.isolation !== "none") return fail(`isolation must be "worktree" or "none", got ${JSON.stringify(params.isolation)}`);
+
+    // A profile that declares a cwd is pinned to it (the visualizer writes only into the fenced frames dir): the caller may not move it or isolate it elsewhere.
+    if (def.cwd) {
+      if (params.cwd !== undefined) return fail(`The "${def.name}" agent is pinned to its own working directory (${def.cwd}); remove the cwd parameter.`);
+      if (params.isolation !== undefined && params.isolation !== (def.isolation ?? "none")) return fail(`The "${def.name}" agent is pinned to its own working directory and runs with isolation "${def.isolation ?? "none"}"; remove the isolation parameter.`);
+    }
 
     const { tools, missing } = this.childTools(def);
     const name = this.uniqueName(parent.summary.id, params.name?.trim() || def.name);
@@ -1644,7 +1650,10 @@ ${text}`;
   > {
     const tools = parseCommaList(a.def.tools);
     const writer = isWriter(tools);
-    const inGit = insideGit(a.cwd);
+    // A pinned cwd that is a fenced root registered at boot (the frames dir) needs no git checkout or writer guard, even when a parent dir (such as $HOME) is a repo.
+    // Any other pinned cwd (a project or user profile can set one) gets the normal planning. (fenceViolation names a path outside the fence only when cwd is inside one.)
+    const inFencedRoot = !!a.def.cwd && fenceViolation(a.cwd, parse(a.cwd).root) !== undefined;
+    const inGit = inFencedRoot ? false : insideGit(a.cwd);
     const want = a.requested ?? defaultIsolation({ ...(tools ? { tools } : {}), ...(a.def.isolation ? { isolation: a.def.isolation } : {}) }, inGit);
     const inPlace = (note = ""): { ok: true; isolation: "none"; cwd: string; note: string } => ({ ok: true, isolation: "none", cwd: a.cwd, note });
     const notGit = want === "worktree" ? "Notice: the working directory is not in a git repository; the sub-agent runs there without a worktree." : "";

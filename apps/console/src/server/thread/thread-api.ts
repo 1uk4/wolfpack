@@ -278,6 +278,35 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
+		/**
+		 * One frame file (self-contained HTML the wolf wrote), relayed from the wolf. Served with `Content-Security-Policy: sandbox`
+		 * so that opened directly it is never a same-origin page; the renderer fetches it as text into a sandboxed srcdoc iframe.
+		 * 404 when the wolf cannot serve frames or the file is gone; 400/403/413 as the wolf refused it.
+		 */
+		async frameFile(wolf: string, path: string | null): Promise<Response> {
+			try {
+				if (!path) return json({ error: "path is required" }, 400);
+				const client = source();
+				if (!client.getFrameFile) return json({ error: "unknown frame file" }, 404);
+				const { bytes } = await client.getFrameFile(wolf, path);
+				return new Response(bytes as BodyInit, {
+					headers: {
+						"Content-Type": "text/html; charset=utf-8",
+						"Content-Length": String(bytes.byteLength),
+						"X-Content-Type-Options": "nosniff",
+						"Content-Security-Policy": "sandbox",
+						"Cache-Control": "no-store",
+					},
+				});
+			} catch (err) {
+				// 403/413 are mapped here only: other routes keep their previous behaviour for these codes.
+				const code = isError(err, "ProtocolError") ? (err as Error & { code?: string }).code : undefined;
+				if (code === "forbidden") return json({ error: (err as Error).message }, 403);
+				if (code === "too_large") return json({ error: (err as Error).message }, 413);
+				return failure(err);
+			}
+		},
+
 		/** Answer a pending card: the console's side of `POST /v1/threads/:id/cards/:callId/answer`. */
 		async answerCard(ref: ThreadRef, callId: string, req: Request): Promise<Response> {
 			try {

@@ -446,6 +446,15 @@ export const ROUTES = {
    */
   getMemoryStatus: { method: "GET", path: "/v1/wolves/:name/memory", response: { kind: "json", schema: MemoryStatusSchema }, status: [200], error: err },
   /**
+   * Read one frame file: a self-contained HTML file the wolf wrote under its per-wolf frames directory (outside any git
+   * checkout). `?path=<relative>` is relative to that directory. Raw bytes as `text/html; charset=utf-8`, with
+   * `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. 400 `invalid_request` for a missing or absolute path,
+   * a `..` segment, or an extension other than `.html`; 403 `forbidden` for a dotfile or dot-directory segment, a symlink
+   * whose real path leaves the directory, or a non-regular file; 404 `not_found` when the file is missing; 413 `too_large`
+   * over 2 MB.
+   */
+  getFrameFile: { method: "GET", path: "/v1/wolves/:name/frame-file", response: { kind: "bytes" }, status: [200], error: err },
+  /**
    * One den or session topic with its body. `?scope=den|session` picks the store (default: den, then session).
    * 400 `invalid_request` for a malformed id or scope, 404 `not_found` for an unknown topic,
    * 409 `memory_unavailable` when memory is inert or off.

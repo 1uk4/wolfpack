@@ -516,7 +516,7 @@ export type ThreadToolCall = z.infer<typeof ThreadToolCallSchema>;
 
 // -------------------------------------------------------- structured objects
 
-import { CHECKLIST_STATES, GRAPH_LIMITS, GRAPH_NODE_STATUSES, graphProblem, parseObjectData, type KnownObjectType, type ObjectToolName } from "./objects.js";
+import { CHECKLIST_STATES, GRAPH_LIMITS, GRAPH_NODE_STATUSES, framePathProblem, graphProblem, parseObjectData, type KnownObjectType, type ObjectToolName } from "./objects.js";
 export * from "./objects.js";
 
 /**
@@ -614,13 +614,26 @@ export const ShowGraphParamsSchema = GraphDataSchema.extend({
 export type ShowGraphParams = z.infer<typeof ShowGraphParamsSchema>;
 
 /** Parameters of the `show_view` tool: open a work item or KB entry in the owner's viewer; reuse objectId to revise. */
-export const ShowViewParamsSchema = z.object({
-  kind: z.enum(["work-item", "kb-entry"]).describe("work-item | kb-entry"),
-  id: z.string().min(1).describe("The full id of the work item or KB entry (e.g. work-wolfpack-AbC1234)"),
-  title: z.string().optional().describe("Optional title for the card and the chip"),
-  pinned: SHOW_PINNED,
-  objectId: z.string().min(1).describe("Stable id for this view; call again with the same id to point it at something else"),
-});
+export const ShowViewParamsSchema = z
+  .object({
+    kind: z.enum(["work-item", "kb-entry", "frame"]).describe("work-item | kb-entry | frame"),
+    id: z.string().min(1).optional().describe("work-item and kb-entry: the full id (e.g. work-wolfpack-AbC1234)"),
+    wolf: z.string().min(1).optional().describe("frame: your own wolf name"),
+    path: z.string().min(1).optional().describe("frame: the .html file, relative to your frames dir (e.g. pack-health.html)"),
+    title: z.string().optional().describe("Optional title for the card and the chip"),
+    pinned: SHOW_PINNED,
+    objectId: z.string().min(1).describe("Stable id for this view; call again with the same id to point it at something else (for a frame: to reload it after the file changed)"),
+  })
+  .superRefine((d, ctx) => {
+    if (d.kind === "frame") {
+      if (d.path === undefined) ctx.addIssue({ code: "custom", path: ["path"], message: "path is required for a frame" });
+      else {
+        const problem = framePathProblem(d.path);
+        if (problem) ctx.addIssue({ code: "custom", path: ["path"], message: problem });
+      }
+      if (d.wolf === undefined) ctx.addIssue({ code: "custom", path: ["wolf"], message: "wolf is required for a frame" });
+    } else if (d.id === undefined) ctx.addIssue({ code: "custom", path: ["id"], message: "id is required" });
+  });
 export type ShowViewParams = z.infer<typeof ShowViewParamsSchema>;
 
 /** Parameters of the `pin` tool: pin or unpin an object already shown in this thread, without resending it. */

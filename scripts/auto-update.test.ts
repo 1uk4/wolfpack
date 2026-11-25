@@ -335,6 +335,37 @@ describe("createReleaseVerifier", () => {
 		expect(await createReleaseVerifier({ assets, fetch: fetchMain })(unit, e)).toMatchObject({ ok: false, code: "checksum" });
 	});
 
+	it("retries a request that fails with a network error on a fresh request, and gives up as release-unreachable after 3 attempts", async () => {
+		const ok = github(`${DIGEST}  ${ASSET}\n`);
+		let calls = 0;
+		const delays: number[] = [];
+		const sleep = async (ms: number) => void delays.push(ms);
+		const flaky = (async (url: string) => {
+			if (++calls === 1) throw new TypeError("fetch failed");
+			return ok(url);
+		}) as unknown as typeof fetch;
+		expect(await createReleaseVerifier({ assets, fetch: flaky, sleep })(unit, entry("hubd", "0.1.14"))).toEqual({ ok: true, sha256: DIGEST });
+		expect(delays).toEqual([1000]);
+		let dead = 0;
+		const down = (async () => {
+			dead++;
+			throw new TypeError("fetch failed");
+		}) as unknown as typeof fetch;
+		expect(await createReleaseVerifier({ assets, fetch: down, sleep })(unit, entry("hubd", "0.1.14"))).toEqual({ ok: false, code: "release-unreachable", message: "fetch failed" });
+		expect(dead).toBe(3);
+	});
+
+	it("does not retry an HTTP error response", async () => {
+		let calls = 0;
+		const f = (async () => {
+			calls++;
+			return new Response("boom", { status: 500 });
+		}) as unknown as typeof fetch;
+		const r = await createReleaseVerifier({ assets, fetch: f, sleep: async () => {} })(unit, entry("hubd", "0.1.14"));
+		expect(r).toMatchObject({ ok: false, code: "release-unreachable" });
+		expect(calls).toBe(1);
+	});
+
 	it("refuses a prerelease", async () => {
 		const v = createReleaseVerifier({ assets, fetch: github(`${DIGEST}  ${ASSET}\n`, { prerelease: true }) as typeof fetch });
 		expect(await v(unit, entry("hubd", "0.1.14"))).toMatchObject({ ok: false, code: "checksum" });

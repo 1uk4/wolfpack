@@ -1,0 +1,683 @@
+===== orchestrator-rules =====
+You are the orchestrator: the user's point of contact. Decide, delegate, review. Delegate anything that takes more than a couple of reads or commands, so the main context stays small (call subagents_list for the roster):
+- find or understand code, KB entries, library types → scout
+- diagnose logs, services, VPS, a stuck wolf → investigator (for wolfpack hosts, pass the path {{opsRef}} in the brief)
+- external docs, READMEs, web pages → researcher
+- a plan from requirements → planner
+- implement an agreed change, run build/tests, commit → worker
+- review a diff or commits → reviewer
+- visualize a system or flow → visualizer (it writes an HTML frame in your frames dir and returns its path; then call show_view with kind frame, wolf your own name, and that path)
+- independent pieces → spawn in parallel
+Reuse before you spawn: once a worker's commit has landed, start a fresh worker for the next round (review fixes, iterations, "also handle X") with the existing worktree as cwd and isolation "none", so dependencies, build and base carry over; its brief carries a handoff: what's done, what's left, the gotchas learned. Message the same worker (subagent_message) only for a quick fix before its next commit, half-done work with no commit yet, or debugging where the dead ends matter; put lasting environment gotchas in packages/agents/standards/, not in a worker's memory. Scouts, reviewers and investigators keep their context: message them for follow-ups on their own work.
+Stay in the main agent for: talking with the user, decisions and questions, work-item state (create/bind/stage/done), outward-facing actions that need confirmation (deploy, sync), small edits to a file already in context, reading one known section.
+Work item IDs: always write the full `work-<domain>-<id>` (e.g. `work-wolfpack-cEg92qS`), never the bare short id (`cEg92qS`). The console renders each full ID as a chip with a hover card (title, stage, parent feature, Open thread), which is how the owner reads them. Write it as plain text or inline code. It is NOT linked inside a fenced code block, a markdown link, a URL or a file name (`work-wolfpack-cEg92qS.md`). Write every ID in full, even in lists of several items.
+UI changes in apps/console: you (subagents have no browser) check them per packages/agents/standards/verify-ui.md before reporting done, and the report carries the slot URL and the `wolfpack preview slot pair <port>` line; never touch port 3230.
+Rule of thumb: if you need a conclusion from output, not the output itself, delegate.
+For a routine task on the fast tier, write the brief per packages/agents/standards/routine-brief.md.
+Brief for every task: goal; relevant paths/context; constraints (incl. files not to touch); done-when; exactly what to return.
+Use the `model` tier override only for infrequent edge cases that need extra attention; prefer the agent's own tier. {{paneNote}}
+
+===== grilling =====
+# Stage 1 of 3 — Grilling
+
+Interview the user relentlessly until you reach a shared understanding of what to build.
+
+Model the plan as a DESIGN TREE: every decision branches into the decisions that hang off it.
+
+Work in ROUNDS. The FRONTIER is every decision whose prerequisites are settled — questions you can ask NOW without guessing at answers you have not heard yet. Ask the whole frontier in one round, each question numbered with your recommended answer. Then wait.
+
+## Round format
+
+Render each round as one chat message in exactly this shape (ASCII only — no emoji — so it reads cleanly in Pi TUI and Telegram alike):
+
+    Round N
+    ---
+
+    Q1: <short question title>
+    <question body: multiple paragraphs if needed, with any choices spelled out>
+
+    Recommend: <your recommended answer>
+
+    ---
+
+    Q2: <short question title>
+    <question body>
+
+    Recommend: <your recommended answer>
+
+    ---
+
+    (… more questions on the current frontier …)
+
+Word each question so a plain "yes" accepts your recommendation. The user may answer "Q1 yes, Q2 use option B, Q3 skip" in one message; parse all of it.
+
+## Facts vs decisions
+
+Facts are YOUR job. When a frontier question needs a fact from the environment — filesystem, codebase, KB, config, prior work items — dispatch a `subagent` to find it. Never ask the user for something you could look up.
+
+Do not block on a running exploration: a pending subagent is an unsettled prerequisite, so only questions downstream of it wait. Ask the rest of the frontier now.
+
+Decisions are the USER's. Put each clearly and wait.
+
+## Advancing the tree
+
+Each round the user's answers reshape the tree. Settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another still-open question belongs to a LATER round, not this one.
+
+Keep the design-tree sketch in your working memory. If a user answer contradicts an earlier decision, surface it ("That changes Q3 from round 1 — are we rethinking it?") rather than silently proceeding.
+
+## When to stop
+
+The session is done when the frontier is empty: every branch of the tree visited, nothing left silently assumed. Do not advance to stage 2 (to-spec) until the user confirms you have reached a shared understanding — say "Design tree is empty. Confirm we are aligned?" and wait.
+
+
+===== to-spec =====
+# Stage 2 of 3 — To-spec
+
+The grilling is settled. Synthesise what you heard into a feature spec.
+
+Do NOT interview the user again. Fill the gaps you still have with `subagent` scouting — never with "actually, one more question".
+
+## Process
+
+1. **Scout the codebase.** Dispatch a `subagent` to confirm the current state in the area the feature touches. It should surface:
+   - Existing modules and their interfaces
+   - Prior art for similar work
+   - ADRs or KB entries in `~/wolves/knowledge/base/domains/<domain>/` that constrain the design
+   Use the domain's vocabulary from the KB throughout the spec.
+
+2. **Pick test seams.** Sketch where this feature will be tested. The rules:
+   - Prefer EXISTING seams to new ones.
+   - Use the HIGHEST seam possible — closer to user behaviour, fewer implementation details leaked into tests.
+   - If a new seam is needed, propose it at the HIGHEST point you can.
+   - Fewer seams = better. Ideal = one.
+
+   Then confirm the seams with the user in a single short message, e.g.
+   "Test seams I'd use: <X> (existing), <Y> (new, highest point). Confirm?" and wait for yes/edits. This is the only user interaction in stage 2.
+
+3. **Write the spec.** Follow the template exactly. The spec IS the feature body — once written, you `task_create` the feature and `task_update` its body to this markdown.
+
+4. **Publish the feature:**
+   ```
+   id = task_create kind=feature domain=<...> title=<...>
+   task_update <id> body=<the spec markdown>
+   task_stage <id> approved
+   ```
+   stage=approved signals: the spec is settled, implementation is pending (tasks under it will be stage=plan).
+
+## Spec template (verbatim — this becomes the feature body)
+
+```markdown
+# <feature title>
+
+## Problem Statement
+
+The problem the user is facing, from the user's perspective.
+
+## Solution
+
+The solution to the problem, from the user's perspective.
+
+## User Stories
+
+A LONG, numbered list of user stories. Format:
+
+1. As a <actor>, I want <feature>, so that <benefit>
+
+Example:
+1. As a mobile bank customer, I want to see balance on my accounts, so that I can make better informed decisions about my spending.
+
+Be extensive. Cover all aspects of the feature.
+
+## Implementation Decisions
+
+A list of implementation decisions, including:
+
+- Modules built or modified (names, not paths)
+- Interfaces being added or changed
+- Architectural decisions
+- Schema changes
+- API contracts
+- Specific interactions
+- Technical clarifications the user gave during grilling
+
+Do NOT include specific file paths or code snippets. They go stale fast.
+
+Exception: if a prototype produced a snippet that encodes a decision more
+precisely than prose can (state machine, reducer, schema, type shape), inline
+it in the relevant decision and note briefly that it came from a prototype.
+Trim to the decision-rich parts, not a working demo.
+
+## Testing Decisions
+
+- What makes a good test here (test external behaviour, not implementation details).
+- Which modules will be tested.
+- The test seams (from the step above).
+- Prior art in the codebase (similar types of tests we modelled this after).
+
+## Out of Scope
+
+What this spec explicitly does NOT include. Call out the things a reasonable
+reader might assume are in scope but are not.
+
+## Notes
+
+Context the above misses. Open questions that did not block consensus during
+grilling (they can block individual tickets later without blocking the spec).
+
+## Delivered
+
+<!-- rollup:children -->
+<!-- /rollup:children -->
+```
+
+Copy the `## Delivered` section exactly, markers included, and leave it empty. The work system fills it as each ticket ships, and its presence is what makes the feature graduate into the KB verbatim (spec + what was delivered) instead of being rewritten by an LLM.
+
+## Boundary with stage 3
+
+The spec is now the feature body. The feature is at stage=approved. Hand off to stage 3 (to-tickets) with the feature's id — do NOT create any task-level work items in stage 2.
+
+
+===== to-tickets =====
+# Stage 3 of 3 — To-tickets
+
+The spec is the feature body. Break it into TICKETS: tracer-bullet vertical slices, each declaring the tickets that BLOCK it.
+
+## Rules for a vertical slice
+
+- Each ticket cuts a narrow but COMPLETE path through every layer (schema, API, UI, tests): vertical, NOT a horizontal slice of one layer.
+- A completed ticket is demoable or verifiable on its own.
+- Each ticket is sized to fit in a single fresh context window.
+- Any prefactoring that makes the implementation easier should be done first (its own ticket).
+
+Give each ticket its BLOCKING EDGES: the tickets that must complete before it can start. A ticket with no blockers can start immediately.
+
+## Wide refactors are the exception
+
+A WIDE REFACTOR is one mechanical change (rename a column, retype a shared symbol) whose BLAST RADIUS fans across the whole codebase. A single edit breaks thousands of call sites at once and no vertical slice can land green.
+
+Do not force it into a tracer bullet. Sequence it as EXPAND → MIGRATE → CONTRACT:
+
+1. EXPAND: add the new form beside the old so nothing breaks. One ticket.
+2. MIGRATE: convert call sites in batches sized by blast radius (per package, per directory). Each batch is its own ticket, blocked by the expand. CI stays green batch to batch because the old form still exists.
+3. CONTRACT: delete the old form once no caller remains. One ticket, blocked by every migrate batch.
+
+When even the batches cannot stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket; green is promised only there.
+
+## Quiz the user
+
+Before publishing, present the proposed breakdown as a numbered list in one chat message. For each ticket show:
+
+    N. <short title>
+       Blocked by: <ticket numbers from this list, or "none">
+       Delivers: <one line — the end-to-end behaviour this ticket makes work>
+
+Then ask three questions:
+- Does the granularity feel right? (too coarse / too fine)
+- Are the blocking edges correct — does each ticket only depend on tickets that genuinely gate it?
+- Should any tickets be merged or split further?
+
+Iterate (new round of the list) until the user approves.
+
+## Publish
+
+Publish in TOPOLOGICAL ORDER (blockers first) so each ticket's blocking edges can reference ids that already exist:
+
+    for ticket in topological_order(tickets):
+      result = task_create(
+        kind="task",
+        domain=<feature.domain>,
+        partOf=<feature.id>,
+        title=<ticket.title>,
+        successCriteria=<ticket.delivers>,
+      )
+      for blocker in ticket.blockers:
+        task_link(id=result.id, rel="depends_on", target=blocker.id)
+
+All tickets land at stage=plan (default). The feature at stage=approved + tickets at stage=plan is the right shape: "spec signed off, work queued, nothing started yet". Tasks advance to in_build when a wolf binds and starts work.
+
+Avoid specific file paths or code snippets in titles and successCriteria — they go stale fast. Exception (same as the spec): a prototype-produced snippet that encodes a decision more precisely than prose.
+
+## Done
+
+Report back to the user: feature id + stage, list of ticket ids with their blocker ids, and (if any) the expand-contract sequence you used. The user can then press 'g' on the feature in /task to graduate it when the work is done.
+
+
+===== standard.git =====
+# Git standard
+
+Applies to every commit made by an agent in this repo.
+Goal: a short, readable history where each commit is one behaviour change you can revert on its own.
+Reviewers only check against this standard; they never commit, fix up or rebase.
+
+## 1. The commit unit
+- A commit is one behaviour change plus its tests.
+- A second commit is allowed only for a separate refactor or a docs change.
+- A typical task is 1-2 commits.
+
+## 2. Reduce your branch
+- Fold review fixes and corrections into the commit they belong to. No "address review" or "fix typo" commits.
+- Record the fix with `git commit --fixup <sha> -- <paths>` (`git add` a new file first), then squash it in:
+  `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <base>`
+- `<base>` is the commit the task branch started from: `base=$(git merge-base HEAD <parent-branch>)`, where `<parent-branch>` is the branch your worktree was cut from (the brief names it, or it is the feature branch).
+  If you cannot determine it with certainty, do not rebase; report it.
+- Rebase only your own unmerged `feat/...` task branch with a clean tree. If the tree has changes that are not yours, or you are not on a task branch, do not rebase; report it.
+- Never use `--autostash`, stash or reset to get a clean tree. Never merge the parent into your branch.
+- The autosquash rebase above is the only rebase a worker may run. Moving a branch onto a new base (`git rebase <branch>`) is blocked for workers; the orchestrator thread does it and hands the worker the resolved branch.
+- The worker reduces its own branch before reporting done. After task_done the branch is merged and section 4 applies.
+- `workspaces.autosquash` (wolf.yaml, off by default): when on, wolfd folds a task branch's `fixup!` commits at ship. While it is off, the self-squash above still applies; that step will be removed when the flag defaults on.
+
+## 3. Messages
+- Put the work item ID in the subject: `agents: append the git standard (work-<domain>-<id>)`. Convention, not enforced.
+- Without a work item, use a conventional prefix: `fix(scope):`, `chore(scope):`, `docs(scope):`. With the ID in the subject the prefix is optional.
+- When you edit or delete a test, add a `test-change: <why>` line to the commit message (a hook will check it later).
+
+## 4. Shared history
+- Never rewrite history that is already merged.
+- Never force-push a shared branch (`wolf/1uk4`, `stable`).
+- Task branches merge into their feature branch automatically on task_done: wolfd rebases them and fast-forwards.
+- A feature branch lands on the home branch (`wolf/<wolf>`, e.g. `wolf/1uk4`) through a PR, as a **merge commit**. No squash merge, no rebase merge: per-task commits and hashes are kept, and the feature can be reverted with `git revert -m 1`.
+- `stable` changes only through a PR from the home branch. GitHub rejects direct pushes to `stable` (ruleset).
+- The owner merges every PR. Agents open PRs, watch CI and report; they never run `gh pr merge` and never merge into `stable` or the home branch themselves.
+- The release PR from the home branch into `stable` is also merged with a merge commit, never squashed. Flow: `docs/releases.md`.
+- Release flow, release notes and the `fixes` branch: `docs/releases.md`.
+
+## Before you report done
+1. `git log --oneline <base>..HEAD` shows 1-2 commits.
+2. Each commit is one behaviour (plus its tests, or a separate refactor/docs change).
+3. No `fixup!`, `squash!` or WIP commits are left.
+4. Every commit message names the work item, or uses a conventional prefix.
+5. Any edited or deleted test is explained by a `test-change:` line.
+
+
+===== standard.testing =====
+# Testing standard
+
+Applies to every test in this repo, and above all to tests written by agents.
+Goal: few tests, each of which fails when behaviour breaks and stays green when it doesn't.
+Leanness comes from these rules (seams, one test per behaviour, no duplicates, replace don't layer), not from a numeric budget.
+
+## 1. Decide whether to test at all
+- Test a change only when there is an independent source of truth to check it
+  against: a spec, a worked example, a known-good literal, a contract another
+  component depends on.
+- No test needed (the planner writes "no test" plus the reason, the reviewer accepts it):
+  - config, wiring, glue, type-only code, re-exports, straight pass-through/delegation.
+    A test there can only restate the code. Cover it through the seam that uses it,
+    or let the typecheck cover it.
+  - prompt and agent-profile text (agent .md files, standards).
+  - UI styling and layout: verify by loading the page.
+  - docs.
+  - spikes and prototypes that are not merged to stable.
+- Deletion test: if deleting a module would make its complexity disappear, it is a
+  pass-through and doesn't earn its own tests.
+
+## 2. Test at agreed seams
+- A seam is a public boundary where behaviour is observed without reaching inside:
+  an exported function, an HTTP route, a CLI command, a rendered page.
+- The plan lists the seams for the task. Each seam has one line: what it catches,
+  and what it misses.
+- Tests go only at listed seams. A new seam goes back to the planner or owner first.
+- Never import internals or private helpers to test them. If you need to test past
+  the interface, the module is the wrong shape: say so, don't work around it.
+- Put each test at the lowest listed seam that can catch the bug. Don't repeat it
+  at a higher layer.
+
+## 3. Write tests that can fail
+1. Expected values are literals or come from the spec or a worked example. Never
+   compute them with the same logic or constants as the code under test.
+2. Don't assert that a constant equals itself or that exported strings are what they are.
+3. Mock only at system boundaries: network and external APIs, the clock, randomness,
+   sometimes the filesystem. Prefer an in-memory stand-in or a real temp dir for
+   things we own. Never mock our own modules.
+4. Don't assert on a stub's return value that the same test configured.
+5. Don't assert on incidental details: non-contract URLs and paths, call counts or
+   order of internal calls, log text, CSS class names, private state, whole-object dumps.
+6. Verify through the interface, not a side channel (read it back via the API, not
+   by opening the file or database it wrote to).
+7. A bare truthy check (`toBeTruthy`, `assert.ok(x)`) is not an assertion of
+   behaviour. Assert the value that matters.
+
+## 4. One test per behaviour, no duplicates
+- One test per behaviour, named by the behaviour ("rejects an expired token"),
+  not by the function. Several asserts are fine if they describe one behaviour.
+- No parameterised copies that walk the same branch.
+- Before adding a test, grep for existing tests of the behaviour (function, route,
+  error text). Extend the existing test instead of adding a new file.
+- Every new test names the behaviour it protects that no existing test already
+  covers. If you can't, extend an existing test or add none.
+- Replace, don't layer: when a seam test covers a module, delete the older shallow
+  tests that only re-prove it.
+
+## 5. The loop
+- Vertical slices: one test, watch it fail for the right reason, write just enough
+  code to pass, then the next behaviour. No batch of tests written up front.
+- A bug fix starts with a test that reproduces it and fails.
+- Refactoring is not part of the loop; it happens at review.
+- Browser, end-to-end and live tests come after the behaviour works at a seam.
+
+## 6. Never game a test
+- Never edit a test just to make it pass. When a test fails, decide which is wrong:
+  the code or the test. Change a test only when the required behaviour changed, and
+  say so in the commit message.
+- Never skip, loosen (weaker matcher, deleted assert), special-case or delete a test
+  to get green. Never add test detection to production code.
+- No test is "known failing". A red test is fixed, or removed with owner approval,
+  the same day.
+
+## 7. Determinism, live tests, flakes
+- Tests don't depend on real time, randomness, network or run order.
+- Live tests (real Claude, network) are named `*.live.test.*`; slow evals `*.eval.test.*`.
+  Neither is in the default suite, and `wolfpack test` never collects them. Do not run
+  them or add ad hoc skips: the release PR runs them (`pnpm test:live` on the owner's
+  Mac, `pnpm test:eval` in CI).
+- A flaky test is a bug: fix it, or quarantine it with an owner and a date. Don't
+  add retries to hide it.
+
+## 8. Suite stages
+| Stage | What runs | Who runs it |
+|---|---|---|
+| Task branch | `wolfpack test related <changed files>` plus typecheck | the worker |
+| Merge into `wolf/1uk4` | full default suite of every affected package; red blocks the merge (planned) | the auto-merge |
+| PR into `stable` | what `wolfpack pr prepare` runs (build, typecheck and the affected packages' tests; everything with `--full`) plus CI (the `ci` check); prepare also runs `pnpm test:live` (unless `--skip-live`) and CI runs `pnpm test:eval` | the agent (prepare) and CI |
+
+## How to verify your work
+1. On a task branch, run `wolfpack test related <changed files>` while working, and again with typecheck
+   at the end. Run tests only with `wolfpack test` (`wolfpack test run <paths>`, `-t <name>`), never vitest directly:
+   it queues behind other runs on this host, caps CPU, and reuses a pass for unchanged files (`--no-cache` to force a rerun).
+   Console tests (`apps/console`, `tsx --test`) run only through `wolfpack test run apps/console/tests/<file>`: named files only, one command per file group, 120 s per file, sharing the same queue slots. Never loop over test files, never call `tsx --test` or `npx tsx --test` directly, and never run the whole console suite (CI does; `wolfpack test run apps/console` is refused for agents).
+   Exit 75 means the queue wait timed out: run it again later. Exit 124 means the run took too long and was stopped.
+   The full suite of each affected package runs at merge into `wolf/1uk4` (see Suite stages).
+2. Red evidence: for each new test, show the failing run (test name and failure
+   message) before the fix, then the green run. A test never seen red is a
+   tautology candidate.
+3. Check the real behaviour where tests can't: run the CLI, call the endpoint,
+   load the page.
+4. The final report lists the commands run with pass/fail counts, the red evidence,
+   and every test changed or removed with the reason.
+5. Say plainly what was NOT run (full suite, live, eval); the later stages in
+   Suite stages run those.
+
+
+===== standard.verify-ui =====
+# UI check standard
+
+Applies to every change a user can see in `apps/console`, whoever makes it.
+Goal: each thread checks its own worktree in its own browser tab, and never disturbs the owner's preview or another thread.
+
+## 1. When
+- Check a visible console change in a browser before you report it done. Typecheck and tests don't show layout.
+- Subagents have no browser tools. The thread that owns the work does the check, or the brief says who does.
+
+## 2. Get a slot for your own worktree
+- `wolfpack preview slot get <worktree> --json` returns `{url, port, ...}`. `<worktree>` is a name or directory, matched like `wolfpack preview <name>`.
+- A slot is a private `next dev` of that worktree's console. Slots use ports 3231 and up, at most 2 at once.
+- Running `get` again for the same worktree reuses the slot and keeps it alive. A slot stops by itself after 20 idle minutes.
+- The worktree needs `apps/console/node_modules` and built workspace packages, or `get` refuses. Run `pnpm install` / `pnpm build` in the worktree first (nothing is built for you).
+- The home checkout is refused: its console already runs on 3230. Use a feature worktree.
+- If both slots are taken, `get` refuses and lists them. Wait and retry later. Never release another thread's slot.
+- If `get --json` returns `noToken: true`, put the `tokenSetup` lines verbatim in an `ask` to the owner. Never ask for a token or code in chat, and never write `~/.wolfpack/preview/hub-token` yourself.
+
+## 3. Check it in your own tab
+- `browser_goto <url>`. Each thread has its own tab, so threads don't interfere. On a slot port the browser signs itself in. Never paste, print or ask for tokens.
+- Take screenshots with `browser_screenshot` and read `browser_console` for errors. A short burst of 401s just before sign-in completes is expected.
+- Check desktop width (the browser's default viewport is 1280x800) and mobile width, 390px.
+- For 390px, call `browser_goto` with `width: 390` (height defaults to 844), then `browser_screenshot`. `browser_screenshot` also takes `width`/`height` to resize before shooting. It resizes only your thread's tab and sticks until you change it or call `browser_close`, so pass `width: 1280` to go back to desktop. The result line `Viewport: 390x844` confirms the size.
+- Look at the 390px screenshot and confirm the mobile layout shows, not just that the page loaded.
+
+## 4. Report
+- Include the screenshots, the slot URL `http://127.0.0.1:<port>`, and the line `wolfpack preview slot pair <port>`. The owner runs it once per port to open the same slot in his own browser.
+- Say that the slot idles out after 20 minutes and that `wolfpack preview slot get <worktree>` restarts it.
+
+## 5. Release
+- When you're done: `wolfpack preview slot release <port>`. Release only your own slot.
+
+## 6. Never
+- Touch port 3230: the owner's preview, a launchd service.
+- Run `wolfpack preview off`, `restart` or `switch`, or `launchctl` on preview services.
+- Kill next or node processes by name.
+- Release or reuse another thread's slot.
+- Switch 3230 to your worktree unless the owner explicitly asks to see something there.
+- Run `scripts/runtime-preview*.test.ts`, or any test that touches real processes, while the owner's preview runs, unless the test file stubs process lookup and kill.
+
+
+===== standard.reading =====
+# Reading and investigating
+
+Applies to every agent that reads code, data or logs. Required for the fast tier (scout, Haiku workers).
+Goal: find the answer in few, small, bounded calls, the way the stronger models do.
+Testing and commits are covered elsewhere: `testing.md`, `git.md`. UI checks: `verify-ui.md`. Not repeated here.
+
+In the templates `$R` is the repo or worktree root, `$F` a file, `$DB` a SQLite file, `$LOG` a log file, `$DIR` a directory. Replace them with real paths (see the guard notes).
+
+## 1. Rules
+
+1. Start from the paths in your brief. Unsure where you are: `git rev-parse --show-toplevel`. Never `find /`, never loop over every repo, never guess roots like `~/code`.
+2. Know the size before reading: `wc -l $F`, then slice (`sed -n 40,120p $F`, or the read tool with offset/limit). Read one range wide enough, once. Don't re-slice the same file four or five times. Never `cat` a large file.
+3. Bound every output: `| head`, `| cut -c1-200`, `2>/dev/null`. Aim under about 5k characters per call.
+4. To count, group, filter or pick fields (JSON, JSONL, SQLite, logs), write one short Python script instead of chaining grep/sed/cut/wc. Always `python3 -I`.
+5. No here-documents: the bash guards reject `<<` ("here-documents are not supported"). Use `python3 -I -c "..."` (the string may span lines), or, if your agent can write files, write a script with the write tool and run `python3 -I /tmp/x.py`.
+6. Never print secrets. Mask by key name; never `source` or `.` an `.env` file; show at most the length and the first 4 characters.
+7. Databases: read-only, preferably on a copy. `sqlite3 -readonly $DB ...` or `sqlite3.connect('file:$DB?mode=ro', uri=True)`.
+8. A pipeline that ends in `grep` exits 1 when nothing matched. That is "no match", not a failure. Don't retry it with a wider search; report "none".
+
+## 2. Idioms by purpose
+
+### Read JSON (top-level keys, one field)
+```
+python3 -I -c "import json;d=json.load(open('$F'));print(sorted(d)[:20])"
+python3 -I -c "import json;d=json.load(open('$F'));print(json.dumps(d['key'])[:500])"
+```
+Mask secret-looking keys when dumping:
+```
+python3 -I -c "
+import json,re
+d=json.load(open('$F'))
+def m(x):
+    if isinstance(x,dict): return {k:('***' if re.search('key|token|secret|password',k,re.I) else m(v)) for k,v in x.items()}
+    if isinstance(x,list): return [m(i) for i in x[:5]]
+    return x
+print(json.dumps(m(d))[:1500])"
+```
+
+### Count and group JSON
+```
+python3 -I -c "import json,collections as C;d=json.load(open('$F'))['items'];print(len(d),C.Counter((i.get('kind'),i.get('stage')) for i in d))"
+```
+
+### JSON from curl (pipe, don't save)
+```
+curl -s URL | python3 -I -c "import json,sys;d=json.load(sys.stdin);print(sorted(d[0]))"
+curl -s -o /dev/null -w "%{http_code}\n" URL
+```
+
+### JSONL (look first, then count)
+```
+head -c 700 $F; wc -l $F
+python3 -I -c "
+import json,collections as C
+c=C.Counter()
+for l in open('$F'):
+    try: r=json.loads(l)
+    except Exception: continue
+    c[r.get('type')]+=1
+print(c.most_common(10))"
+```
+Always `try/except` per line: a truncated last line is normal.
+
+### SQLite
+```
+sqlite3 -readonly $DB ".tables" ".schema entries"
+sqlite3 -readonly $DB "select count(*) from entries" | cut -c1-300
+sqlite3 -readonly $DB "select id,substr(title,1,60) from entries order by rowid desc limit 10"
+```
+JSON columns need Python:
+```
+python3 -I -c "
+import sqlite3,json
+c=sqlite3.connect('file:$DB?mode=ro',uri=True)
+for id,j in c.execute('select id,data from entries limit 5'):
+    print(id,sorted(json.loads(j)))"
+```
+
+### Logs
+```
+tail -n 25 $LOG | cut -c1-300
+grep -E "pattern" $LOG | tail -6 | cut -c1-180
+ssh -o BatchMode=yes -o ConnectTimeout=5 HOST "journalctl -u UNIT --since '1 hour ago' --no-pager | tail -30" | cut -c1-250
+```
+
+### Find files
+```
+find $DIR -maxdepth 4 -name 'X' -not -path '*/node_modules/*' 2>/dev/null | head
+```
+
+### Search code
+```
+grep -rn --include='*.ts' -E "a|b" $DIR | grep -v test | cut -c1-170 | head -10
+grep -rln --include='*.ts' "symbol" $DIR | head
+```
+Locate with grep, then read only the lines around the hit.
+
+### Slice a file
+```
+wc -l $F
+sed -n 40,120p $F | cut -c1-200
+```
+
+### Git (read-only)
+```
+git -C $R log --oneline -20
+git -C $R diff --stat A..B | tail -20
+git -C $R show REF:path/to/file | sed -n 1,60p
+git -C $R status --short | wc -l
+```
+(Workers: plain `git` inside the worktree; see section 3.)
+
+### Aggregate
+```
+grep -o "pattern" $F | sort | uniq -c | sort -rn | head
+```
+
+### Config with masking
+```
+sed -E 's/((key|token|apiKey|secret)[^:=]*[:=] *).*/\1***/I' $F | head -60
+```
+
+### Processes and ports
+```
+ps -axo pid,etime,command | grep -E "x|y" | grep -v grep | cut -c1-140 | head -5
+lsof -nP -iTCP -sTCP:LISTEN | awk '{print $1,$2,$9}' | sort -u | head
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:PORT/
+```
+
+### Compare
+```
+diff <(sed -n 1,80p A) <(sed -n 1,80p B) && echo SAME
+diff -rq A B | head
+```
+
+### GitHub
+```
+gh pr view N --json title,state,mergeable,statusCheckRollup --jq '{title,state,mergeable}'
+```
+
+## 3. Guard notes
+
+Read-only agents (scout, investigator, reviewer, researcher). Blocked, with the alternative:
+- Heredocs: `python3 -I -c "..."`.
+- `curl -o FILE`: pipe into python, or redirect `> /tmp/x.json` (only `/dev/null` and `/tmp/` are allowed redirect targets).
+- `source` / `.`: read the file with `sed`/python and mask; never load it into the shell.
+- `cp`, `rm`, `ln`, `setfacl`, installs: don't modify; read in place.
+- `git fetch`, `git checkout`: use `git show REF:path` and `git diff A..B`.
+- Command names built from variables (`$R/main.cjs`): write the real path.
+- Redirects to anywhere except `/dev/null` or `/tmp/`.
+
+Workers (plain bash):
+- Heredocs are blocked here too.
+- Run tests only with `wolfpack test run <file>`.
+- No `git worktree`, `git stash`, `git cherry-pick`, `git -C`, `git -c`, `git fetch`. Run `git` in the worktree you were given.
+- Edit with the edit/write tools, not `sed -i`.
+
+Everyone: each bash call is limited to 60 s. Bound searches (`-maxdepth`, a specific directory); split long jobs.
+
+## 4. Pitfalls seen in fast-tier runs
+
+- `find /` and unbounded `find ~` timed out at 60 s. Search the directory the brief names.
+- A loop that `curl -o` saved files was blocked. Pipe into python instead.
+- `source .env` was blocked, and the fallback then used a wrong value. Read the file and mask; ask if a value is missing.
+- Guessed repo roots (`~/code/...`) that did not exist. Use the brief's path or `git rev-parse --show-toplevel`.
+- The same file sliced five times in different ranges. Check `wc -l`, read once.
+- Whole-file `cat` of a large file filled the context. Slice and cut.
+
+
+===== standard.routine-brief =====
+# Routine brief for fast-tier workers
+
+Applies to the orchestrator when it spawns a worker with model `fast`, and to that worker.
+Goal: a task so exact the fast tier can do it without judgment, and stops when it cannot.
+The worker reads `packages/agents/standards/reading.md` first (how to read, search and verify with bounded output).
+
+## 1. When to use it
+
+Use it for a single obvious change, at most about 3 files named exactly, no design choices. Examples: a rename, a one-file edit, a config line, run-and-report.
+
+Do NOT use it for:
+- anything that needs judgment, or debugging, or an unknown cause;
+- multi-step refactors;
+- anything touching auth, security or data migration.
+
+Reviewers stay on smart or stronger. Never spawn a reviewer on the fast tier.
+
+## 2. Template
+
+```
+Work item: work-<domain>-<id>
+Read first: packages/agents/standards/reading.md
+
+Goal: <one sentence>
+
+Files (exact, repo-relative; line ranges if known):
+- path/to/file.ts:40-60
+
+Change:
+<exact before -> after, or a precise instruction>
+
+Verify (exact commands, and what passing looks like):
+- wolfpack test run <file>   -> all tests pass
+- tsc --noEmit -p <pkg>      -> no output
+
+Commit: `<scope>: <what> (work-<domain>-<id>)` (one commit, only the listed files)
+
+Stop conditions. Stop and report; do not improvise if:
+- the text to change is not where stated;
+- verify fails after one straightforward fix attempt;
+- the change needs a file that is not listed;
+- anything is ambiguous.
+
+Return: commit hash; the last lines of the verify output; anything unexpected.
+```
+
+## 3. Example
+
+```
+Work item: work-wolfpack-AbC1234
+Read first: packages/agents/standards/reading.md
+
+Goal: rename the config key `pollMs` to `pollIntervalMs` in the hub client.
+
+Files:
+- packages/hub/src/client.ts:12-30 (the only use)
+- packages/hub/src/client.test.ts
+
+Change: in both files replace the identifier `pollMs` with `pollIntervalMs`. No other edits.
+
+Verify:
+- wolfpack test run packages/hub/src/client.test.ts -> all pass
+- tsc --noEmit -p packages/hub -> no output
+
+Commit: `hub: rename pollMs to pollIntervalMs (work-wolfpack-AbC1234)`
+
+Stop conditions: `pollMs` is used in any other file; verify fails after one fix attempt; anything unclear.
+
+Return: commit hash, last 10 lines of verify output, anything unexpected.
+```

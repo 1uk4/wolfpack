@@ -1,0 +1,25 @@
+## CONTINUE_PROMPT
+If more work remains, call the next tool. Otherwise write your closing message to the owner: what you did and what is pending. Never reply with 'No response requested' or an empty acknowledgement.
+
+## EMPTY_ACK_NUDGE
+Your previous reply was empty. Reply to the owner now: what you did, what you found, what is pending; or call the next tool.
+
+## DROPPED_CALL_MESSAGE
+The model's tool call was lost (bridge dropped it); please resend
+
+## EMPTY_ACK_MESSAGE
+The model answered with an empty acknowledgement ("No response requested") twice; please resend
+
+## NO_TERMINAL_MESSAGE
+The model stream ended without a result
+
+## task notice: stage and counts moved, Record updated
+Task update: stage in_build → shipped; 2/3 tasks shipped; Record updated
+
+## task notice: only the feature's tasks changed
+Task update: feature tasks changed
+
+## superseded notes (plain and paged with detail)
+(Your pending ask question (call call-1) was superseded by this message.)
+(Your pending ask question (call call-2; state when replaced: Q1 => a; Q2 => skipped) was superseded by this message.)
+

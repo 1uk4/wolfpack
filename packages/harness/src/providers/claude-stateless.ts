@@ -173,8 +173,8 @@ export const makeStatelessFactory = (id: string, exec: StatelessExecOptions = {}
   // pi's agent loop calls streamSimple (compat.js streamSimple -> provider.streamSimple); stream() is the non-simple entry.
   // The bridge aliases both to one function today, but each is wrapped on its own so neither bypasses the net nor changes
   // the other's signature if the bridge ever splits them.
-  p.stream = withDroppedCallNet(p.stream.bind(p));
-  p.streamSimple = withDroppedCallNet(p.streamSimple.bind(p));
+  p.stream = withDroppedCallNet(p.stream.bind(p), undefined, (sid) => handle.forget(sid));
+  p.streamSimple = withDroppedCallNet(p.streamSimple.bind(p), undefined, (sid) => handle.forget(sid));
   return { provider: handle.provider as never, forget: (sid) => void handle.forget(sid), dispose: () => void handle.dispose() };
 };
 

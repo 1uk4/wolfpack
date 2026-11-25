@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { roundNotes } from "./max-turns.js";
-import { CONTINUE_PROMPT, DROPPED_CALL_MESSAGE, EMPTY_ACK_MESSAGE, withDroppedCallNet } from "./dropped-call.js";
+import { DROPPED_CALL_MESSAGE, EMPTY_ACK_MESSAGE, EMPTY_ACK_NUDGE, withDroppedCallNet } from "./dropped-call.js";
+import { subAgentHead } from "../injected-text.js";
+import { supersededNotes } from "../superseded-note.js";
+import { answerText } from "../wolfd/cards.js";
+import { describeChange } from "../wolfd/task-notice.js";
 
 const usage = (n: number) => ({ input: n, output: n, cacheRead: n, cacheWrite: n, totalTokens: 4 * n, cost: { input: n, output: n, cacheRead: n, cacheWrite: n, total: 4 * n } });
 const msg = (content: any[], u = usage(1), stopReason = "stop") => ({ role: "assistant", content, stopReason, usage: u });
@@ -83,7 +87,10 @@ describe("withDroppedCallNet (work-wolfpack-7g4ZFMJ)", () => {
       const log = vi.fn();
       const events = await collect(withDroppedCallNet(q, log)({}, toolCtx, {}));
       expect(q).toHaveBeenCalledTimes(2);
-      expect(q.mock.calls[1][1].messages.at(-1)).toMatchObject({ role: "user", content: CONTINUE_PROMPT });
+      const retried = q.mock.calls[1][1].messages;
+      expect(retried).toHaveLength(2); // no standalone user turn added
+      expect(retried.at(-1)).toMatchObject({ role: "toolResult", content: [{ type: "text", text: "launched" }, { type: "text", text: EMPTY_ACK_NUDGE }] });
+      expect(EMPTY_ACK_NUDGE).not.toContain("If more work remains"); // not the bridge's continue prompt the model already ignored
       expect(events.at(-1).message.content[0].text).toBe("Started the worker; expect a report in a few minutes.");
       expect(events.filter((e) => e.type === "text_delta").map((e) => e.delta).join("")).not.toMatch(/no response/i);
       expect(events.at(-1).message.usage).toEqual(usage(2));
@@ -102,6 +109,86 @@ describe("withDroppedCallNet (work-wolfpack-7g4ZFMJ)", () => {
       const events = await collect(withDroppedCallNet(q, vi.fn())({}, userCtx, {}));
       expect(q).toHaveBeenCalledTimes(1);
       expect(events.at(-1).type).toBe("done");
+    });
+
+    it("retries an empty ack once when the turn began with wolfd-injected user text (ask result, superseded note, task notice, sub-agent delivery)", async () => {
+      // The real producers' output, not hand-copied strings.
+      const card = { tool: "ask", fields: [{ id: "a", kind: "free-text" as const, label: "A" }] };
+      const snap = { workId: "w", stage: "a", record: "r" };
+      const injected = [
+        answerText([{ callId: "c1", card, answers: {}, skipped: true }]),
+        answerText([{ callId: "c1", card, answers: { a: { value: "x" } } }]),
+        answerText([{ callId: "c1", card: { ...card, paged: true }, answers: { a: { value: "x" } } }]),
+        `${supersededNotes([{ callId: "c1", tool: "ask" }])}actually do X`,
+        `${describeChange(snap, { ...snap, stage: "b" })}\n\nhello`,
+        `${subAgentHead("scout", "completed")}2m 1s).\n\nfound it`,
+        `${subAgentHead("scout", "failed")}2m 1s: boom`,
+        `${subAgentHead("scout", "merge")}merged`,
+      ];
+      for (const text of injected) {
+        const q = rounds(textRound("No response requested."), real);
+        const events = await collect(withDroppedCallNet(q, vi.fn())({}, { messages: [{ role: "user", content: text }] }, {}));
+        expect(q, text).toHaveBeenCalledTimes(2);
+        expect(events.at(-1).message.content[0].text).toBe("Started the worker; expect a report in a few minutes.");
+      }
+    });
+
+    it("does not retry an ack to an owner message that only looks like wolfd text (merge:, Task update:, quoted mid-text)", async () => {
+      for (const text of ["merge: x", "Task update: ship it", 'please explain: Sub-agent "a" completed (1s)', "the user skipped your question"]) {
+        const q = rounds(textRound("No response requested."));
+        const events = await collect(withDroppedCallNet(q, vi.fn())({}, { messages: [{ role: "user", content: text }] }, {}));
+        expect(q, text).toHaveBeenCalledTimes(1);
+        expect(events.at(-1).type, text).toBe("done");
+      }
+    });
+
+    it("still retries, then ends with the visible error, when dropping the session file rejects", async () => {
+      const forget = vi.fn(async () => { throw new Error("disk gone"); });
+      const q = rounds(textRound("No response requested."), real);
+      const log = vi.fn();
+      const events = await collect(withDroppedCallNet(q, log, forget)({}, toolCtx, { sessionId: "s1" }));
+      expect(q).toHaveBeenCalledTimes(2);
+      expect(events.at(-1).message.content[0].text).toBe("Started the worker; expect a report in a few minutes.");
+      expect(log).toHaveBeenCalledWith("claude-stateless: could not drop the session after an empty ack: disk gone");
+      const q2 = rounds(textRound("No response requested."));
+      const e2 = await collect(withDroppedCallNet(q2, vi.fn(), forget)({}, toolCtx, { sessionId: "s1" }));
+      expect(e2.at(-1)).toMatchObject({ type: "error", error: { errorMessage: EMPTY_ACK_MESSAGE } });
+      expect(EMPTY_ACK_MESSAGE).toContain("twice");
+    });
+
+    it("never puts the dropped ack into the retry's context", async () => {
+      const q = rounds(textRound("No response requested."), real);
+      await collect(withDroppedCallNet(q, vi.fn())({}, toolCtx, {}));
+      const retryCtx = q.mock.calls[1][1];
+      expect(retryCtx.messages.filter((m: any) => m.role === "assistant")).toEqual([]);
+      expect(toolCtx.messages).toHaveLength(2);
+    });
+
+    it("drops the bridge's session file for the session when an ack is caught, before the retry runs and when the retry fails too", async () => {
+      // Claude Code writes the ack itself as a <synthetic> record the bridge's verify skips, so a resumed file would replay it.
+      const order: string[] = [];
+      const forget = vi.fn(async (sid: string) => { order.push(`forget ${sid}`); });
+      const q = vi.fn(() => { order.push("round"); return textRound("No response requested.")(); });
+      await collect(withDroppedCallNet(q, vi.fn(), forget)({}, toolCtx, { sessionId: "s1" }));
+      expect(order).toEqual(["round", "forget s1", "round", "forget s1"]);
+    });
+
+    it("after thinking was shown, an empty ack ends with the visible error (no duplicate blocks) and is logged", async () => {
+      const thinkAck = () => (async function* () {
+        yield { type: "start" };
+        yield { type: "thinking_start", contentIndex: 0 };
+        yield { type: "thinking_end", contentIndex: 0 };
+        yield { type: "text_start", contentIndex: 1 };
+        yield { type: "text_delta", contentIndex: 1, delta: "No response requested." };
+        yield { type: "text_end", contentIndex: 1 };
+        yield done(msg([{ type: "thinking", thinking: "hm" }, { type: "text", text: "No response requested." }]));
+      })();
+      const q = rounds(thinkAck, real);
+      const log = vi.fn();
+      const events = await collect(withDroppedCallNet(q, log)({}, toolCtx, {}));
+      expect(q).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)).toMatchObject({ type: "error", error: { errorMessage: EMPTY_ACK_MESSAGE } });
+      expect(log).toHaveBeenCalledWith("claude-stateless: EMPTY ACK (attempt 1)");
     });
 
     it("streams a longer real reply that contains the phrase without retrying", async () => {

@@ -185,6 +185,8 @@ export const CardSchema = z
      * raised by that call id (`fields`/`steps` are the replacement pages only).
      */
     revises: z.string().optional(),
+    /** Free-form facts the raising tool attaches for the console (task_graduate: the preparing wolf and `via`). Optional; old cards have none. */
+    meta: z.record(z.string(), z.unknown()).optional(),
   })
   .refine((c) => !c.paged || c.steps !== undefined, { message: "a paged card needs steps (its pages)", path: ["steps"] })
   .refine((c) => c.fields.length >= 1 || c.brief !== undefined, { message: "a card needs at least one field", path: ["fields"] })

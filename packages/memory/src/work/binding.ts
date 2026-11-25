@@ -22,6 +22,15 @@ export const BINDING_RULES = [
   "- When a subagent finishes, relay the decisions and findings that matter to the user in your own words; the raw report is not kept in memory.",
 ].join("\n");
 
+/** The graduation rules, for the orchestrator's rules text. */
+export const GRADUATION_RULES = [
+  "Graduation:",
+  "- Never graduate on your own. There is no auto-graduate: the owner decides, on a card.",
+  "- When the owner asks (\"anything to graduate?\"), find the finished features and initiatives with task_query and offer them in ONE task_graduate ids card. Include items they passed on before.",
+  "- When a feature's last task ships, make ONE light offer, expecting \"no\": there is often more to do in the feature. Do not repeat it.",
+  "- Graduation is for features and initiatives. A loose task graduates only when the owner names it: list it in task_graduate's named.",
+].join("\n");
+
 /** An item that can be worked on directly (a workspace such as a feature cannot be bound). */
 const BINDABLE = ["task", "issue", "spike"];
 

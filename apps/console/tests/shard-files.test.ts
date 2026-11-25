@@ -1,7 +1,6 @@
 /** The console CI shards: every test file lands in exactly one shard, deterministically. */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-// @ts-expect-error plain .mjs helper without types
 import { parseShard, shardFiles } from "../scripts/shard-files.mjs";
 
 const FILES = ["tests/e.test.ts", "tests/a.test.ts", "tests/c.test.ts", "tests/b.test.ts", "tests/d.test.ts", "tests/f.test.ts", "tests/g.test.ts"];

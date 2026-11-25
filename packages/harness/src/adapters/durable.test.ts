@@ -41,7 +41,7 @@ describe("frozen sections", () => {
     const [kb, task, live] = ext.sections as unknown as Render[];
     return { kb: kb!, task: task!, live: live!, den };
   };
-  const bound = (id: string, title: string) => `## Active Task\n\n**Feature:** [${id}] ${title} (kind: feature)\n\nCall task_current for the plan, notes and current stage.`;
+  const bound = (id: string, title: string) => `## Active Task\n\n**Feature:** [${id}] ${title} (kind: feature)\n\nCall task_query {current: true} for the plan, notes and current stage.`;
   // The real strings of extensions/wolfpack-memory/unified-tasks.ts: the unbound text, and the catch-branch error text.
   const UNBOUND = `## Active Task\n\n${UNBOUND_CONTEXT}\nUse \`task_query\` to see available work.`;
   const ERROR = "## Active Task\n\nError: ENOENT: no such file or directory";
@@ -77,10 +77,10 @@ describe("frozen sections", () => {
     await task.render({ conversationId: "20", shown: {} }, ctx);
     text.task = bound("work-wolfpack-AbC1234", "Fix the thing (now)");
     const bind = await pendingContextNotice(den, "20");
-    expect(bind.text).toBe('Context update: active_task changed (now work-wolfpack-AbC1234 "Fix the thing (now)"); call task_current');
+    expect(bind.text).toBe('Context update: active_task changed (now work-wolfpack-AbC1234 "Fix the thing (now)"); call task_query {current: true}');
     bind.commit();
     text.task = UNBOUND;
-    expect((await pendingContextNotice(den, "20")).text).toBe("Context update: active_task changed (now unbound); call task_current");
+    expect((await pendingContextNotice(den, "20")).text).toBe("Context update: active_task changed (now unbound); call task_query {current: true}");
   });
 
   it("ignores a failed active_task render: no unbind announced, the last state is kept (also after a restart)", async () => {
@@ -92,7 +92,7 @@ describe("frozen sections", () => {
     expect(await task.render({ conversationId: "22", shown }, ctx)).toBe(first); // still frozen
     expect((await pendingContextNotice(den, "22")).text).toBe("");
     text.task = UNBOUND; // a real unbind after the error is still announced
-    expect((await pendingContextNotice(den, "22")).text).toBe("Context update: active_task changed (now unbound); call task_current");
+    expect((await pendingContextNotice(den, "22")).text).toBe("Context update: active_task changed (now unbound); call task_query {current: true}");
 
     // Restart: the transcript shows an Error text; the fresh text is shown, and nothing is announced.
     text.task = bound("work-wolfpack-ZzZ9999", "Back");
@@ -106,7 +106,7 @@ describe("frozen sections", () => {
     const first = await task.render({ conversationId: "21", shown: {} }, ctx);
     text.task = bound("work-snapjack-BBB2222", "Two");
     expect(await task.render({ conversationId: "21", shown: { active_task: tagged("active_task", first!) } }, ctx)).toBe(first);
-    expect((await pendingContextNotice(den, "21")).text).toBe('Context update: active_task changed (now work-snapjack-BBB2222 "Two"); call task_current');
+    expect((await pendingContextNotice(den, "21")).text).toBe('Context update: active_task changed (now work-snapjack-BBB2222 "Two"); call task_query {current: true}');
   });
 
   it("shows the fresh text after a compaction (no shown entry) and announces nothing", async () => {

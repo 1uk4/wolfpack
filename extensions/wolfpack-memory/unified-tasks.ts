@@ -881,11 +881,11 @@ export default function createTasksExtension(
     lines.push(`**${task.kind === "feature" ? "Feature" : "Task"}:** [${task.id}] ${task.title} (kind: ${task.kind})`);
     if (task.kind !== "feature" && parent && (parent.kind === "feature" || parent.kind === "initiative")) lines.push(`**Part of ${parent.kind}:** [${parent.id}] ${parent.title}`);
     if (task.successCriteria) lines.push("", `**Success Criteria:** ${task.successCriteria}`);
-    lines.push("", "Call task_current for the plan, notes and current stage.");
+    lines.push("", "Call task_query {current: true} for the plan, notes and current stage.");
     return lines.join("\n");
   }
 
-  /** The full view task_current returns: stage, hierarchy with counts, criteria, the whole working document and the feature Record. */
+  /** The full view task_query {current: true} returns: stage, hierarchy with counts, criteria, the whole working document and the feature Record. */
   function renderFullTask(cached: TaskCache): string {
     const { task, parent, siblings } = cached;
     const lines: string[] = [];
@@ -932,7 +932,7 @@ export default function createTasksExtension(
         const quiet = isSubagent() || (await resolveBindingRoot({ wolfDen, conversationId: sc.conversationId ?? 1, conversation: sc.conversation })).readOnly;
         return `## Task Tools
 
-Available: task_query, task_bind, task_claim, task_release, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features
+Available: task_query, task_bind, task_claim, task_release, task_unbind, task_create, task_done, task_note, task_stage, task_graduate
 
 Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<id>\` (e.g. \`work-wolfpack-cEg92qS\`), never the bare short id (\`cEg92qS\`). The console renders each full ID as a chip with a hover card (title, stage, parent feature, Open thread), which is how the owner reads them. Write it as plain text or inline code. It is NOT linked inside a fenced code block, a markdown link, a URL or a file name (\`work-wolfpack-cEg92qS.md\`). Write every ID in full, even in lists of several items.${quiet ? "" : `\n\n${BINDING_RULES}`}`;
       }),
@@ -963,14 +963,14 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           }
 
           // Only what is fixed while bound: stage, counts and the Record change under us and would break prompt caching,
-          // so wolfd announces them as a short user-turn notice and task_current returns them in full.
+          // so wolfd announces them as a short user-turn notice and task_query {current: true} returns them in full.
           if (!peek) refreshCacheSoon(cached);
           return renderStableHeader(cached.task, cached.parent);
         } catch (err) {
           return `## Active Task\n\nError: ${err instanceof Error ? err.message : err}`;
         }
         };
-        // Frozen: a rebind or unbind reaches the model as a "Context update" notice (call task_current).
+        // Frozen: a rebind or unbind reaches the model as a "Context update" notice (call task_query {current: true}).
         return section("active_task", (sc) => render(sc, false), { frozen: true, peek: (sc) => render(sc, true) });
       })(),
     ],
@@ -1120,53 +1120,18 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
         },
       }),
 
-      // ─── task_current ────────────────────────────────────────────────────
-      defineTool({
-        name: "task_current",
-        description: "Get the currently bound task in full: its current stage, its feature's tasks and progress, success criteria, the whole working document (plan + Record) and the feature Record. The system prompt only names the task; changes to it arrive as short 'Task update' notices, so call this for the details.",
-        parameters: Type.Object({}),
-        async execute(_args: unknown, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx);
-          if (!binding) {
-            return {
-              content: [{ type: "text", text: "No task currently bound." }],
-            };
-          }
-
-          const found = await findItem(binding.taskId);
-          if (!found) {
-            return {
-              content: [{ type: "text", text: `Bound task ${binding.taskId} not found.` }],
-              isError: true,
-            };
-          }
-
-          const { item } = found;
-          // Fresh, not the section cache: this is the full current state.
-          try {
-            await writeCache(item);
-          } catch { /* fall through to whatever is cached */ }
-          const cached = readCache(item.id as string);
-          if (cached) return { content: [{ type: "text", text: `ID: ${item.id}\n${renderFullTask(cached)}` }] };
-          return {
-            content: [{
-              type: "text",
-              text: `ID: ${item.id}\nTitle: ${item.title}\nKind: ${item.kind}\nStage: ${item.stage}\nDomain: ${binding.domain}\n${item.successCriteria ? `Success: ${item.successCriteria}` : ""}`,
-            }],
-          };
-        },
-      }),
-
       // ─── task_query ──────────────────────────────────────────────────────
       defineTool({
         name: "task_query",
-        description: "Query work items across subscribed domains. Returns hierarchical view with parents and children.",
+        description: "Query work items across subscribed domains (parents and children). current: true returns the bound task in full (stage, hierarchy, criteria, plan, Record). kind: \"feature\" with open: true lists the open features to pick a partOf parent.",
         parameters: Type.Object({
           domain: Type.Optional(Type.String({ description: "Filter to specific domain" })),
           kind: Type.Optional(Type.String({ description: "Filter by kind: initiative, feature, task, issue, spike" })),
           stage: Type.Optional(Type.String({ description: "Filter by stage" })),
           id: Type.Optional(Type.String({ description: "Get specific item with its context" })),
           depth: Type.Optional(Type.Number({ description: "Include children to this depth (default: 1)" })),
+          current: Type.Optional(Type.Boolean({ description: "Return the bound task in full; other filters are ignored" })),
+          open: Type.Optional(Type.Boolean({ description: "Leave out finished items" })),
         }),
         async execute(args: {
           domain?: string;
@@ -1174,7 +1139,39 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           stage?: string;
           id?: string;
           depth?: number;
+          current?: boolean;
+          open?: boolean;
         }, ctx: ToolContext): Promise<ToolResult> {
+          if (args.current) {
+            const binding = await readBinding(ctx);
+            if (!binding) {
+              return {
+                content: [{ type: "text", text: "No task currently bound." }],
+              };
+            }
+
+            const found = await findItem(binding.taskId);
+            if (!found) {
+              return {
+                content: [{ type: "text", text: `Bound task ${binding.taskId} not found.` }],
+                isError: true,
+              };
+            }
+
+            const { item } = found;
+            // Fresh, not the section cache: this is the full current state.
+            try {
+              await writeCache(item);
+            } catch { /* fall through to whatever is cached */ }
+            const cached = readCache(item.id as string);
+            if (cached) return { content: [{ type: "text", text: `ID: ${item.id}\n${renderFullTask(cached)}` }] };
+            return {
+              content: [{
+                type: "text",
+                text: `ID: ${item.id}\nTitle: ${item.title}\nKind: ${item.kind}\nStage: ${item.stage}\nDomain: ${binding.domain}\n${item.successCriteria ? `Success: ${item.successCriteria}` : ""}`,
+              }],
+            };
+          }
           const targetDomains = args.domain ? [args.domain] : domains;
           const depth = args.depth ?? 1;
           const results: string[] = [];
@@ -1221,11 +1218,12 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
                 continue;
               }
 
-              const items = await client.query({
+              const queried = await client.query({
                 domain,
                 ...(args.kind ? { kind: args.kind } : {}),
                 ...(args.stage ? { stage: args.stage } : {}),
               });
+              const items = args.open ? queried.filter(i => !isComplete(i)) : queried;
 
               if (items.length === 0) continue;
 
@@ -1722,40 +1720,6 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             // Never the outbox "queued" success: only a request the hub holds counts.
             return text(`Graduation request failed, the owner has not been asked: ${err instanceof Error ? err.message : err}`, true);
           }
-        },
-      }),
-
-      // ─── task_features ───────────────────────────────────────────────────
-      defineTool({
-        name: "task_features",
-        description: "List open features in a domain. Useful for showing parent options when creating tasks.",
-        parameters: Type.Object({
-          domain: Type.String({ description: "Domain to list features from" }),
-        }),
-        async execute(args: { domain: string }): Promise<ToolResult> {
-          if (!domains.includes(args.domain)) {
-            return {
-              content: [{ type: "text", text: `Not subscribed to domain: ${args.domain}` }],
-              isError: true,
-            };
-          }
-
-          const items = await getItems(args.domain);
-          const features = items.filter(i => 
-            i.kind === "feature" && 
-            !isComplete(i)
-          );
-
-          if (features.length === 0) {
-            return {
-              content: [{ type: "text", text: "No open features. Tasks will go to Inbox." }],
-            };
-          }
-
-          const lines = features.map(f => `${f.id} | ${f.title}`);
-          return {
-            content: [{ type: "text", text: `Open features:\n${lines.join("\n")}` }],
-          };
         },
       }),
     ],

@@ -285,7 +285,7 @@ describe("feature threads", () => {
     // bound at creation, in the memory extension's own shape (a feature binds itself: workId = featureId)
     expect(readBindingFile(den, cid)).toMatchObject({ workId: featureId, domain: "wolfpack", featureId });
     expect(readBindingFile(den, 1)).toBeNull();
-    expect((await tool(den, cid, "task_current")).text).toContain(featureId);
+    expect((await tool(den, cid, "task_query", { current: true })).text).toContain(featureId);
 
     // home starts a turn and stays mid-turn while the feature thread takes its own
     await tw.client.submit(tw.home, say("MARK_HOME"), { whenBusy: "reject" });

@@ -98,7 +98,7 @@ describe("hub claim tools", () => {
     const bound = await a.run("task_bind", { id: featureId });
     expect(bound.isError).toBe(false);
     expect(bound.text).toContain(`Claimed and bound to: [${featureId}]`);
-    expect((await a.run("task_current", {})).text).toContain(featureId);
+    expect((await a.run("task_query", { current: true })).text).toContain(featureId);
     // wolf-a holds the feature: a second wolf cannot claim it
     expect((await b.run("task_claim", { id: featureId })).text).toBe(`${featureId} is held by wolf-a`);
     // a task is bound locally, no claim (wolf-b would 409 if it called one, as the feature is held by wolf-a)

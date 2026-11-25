@@ -165,6 +165,6 @@ describe("context update line", () => {
   it("strips only the generated line: operator text that starts like it survives", () => {
     expect(stripTaskNotice("Context update: kb_access changed the plan\n\nhi")).toBe("Context update: kb_access changed the plan\n\nhi");
     expect(stripTaskNotice("Context update: is a phrase I use\n\nhello")).toBe("Context update: is a phrase I use\n\nhello");
-    expect(stripTaskNotice('Context update: active_task changed (now work-wolfpack-AbC1234 "T"); call task_current\n\nhi')).toBe("hi");
+    expect(stripTaskNotice('Context update: active_task changed (now work-wolfpack-AbC1234 "T"); call task_query {current: true}\n\nhi')).toBe("hi");
   });
 });

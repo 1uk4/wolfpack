@@ -194,7 +194,7 @@ function requestSectionEntries(): CatalogEntry[] {
     ].join("\n")),
     sec("task_tools", "task_tools: task tool list, domains and work-id rule (template)", "extensions/wolfpack-memory/unified-tasks.ts section task_tools", [
       "## Task Tools",
-      "Available: task_query, task_bind, task_claim, task_release, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features",
+      "Available: task_query, task_bind, task_claim, task_release, task_unbind, task_create, task_done, task_note, task_stage, task_graduate",
       "Domains: <domain list>",
       "Work item IDs: always write the full `work-<domain>-<id>` ... (rule about chips and code blocks)",
       "<binding rules, omitted for subagents and read-only task conversations>",
@@ -202,7 +202,7 @@ function requestSectionEntries(): CatalogEntry[] {
     sec("active_task", "active_task: the bound work item (template)", "extensions/wolfpack-memory/unified-tasks.ts section active_task", [
       "## Active Task",
       "<unbound: the 'item completed' notice once, then the unbound context and: Use `task_query` to see available work.>",
-      "<bound: the stable header (id, title, kind, parent feature, success criteria). Stage, counts and the Record are left out on purpose: they arrive as the Task update notice and via task_current.>",
+      "<bound: the stable header (id, title, kind, parent feature, success criteria). Stage, counts and the Record are left out on purpose: they arrive as the Task update notice and via task_query {current: true}.>",
       "Empty for subagents.",
     ].join("\n\n")),
     sec("telegram-suffix", "Telegram suffix (terminal pi only; wolfd does not load it)", "extensions/wolfpack-telegram/index.ts SYSTEM_PROMPT_SUFFIX", [

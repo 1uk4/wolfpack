@@ -74,14 +74,14 @@ afterEach(() => {
   rmSync(den, { recursive: true, force: true });
 });
 
-describe("bound-task context (task_current)", () => {
+describe("bound-task context (task_query current)", () => {
   const current = async (ext: ReturnType<typeof make>) => {
     mkdirSync(join(den, "factory", "conversations", "1"), { recursive: true });
     writeFileSync(join(den, "factory", "conversations", "1", "active-task.json"), JSON.stringify({ workId: "work-w-T", domain: "w", boundAt: "now", featureId: "work-w-F" }));
     items.get("work-w-F")!.body = "## Record\n\n### Changes\n\n- 09:00 [x\u00b7change] feature line";
     items.set("work-w-S", { id: "work-w-S", kind: "task", title: "Sibling", stage: "in_build", domain: "w", container: false, log: [], body: "## Record\n\n- 09:30 [x\u00b7change] sibling line", partOf: "work-w-F" });
     urls.length = 0;
-    const r = (await ext.tools!.find((t) => t.name === "task_current")!.execute({}, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 } as never)) as { content: Array<{ text: string }> };
+    const r = (await ext.tools!.find((t) => t.name === "task_query")!.execute({ current: true }, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 } as never)) as { content: Array<{ text: string }> };
     return r.content[0]!.text;
   };
 

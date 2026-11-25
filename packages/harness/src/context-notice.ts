@@ -48,7 +48,7 @@ const HINTS: Record<string, string> = {
   wolf_memory: "read the topic files",
   wolf_memory_retired: "read the entries with kb_access",
   kb_access: "re-read the domain _digest.json",
-  active_task: "call task_current",
+  active_task: "call task_query {current: true}",
 };
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

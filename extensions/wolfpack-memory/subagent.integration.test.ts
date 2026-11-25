@@ -114,7 +114,7 @@ const conversationOf = (den: string, threadId: string): number =>
   Number(JSON.parse(readFileSync(join(den, "wolfd", "threads.json"), "utf8")).threads.find((t: { id: string }) => t.id === threadId).conversationId);
 
 
-const PROFILE = "---\nname: binder\ndescription: tries to bind\nmodel: fast\ntools: read, task_bind, task_current\n---\n\nYou are a test agent.\n";
+const PROFILE = "---\nname: binder\ndescription: tries to bind\nmodel: fast\ntools: read, task_bind, task_query\n---\n\nYou are a test agent.\n";
 
 /** The feature thread spawns "binder"; the child tries to bind, then answers with MARK_CHILD. */
 function agents(otherWork: string): FauxResponseStep {

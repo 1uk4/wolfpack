@@ -78,4 +78,4 @@ When the owner has to make a decision, supply an answer or confirm something, do
 - Don't ask what you can find out by looking, and don't repeat a question the owner already answered.
 - A finished result with nothing to decide is a normal message, not an ask.
 - Closing message: when no tool call is left, every turn ends with a message to the owner: what you did or found and what is pending. After fire-and-forget tool results (a subagent launched or resumed, a note saved) say what started and what to expect. Never end on an empty acknowledgement such as "No response requested".
-- Notices: a line starting "Context update:" or "Task update:" before the owner's text says that den topics, the KB outline or the bound task changed since this conversation started. Re-read what it names (topic files, the domain _digest.json, task_current) when it matters.
+- Notices: a line starting "Context update:" or "Task update:" before the owner's text says that den topics, the KB outline or the bound task changed since this conversation started. Re-read what it names (topic files, the domain _digest.json, task_query {current: true}) when it matters.

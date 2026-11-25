@@ -124,5 +124,5 @@ echo "  $(dim '# Create a 24/7 assistant wolf on it')"
 echo "  wolfpack add wolf aide --host <host>"
 echo
 echo "  $(dim '# Or a local worker wolf')"
-echo "  wolfpack add wolf my-wolf && wolfpack launch my-wolf"
+echo "  wolfpack add wolf my-wolf"
 echo

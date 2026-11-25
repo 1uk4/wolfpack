@@ -18,7 +18,7 @@ const reportedUnreadable = new Set<string>();
 
 /**
  * The standards shipped with wolfpack. From source and dist this is `packages/agents/standards`; in the den extension bundle
- * (discover.ts inlined into `wolfpack-subagents/index.js`) it is the `standards` folder copied next to the bundle (`wolfpack.assets`).
+ * (discover.ts inlined into an extension bundle) it is the `standards` folder copied next to the bundle (`wolfpack.assets`).
  */
 export function bundledStandardsDir(): string {
   if (standardsDir === undefined) {

@@ -28,7 +28,6 @@ import { parsePrArgs } from "../pr-prepare.js";
 import { deployCmd } from "../commands/deploy.js";
 import { workDoctor } from "../commands/work-doctor.js";
 import { workBackfillFeatureStages } from "../commands/work-backfill.js";
-import { wolfLaunch } from "../commands/wolf-launch.js";
 import { wolfSync } from "../commands/wolf-sync.js";
 import { domainCmd } from "../commands/domain.js";
 import { meshCmd } from "../commands/mesh.js";
@@ -48,7 +47,6 @@ ${c.bold("COMMANDS")}
   setup                           First-time setup (hub + librarian + pack models)
   add wolf <name>                 Create a new wolf (interactive wizard)
   add domain <name>               Declare a new knowledge domain
-  launch <wolf> [dir] [--session <id>]  Run a wolf locally (resume a pi session)
   sync <wolf>                     Deploy wolf to host (bundle)
   list                            Show all wolves grouped by host
   status <wolf>                   Wolf health and service state
@@ -83,7 +81,6 @@ ${c.bold("WORKFLOW COMMANDS")}
   setup                           First-time setup (hub + librarian + pack models)
   add wolf <name>                 Create a new wolf (interactive wizard)
   add domain <name>               Declare a new knowledge domain
-  launch <wolf> [dir] [--session <id>]  Run a wolf locally (resume a pi session)
   sync <wolf> [--host <h>]        Deploy wolf to host (bundle)
   sync --all                      Sync every wolf on every host
   deploy <wolf> --release wolfd/vX.Y.Z [--host h] [--dry-run]   host pulls + verifies a GitHub release, health-checks, rolls back
@@ -315,17 +312,6 @@ async function main(): Promise<void> {
         });
         break;
 
-      case "launch":
-        if (!positional[1]) {
-          console.error("Usage: wolfpack launch <wolf> [project-dir] [--session <id>]");
-          process.exit(1);
-        }
-        await wolfLaunch(positional[1], {
-          host: flags.host as string | undefined,
-          dir: positional[2],
-          session: flags.session as string | undefined,
-        });
-        break;
 
       case "list":
         await wolfList({ json: flags.json as boolean | undefined });

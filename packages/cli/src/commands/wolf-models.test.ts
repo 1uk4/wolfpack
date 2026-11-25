@@ -28,8 +28,8 @@ describe("modelRows", () => {
 
   it("lists main, every engine step and every agent with tier and source", () => {
     const rows = modelRows(table, [
-      { name: "scout", extension: "wolfpack-subagents", model: "fast" },
-      { name: "worker", extension: "wolfpack-subagents", model: "smart" },
+      { name: "scout", extension: "fx-ext", model: "fast" },
+      { name: "worker", extension: "fx-ext", model: "smart" },
     ]);
     const byUse = Object.fromEntries(rows.map((r) => [r.use, r]));
     expect(byUse.main).toEqual({ use: "main", tier: "main", model: "claude-opus-5-5", thinking: "—", source: "pack" });
@@ -71,12 +71,12 @@ describe("shadowed agents", () => {
     const ext = path.join(root, "ext");
     const wolf = path.join(root, "wolf-agent");
     const proj = path.join(root, "proj");
-    for (const d of [path.join(ext, "wolfpack-subagents", "agents"), path.join(wolf, "agents"), path.join(proj, ".pi", "agents")]) {
+    for (const d of [path.join(ext, "fx-ext", "agents"), path.join(wolf, "agents"), path.join(proj, ".pi", "agents")]) {
       fs.mkdirSync(d, { recursive: true });
     }
     const w = (f: string, body: string) => fs.writeFileSync(f, body);
-    w(path.join(ext, "wolfpack-subagents", "agents", "scout.md"), "---\nname: scout\nmodel: fast\n---\n");
-    w(path.join(ext, "wolfpack-subagents", "agents", "worker.md"), "---\nname: worker\nmodel: smart\n---\n");
+    w(path.join(ext, "fx-ext", "agents", "scout.md"), "---\nname: scout\nmodel: fast\n---\n");
+    w(path.join(ext, "fx-ext", "agents", "worker.md"), "---\nname: worker\nmodel: smart\n---\n");
     w(path.join(wolf, "agents", "scout.md"), "---\nname: scout\nmodel: smart\n---\n");
     w(path.join(wolf, "agents", "mine.md"), "---\nname: mine\nmodel: fast\n---\n");
     w(path.join(proj, ".pi", "agents", "worker.md"), "---\nname: worker\nmodel: claude-x\n---\n");
@@ -88,7 +88,7 @@ describe("shadowed agents", () => {
     const agents = agentsForWolf(readRepoAgents(ext), wolf, proj);
     const rows = Object.fromEntries(modelRows(table, agents).map((r) => [r.use, r]));
     expect(rows["agent:scout"]!.tier).toBe("smart");
-    expect(rows["agent:scout"]!.source).toContain(`⚠ shadows repo agent (${path.join(ext, "wolfpack-subagents", "agents", "scout.md")})`);
+    expect(rows["agent:scout"]!.source).toContain(`⚠ shadows repo agent (${path.join(ext, "fx-ext", "agents", "scout.md")})`);
     expect(rows["agent:worker"]!.model).toBe("claude-x (not a tier)");
     expect(rows["agent:worker"]!.source).toContain("⚠ shadows repo agent");
     expect(rows["agent:mine"]!.source).toContain("wolf agent (");

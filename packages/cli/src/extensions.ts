@@ -187,7 +187,7 @@ export function agentDir(wolfDir: string): string {
  *
  * With `main` (the resolved table's main tier), also sets pi's
  * `defaultProvider` / `defaultModel` (and `defaultThinkingLevel` when the tier
- * sets thinking), so pi started without `wolfpack launch` lands on the right
+ * sets thinking), so pi lands on the right
  * model. All other keys are preserved.
  */
 export function writePiSettings(wolfDir: string, keys: string[], main?: ResolvedTier): string[] {
@@ -241,24 +241,6 @@ export function writePiSettings(wolfDir: string, keys: string[], main?: Resolved
 
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   return missing;
-}
-
-/**
- * Set only the model defaults in the wolf's pi `settings.json` (launch uses
- * this; everything else in the file is left as is).
- */
-export function writePiModelDefaults(wolfDir: string, main: ResolvedTier): void {
-  const dir = agentDir(wolfDir);
-  fs.mkdirSync(dir, { recursive: true });
-  const settingsPath = path.join(dir, "settings.json");
-  let settings: Record<string, unknown> = {};
-  try {
-    settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  } catch {
-    // start fresh
-  }
-  setPiModelDefaults(settings, main);
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 }
 
 /** Main model used when the pack has no `models:` block to resolve (the subscription default). */

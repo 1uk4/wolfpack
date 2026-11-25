@@ -38,7 +38,7 @@ const execFileAsync = promisify(execFile);
 /** A subagent definition in the repo and the raw value of its `model:` key. */
 export interface AgentModelRef {
   name: string;
-  /** Extension package the agent file lives in (e.g. wolfpack-subagents). */
+  /** Extension package the agent file lives in (or "agents" for the shared roster). */
   extension: string;
   model: string | undefined;
   /** The agent file. */
@@ -94,7 +94,7 @@ export function readAgentsDir(dir: string, origin: AgentOrigin): AgentModelRef[]
 
 /**
  * The agents a wolf actually gets: repo agents, overridden by same-named wolf
- * agents, overridden by same-named project agents (the subagents extension's
+ * agents, overridden by same-named project agents (wolfd's subagent
  * precedence). An override records the lower-precedence file it shadows.
  */
 export function effectiveAgents(repo: AgentModelRef[], wolf: AgentModelRef[], project: AgentModelRef[]): AgentModelRef[] {

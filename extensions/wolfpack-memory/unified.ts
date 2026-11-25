@@ -137,7 +137,7 @@ export function memoryGate(config: MemoryConfig, context: ExtensionContext): Mem
 /** Waits between polls for the reported response to be committed (then the hook's copy is used): ~1s in all. */
 const COMMIT_WAITS_MS = [10, 20, 40, 80, 160, 160, 160, 160, 160];
 
-/** Pi's defaults (extensions/wolfpack-memory/index.ts CONSOLIDATE_AT / POOL_TARGET). */
+/** Pi's defaults (the former pi memory extension). */
 export const DEFAULT_CONSOLIDATE_AT = 20000;
 export const DEFAULT_POOL_TARGET = 10000;
 
@@ -404,7 +404,7 @@ export default function createMemoryExtension(
   // Fail closed before anything touches the den (reconcileDen below writes to it).
   const gate = memoryGate(config, context);
   console.log(`[memory] ${gate.enabled ? "starting: " : "inert: "}${gate.reason}`);
-  if (!gate.enabled) return defineExtension({ name: "wolfpack-memory", runtimes: ["pi", "pi-durable"] });
+  if (!gate.enabled) return defineExtension({ name: "wolfpack-memory", runtimes: ["pi-durable"] });
 
   sweepStaleMarkers(wolfDen);
   const defaultDomain = resolveDefaultDomain(config.defaultDomain, domains);
@@ -914,7 +914,7 @@ export default function createMemoryExtension(
 
   return defineExtension({
     name: "wolfpack-memory",
-    runtimes: ["pi", "pi-durable"],
+    runtimes: ["pi-durable"],
 
     onEngineReady: (info) => startTimer(info),
 

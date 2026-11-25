@@ -20,7 +20,7 @@ afterEach(() => {
 
 async function addWolf(): Promise<Record<string, any>> {
   const { wolfAdd } = await import("./commands/wolf-add.js");
-  await wolfAdd("newbie", { yes: true, runtime: "pi", profile: "worker", extensions: ["memory"] });
+  await wolfAdd("newbie", { yes: true, runtime: "pi-durable", profile: "worker", extensions: ["memory"] });
   return JSON.parse(fs.readFileSync(path.join(home, "wolves/local/newbie/agent/settings.json"), "utf8"));
 }
 

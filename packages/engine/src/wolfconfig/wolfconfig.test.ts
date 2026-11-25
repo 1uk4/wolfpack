@@ -110,7 +110,7 @@ serve:
       "c",
       `id: ddkyhT
 name: c
-runtime: pi
+runtime: pi-durable
 profile: worker
 role: c
 domains: [personal]
@@ -125,6 +125,10 @@ extensions: [memory, ask]
     expect(warnings.join("\n")).toMatch(/"runtime" is ignored/);
     expect(warnings.join("\n")).toMatch(/"profile"/);
     expect(warnings.join("\n")).not.toMatch(/"extensions"/);
+  });
+
+  it("runtime: pi is rejected with a pointer to pi-durable", () => {
+    expect(() => loadWolfConfig(wolf("p", "name: p\nruntime: pi\n"))).toThrow(/terminal pi runtime was removed; use pi-durable/);
   });
 
   it("broken yaml → WolfConfigError", () => {
@@ -145,7 +149,7 @@ extensions: [memory, ask]
 describe("discoverWolves", () => {
   it("finds */wolf.yaml, reports broken ones, skips dirs without one", () => {
     wolf("good", "name: good\n");
-    wolf("legacy", "name: legacy\nruntime: pi\n");
+    wolf("legacy", "name: legacy\nruntime: pi-durable\n");
     wolf("bad", "name: [oops\n");
     fs.mkdirSync(path.join(tmp, "empty"));
     fs.writeFileSync(path.join(tmp, "stray.txt"), "x");

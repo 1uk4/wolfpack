@@ -192,7 +192,7 @@ async function configLocal(
 
   // Interactive menu
   console.log(c.bold(`\nConfiguring ${name} (${wolf.id})`));
-  console.log(c.dim(`  runtime:    ${wolf.runtime || "pi"}`));
+  console.log(c.dim(`  runtime:    ${wolf.runtime || "pi-durable"}`));
   console.log(c.dim(`  models:     ${modelsSummary(wolfModelsOf(wolf), "local")}`));
   console.log(c.dim(`  domains:    ${wolf.domains?.join(", ") || "(none)"}`));
   console.log(c.dim(`  extensions: ${wolf.extensions?.join(", ") || "(none)"}\n`));
@@ -222,7 +222,7 @@ async function configLocal(
       break;
     }
     case "extensions": {
-      const runtime = wolf.runtime || "pi";
+      const runtime = wolf.runtime || "pi-durable";
       const profile = (wolf.profile as string) ?? "worker";
       const current = wolf.extensions ?? defaultExtensionKeys(
         profile === "assistant" ? "assistant" : "worker",
@@ -310,9 +310,6 @@ function persistLocal(
   wolf: WolfYaml,
 ): string[] {
   fs.writeFileSync(yamlPath, yamlStringify(wolf));
-  if (wolf.runtime === "pi") {
-    return writePiSettings(wolfDir, wolf.extensions ?? []);
-  }
   return [];
 }
 

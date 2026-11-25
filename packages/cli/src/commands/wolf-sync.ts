@@ -179,8 +179,7 @@ function syncLocal(config: CliConfig, name: string, resetKbBase = false): void {
   const lines = [...Object.entries(managed).map(([k, v]) => `${k}=${v}`), ...kept];
   fs.writeFileSync(envPath, lines.join("\n") + "\n", { mode: 0o600 });
 
-  // pi's default model follows the resolved main tier (launch also passes
-  // --model; this covers pi started without `wolfpack launch`).
+  // pi's default model follows the resolved main tier (settings.json default).
   const table = resolveModelsOrExit(() => resolveLocalWolfModels(config, name));
   const missing = writePiSettings(dir, wolf.extensions ?? [], table.tiers.main);
   console.log(c.green(`\u2713 Reconciled local wolf ${wolf.name} from config`));

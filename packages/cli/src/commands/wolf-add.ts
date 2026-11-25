@@ -6,7 +6,7 @@
  *
  * Interactive by default: picks a profile, lets you adjust the attached
  * extensions, and (when Telegram is attached) collects the bot token + owner.
- * Use --yes / flags to skip prompts. Wolfpack only uses the PI runtime.
+ * Use --yes / flags to skip prompts. Wolves run as pi-durable under wolfd.
  */
 
 import fs from "node:fs";
@@ -89,18 +89,12 @@ async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
   }
 
   // 2. Runtime
-  let runtime: string;
-  if (opts.runtime) {
-    runtime = opts.runtime === "pi-durable" || opts.runtime === "wolfd" ? opts.runtime : "pi";
-  } else if (interactive) {
-    const defaultRt = host ? "pi-durable" : "pi";
-    runtime = await select<string>("Runtime", [
-      { label: `pi — interactive CLI agent${!host ? " (recommended for local)" : ""}`, value: "pi" },
-      { label: `pi-durable — persistent background agent${host ? " (recommended for VPS)" : ""}`, value: "pi-durable" },
-    ]);
-  } else {
-    runtime = host ? "pi-durable" : "pi";
+  // Every wolf runs as pi-durable under wolfd (the terminal pi runtime was removed); `wolfd` is the only other value.
+  if (opts.runtime === "pi") {
+    console.error(c.red("terminal pi runtime was removed; use pi-durable"));
+    process.exit(1);
   }
+  const runtime = opts.runtime === "wolfd" ? "wolfd" : "pi-durable";
 
   const profile: WolfProfile =
     opts.profile === "assistant" || opts.profile === "worker"
@@ -374,7 +368,7 @@ function reportCreated(
 ): void {
   console.log(c.green(`✓ Wolf created at ${wolfDir}`));
   console.log(c.dim(`  ID:      ${id}`));
-  console.log(c.dim(`  Runtime: pi`));
+  console.log(c.dim(`  Runtime: ${choices.runtime}`));
   console.log(c.dim(`  Profile: ${choices.profile}`));
   console.log(
     c.dim(

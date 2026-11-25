@@ -199,7 +199,7 @@ export interface TelegramSharedState {
 
 // ─── Extension Definition ──────────────────────────────────────────────────
 
-export type Runtime = "pi" | "pi-durable";
+export type Runtime = "pi-durable";
 
 /** Context passed to extension factory */
 /** Sweep manager for librarian mode */

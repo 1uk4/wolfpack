@@ -413,6 +413,12 @@ export class SubagentManager {
     }
     if (params.isolation !== undefined && params.isolation !== "worktree" && params.isolation !== "none") return fail(`isolation must be "worktree" or "none", got ${JSON.stringify(params.isolation)}`);
 
+    // A profile that declares a cwd is pinned to it (the visualizer writes only into the fenced frames dir): the caller may not move it or isolate it elsewhere.
+    if (def.cwd) {
+      if (params.cwd !== undefined) return fail(`The "${def.name}" agent is pinned to its own working directory (${def.cwd}); remove the cwd parameter.`);
+      if (params.isolation !== undefined && params.isolation !== (def.isolation ?? "none")) return fail(`The "${def.name}" agent is pinned to its own working directory and runs with isolation "${def.isolation ?? "none"}"; remove the isolation parameter.`);
+    }
+
     const { tools, missing } = this.childTools(def);
     const name = this.uniqueName(parent.summary.id, params.name?.trim() || def.name);
     const id = `${this.port.name}/sub-${randomUUID().slice(0, 8)}`;
@@ -1644,7 +1650,8 @@ ${text}`;
   > {
     const tools = parseCommaList(a.def.tools);
     const writer = isWriter(tools);
-    const inGit = insideGit(a.cwd);
+    // A pinned-cwd profile works in a fenced root of its own (e.g. the frames dir): no git checkout or writer guard applies, even when a parent dir (such as $HOME) is a repo.
+    const inGit = a.def.cwd ? false : insideGit(a.cwd);
     const want = a.requested ?? defaultIsolation({ ...(tools ? { tools } : {}), ...(a.def.isolation ? { isolation: a.def.isolation } : {}) }, inGit);
     const inPlace = (note = ""): { ok: true; isolation: "none"; cwd: string; note: string } => ({ ok: true, isolation: "none", cwd: a.cwd, note });
     const notGit = want === "worktree" ? "Notice: the working directory is not in a git repository; the sub-agent runs there without a worktree." : "";

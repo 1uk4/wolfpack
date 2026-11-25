@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error plain .mjs script
 import { buildCommands, classify, runUpdate } from "./runtime-update.mjs";
+// @ts-expect-error plain .mjs script
+import { restartConsole } from "./runtime-preview-console.mjs";
 
 let tmp: string;
 let main: string, intWt: string, rtWt: string, origin: string;
@@ -50,7 +52,7 @@ const ownerMerges = (file: string, body = "x") => {
 	return g(clone, "rev-parse", "HEAD");
 };
 
-const steps = () => ({ build: vi.fn(), refreshExtensions: vi.fn(async () => []) });
+const steps = () => ({ build: vi.fn(), refreshExtensions: vi.fn(async () => []), restartPreviewConsole: vi.fn() });
 const run = (argv: string[], s = steps()) => {
 	const logs: string[] = [];
 	const warns: string[] = [];
@@ -70,6 +72,19 @@ describe("runtime-update", () => {
 		expect(g(intWt, "rev-parse", "HEAD")).toBe(intBefore);
 		expect(g(origin, "rev-parse", "stable")).toBe(owner);
 		expect(g(origin, "for-each-ref", "--format=%(refname)")).toBe("refs/heads/stable");
+	});
+
+	it("restarts the preview console agent after a real update's build, and never on a dry run", async () => {
+		ownerMerges("apps/console/a.tsx");
+		const order: string[] = [];
+		const s = steps();
+		s.build.mockImplementation(() => void order.push("build"));
+		s.restartPreviewConsole.mockImplementation(() => void order.push("restart"));
+		await run([], s);
+		expect(order).toEqual(["build", "restart"]);
+		expect(s.restartPreviewConsole).toHaveBeenCalledWith(rtWt);
+		const dry = await run(["--dry-run"]);
+		expect(dry.s.restartPreviewConsole).not.toHaveBeenCalled();
 	});
 
 	it("--sha <commit> checks out exactly that commit (detached) from origin's branches and builds, so the main channel runs what its manifest names", async () => {
@@ -262,6 +277,35 @@ describe("runtime-update: pnpm checkouts and npm checkouts", () => {
 	it("tells the pnpm checkout to restart with pnpm", () => {
 		expect(classify(["packages/harness/src/a.ts"], [], "pnpm").lines[0]).toBe("restart the stack: pnpm stack restart");
 		expect(classify(["packages/harness/src/a.ts"]).lines[0]).toBe("restart the stack: npm run stack -- restart");
+	});
+});
+
+describe("restartConsole (launchctl stubbed)", () => {
+	const setup = (workingDir?: string) => {
+		const home = path.join(tmp, "home");
+		if (workingDir) {
+			const dir = path.join(home, "Library", "LaunchAgents");
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(path.join(dir, "com.wolfpack.preview-console.plist"), `<dict><key>WorkingDirectory</key><string>${workingDir}</string></dict>`);
+		}
+		const calls: string[][] = [];
+		const launchctl = (...a: string[]) => (calls.push(a), 0);
+		return { home, calls, launchctl, prepare: vi.fn() };
+	};
+
+	it("kicks the agent when it serves the updated runtime, so it stops serving stale HTML against new chunks", () => {
+		const o = setup(path.join(rtWt, "apps/console/.next/standalone"));
+		expect(restartConsole({ home: o.home, runtimeDir: rtWt, uid: 501, launchctl: o.launchctl, prepare: o.prepare })).toBe("restarted");
+		expect(o.calls).toEqual([["kickstart", "-k", "gui/501/com.wolfpack.preview-console"]]);
+		expect(o.prepare).toHaveBeenCalledWith(rtWt);
+	});
+
+	it("leaves the agent alone when none is installed or it serves another checkout", () => {
+		const none = setup();
+		expect(restartConsole({ home: none.home, runtimeDir: rtWt, uid: 501, launchctl: none.launchctl, prepare: none.prepare })).toBe("none");
+		const other = setup(path.join(tmp, "elsewhere/apps/console"));
+		expect(restartConsole({ home: other.home, runtimeDir: rtWt, uid: 501, launchctl: other.launchctl, prepare: other.prepare })).toBe("other-build");
+		expect([...none.calls, ...other.calls]).toEqual([]);
 	});
 });
 

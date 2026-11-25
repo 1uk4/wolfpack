@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { bundleState, sourceRoots } from "./dev-stack-extensions.mjs";
+import { restartConsole, runLaunchctl } from "./runtime-preview-console.mjs";
 
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const tryGit = (cwd, ...args) => {
@@ -165,6 +166,9 @@ const defaultSteps = (pnpmFound) => ({
 		execFileSync(process.execPath, [path.join(wt, "scripts/release-version.mjs"), "--stamp-runtime", wt], { cwd: wt, stdio: "inherit" });
 	},
 	refreshExtensions: refreshDenExtensions,
+	// The preview-console launchd agent (port 3230) keeps serving the old build's HTML after an update; kick it. Mac only.
+	restartPreviewConsole: (wt) =>
+		process.platform === "darwin" ? restartConsole({ home: os.homedir(), runtimeDir: wt, uid: process.getuid(), launchctl: (...a) => runLaunchctl(a) }) : "none",
 });
 
 /** Returns {exitCode, classification, ...}; throws nothing for expected failures. */
@@ -230,6 +234,7 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 			} catch (err) {
 				return fail(`build failed in ${rtWt}: ${err.message}`);
 			}
+			log(`preview console: ${st.restartPreviewConsole(rtWt)}`);
 		}
 		const refreshedSha = await st.refreshExtensions({ repo: rtWt, wolvesDir, dryRun, log });
 		const clsSha = classify(changed, refreshedSha.map((r) => r.wolf), choosePm(rtWt, { pnpmFound }).pm);
@@ -279,6 +284,7 @@ export async function runUpdate({ argv = [], env = {}, cwd = process.cwd(), step
 		} catch (err) {
 			return fail(`build failed in ${rtWt}: ${err.message}`);
 		}
+		log(`preview console: ${st.restartPreviewConsole(rtWt)}`);
 	}
 	log(`${tag}checking den extensions in ${wolvesDir}`);
 	const refreshed = await st.refreshExtensions({ repo: rtWt, wolvesDir, dryRun, log });

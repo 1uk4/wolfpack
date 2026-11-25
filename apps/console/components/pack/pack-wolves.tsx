@@ -15,7 +15,7 @@ import { PromptGraphCanvas } from "@/components/settings/prompt-graph-view";
 import { PageViewer } from "@/components/viewer/page-viewer";
 import { useOpenView } from "@/components/viewer/viewer-context";
 import { closeViewer } from "@/components/viewer/viewer-store";
-import { parseWolfPath, wolfPath, wolfRedirect, DEFAULT_WOLF_TAB } from "@/src/core/pack/wolf-path";
+import { parseWolfPath, wolfPath, wolfRedirect, DEFAULT_WOLF_TAB } from "@/src/core";
 import { VIEW_PARAM, noteUrlWrite } from "@/components/viewer/viewer-url";
 import { buildPromptBlocks, PromptBlocksContext } from "@/components/viewer/renderers/prompt-view";
 import { WolfAllSettings, WolfRestartBar, type WolfSectionId, type WolfSettingsView } from "@/components/pack/wolf-all-settings";

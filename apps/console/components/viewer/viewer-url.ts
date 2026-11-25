@@ -85,5 +85,5 @@ export function useViewerUrlSync(wolf: string, threadId: string, host?: Pick<Vie
 		if (new URLSearchParams(search).get(VIEW_PARAM) === topKey) return;
 		const qs = nextSearch(search, topKey);
 		router.replace(qs ? `${pathname}?${qs}` : pathname);
-	}, [topKey, search, pathname, router]);
+	}, [topKey, search, pathname, router, host]);
 }

@@ -3,10 +3,10 @@ import { useCallback, useSyncExternalStore } from "react";
 /**
  * Visualization mode of a thread page: the transcript and the page composer hide, the Viewer takes the full width and the
  * floating chat bar shows over it. Two small stores:
- *  - the owner's choice, per thread, in localStorage under `wolfpack:viz:<wolf>:<threadId>` ("1" when on, key removed when off);
+ *  - the owner's choice, per thread, in localStorage under `wolfpack:viz:<threadId>` (thread ids already start with the wolf name) ("1" when on, key removed when off);
  *  - which thread page is IN the mode right now (set by that page), which the chat bar reads to show itself on that page.
  */
-export const vizKey = (wolf: string, threadId: string) => `wolfpack:viz:${wolf}:${threadId}`;
+export const vizKey = (wolf: string, threadId: string) => (threadId.startsWith(`${wolf}/`) ? `wolfpack:viz:${threadId}` : `wolfpack:viz:${wolf}:${threadId}`);
 
 const listeners = new Set<() => void>();
 const subscribe = (cb: () => void) => {

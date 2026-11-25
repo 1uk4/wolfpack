@@ -41,6 +41,14 @@ const { setVizActive, vizKey } = await import("../../../components/viewer/viz-mo
 
 registerViewRenderer("kb", () => <div>kb body</div>);
 
+/** Lets a test unmount only the thread page (the bar and providers stay), like navigating away. */
+let hideChat: (() => void) | null = null;
+function Gate({ children }: { children: React.ReactNode }) {
+	const [shown, setShown] = React.useState(true);
+	hideChat = () => setShown(false);
+	return shown ? <>{children}</> : null;
+}
+
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
 const realFetch = globalThis.fetch;
 let root: Root | null = null;
@@ -62,7 +70,9 @@ async function mount() {
 					<AttachedThreadProvider>
 						<ChatBar />
 						<MemoryEventsProvider connect={inertSource}>
-							<ThreadChat wolf="1uk4" slug="home" threadId={TID} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />
+							<Gate>
+								<ThreadChat wolf="1uk4" slug="home" threadId={TID} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />
+							</Gate>
 						</MemoryEventsProvider>
 					</AttachedThreadProvider>
 				</ServerEventsProvider>
@@ -145,6 +155,17 @@ describe("thread visualization mode", () => {
 		assert.equal(mainHidden(), false);
 		assert.equal(store.get(VIZ), undefined);
 		assert.equal(q('[data-testid="viz-toggle"]'), null);
+	});
+
+	it("leaving the page while the mode is on docks the bar, so it does not stay attached to this thread", async () => {
+		await mount();
+		await openKb();
+		await click(q('[data-testid="viz-toggle"]')!);
+		await settle(60);
+		assert.ok(q('[data-testid="chat-bar"]'));
+		await act(async () => hideChat!());
+		await settle(60);
+		assert.equal(q('[data-testid="chat-bar"]'), null);
 	});
 
 	it("a draft typed in the bar during the mode is in the page composer after leaving it", async () => {

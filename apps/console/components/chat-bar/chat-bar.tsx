@@ -477,7 +477,8 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	const hasSurface = (BAR_EXTRAS.cards || BAR_EXTRAS.peek) && (cards.pending.length > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error);
 
 	// Visualization mode: chat and questionnaires only (no needs-you badge, no thread switcher), and on the phone the dock sits over the viewer's full-screen sheet (z-60).
-	const vizOn = !!useVizActive();
+	const vizActive = useVizActive();
+	const vizOn = !!vizActive && vizActive.wolf === target.wolf && vizActive.threadId === target.threadId;
 	const badge = BAR_EXTRAS.badge && !vizOn && (waiting.length > 0 || approvals.length > 0) ? <NeedsYouBadge waiting={waiting} all={all} approvals={approvals} /> : null;
 	const chip = (
 		<button
@@ -586,7 +587,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						</div>
 					)}
 				</div>
-				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
+				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 			</>

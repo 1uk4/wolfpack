@@ -15,9 +15,9 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { loadWorkState } from "@wolfpack/kb/client";
+import { loadWorkState, type WorkItem } from "@wolfpack/kb/client";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
-import type { ApprovalAuditLine, ApprovalRequest, CreateApprovalRequestBody, GraduationContribution } from "@wolfpack/protocol";
+import { capSummary, type ApprovalAuditLine, type ApprovalRequest, type CreateApprovalRequestBody, type DirectGraduateBody, type DirectGraduateResponse, type GraduationContribution } from "@wolfpack/protocol";
 import { ContributionError, storeContribution } from "./contributions.js";
 import { HubError } from "./errors.js";
 import { applyOps, graduateItem, probeWorkStore } from "./work-writes.js";
@@ -54,10 +54,33 @@ export function createApprovalStore(d: ApprovalDeps) {
     writeFileSync(tmp, JSON.stringify({ requests }, null, 1), { mode: 0o600 });
     renameSync(tmp, file);
   };
-  const itemOf = (id: string) => {
-    const item = loadWorkState(d.roots).get(id as never);
+  const itemOf = (id: string): WorkItem => {
+    const item = loadWorkState(d.roots).get(id as WorkItem["id"]);
     if (!item) throw new HubError("not_found", `Work item not found: ${id}`);
     return item;
+  };
+
+  /**
+   * The shared graduate action (request approval and the direct path): deliver the set, mark graduated, run `afterSend` (the direct
+   * path writes its audit line here: only once delivery succeeded, and before the archive closes the Record), then archive deepest
+   * first. `resume` is a retry of a half-finished graduation (marked graduated, never archived): the set was already delivered, so
+   * only the archive runs.
+   */
+  const sendAndArchive = (workId: string, wolf: string, item: { domain: unknown }, contributions: GraduationContribution[], at: string, toArchive: string[], tag: string, resume = false, afterSend?: () => void): void => {
+    if (!resume) {
+      deliverContributions(d, wolf, item, contributions, at);
+      graduateItem(d.roots, workId);
+    }
+    afterSend?.();
+    for (const id of toArchive) {
+      try {
+        applyOps(d.roots, id, [{ op: "stage", to: "archived" }]);
+      } catch (e) {
+        // A descendant that refuses (guard error) is skipped; the rest, and the item, still archive.
+        if (id === workId) throw e;
+        console.warn(`[work-approvals] ${tag}: could not archive ${id}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
   };
 
   const store = {
@@ -80,7 +103,7 @@ export function createApprovalStore(d: ApprovalDeps) {
         if (!body.target) throw new HubError("invalid_request", "a reassign request needs a target wolf");
         if (!d.knownWolf(body.target)) throw new HubError("invalid_request", `unknown assignee ${JSON.stringify(body.target).slice(0, 80)}: not an active wolf known to this hub`);
       }
-      if (body.kind === "graduate" && item.graduated) throw new HubError("invalid_request", `${workId} is already graduated`);
+      if (body.kind === "graduate" && item.graduated && item.stage === "archived") throw new HubError("invalid_request", `${workId} is already graduated`);
       if (body.kind === "archive" && item.stage === "archived") throw new HubError("invalid_request", `${workId} is already archived`);
       probeWorkStore(d.roots, String(item.domain));
       const req: ApprovalRequest = {
@@ -96,6 +119,34 @@ export function createApprovalStore(d: ApprovalDeps) {
       save([...all, req]);
       return req;
     },
+    /** Inside the write queue. The owner already approved (card pick, Graduate button): the approval is recorded inline, no request exists. */
+    graduateDirect(workId: string, body: DirectGraduateBody, by: Decider, fallbackWolf: string): { done: DirectGraduateResponse; closed: ApprovalRequest[] } {
+      const item = itemOf(workId);
+      // Graduated AND archived is done. Graduated but not archived is a half-finished earlier try (the archive failed): resume it.
+      const resume = !!item.graduated && item.stage !== "archived";
+      if (item.graduated && !resume) throw new HubError("invalid_request", `${workId} is already graduated`);
+      if (item.stage === "archived") throw new HubError("invalid_request", `${workId} is already archived`);
+      probeWorkStore(d.roots, String(item.domain));
+      const at = now().toISOString();
+      const toArchive = archiveOrder(d.roots, workId);
+      const sent = resume ? 0 : body.contributions.length;
+      const summary = body.summary ? `; summary: ${capSummary(body.summary)}` : "";
+      // The audit line is written AFTER delivery succeeded (so a failed send leaves no "Approved" claim in the Record) and BEFORE the
+      // archive (archiving closes the Record). A resumed try says so instead of repeating the send.
+      const audit = (): void => {
+        const text = resume
+          ? `Archive resumed by ${by.actor} on device ${by.device} at ${at} via ${body.via}: graduate (direct), the set was already sent, archived ${toArchive.length}`
+          : `Approved by ${by.actor} on device ${by.device} at ${at} via ${body.via}: graduate (direct), sent: ${sent} contributions, archived ${toArchive.length}${summary}`;
+        applyOps(d.roots, workId, [{ op: "recordAppend", lines: [{ at, src: "approval", kind: "decision", text, ids: [] }] }]);
+      };
+      const wolf = body.wolf ?? (String(item.assignee ?? "") || fallbackWolf);
+      sendAndArchive(workId, wolf, item, body.contributions, at, toArchive, `direct ${workId}`, resume, audit);
+      // The item is graduated: any pending graduate request for it is moot (approving it later would send the set twice). Close it as rejected, with the reason.
+      const all = load();
+      const closed = all.filter((r) => r.workId === workId && r.kind === "graduate" && r.status === "pending").map((r): ApprovalRequest => ({ ...r, status: "rejected", decidedAt: at, decidedBy: { device: by.device, actor: by.actor }, reason: "superseded: the owner graduated the item directly" }));
+      if (closed.length) save(all.map((r) => closed.find((c) => c.id === r.id) ?? r));
+      return { done: { itemId: workId, domain: String(item.domain), sent, archived: toArchive.length, via: body.via, approvedBy: { actor: by.actor, device: by.device, at } }, closed };
+    },
     /** Inside the write queue. Returns the approved request. */
     approve(rid: string, by: Decider): ApprovalRequest {
       const all = load();
@@ -105,29 +156,26 @@ export function createApprovalStore(d: ApprovalDeps) {
       const item = itemOf(req.workId);
       probeWorkStore(d.roots, String(item.domain));
       const at = now().toISOString();
+      if (req.kind === "graduate" && item.graduated && item.stage === "archived") {
+        // A stale request: the item was graduated another way. Close it (kept rejected, with the reason) so it is not left pending, then refuse.
+        save(all.map((r) => (r.id === rid ? { ...req, status: "rejected" as const, decidedAt: at, decidedBy: { device: by.device, actor: by.actor }, reason: "superseded: the item was already graduated" } : r)));
+        throw new HubError("invalid_request", `${req.workId} is already graduated`);
+      }
+      const resume = req.kind === "graduate" && !!item.graduated && item.stage !== "archived";
       const contributions: GraduationContribution[] = req.kind === "graduate" ? (req.preview?.contributions ?? []) : [];
       // Graduating archives the item and every descendant not archived yet (the retired direct path did the same). Deepest first, so a parent never archives before its children.
       const toArchive = req.kind === "graduate" ? archiveOrder(d.roots, req.workId) : [];
-      const outcome = req.kind === "graduate" ? `sent: ${contributions.length} contributions, archived ${toArchive.length}` : req.kind === "archive" ? "stage archived" : `assignee ${req.target}`;
+      const outcome = req.kind === "graduate" ? (resume ? `the set was already sent, archived ${toArchive.length}` : `sent: ${contributions.length} contributions, archived ${toArchive.length}`) : req.kind === "archive" ? "stage archived" : `assignee ${req.target}`;
       const audit: ApprovalAuditLine = { requestId: rid, kind: req.kind, actor: by.actor, device: by.device, at, outcome };
       // (a) The audit line, BEFORE the action: archiving closes the Record.
       applyOps(d.roots, req.workId, [{
         op: "recordAppend",
-        lines: [{ at, src: "approval", kind: "decision", text: `Approved by ${audit.actor} on device ${audit.device} at ${at}: ${req.kind} (${rid}), ${outcome}`, ids: [rid] }],
+        lines: [{ at, src: "approval", kind: "decision", text: `${resume ? "Archive resumed by" : "Approved by"} ${audit.actor} on device ${audit.device} at ${at}: ${req.kind} (${rid}), ${outcome}`, ids: [rid] }],
       }]);
       // (b) The action.
       if (req.kind === "graduate") {
-        deliverContributions(d, req, item as { domain: unknown }, contributions, at);
-        graduateItem(d.roots, req.workId);
-        for (const id of toArchive) {
-          try {
-            applyOps(d.roots, id, [{ op: "stage", to: "archived" }]);
-          } catch (e) {
-            // A descendant that refuses (guard error) is skipped; the rest, and the item, still archive.
-            if (id === req.workId) throw e;
-            console.warn(`[work-approvals] ${rid}: could not archive ${id}: ${e instanceof Error ? e.message : String(e)}`);
-          }
-        }
+        // The same retry guard as the direct path: marked graduated but never archived means the set already went out.
+        sendAndArchive(req.workId, req.requestedBy.wolf, item, contributions, at, toArchive, rid, resume);
       } else if (req.kind === "archive") {
         applyOps(d.roots, req.workId, [{ op: "stage", to: "archived" }]);
       } else {
@@ -173,11 +221,11 @@ function archiveOrder(roots: KbRoots, rootId: string): string[] {
 }
 
 /** The stored preview set goes to the hub's contribution lane under the requesting wolf (the lane its own confirm would have used). */
-function deliverContributions(d: ApprovalDeps, req: ApprovalRequest, item: { domain: unknown }, contributions: GraduationContribution[], at: string): void {
+function deliverContributions(d: ApprovalDeps, wolf: string, item: { domain: unknown }, contributions: GraduationContribution[], at: string): void {
   const submitted = at.slice(0, 16).replace("T", " ");
   for (const c of contributions) {
     const json = {
-      from: req.requestedBy.wolf,
+      from: wolf,
       denTopicId: c.id,
       change: c.target ? "merge" : "create",
       contentHash: contentHash(c.body),

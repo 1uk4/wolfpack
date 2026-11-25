@@ -1,12 +1,14 @@
 /**
- * Follows the hub's `GET /v1/events` for `work-request-changed` and hands approved ones to the caller. The hub performs the
+ * Follows the hub's `GET /v1/events` for `work-request-changed` and hands approved ones to the caller, and likewise for `work-graduated`
+ * (the owner graduated an item directly, no request). The hub performs the
  * graduation itself on owner approval; wolfd only has to close the feature thread and unbind the other holders live.
  * Reconnects with backoff; an event missed while offline is caught by `closedReasonOf` (the item is graduated/archived).
  */
 import { hubTargetFromEnv } from "@wolfpack/memory";
 
 export interface ApprovedRequest {
-  requestId: string;
+  /** Absent for a direct graduation (`work-graduated`): no request exists. */
+  requestId?: string;
   itemId: string;
   kind: "graduate" | "archive" | "reassign";
   status: "approved";
@@ -65,8 +67,9 @@ export function watchApprovals(
         for await (const data of dataFrames(res.body)) {
           let ev: Partial<ApprovedRequest> & { type?: string };
           try { ev = JSON.parse(data); } catch { continue; }
-          if (ev.type !== "work-request-changed" || ev.status !== "approved" || typeof ev.itemId !== "string") continue;
-          try { await onApproved(ev as ApprovedRequest); } catch (e) { log(`approval ${ev.requestId}: ${e instanceof Error ? e.message : String(e)}`); }
+          if (ev.type === "work-graduated" && typeof ev.itemId === "string") ev = { itemId: ev.itemId, kind: "graduate", status: "approved", ...(typeof ev.domain === "string" ? { domain: ev.domain } : {}) };
+          else if (ev.type !== "work-request-changed" || ev.status !== "approved" || typeof ev.itemId !== "string") continue;
+          try { await onApproved(ev as ApprovedRequest); } catch (e) { log(`approval ${ev.requestId ?? ev.itemId}: ${e instanceof Error ? e.message : String(e)}`); }
         }
       } catch (e) {
         if (ctl.signal.aborted) return;

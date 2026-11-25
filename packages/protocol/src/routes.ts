@@ -64,7 +64,7 @@ import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from
 import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
 import { RebuildApplyRequestSchema, RebuildApplyResponseSchema, RebuildListResponseSchema, RebuildPreviewRequestSchema, RebuildPreviewResponseSchema, RebuildRestoreRequestSchema, RebuildRestoreResponseSchema } from "./kb-rebuild.js";
-import { ApprovalListResponseSchema, ApprovalResponseSchema, CreateApprovalRequestBodySchema } from "./work-approvals.js";
+import { ApprovalListResponseSchema, ApprovalResponseSchema, CreateApprovalRequestBodySchema, DirectGraduateBodySchema, DirectGraduateResponseSchema } from "./work-approvals.js";
 import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
 
 export { ATTACHMENT_NAME_HEADER } from "./attachments.js";
@@ -565,6 +565,7 @@ export const ROUTES = {
    * `hubListApprovals`: `?status=pending|approved|rejected` (default pending), `?workId=`.
    */
   hubCreateApproval: { scope: "hub", method: "POST", path: "/v1/work/:id/requests", body: CreateApprovalRequestBodySchema, response: { kind: "json", schema: ApprovalResponseSchema }, status: [201], error: err },
+  hubGraduateDirect: { scope: "hub", method: "POST", path: "/v1/work/:id/graduate-direct", body: DirectGraduateBodySchema, response: { kind: "json", schema: DirectGraduateResponseSchema }, status: [200], error: err },
   hubListApprovals: { scope: "hub", method: "GET", path: "/v1/work/requests", response: { kind: "json", schema: ApprovalListResponseSchema }, status: [200], error: err },
   hubGetApproval: { scope: "hub", method: "GET", path: "/v1/work/requests/:rid", response: { kind: "json", schema: ApprovalResponseSchema }, status: [200], error: err },
   hubApproveApproval: { scope: "hub", method: "POST", path: "/v1/work/requests/:rid/approve", response: { kind: "json", schema: ApprovalResponseSchema }, status: [200], error: err },

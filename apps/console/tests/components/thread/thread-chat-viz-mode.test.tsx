@@ -7,7 +7,7 @@ import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
-import { after, afterEach, describe, it } from "node:test";
+import { after, afterEach, beforeEach, describe, it } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { parseHTML } from "linkedom";
 
@@ -27,6 +27,52 @@ Object.assign(globalThis, {
 });
 Object.assign(dom.window.Element.prototype, { attachEvent() {}, detachEvent() {} });
 
+// ---- fake mic + Deepgram socket (the bar's dictation) ----
+class FakeWS {
+	static OPEN = 1;
+	static CONNECTING = 0;
+	static last: FakeWS | null = null;
+	readyState = 0;
+	private ls = new Map<string, ((ev: unknown) => void)[]>();
+	constructor() {
+		FakeWS.last = this;
+	}
+	addEventListener(t: string, f: (ev: unknown) => void) {
+		this.ls.set(t, [...(this.ls.get(t) ?? []), f]);
+	}
+	send() {}
+	close() {
+		this.readyState = 3;
+	}
+	emit(t: string, ev: unknown = {}) {
+		for (const f of this.ls.get(t) ?? []) f(ev);
+	}
+	open() {
+		this.readyState = 1;
+		this.emit("open");
+	}
+	final(text: string) {
+		this.emit("message", { data: JSON.stringify({ type: "Results", is_final: true, channel: { alternatives: [{ transcript: text }] } }) });
+	}
+}
+class FakeNode {
+	port: { onmessage: unknown } = { onmessage: null };
+	connect() {}
+	disconnect() {}
+}
+class FakeCtx {
+	state = "running";
+	destination = {};
+	audioWorklet = { addModule: async () => {} };
+	createMediaStreamSource() {
+		return new FakeNode();
+	}
+	async resume() {}
+	async suspend() {}
+}
+Object.assign(globalThis, { WebSocket: FakeWS, AudioContext: FakeCtx, AudioWorkletNode: FakeNode });
+Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "test", mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } } });
+
 const { MockConsoleClient, FIXTURE_THREAD } = await import("@wolfpack/client");
 const { cardsOfThread, threadMessagesToNative } = await import("../../../src/core/index.ts");
 const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx");
@@ -37,6 +83,7 @@ const { AttachedThreadProvider } = await import("../../../components/chat-bar/at
 const { ChatBar } = await import("../../../components/chat-bar/chat-bar.tsx");
 const { registerViewRenderer } = await import("../../../components/viewer/registry.tsx");
 const vs = await import("../../../components/viewer/viewer-store.ts");
+const { ATTACHED_KEY, BAR_EXTRAS } = await import("../../../src/core/thread/chat-bar.ts");
 const { setVizActive, vizKey } = await import("../../../components/viewer/viz-mode.ts");
 
 registerViewRenderer("kb", () => <div>kb body</div>);
@@ -56,8 +103,19 @@ const TID = FIXTURE_THREAD.id;
 const VIZ = vizKey("1uk4", TID);
 const DRAFT = `wolfpack:draft:1uk4:${TID}`;
 
-async function mount() {
-	globalThis.fetch = (async () => new Response("{}", { status: 404 })) as typeof fetch;
+const th = (id: string, status = "idle") => ({ id, title: id, kind: "feature", status });
+let lists = false; // the wolf and thread lists (the badge and switcher need them); off, they 404 like the other tests
+const barFetch = (async (input: RequestInfo | URL) => {
+	const url = String(input);
+	if (url.includes("/api/stt/token")) return new Response(JSON.stringify({ token: "tok" }), { status: 200 });
+	if (lists && url === "/api/wolves") return Response.json({ wolves: [{ name: "1uk4" }] });
+	if (lists && url === "/api/wolves/1uk4/threads") return Response.json({ threads: [th("1uk4/other"), th("1uk4/waiting", "needs-you")] });
+	if (lists && url === "/api/needs-you") return Response.json({ items: [] });
+	return new Response("{}", { status: 404 });
+}) as typeof fetch;
+
+async function mount(opts: { chat?: boolean; start?: string } = {}) {
+	globalThis.fetch = barFetch;
 	const client = new MockConsoleClient({ delayMs: 0, script: [{ kind: "text", text: "ok" }] });
 	const detail = await client.getThread(TID);
 	const host = document.createElement("div");
@@ -65,13 +123,13 @@ async function mount() {
 	root = createRoot(host);
 	await act(async () => {
 		root!.render(
-			<FakeNav start="/wolf/1uk4/thread/home">
+			<FakeNav start={opts.start ?? "/wolf/1uk4/thread/home"}>
 				<ServerEventsProvider connect={() => ({ close() {}, onOpen() {}, onEvent() {} })}>
 					<AttachedThreadProvider>
 						<ChatBar />
 						<MemoryEventsProvider connect={inertSource}>
 							<Gate>
-								<ThreadChat wolf="1uk4" slug="home" threadId={TID} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />
+								{opts.chat === false ? null : <ThreadChat wolf="1uk4" slug="home" threadId={TID} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />}
 							</Gate>
 						</MemoryEventsProvider>
 					</AttachedThreadProvider>
@@ -179,5 +237,55 @@ describe("thread visualization mode", () => {
 		const page = q('[data-testid="thread-main"] [data-testid="composer"] textarea') as HTMLTextAreaElement;
 		assert.equal(page.value, "half a thought");
 		assert.equal(store.get(DRAFT), "half a thought");
+	});
+
+	it("a stored choice survives a reload where the viewer state hydrates after the first effects, and the mode is on once the view appears", async () => {
+		store.set(VIZ, "1");
+		await mount(); // no view yet: the viewer store has not hydrated
+		await settle(60);
+		assert.equal(store.get(VIZ), "1", "an unhydrated viewer is not a closing view");
+		assert.equal(mainHidden(), false);
+		await openKb(); // the view arrives late
+		await settle(60);
+		assert.equal(mainHidden(), true);
+		assert.equal(store.get(VIZ), "1");
+	});
+
+	describe("with the bar's extras on", () => {
+		const saved = { ...BAR_EXTRAS };
+		beforeEach(() => void ((lists = true), Object.assign(BAR_EXTRAS, { badge: true, switcher: true })));
+		afterEach(() => void ((lists = false), Object.assign(BAR_EXTRAS, saved)));
+
+		it("a bar attached to another thread keeps its needs-you badge and switcher while viz is on for this one", async () => {
+			store.set(ATTACHED_KEY, JSON.stringify({ wolf: "1uk4", slug: "other", threadId: "1uk4/other" }));
+			await mount({ chat: false, start: "/kb" }); // a page that is not a thread page, so the bar shows for its own target
+			await act(async () => setVizActive({ wolf: "1uk4", threadId: TID }));
+			await settle(80);
+			assert.ok(q('[data-testid="chat-bar"]'), "the bar shows for its own target");
+			assert.equal(q('[data-testid="chat-bar-needs-you"]')?.getAttribute("data-thread"), "1uk4/waiting");
+			await click(q('[data-testid="chat-bar-chip"]')!);
+			assert.ok(q('[data-testid="chat-bar-switcher"]'), "the switcher opens");
+		});
+	});
+
+	it("dictating from the bar in the mode keeps the bar up and un-docked, and the dictated draft is in the page composer after leaving", async () => {
+		await mount();
+		await openKb();
+		await click(q('[data-testid="viz-toggle"]')!);
+		await settle(80);
+		await click(q('[data-testid="chat-bar"] [data-testid="dictation-toggle"]')!);
+		await settle(40);
+		const ws = FakeWS.last!;
+		await act(async () => ws.open());
+		await act(async () => ws.final("spoken in viz"));
+		await act(async () => ws.emit("close", { code: 1000 }));
+		await settle(80);
+		assert.ok(q('[data-testid="chat-bar"]'), "the bar is still showing");
+		assert.ok(store.get(ATTACHED_KEY), "not docked");
+		assert.equal(mainHidden(), true);
+		await click(q('[data-testid="viz-toggle"]')!);
+		await settle(80);
+		const page = q('[data-testid="thread-main"] [data-testid="composer"] textarea') as HTMLTextAreaElement;
+		assert.equal(page.value, "spoken in viz");
 	});
 });

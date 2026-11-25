@@ -52,8 +52,7 @@ WRITING RULES:
   then the detail. The summary is the whole lede (one paragraph, however many
   sentences it needs). Start the detail at its first "## " section: do NOT
   repeat the title as a "# " heading, do NOT repeat the summary at its top.
-- Never write commit hashes, task ids, "N tests pass" lines, or
-  "deployed"/"verified" status lines anywhere in the entry, and never repeat
+- Never write commit hashes, task ids, test counts, or deploy/build status anywhere in the entry, and never repeat
   the summary in the detail. A work id appears only as a History line's closing
   citation, never in the title, summary, body or properties. Leave out progress notes; keep only what is true
   of the subject.

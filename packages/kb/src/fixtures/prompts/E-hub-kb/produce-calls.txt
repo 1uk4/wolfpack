@@ -55,8 +55,7 @@ WRITING RULES:
   then the detail. The summary is the whole lede (one paragraph, however many
   sentences it needs). Start the detail at its first "## " section: do NOT
   repeat the title as a "# " heading, do NOT repeat the summary at its top.
-- Never write commit hashes, task ids, "N tests pass" lines, or
-  "deployed"/"verified" status lines anywhere in the entry, and never repeat
+- Never write commit hashes, task ids, test counts, or deploy/build status anywhere in the entry, and never repeat
   the summary in the detail. A work id appears only as a History line's closing
   citation, never in the title, summary, body or properties. Leave out progress notes; keep only what is true
   of the subject.
@@ -182,8 +181,7 @@ WRITING RULES:
   then the detail. The summary is the whole lede (one paragraph, however many
   sentences it needs). Start the detail at its first "## " section: do NOT
   repeat the title as a "# " heading, do NOT repeat the summary at its top.
-- Never write commit hashes, task ids, "N tests pass" lines, or
-  "deployed"/"verified" status lines anywhere in the entry, and never repeat
+- Never write commit hashes, task ids, test counts, or deploy/build status anywhere in the entry, and never repeat
   the summary in the detail. A work id appears only as a History line's closing
   citation, never in the title, summary, body or properties. Leave out progress notes; keep only what is true
   of the subject.
@@ -330,8 +328,7 @@ WRITING RULES:
   then the detail. The summary is the whole lede (one paragraph, however many
   sentences it needs). Start the detail at its first "## " section: do NOT
   repeat the title as a "# " heading, do NOT repeat the summary at its top.
-- Never write commit hashes, task ids, "N tests pass" lines, or
-  "deployed"/"verified" status lines anywhere in the entry, and never repeat
+- Never write commit hashes, task ids, test counts, or deploy/build status anywhere in the entry, and never repeat
   the summary in the detail. A work id appears only as a History line's closing
   citation, never in the title, summary, body or properties. Leave out progress notes; keep only what is true
   of the subject.
@@ -455,8 +452,7 @@ WRITING RULES:
   then the detail. The summary is the whole lede (one paragraph, however many
   sentences it needs). Start the detail at its first "## " section: do NOT
   repeat the title as a "# " heading, do NOT repeat the summary at its top.
-- Never write commit hashes, task ids, "N tests pass" lines, or
-  "deployed"/"verified" status lines anywhere in the entry, and never repeat
+- Never write commit hashes, task ids, test counts, or deploy/build status anywhere in the entry, and never repeat
   the summary in the detail. A work id appears only as a History line's closing
   citation, never in the title, summary, body or properties. Leave out progress notes; keep only what is true
   of the subject.
@@ -527,4 +523,4 @@ OVERFLOW: not allowed (leave out anything about another subject)
 
 YOUR PREVIOUS ANSWER FAILED THESE CHECKS:
 - commit-hash: 1 commit-hash-like token(s): 3f2a9c1b4d5e (e.g. "3f2a9c1b4d5e")
-Write the entry again and fix every one. If the body is over the size cap, cut redundancy and anything off the entry's subject (never drop History lines). Commit hashes, task ids, test counts, deploy status and dated headings are never part of an entry; a work id appears only as the closing citation of a History line; History lines carry dates and reasons only. A [[link]] names a real entry id only: write anything else as plain words.
+Write the entry again and fix every one. If the body is over the size cap, cut redundancy and anything off the entry's subject (never drop History lines). Never write commit hashes, task ids, test counts, or deploy/build status, or dated headings, in an entry; a work id appears only as the closing citation of a History line; History lines carry dates and reasons only. A [[link]] names a real entry id only: write anything else as plain words.

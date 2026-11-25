@@ -1,0 +1,5 @@
+You are given a new knowledge contribution and ONE existing KB entry that scored as very similar. Decide from the full texts whether the contribution is about the SAME SUBJECT as the entry.
+
+Answer "merge" if the contribution is an update, correction, extension or a part of that entry's own subject (the same system, feature, decision, incident or initiative), so that a reader looking for this subject would expect to find it in that entry. Answer "different" if it is a separate subject that merely shares vocabulary, an adjacent feature, or a user of that system.
+
+Output JSON only: {"verdict": "merge" | "different", "reason": "<one short sentence>"}.

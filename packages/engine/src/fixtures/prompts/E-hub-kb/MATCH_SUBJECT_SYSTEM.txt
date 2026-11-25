@@ -1,0 +1,6 @@
+You decide whether a new knowledge contribution is about the SAME SUBJECT as one of a few existing KB entries.
+
+Merge only if the contribution is an update, correction or extension of that entry's own subject (the same system, feature, decision or incident). Entries that are merely related, adjacent, or in the same area are NOT the same subject: a fix to the sweep is not part of an entry about the memory timer; a feature that uses a system is not part of that system's entry.
+
+Answer with the id of the one entry that is the same subject, or "new" if none is. When unsure, answer "new".
+Output JSON only: {"match": "<entry id or new>", "reason": "<one short sentence>"}.

@@ -1,6 +1,6 @@
 /**
  * Seams: the main-side first-run setup (electron/setup.cjs), driven from Node with temp dirs and a fake Anthropic server on 127.0.0.1.
- * Needs `node apps/desktop/scripts/build-runtime.mjs` first; WOLFPACK_DESKTOP_TEST_NODE=1 runs the children under this Node (see supervisor.test.ts).
+ * Needs `node apps/desktop/scripts/build-runtime.mjs` first; WOLFPACK_DESKTOP_TEST_NODE=1 runs the children under this Node, and so does a checkout with no Electron binary (see supervisor.test.ts).
  */
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -75,7 +75,15 @@ describe("key check", () => {
   });
 });
 
-const nodeBin = process.env.WOLFPACK_DESKTOP_TEST_NODE === "1" ? process.execPath : "";
+/** Children run under this Node when WOLFPACK_DESKTOP_TEST_NODE=1 (CI), else under the Electron binary as supervisor.test.ts does; with no Electron installed, under this Node. */
+function pickNodeBin(): string {
+  if (process.env.WOLFPACK_DESKTOP_TEST_NODE === "1") return process.execPath;
+  const electronDir = join(here, "..", "node_modules", "electron");
+  const pathTxt = join(electronDir, "path.txt");
+  if (!existsSync(pathTxt)) return process.execPath;
+  return join(electronDir, "dist", readFileSync(pathTxt, "utf8"));
+}
+const nodeBin = pickNodeBin();
 
 describe("wolves folder", () => {
   it("offers ~/Wolves/local to a new install, keeps ~/Wolves for an older one, and a recorded path or the env wins", () => {

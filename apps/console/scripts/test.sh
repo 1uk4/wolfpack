@@ -15,6 +15,10 @@ fi
 if [ "$#" -eq 0 ]; then
   # tests/ mirrors the source tree, so collect recursively.
   set -- $(find tests -type f -name '*.test.ts' -o -name '*.test.tsx' | sort)
+  # CONSOLE_TEST_SHARD=N/M (CI) runs only shard N of M of the sorted list; unset runs everything.
+  if [ -n "${CONSOLE_TEST_SHARD:-}" ]; then
+    set -- $(node scripts/shard-files.mjs "$CONSOLE_TEST_SHARD" "$@")
+  fi
 fi
 # Per-file limit; keep the default equal to CONSOLE_FILE_TIMEOUT_MS in packages/cli/src/test-runner.ts.
 NODE_ENV=test exec "$TSX" --test --test-timeout="${CONSOLE_TEST_TIMEOUT_MS:-120000}" "$@"

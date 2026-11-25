@@ -1,6 +1,6 @@
 /**
  * Runs the wrapper through the REAL claude-stateless bridge (`pi-claude-bridge-stateless/stateless`, npm alias for
- * 1uk4/pi-claude-bridge @91b1fc4d, dist/stateless/provider.js), the package claudeStatelessFactory imports at runtime.
+ * 1uk4/pi-claude-bridge @91f9437e, dist/stateless/provider.js), the package claudeStatelessFactory imports at runtime.
  * NOT `pi-claude-bridge` (durable-core), which is the separate claude-bridge provider with no error_max_turns handling.
  * Only the SDK query is faked.
  */

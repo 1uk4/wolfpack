@@ -11,13 +11,13 @@ export type ViewDescriptor = {
 
 /**
  * Validates a frame descriptor from untrusted data (a show_view object, stored state). The file is named `path` (alias `id`),
- * relative to the wolf's frames dir. `fallbackWolf` fills a missing wolf. Null unless kind is "frame" and wolf and path are non-empty strings.
+ * relative to the wolf's frames dir. `wolf` is the thread's own wolf and is the only wolf ever used: any `wolf` field in the untrusted
+ * data is ignored, so one wolf cannot point its view at another wolf's frames. Null unless kind is "frame" and wolf and path are non-empty strings.
  */
-export function parseFrameDescriptor(d: unknown, fallbackWolf?: string): ViewDescriptor | null {
+export function parseFrameDescriptor(d: unknown, wolf: string): ViewDescriptor | null {
 	if (!d || typeof d !== "object") return null;
 	const o = d as Record<string, unknown>;
 	const path = typeof o.path === "string" ? o.path : o.id;
-	const wolf = typeof o.wolf === "string" ? o.wolf : fallbackWolf;
 	if (o.kind !== "frame" || !wolf || typeof path !== "string" || !path) return null;
 	return {
 		kind: "frame",

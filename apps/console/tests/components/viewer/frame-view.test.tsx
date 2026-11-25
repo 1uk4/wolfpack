@@ -17,7 +17,7 @@ Object.assign(globalThis, {
 	IS_REACT_ACT_ENVIRONMENT: true,
 });
 
-const { FrameViewRenderer } = await import("../../../components/viewer/renderers/frame-view.tsx");
+const { FrameViewRenderer, FRAME_CSP } = await import("../../../components/viewer/renderers/frame-view.tsx");
 const { ViewerActionsContext } = await import("../../../components/viewer/viewer-actions.ts");
 const { parseFrameDescriptor } = await import("../../../components/viewer/view-descriptor.ts");
 
@@ -73,10 +73,35 @@ describe("frame renderer", () => {
 		assert.equal(attr(f, "referrerpolicy"), "no-referrer");
 		const doc = attr(f, "srcdoc")!;
 		assert.ok(
-			doc.startsWith(`<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">`),
+			doc.startsWith(`<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; form-action 'none'; base-uri 'none'">`),
 		);
 		assert.ok(doc.endsWith(reply.body));
 		assert.deepEqual(calls, ["/api/wolves/hal/frame-file?path=viz%2Fa.html"]);
+	});
+
+	it("the CSP forbids form submits and a <base>, and a meta refresh is stripped from the author's html", async () => {
+		assert.match(FRAME_CSP, /form-action 'none'/);
+		assert.match(FRAME_CSP, /base-uri 'none'/);
+		reply.body = '<head><META HTTP-EQUIV="Refresh" content="0;url=https://evil.example"></head><p>x</p>';
+		await mount();
+		const doc = attr(iframe()!, "srcdoc")!;
+		assert.ok(!/refresh/i.test(doc));
+		assert.ok(doc.endsWith("<head></head><p>x</p>"));
+	});
+
+	it("a second load event (the frame navigated) removes the iframe and shows a stopped state with Reload", async () => {
+		await mount();
+		const f = iframe()!;
+		await act(async () => void f.dispatchEvent(new dom.window.Event("load")));
+		assert.ok(iframe(), "the first load is the srcdoc");
+		await act(async () => void f.dispatchEvent(new dom.window.Event("load")));
+		assert.equal(iframe(), null);
+		const note = document.querySelector('[data-testid="frame-navigated"]')!;
+		assert.match(note.textContent ?? "", /tried to navigate away and was stopped/);
+		reply.body = "<p>again</p>";
+		await act(async () => (note.querySelector("button") as HTMLElement).click());
+		await flush();
+		assert.ok(attr(iframe()!, "srcdoc")!.endsWith("<p>again</p>"));
 	});
 
 	it("Reload (the header action) refetches the file", async () => {
@@ -113,14 +138,13 @@ describe("frame renderer", () => {
 });
 
 describe("frame descriptor", () => {
-	it("accepts wolf + path (or id), keeps title and rev, and fills a missing wolf from the host", () => {
-		assert.deepEqual(parseFrameDescriptor({ kind: "frame", wolf: "hal", path: "a.html", title: "A", rev: 3 }), { kind: "frame", id: "a.html", wolf: "hal", title: "A", rev: 3 });
-		assert.deepEqual(parseFrameDescriptor({ kind: "frame", id: "a.html" }, "jack"), { kind: "frame", id: "a.html", wolf: "jack" });
+	it("accepts path (or id), keeps title and rev, and always uses the thread's wolf, ignoring a wolf named in the data", () => {
+		assert.deepEqual(parseFrameDescriptor({ kind: "frame", path: "a.html", title: "A", rev: 3 }, "hal"), { kind: "frame", id: "a.html", wolf: "hal", title: "A", rev: 3 });
+		assert.deepEqual(parseFrameDescriptor({ kind: "frame", id: "a.html", wolf: "victim" }, "jack"), { kind: "frame", id: "a.html", wolf: "jack" });
 	});
-	it("rejects other kinds, a missing path or wolf, and non-objects", () => {
-		assert.equal(parseFrameDescriptor({ kind: "kb", wolf: "hal", path: "a.html" }), null);
-		assert.equal(parseFrameDescriptor({ kind: "frame", wolf: "hal", path: "" }), null);
-		assert.equal(parseFrameDescriptor({ kind: "frame", path: "a.html" }), null);
-		assert.equal(parseFrameDescriptor("frame"), null);
+	it("rejects other kinds, a missing path, and non-objects", () => {
+		assert.equal(parseFrameDescriptor({ kind: "kb", path: "a.html" }, "hal"), null);
+		assert.equal(parseFrameDescriptor({ kind: "frame", path: "" }, "hal"), null);
+		assert.equal(parseFrameDescriptor("frame", "hal"), null);
 	});
 });

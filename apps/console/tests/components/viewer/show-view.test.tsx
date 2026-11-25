@@ -87,11 +87,11 @@ describe("open on arrival", () => {
 		const seen = new Set<string>();
 		const msgs = (rev: number, id: string, extra = {}) => [{ role: "assistant", parts: [viewPart(rev, id, extra)] }] as never[];
 		// history replay (not streaming): marked seen, nothing reported
-		assert.deepEqual(viewArrivals(msgs(1, "a"), seen, false), []);
+		assert.deepEqual(viewArrivals(msgs(1, "a"), seen, false, "w"), []);
 		// same rev again while streaming: still seen
-		assert.deepEqual(viewArrivals(msgs(1, "a"), seen, true), []);
+		assert.deepEqual(viewArrivals(msgs(1, "a"), seen, true, "w"), []);
 		// a revision streams in: reported, pinned carried
-		assert.deepEqual(viewArrivals(msgs(2, "b", { pinned: true }), seen, true), [{ descriptor: { kind: "work", id: "b", title: "T-b" }, pinned: true }]);
-		assert.deepEqual(viewArrivals(msgs(2, "b", { pinned: true }), seen, true), []);
+		assert.deepEqual(viewArrivals(msgs(2, "b", { pinned: true }), seen, true, "w"), [{ descriptor: { kind: "work", id: "b", title: "T-b" }, pinned: true }]);
+		assert.deepEqual(viewArrivals(msgs(2, "b", { pinned: true }), seen, true, "w"), []);
 	});
 });

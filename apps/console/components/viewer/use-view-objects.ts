@@ -34,7 +34,7 @@ interface ViewPartLike {
  * Folds the collapsed messages for "view" objects and returns those not yet in `seen` (keyed objectId:rev), marking all as seen.
  * When `live` is false (initial load / history replay) everything is marked seen and nothing is returned.
  */
-export function viewArrivals(messages: ReadonlyArray<{ role?: string; parts?: unknown[] }>, seen: Set<string>, live: boolean, wolf?: string): ViewArrival[] {
+export function viewArrivals(messages: ReadonlyArray<{ role?: string; parts?: unknown[] }>, seen: Set<string>, live: boolean, wolf: string): ViewArrival[] {
 	const out: ViewArrival[] = [];
 	for (const m of messages) {
 		if (m.role !== "assistant") continue;

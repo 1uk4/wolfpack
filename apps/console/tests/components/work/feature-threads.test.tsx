@@ -89,8 +89,10 @@ describe("the work page offers a thread for a feature", () => {
 	});
 
 	it("offers Graduate (work-wolfpack-F85qPOc) only when the page found the item ready to graduate", () => {
-		const ready = renderToStaticMarkup(<WorkItemView id="work-x-F" state={{ kind: "ready", item: { ...feat, stage: "shipped" }, parent: null, graduate: { assignee: "hal" } }} />);
+		const ready = renderToStaticMarkup(<WorkItemView id="work-x-F" state={{ kind: "ready", item: { ...feat, stage: "shipped" }, parent: null, graduate: { assignee: "hal", ready: true, reason: "" } }} />);
 		assert.match(ready, /data-testid="graduate-button"/);
+		const notReady = renderToStaticMarkup(<WorkItemView id="work-x-F" state={{ kind: "ready", item: feat, parent: null, graduate: { assignee: "hal", ready: false, reason: "not shipped yet" } }} />);
+		assert.doesNotMatch(notReady, /graduate-button/);
 		const plain = renderToStaticMarkup(<WorkItemView id="work-x-F" state={{ kind: "ready", item: feat, parent: null }} />);
 		assert.doesNotMatch(plain, /graduate-button/);
 	});

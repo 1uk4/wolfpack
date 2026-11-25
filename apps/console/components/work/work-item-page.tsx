@@ -2,7 +2,7 @@
 
 /** A work item page body (/kb/work/[id]): header facts, links to parent / dependencies, plan and Record. */
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { XIcon } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { TopBar } from "@/components/shell/top-bar";
 import { WorkBadges } from "@/components/work/work-badges";
 import { PendingApprovalBlock } from "@/components/work/approval-request";
 import { GraduateButton } from "@/components/work/graduate-button";
+import { GraduationDetails } from "@/components/work/graduation-details";
 import { useLibrarian } from "@/components/kb/use-librarian";
 import { loadThreadButtons, runThreadButton } from "@/components/work/feature-thread-actions";
 import { graduateState, buildTaskGraph, featureThreadWolves, resolveWork, threadButtonLabel, workHref, composeItemDocument, workRecordView, workWolfCandidates, type FeatureThreadButton, type WorkRecordResponse } from "@/src/core";
@@ -23,7 +24,7 @@ export type WorkPageState =
 	| { kind: "unavailable" }
 	| { kind: "not_found" }
 	| { kind: "error"; message: string }
-	| { kind: "ready"; item: WorkRecordResponse; parent: WorkRecordResponse | null; /** Wolves a feature thread can open on (features only). */ threadWolves?: string[]; /** Per-wolf thread state (none / open / closed); without it every wolf offers "Open thread". */ threadButtons?: FeatureThreadButton[]; /** Set when the item is ready to graduate (features and initiatives): the Graduate button shows, run on the assignee wolf. */ graduate?: { assignee?: string } };
+	| { kind: "ready"; item: WorkRecordResponse; parent: WorkRecordResponse | null; /** Wolves a feature thread can open on (features only). */ threadWolves?: string[]; /** Per-wolf thread state (none / open / closed); without it every wolf offers "Open thread". */ threadButtons?: FeatureThreadButton[]; /** Set when the item is ready to graduate (features and initiatives): the Graduate button shows, run on the assignee wolf. */ graduate?: { assignee?: string; ready: boolean; reason: string } };
 
 export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id: string; /** "none" hides the page top bar (title, Full page, close) when a shell hosts the page. Default "full". */ chrome?: "full" | "none"; /** Called with the item title once loaded, and again if it changes. */ onTitle?: (title: string) => void; /** Reader-panel mode: draws a close button and fills its container. */ onClose?: () => void; /** Overrides the default navigation to the full page (the reader switches item in place). */ onOpenTask?: (id: string) => void }) {
 	const { librarian, loading } = useLibrarian();
@@ -53,13 +54,14 @@ export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id:
 			}
 			const threadWolves = item.kind === "feature" && w.ok ? featureThreadWolves(w.data.wolves) : [];
 			const threadButtons = threadWolves.length > 0 && !item.container ? await loadThreadButtons(item.id, threadWolves) : undefined;
-			let graduate: { assignee?: string } | undefined;
+			let graduate: { assignee?: string; ready: boolean; reason: string } | undefined;
 			if ((item.kind === "feature" || item.kind === "initiative") && item.domain) {
 				const list = await fetchWorkList(hit.wolf, item.domain, true, 30_000);
 				const rows = list.ok ? list.data.items : null;
 				const self = rows?.find((r) => r.id === item.id);
 				const kids = rows ? rows.filter((r) => r.partOf === item.id).map((r) => ({ stage: r.stage, kind: r.kind, graduated: !!r.graduated })) : null;
-				if (self && graduateState({ kind: item.kind, stage: item.stage, graduated: !!self.graduated, standing: self.standing }, kids).ready) graduate = { ...(self.assignee ? { assignee: self.assignee } : {}) };
+				const gs = self ? graduateState({ kind: item.kind, stage: item.stage, graduated: !!self.graduated, standing: self.standing }, kids) : null;
+				if (self && gs?.show) graduate = { ...(self.assignee ? { assignee: self.assignee } : {}), ready: gs.ready, reason: gs.reason };
 			}
 			done({ kind: "ready", item, parent, threadWolves, threadButtons, ...(graduate ? { graduate } : {}) });
 		})();
@@ -130,7 +132,10 @@ export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError,
 	);
 }
 
-function WorkBody({ item, parent, onOpenTask, threadWolves = [], threadButtons, graduate, onOpenThread, threadError }: { graduate?: { assignee?: string }; item: WorkRecordResponse; parent: WorkRecordResponse | null; onOpenTask?: (id: string) => void; threadWolves?: string[]; threadButtons?: FeatureThreadButton[]; onOpenThread?: (b: FeatureThreadButton) => void; threadError?: string | null }) {
+function WorkBody({ item, parent, onOpenTask, threadWolves = [], threadButtons, graduate, onOpenThread, threadError }: { graduate?: { assignee?: string; ready: boolean; reason: string }; item: WorkRecordResponse; parent: WorkRecordResponse | null; onOpenTask?: (id: string) => void; threadWolves?: string[]; threadButtons?: FeatureThreadButton[]; onOpenThread?: (b: FeatureThreadButton) => void; threadError?: string | null }) {
+	// Exactly `?view=graduation&wolf=<name>` (the batch card's "More details" link) shows the prepared graduation on top.
+	const params = useSearchParams();
+	const graduationWolf = params?.get("view") === "graduation" ? params.get("wolf") : null;
 	const record = workRecordView(item, parent);
 	const doc = composeItemDocument(item, { record: record.markdown, inheritedFrom: record.fromParent });
 	const graph = item.kind === "feature" ? buildTaskGraph(item, item) : null;
@@ -138,8 +143,9 @@ function WorkBody({ item, parent, onOpenTask, threadWolves = [], threadButtons, 
 	return (
 		<article>
 			<WorkBadges kind={item.kind} stage={item.stage} domain={item.domain} className="mb-4" />
+			{graduationWolf && <GraduationDetails itemId={item.id} wolf={graduationWolf} assignee={graduate?.assignee} ready={!!graduate?.ready} reason={graduate?.reason ?? "this item cannot be graduated"} />}
 			<PendingApprovalBlock workId={item.id} />
-			{graduate && (
+			{graduate?.ready && (
 				<div className="mb-4" data-testid="work-page-graduate">
 					<GraduateButton itemId={item.id} assignee={graduate.assignee} via="work" title={item.title} />
 				</div>

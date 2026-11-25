@@ -19,7 +19,6 @@ import type { Engine } from "@wolfpack/engine";
 import { expectGolden } from "@wolfpack/engine/dist/golden.js";
 import {
   ACTIVE_WORK_CONTEXT_HEADER,
-  BREAKDOWN_SUGGESTION_SYSTEM,
   LIVE_OBSERVER_USER_PROMPT,
   PACK_ALREADY_KNOWS_RUNNING_DIGEST_TEMPLATE,
   SESSION_CONSOLIDATION_USER_PROMPT,
@@ -100,7 +99,6 @@ describe("B live memory prompts", () => {
 describe("C work memory prompts", () => {
   it("static work-context texts are unchanged", () => {
     expectGolden(dir, "C-work-memory/TASK_SUMMARY_SYSTEM.txt", TASK_SUMMARY_SYSTEM);
-    expectGolden(dir, "C-work-memory/BREAKDOWN_SUGGESTION_SYSTEM.txt", BREAKDOWN_SUGGESTION_SYSTEM); // dead: no caller
     expectGolden(dir, "C-work-memory/ACTIVE_WORK_CONTEXT_HEADER.txt", ACTIVE_WORK_CONTEXT_HEADER);
     expectGolden(dir, "C-work-memory/SUCCESS_CRITERIA_LINE.txt", SUCCESS_CRITERIA_LINE);
     expectGolden(dir, "C-work-memory/STAGE_CONTEXT.txt", Object.entries(STAGE_CONTEXT).map(([k, v]) => `## ${k}\n${v}`).join("\n\n"));

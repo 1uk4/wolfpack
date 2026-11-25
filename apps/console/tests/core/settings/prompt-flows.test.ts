@@ -14,7 +14,7 @@ const IDS = [
 	"tool.read", "tool.bash", "tool.subagent",
 	"pipeline.observer", "pipeline.observer-user", "pipeline.consolidate", "pipeline.consolidate-user", "pipeline.pack-digest",
 	"pipeline.crawl-observer", "pipeline.crawl-observer-user", "pipeline.crawl-consolidate", "pipeline.crawl-consolidate-user", "pipeline.crawl-journey", "pipeline.crawl-journey-user",
-	"pipeline.distill", "pipeline.distill-graduation", "pipeline.distill-graduation-standing", "pipeline.work-record", "pipeline.work-log", "pipeline.work-compact", "pipeline.work-distill", "pipeline.work-tidy", "pipeline.task-summary", "pipeline.breakdown-suggestion",
+	"pipeline.distill", "pipeline.distill-graduation", "pipeline.distill-graduation-standing", "pipeline.work-record", "pipeline.work-log", "pipeline.work-compact", "pipeline.work-distill", "pipeline.work-tidy", "pipeline.task-summary",
 	"request.wolf_memory", "request.wolf_memory_retired", "request.kb_access", "request.task_tools", "request.active_task", "request.telegram-suffix",
 	"delivery.task-notice", "delivery.ask-answer-answered", "delivery.subagent-completed", "delivery.subagent-child-instructions", "delivery.continue-prompt", "delivery.guard-worker",
 	"pipeline.active-work-header", "pipeline.success-criteria-line",
@@ -179,7 +179,6 @@ describe("prompt graphs", () => {
 			"hub:sweep.match-subject>hub:sweep.section-pick",
 			"hub:sweep.confirm-subject>hub:sweep.section-pick",
 			"hub:sweep.section-pick>hub:sweep.produce",
-			"hub:sweep.produce>hub:sweep.contradict",
 			"hub:sweep.produce>hub:sweep.split-section",
 			"hub:sweep.split-section>hub:sweep.section-summary",
 			"hub:sweep.section-summary>hub:sweep.label-section",
@@ -212,9 +211,8 @@ describe("prompt graphs", () => {
 
 	it("covers every wolf prompt id and every hub sweep id in some graph, and an unknown id gets its own node under Other", () => {
 		const covered = new Set(graphs().flatMap((g) => g.nodes.flatMap((n) => n.ids)));
-		for (const id of IDS.filter((i) => i !== "pipeline.breakdown-suggestion")) assert.ok(covered.has(id), id);
+		for (const id of IDS) assert.ok(covered.has(id), id);
 		for (const h of HUB_ROWS) assert.ok(covered.has(`hub:${h.id}`), h.id);
-		assert.ok(!covered.has("pipeline.breakdown-suggestion"));
 		const sys = graphOf(graphs(rows([...IDS, "pipeline.brand-new", "tool.mystery"])), "system");
 		assert.deepEqual(sys.nodes.find((n) => n.id === "pipeline.brand-new")?.ids, ["pipeline.brand-new"]);
 		assert.ok(edgeSet(sys).includes("other>pipeline.brand-new"));

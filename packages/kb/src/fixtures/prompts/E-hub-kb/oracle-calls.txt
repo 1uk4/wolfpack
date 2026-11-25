@@ -1,27 +1,4 @@
-===== CALL 1: contradict / SYSTEM =====
-You compare a NEW knowledge contribution against an EXISTING KB entry. Decide only whether they factually conflict, and if so which should win. Base 'winner' on recency and specificity of evidence, using the supplied dates. IMPORTANT: if the NEW contribution is marked currency=archived and its date is older than the existing entry, prefer 'existing' and treat the new material as historical context, NOT a correction. Also: origin=crawl means the NEW material was bulk-ingested from old documents (a wolf acting as a scribe), not lived/curated knowledge — do not let it overwrite a current entry unless it is clearly more recent AND more specific. Output JSON only.
-
-===== CALL 1: contradict / PROMPT =====
-NEW:
-New claim text.
-
-EXISTING:
-Existing entry text.
-
-===== CALL 2: contradict / SYSTEM =====
-You compare a NEW knowledge contribution against an EXISTING KB entry. Decide only whether they factually conflict, and if so which should win. Base 'winner' on recency and specificity of evidence, using the supplied dates. IMPORTANT: if the NEW contribution is marked currency=archived and its date is older than the existing entry, prefer 'existing' and treat the new material as historical context, NOT a correction. Also: origin=crawl means the NEW material was bulk-ingested from old documents (a wolf acting as a scribe), not lived/curated knowledge — do not let it overwrite a current entry unless it is clearly more recent AND more specific. Output JSON only.
-
-===== CALL 2: contradict / PROMPT =====
-NEW date: 2026-11-01 (currency: live, origin: wolf)
-EXISTING date: 2026-10-01
-
-NEW:
-New claim text.
-
-EXISTING:
-Existing entry text.
-
-===== CALL 3: classifyToSection / SYSTEM =====
+===== CALL 1: classifyToSection / SYSTEM =====
 You route a knowledge contribution to exactly ONE section.
 
 You will be given:
@@ -39,7 +16,7 @@ Rules:
 
 Output valid JSON matching the schema.
 
-===== CALL 3: classifyToSection / PROMPT =====
+===== CALL 1: classifyToSection / PROMPT =====
 CONTRIBUTION:
 A contribution about login sessions.
 
@@ -50,7 +27,7 @@ SECTIONS (pick one id or return "NEW"):
 - sec-a-2: Billing
   Invoices and plans.
 
-===== CALL 4: matchSubject / SYSTEM =====
+===== CALL 2: matchSubject / SYSTEM =====
 You decide whether a new knowledge contribution is about the SAME SUBJECT as one of a few existing KB entries.
 
 Merge only if the contribution is an update, correction or extension of that entry's own subject (the same system, feature, decision or incident). Entries that are merely related, adjacent, or in the same area are NOT the same subject: a fix to the sweep is not part of an entry about the memory timer; a feature that uses a system is not part of that system's entry.
@@ -58,7 +35,7 @@ Merge only if the contribution is an update, correction or extension of that ent
 Answer with the id of the one entry that is the same subject, or "new" if none is. When unsure, answer "new".
 Output JSON only: {"match": "<entry id or new>", "reason": "<one short sentence>"}.
 
-===== CALL 4: matchSubject / PROMPT =====
+===== CALL 2: matchSubject / PROMPT =====
 CONTRIBUTION:
 Login sessions
 How login works.
@@ -70,14 +47,14 @@ CANDIDATE ENTRIES (answer one id or "new"):
 - kb-a-2222222: Cookie flags
   Cookie settings.
 
-===== CALL 5: confirmSubject / SYSTEM =====
+===== CALL 3: confirmSubject / SYSTEM =====
 You are given a new knowledge contribution and ONE existing KB entry that scored as very similar. Decide from the full texts whether the contribution is about the SAME SUBJECT as the entry.
 
 Answer "merge" if the contribution is an update, correction, extension or a part of that entry's own subject (the same system, feature, decision, incident or initiative), so that a reader looking for this subject would expect to find it in that entry. Answer "different" if it is a separate subject that merely shares vocabulary, an adjacent feature, or a user of that system.
 
 Output JSON only: {"verdict": "merge" | "different", "reason": "<one short sentence>"}.
 
-===== CALL 5: confirmSubject / PROMPT =====
+===== CALL 3: confirmSubject / PROMPT =====
 CONTRIBUTION:
 Login sessions
 How login works.

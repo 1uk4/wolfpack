@@ -24,7 +24,6 @@ import {
 } from "@wolfpack/engine";
 import {
   ACTIVE_WORK_CONTEXT_HEADER,
-  BREAKDOWN_SUGGESTION_SYSTEM,
   ConsolidationResultSchema,
   CRAWL_CONSOLIDATION_USER_PROMPT,
   CRAWL_JOURNEY_USER_PROMPT,
@@ -162,7 +161,6 @@ function pipelineEntries(): CatalogEntry[] {
     pipeline("work-distill", "Work memory", "Work distill: shipped task log into the feature Record", "Ship distill (memory extension)", ENGINE_PROMPTS, WORK_DISTILL_SYSTEM, { constants: ["WORK_DISTILL_SYSTEM"], contractNote: LINES_NOTE }),
     pipeline("work-tidy", "Work memory", "Work tidy: one-time tidy of a finished feature's Record", "Final pass (memory extension)", "packages/engine/src/work-tidy.ts", WORK_TIDY_SYSTEM, { constants: ["WORK_TIDY_SYSTEM"], contractNote: LINES_NOTE }),
     pipeline("task-summary", "Work memory", "Task summary on completion", "Work memory (task done)", `${MEMORY_TEMPLATES}/tasks.ts`, TASK_SUMMARY_SYSTEM, { schema: TaskSummaryResult, constants: ["TASK_SUMMARY_SYSTEM"] }),
-    pipeline("breakdown-suggestion", "Work memory", "Breakdown suggestion (child tasks or features)", "Work memory (defined; no engine.call site uses it yet)", `${MEMORY_TEMPLATES}/tasks.ts`, BREAKDOWN_SUGGESTION_SYSTEM, { constants: ["BREAKDOWN_SUGGESTION_SYSTEM"], contractNote: "No call site parses a reply against a schema yet." }),
     pipeline("active-work-header", "Work context", "Active work context header", "main wolf and subagents bound to a work item (memory extension)", `${MEMORY_TEMPLATES}/tasks.ts`, ACTIVE_WORK_CONTEXT_HEADER, { constants: ["ACTIVE_WORK_CONTEXT_HEADER"] }),
     pipeline("success-criteria-line", "Work context", "Success criteria line", "main wolf and subagents bound to a work item (memory extension)", `${MEMORY_TEMPLATES}/tasks.ts`, SUCCESS_CRITERIA_LINE, { constants: ["SUCCESS_CRITERIA_LINE"] }),
     ...stages,

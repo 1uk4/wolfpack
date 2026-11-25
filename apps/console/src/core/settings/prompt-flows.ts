@@ -13,11 +13,6 @@ export interface FlowRow {
 	file?: string;
 }
 
-/** Defined in the registry but never called by any engine step: hidden from both views and the filter. */
-export const HIDDEN_IDS: ReadonlySet<string> = new Set(["pipeline.breakdown-suggestion"]);
-
-export const visibleRows = <T extends { id: string }>(rows: T[]): T[] => rows.filter((r) => !HIDDEN_IDS.has(r.id));
-
 /** The order composeProjectContext (packages/harness/src/wolfd/context.ts) adds the system-prompt blocks. A block it did not add for this wolf is simply absent. */
 export const SYSTEM_ORDER = ["system.header", "system.identity", "system.orchestrator", "system.agents-md", "system.claude-md", "system.skills", "system.structured-output", "system.ending-turn"] as const;
 
@@ -68,7 +63,7 @@ export interface TreeNode {
 }
 
 export function buildTree(allRows: FlowRow[]): TreeNode[] {
-	const rows = visibleRows(allRows);
+	const rows = allRows;
 	const ids = new Set(rows.map((r) => r.id));
 	const placed = new Set<string>();
 	const take = (id: string): boolean => (ids.has(id) && !placed.has(id) ? (placed.add(id), true) : false);
@@ -145,7 +140,7 @@ export const hubId = (id: string): string => `hub:${id}`;
 
 /** The step lists of flows A-D (the graph builder chains them). */
 function buildFlows(allRows: FlowRow[]): Flow[] {
-	const rows = visibleRows(allRows);
+	const rows = allRows;
 	const have = new Set(rows.map((r) => r.id));
 	const ids = (...want: string[]): string[] => want.filter((id) => have.has(id));
 	let n = 0;
@@ -238,7 +233,7 @@ export interface PromptGraph {
 
 /** `hubRows` null: the hub is not connected. */
 export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): PromptGraph[] {
-	const rows = visibleRows(allRows);
+	const rows = allRows;
 	const byId = new Map<string, FlowRow>(rows.map((r) => [r.id, r]));
 	for (const h of hubRows ?? []) byId.set(hubId(h.id), { ...h, editable: false });
 	const markerOf = (ids: string[]): NodeMarker => {
@@ -338,7 +333,6 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 		{ id: "sweep.confirm-subject", label: "Confirm the subject", note: "Only for a near miss: the nearest entry scored high but the first check said new." },
 		{ id: "sweep.section-pick", label: "Pick the section", note: "The fallback when tree placement cannot place the entry; a merge keeps its entry's section." },
 		{ id: "sweep.produce", label: "Write the entry (produce)" },
-		{ id: "sweep.contradict", label: "Contradiction check", note: "Defined in the librarian's oracles; the sweep path has no call site for it today." },
 		{ id: "sweep.split-section", label: "Split an oversized section", note: "Maintenance pass (post-sweep reorg, off by default, and rebuild)." },
 		{ id: "sweep.section-summary", label: "Section summary", note: "Maintenance pass: runs for a section whose members changed." },
 		{ id: "sweep.label-section", label: "Section label", note: "Maintenance pass: titles the section from its summary." },
@@ -357,7 +351,6 @@ export function buildGraphs(allRows: FlowRow[], hubRows: FlowRow[] | null): Prom
 		{ from: sw("sweep.match-subject"), to: sw("sweep.section-pick") },
 		{ from: sw("sweep.confirm-subject"), to: sw("sweep.section-pick") },
 		{ from: sw("sweep.section-pick"), to: sw("sweep.produce") },
-		{ from: sw("sweep.produce"), to: sw("sweep.contradict") },
 		{ from: sw("sweep.produce"), to: sw("sweep.split-section") },
 		{ from: sw("sweep.split-section"), to: sw("sweep.section-summary") },
 		{ from: sw("sweep.section-summary"), to: sw("sweep.label-section") },

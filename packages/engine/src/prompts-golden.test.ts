@@ -25,7 +25,6 @@ const SYSTEM_PROMPTS: Record<string, "B-live-memory" | "C-work-memory" | "D-dist
   OBSERVER_SYSTEM: "B-live-memory",
   OBSERVER_GENERAL_FLAG: "B-live-memory",
   CONSOLIDATE_SYSTEM: "B-live-memory",
-  JOURNEY_SYSTEM: "B-live-memory", // dead: reserved, no caller
   WORK_RECORD_SYSTEM: "C-work-memory",
   WORK_LOG_SYSTEM: "C-work-memory",
   WORK_COMPACT_SYSTEM: "C-work-memory",
@@ -38,7 +37,6 @@ const SYSTEM_PROMPTS: Record<string, "B-live-memory" | "C-work-memory" | "D-dist
   SECTION_SUMMARY_SYSTEM: "E-hub-kb",
   LABEL_SECTION_SYSTEM: "E-hub-kb",
   SPLIT_SECTION_SYSTEM: "E-hub-kb",
-  CONTRADICT_SYSTEM: "E-hub-kb", // dead: no caller in the sweep
   MATCH_SUBJECT_SYSTEM: "E-hub-kb",
   CONFIRM_SUBJECT_SYSTEM: "E-hub-kb",
   PRODUCE_SYSTEM: "E-hub-kb",

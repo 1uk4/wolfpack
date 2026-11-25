@@ -64,28 +64,4 @@ RULES:
 6. Do NOT repeat the task title
 7. Do NOT include temporal language ("first", "then", "finally")`;
 
-export const BREAKDOWN_SUGGESTION_SYSTEM = `You analyze a work item plan and suggest how to break it down into child tasks or features.
-
-INPUT: Work item title, body/plan, and kind (initiative, feature, task)
-
-OUTPUT (JSON):
-{
-  "suggestions": [
-    {
-      "title": "Short, specific task title",
-      "kind": "task" or "feature",
-      "successCriteria": "Concrete done condition"
-    }
-  ],
-  "reasoning": "Why this breakdown makes sense"
-}
-
-RULES:
-1. Tasks should be completable in one session (1-4 hours)
-2. Each task needs a concrete success criteria
-3. Group related work into features if complex
-4. Identify dependencies between tasks
-5. Keep titles short and action-oriented
-6. Max 10 suggestions per breakdown`;
-
 // The task-create prompts (new-work, grilling, to-spec, to-tickets) are registry prompts in @wolfpack/agents (packages/agents/prompts/*.md).

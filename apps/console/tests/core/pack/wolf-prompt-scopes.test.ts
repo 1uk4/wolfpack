@@ -9,7 +9,7 @@ describe("Wolf prompt scopes", () => {
 	});
 
 	it("puts work memory, work context and hub sweep prompts under Memory, and per-request sections and injected messages under Wolf", () => {
-		for (const id of ["pipeline.work-log", "pipeline.work-compact", "pipeline.work-distill", "pipeline.work-tidy", "pipeline.breakdown-suggestion", "pipeline.stage-context.plan", "pipeline.active-work-header", "pipeline.success-criteria-line", "hub:sweep.produce"]) assert.equal(promptScope(id), "memory", id);
+		for (const id of ["pipeline.work-log", "pipeline.work-compact", "pipeline.work-distill", "pipeline.work-tidy", "pipeline.stage-context.plan", "pipeline.active-work-header", "pipeline.success-criteria-line", "hub:sweep.produce"]) assert.equal(promptScope(id), "memory", id);
 		assert.equal(promptScope("request.kb_access"), "wolf");
 		assert.equal(promptScope("delivery.continue-prompt"), "wolf");
 	});

@@ -40,7 +40,6 @@ describe("hub settings", () => {
     // The sweep's engine.call sites (kb/src/librarian oracles.ts, produce.ts, summarize.ts) pass these constants as `system`.
     const used = {
       "sweep.produce": engine.PRODUCE_SYSTEM,
-      "sweep.contradict": engine.CONTRADICT_SYSTEM,
       "sweep.section-pick": engine.SECTION_PICK_SYSTEM,
       "sweep.match-subject": engine.MATCH_SUBJECT_SYSTEM,
       "sweep.confirm-subject": engine.CONFIRM_SUBJECT_SYSTEM,
@@ -64,7 +63,7 @@ describe("hub settings", () => {
       for (const m of readFileSync(join(kb, f), "utf8").matchAll(/system: ([A-Z_]+_SYSTEM)\b/g)) found.add(m[1]!);
     }
     expect([...found].sort()).toEqual(
-      ["CONFIRM_SUBJECT_SYSTEM", "CONTRADICT_SYSTEM", "LABEL_SECTION_SYSTEM", "MATCH_SUBJECT_SYSTEM", "PRODUCE_SYSTEM", "SECTION_PICK_SYSTEM", "SECTION_SUMMARY_SYSTEM", "SPLIT_SECTION_SYSTEM"],
+      ["CONFIRM_SUBJECT_SYSTEM", "LABEL_SECTION_SYSTEM", "MATCH_SUBJECT_SYSTEM", "PRODUCE_SYSTEM", "SECTION_PICK_SYSTEM", "SECTION_SUMMARY_SYSTEM", "SPLIT_SECTION_SYSTEM"],
     );
   });
 

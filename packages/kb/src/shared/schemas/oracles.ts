@@ -1,16 +1,8 @@
 /**
- * Oracle schemas — the three narrow, mostly-conditional LLM calls.
+ * Oracle schemas — the narrow, mostly-conditional LLM calls.
  * Everything else in the sweep is deterministic code.
  */
 import { z } from "zod";
-
-/** contradict — only fires on high similarity + content diff. */
-export const ContradictResultSchema = z.object({
-  conflicts: z.boolean(),
-  winner: z.enum(["new", "existing", "unclear"]),
-  reason: z.string(),
-});
-export type ContradictResult = z.infer<typeof ContradictResultSchema>;
 
 /** sectionPick — route a contribution to ONE section or NEW. */
 export const SectionPickSchema = z.object({

@@ -37,16 +37,13 @@
  *        [JOURNEY] (appended, simple v1)
  *   buildJourneyPrompt: not yet wired to LLM
  *              │
- *              ├─ JOURNEY_SYSTEM: reserved for future LLM call
- *              │  in: session summary + journey → out: updated journey
- *              │
  *              ▼
  *   ┌──────────────────────────────────────────────────────────┐
  *   │ Den topics + den journey (wolf persistent memory)        │
  *   └──────────────────────────────────────────────────────────┘
  *
  *
- *   KB SWEEP PIPELINE (route → contradict → produce; reorg maintains sections):
+ *   KB SWEEP PIPELINE (route → produce; reorg maintains sections):
  *   ┌──────────────────────────────────────────────────────────┐
  *   │ Contribution (wolf den topic or emitted delta)           │
  *   └──────────┬───────────────────────────────────────────────┘
@@ -55,12 +52,6 @@
  *              │
  *              ├─ SECTION_PICK_SYSTEM: pick ONE section id or NEW
  *              │  in: contribution + digest sections (enum) → out: section
- *              │
- *              ▼
- *   [CONTRADICT] (fast model, conditional)
- *              │
- *              ├─ CONTRADICT_SYSTEM: compare with existing entry
- *              │  in: new text + existing text + dates → out: winner
  *              │
  *              ▼
  *        [PRODUCE] (smart model)
@@ -130,7 +121,6 @@ export {
   OBSERVER_SYSTEM,
   OBSERVER_GENERAL_FLAG,
   CONSOLIDATE_SYSTEM,
-  JOURNEY_SYSTEM,
   CRAWL_OBSERVER_SYSTEM,
   CRAWL_CONSOLIDATE_SYSTEM,
   CRAWL_JOURNEY_SYSTEM,
@@ -174,7 +164,6 @@ export {
  * This prompt is reserved for future LLM-based implementation.
  * Dynamic builder: buildJourneyPrompt (in packages/memory/src/prompts.ts; template in packages/memory/src/config/prompts).
  */
-// JOURNEY_SYSTEM is exported from ./config/prompts/memory.js.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // KB HIERARCHY: SECTION PICK
@@ -285,14 +274,6 @@ Output JSON only: {"categories":[{"name":"...","ids":["..."]}],"doesnt_fit":["id
 // ═══════════════════════════════════════════════════════════════════════════
 // KB SWEEP: CONTRADICT
 // ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * stage: contradict (KB sweep) · model: fast · in: new text + existing text + dates · out: winner
- *
- * Compare a contribution against an existing entry to detect contradictions
- * and determine which should take precedence.
- */
-export const CONTRADICT_SYSTEM = `You compare a NEW knowledge contribution against an EXISTING KB entry. Decide only whether they factually conflict, and if so which should win. Base 'winner' on recency and specificity of evidence, using the supplied dates. IMPORTANT: if the NEW contribution is marked currency=archived and its date is older than the existing entry, prefer 'existing' and treat the new material as historical context, NOT a correction. Also: origin=crawl means the NEW material was bulk-ingested from old documents (a wolf acting as a scribe), not lived/curated knowledge — do not let it overwrite a current entry unless it is clearly more recent AND more specific. Output JSON only.`;
 
 /**
  * stage: matchSubject (KB sweep) · model: fast · in: contribution title+summary + up to 3 candidate entries · out: entry id | "new"

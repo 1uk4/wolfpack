@@ -9,7 +9,6 @@
 import { stampedVersion } from "@wolfpack/protocol/health-lag";
 import {
   CONFIRM_SUBJECT_SYSTEM,
-  CONTRADICT_SYSTEM,
   LABEL_SECTION_SYSTEM,
   MATCH_SUBJECT_SYSTEM,
   PRODUCE_SYSTEM,
@@ -27,7 +26,6 @@ const GROUP = "KB sweep";
 export function hubPrompts(): HubPrompt[] {
   return [
     { id: "sweep.produce", group: GROUP, label: "Write the entry (produce)", text: PRODUCE_SYSTEM },
-    { id: "sweep.contradict", group: GROUP, label: "Contradiction check", text: CONTRADICT_SYSTEM },
     { id: "sweep.section-pick", group: GROUP, label: "Pick the section", text: SECTION_PICK_SYSTEM },
     { id: "sweep.match-subject", group: GROUP, label: "Match the subject", text: MATCH_SUBJECT_SYSTEM },
     { id: "sweep.confirm-subject", group: GROUP, label: "Confirm the subject", text: CONFIRM_SUBJECT_SYSTEM },

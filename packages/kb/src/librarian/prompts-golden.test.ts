@@ -3,7 +3,7 @@
  * a safety net for the prompt cleanup. The system texts themselves (PRODUCE_SYSTEM, MATCH_SUBJECT_SYSTEM, ...) are in
  * packages/engine/src/prompts-golden.test.ts; here the full call is captured at the engine.call seam with a stub engine:
  * system + user prompt, from fixed inputs and a pinned clock. Fixtures live in fixtures/prompts/E-hub-kb/.
- * Dead paths are included on purpose (contradict, split-fat): their fixture goes when the code goes.
+ * Dead paths are included on purpose (split-fat): its fixture goes when the code goes.
  *
  * A failure means a prompt's text changed. If that was deliberate, review the diff and rewrite the fixtures:
  *
@@ -51,16 +51,13 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("E hub KB sweep prompts", () => {
-  it("oracles: contradict (dead), section pick, match subject, confirm subject", async () => {
+  it("oracles: section pick, match subject, confirm subject", async () => {
     const { engine, calls } = recorder((step) => {
-      if (step === "contradict") return { conflict: false, winner: "new", reason: "r" };
       if (step === "classifyToSection") return { section: "NEW", confidence: 0.5 };
       if (step === "matchSubject") return { match: "new", reason: "r" };
       return { verdict: "different", reason: "r" };
     });
     const o = createOracles(engine);
-    await o.contradict("New claim text.", "Existing entry text.");
-    await o.contradict("New claim text.", "Existing entry text.", { newDate: "2026-11-01", newCurrency: "live", existingDate: "2026-10-01", newOrigin: "wolf" });
     await o.classifyToSection("A contribution about login sessions.", [
       { sectionId: "sec-a-1", title: "Auth", summary: "Login and sessions." },
       { sectionId: "sec-a-2", title: "Billing", summary: "Invoices and plans." },

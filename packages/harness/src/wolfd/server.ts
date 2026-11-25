@@ -76,6 +76,7 @@ import { readOnlyCatalog, type ToolInfo } from "./prompt-catalog.js";
 import { GraduationJobs } from "./graduation-jobs.js";
 import { watchApprovals, type ApprovedRequest, type HubEventsTarget } from "./hub-approvals.js";
 import { GitInfo } from "./workspace-info.js";
+import { readFrameFile } from "./frames.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
 import { SubagentManager, type SubagentOptions } from "./subagents.js";
 import { readFeatureClosed, unbindOnGraduation, writeThreadAutoShip } from "@wolfpack/memory";
@@ -1089,6 +1090,19 @@ export class WolfServer {
         const t = thread !== null ? this.checkThread(thread) : this.home;
         const bound = this.opts.den ? await readBound(this.opts.den, t.conv.id, this.opts.work ?? {}) : null;
         return this.json(res, 200, await readMemoryStatus(this.memoryReadInput(), this.lastPromote(), bound, (this.opts.den ? memoryActionsFor(this.opts.den)?.promotingJob?.() : null) ?? null));
+      }
+      case "getFrameFile": {
+        this.checkWolf(params.name);
+        if (!this.opts.wolfHome) throw new HttpError("not_found", "this wolf has no home to keep frames in");
+        const bytes = readFrameFile(this.opts.wolfHome, url.searchParams.get("path"));
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Content-Length": bytes.length,
+          "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "no-store",
+        });
+        res.end(bytes);
+        return;
       }
       case "getMemoryTopic": {
         this.checkWolf(params.name);

@@ -87,6 +87,8 @@ function failure(err: unknown): Response {
 	if (isBusy(err)) return json({ error: err.message, code: "busy" }, 409);
 	// A refusal the user can act on (unsupported type, too large, unknown attachment).
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "invalid_request") return json({ error: err.message }, 400);
+	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "forbidden") return json({ error: err.message }, 403);
+	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "too_large") return json({ error: err.message }, 413);
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "conflict") return json({ error: err.message, code: "conflict" }, 409);
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "thread_closed") return json({ error: err.message, code: "thread_closed" }, 409);
 	for (const code of ["thread_open", "thread_graduated"]) {
@@ -271,6 +273,31 @@ export function createThreadApi(source: ClientSource) {
 						"X-Content-Type-Options": "nosniff",
 						"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
 						"Cache-Control": "private, max-age=31536000, immutable",
+					},
+				});
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/**
+		 * One frame file (self-contained HTML the wolf wrote), relayed from the wolf. Served with `Content-Security-Policy: sandbox`
+		 * so that opened directly it is never a same-origin page; the renderer fetches it as text into a sandboxed srcdoc iframe.
+		 * 404 when the wolf cannot serve frames or the file is gone; 400/403/413 as the wolf refused it.
+		 */
+		async frameFile(wolf: string, path: string | null): Promise<Response> {
+			try {
+				if (!path) return json({ error: "path is required" }, 400);
+				const client = source();
+				if (!client.getFrameFile) return json({ error: "unknown frame file" }, 404);
+				const { bytes } = await client.getFrameFile(wolf, path);
+				return new Response(bytes as BodyInit, {
+					headers: {
+						"Content-Type": "text/html; charset=utf-8",
+						"Content-Length": String(bytes.byteLength),
+						"X-Content-Type-Options": "nosniff",
+						"Content-Security-Policy": "sandbox",
+						"Cache-Control": "no-store",
 					},
 				});
 			} catch (err) {

@@ -131,6 +131,8 @@ export interface ConsoleClient {
   /** Hold typed text as the answer of question `qid` of a paged card, any page (not a chat message). Optional. */
   bindCardText?(threadId: string, callId: string, qid: string, text: string, attachments?: string[], multi?: { picked: string[]; others: string[] }, stepsKey?: string): Promise<void>;
   /** Bytes of a rendered diagram by id (a card field's `diagram`). NotFoundError for anything but a published diagram. Optional. */
+  /** A frame file (self-contained HTML) under the wolf's frames directory, by relative path. NotFoundError when missing; ProtocolError `forbidden` / `too_large` / `invalid_request` for refused paths. Optional. */
+  getFrameFile?(wolf: string, path: string): Promise<{ bytes: Uint8Array; mimeType: string }>;
   getDiagram?(threadId: string, diagramId: string): Promise<{ bytes: Uint8Array; mimeType: string }>;
   /** Skip a pending card without answering: the agent is told, siblings count it as resolved. Errors as `answerCard`. Optional like it. */
   skipCard?(threadId: string, callId: string): Promise<SubmitAck>;

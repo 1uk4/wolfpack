@@ -207,6 +207,11 @@ export class HttpConsoleClient implements ConsoleClient {
     await this.json("bindCardText", { id: threadId, callId, qid }, ROUTES.bindCardText.response.schema, { ...(text ? { text } : {}), ...(attachments?.length ? { attachments } : {}), ...(multi ?? {}), ...(stepsKey ? { stepsKey } : {}) }, threadId);
   }
 
+  async getFrameFile(wolf: string, path: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
+    const res = await this.request("getFrameFile", { name: wolf }, {}, wolf, `?path=${encodeURIComponent(path)}`);
+    return { bytes: new Uint8Array(await res.arrayBuffer()), mimeType: res.headers.get("content-type") ?? "application/octet-stream" };
+  }
+
   async getDiagram(threadId: string, diagramId: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
     const res = await this.request("getDiagram", { id: threadId, diagramId }, {}, threadId);
     return { bytes: new Uint8Array(await res.arrayBuffer()), mimeType: res.headers.get("content-type") ?? "application/octet-stream" };

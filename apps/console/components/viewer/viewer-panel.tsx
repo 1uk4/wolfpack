@@ -54,7 +54,7 @@ export function ViewerPanel(props: ({ wolf: string; threadId: string } | { host:
 	// A renderer (frame) registers a reload action; the header shows Reload and a pull-down on the header/grab area calls it.
 	const [reload, setReloadFn] = useState<(() => void) | null>(null);
 	const actions = useMemo(() => ({ setReload: (fn: (() => void) | null) => setReloadFn(() => fn) }), []);
-	const pullStart = useRef<number | null>(null);
+	const pullStart = useRef<{ x: number; y: number } | null>(null);
 
 	// Exclusivity. The viewer opening closes the panel; the panel opening while the viewer is open closes the viewer.
 	const prev = useRef({ shown: false, panelOpen });
@@ -147,13 +147,15 @@ export function ViewerPanel(props: ({ wolf: string; threadId: string } | { host:
 				className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2"
 				data-testid="viewer-header"
 				onTouchStart={(e) => {
-					pullStart.current = reload ? (e.touches[0]?.clientY ?? null) : null;
+					const t = e.touches[0];
+					pullStart.current = reload && t ? { x: t.clientX, y: t.clientY } : null;
 				}}
 				onTouchEnd={(e) => {
-					const y0 = pullStart.current;
+					const p0 = pullStart.current;
 					pullStart.current = null;
-					const y1 = e.changedTouches[0]?.clientY;
-					if (reload && y0 !== null && y1 !== undefined && y1 - y0 > 60) reload();
+					const t = e.changedTouches[0];
+					// A pull: more than 60px down and more than twice the sideways drift.
+					if (reload && p0 && t && t.clientY - p0.y > 60 && t.clientY - p0.y > 2 * Math.abs(t.clientX - p0.x)) reload();
 				}}
 			>
 				{v.stack.length > 1 && (

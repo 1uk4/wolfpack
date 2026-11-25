@@ -377,7 +377,7 @@ describe("a graph node click: the reader only", () => {
 		assert.ok(!/setExpanded|expanded/.test(g), "the expand-in-place state is gone");
 		assert.ok(!g.includes("collapsedRef") && !g.includes("onNodeDoubleClick") && !g.includes("FeatureTaskOverlay"));
 		// setSelected sits only on the non-work branch
-		assert.match(handler, /else setSelected\(\{ id: nodeId \}\)/);
+		assert.match(handler, /else if \(!openNodeInViewer\(nodeId, openViewRef\.current\)\) setSelected\(\{ id: nodeId \}\)/);
 	});
 });
 

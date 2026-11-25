@@ -42,11 +42,20 @@ export function createApprovalsApi(d: ApprovalsApiDeps) {
 		const base = env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "");
 		const token = bearerOf(req.headers.get("authorization"));
 		if (!base || !token) return fail(501, "This console has no hub (WOLFPACK_HUB_URL is not set).", "unsupported");
+		const isApprove = method === "POST" && path.endsWith("/approve");
+		const started = Date.now();
+		const logApprove = (outcome: string) => {
+			if (isApprove) console.log(`[approvals] approve ${path.split("/").at(-2)}: ${outcome} in ${Date.now() - started}ms`);
+		};
+		// An approve is a synchronous multi-item archive on the hub: a short timeout would report a slow success as a failure.
+		const timeoutMs = d.timeoutMs ?? (method === "POST" ? 30_000 : 5000);
 		try {
-			const r = await doFetch(`${base}${path}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(d.timeoutMs ?? 5000) });
+			const r = await doFetch(`${base}${path}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(timeoutMs) });
+			logApprove(String(r.status));
 			if (!r.ok) return await hubFailure(r);
 			return new Response(await r.text(), { status: r.status, headers: { "content-type": "application/json", ...NO_STORE } });
-		} catch {
+		} catch (e) {
+			logApprove(e instanceof Error && e.name === "TimeoutError" ? "timeout" : "error");
 			return fail(503, "The hub is not answering.", "hub_unreachable");
 		}
 	};

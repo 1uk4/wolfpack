@@ -134,6 +134,7 @@ describe("startWolf", () => {
       "show_checklist",
       "show_decision",
       "show_graph",
+      "show_view",
       "subagent",
       "subagent_merge",
       "subagent_message",

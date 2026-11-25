@@ -274,12 +274,16 @@ export function foldRegistry(events: KbEvent[]): Registry {
         if (existing) {
           existing.lastHash = e.hash;
           existing.lastSeen = e.at;
+          // A later event without hashes (a backfill) clears them: no prior claim known = merge.
+          existing.bodyHash = e.bodyHash;
+          existing.bodyShapeHash = e.bodyShapeHash;
         } else {
           t.aliases.push({
             wolf: e.wolf,
             denTopicId: e.denTopicId,
             lastHash: e.hash,
             lastSeen: e.at,
+            ...(e.bodyHash !== undefined ? { bodyHash: e.bodyHash, bodyShapeHash: e.bodyShapeHash } : {}),
           });
         }
         // Contributing implies implicit subscription.

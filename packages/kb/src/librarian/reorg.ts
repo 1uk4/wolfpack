@@ -1081,51 +1081,14 @@ for (const v of violations) {
   }
 }
 
-// 6. Branching factor control (maxChildrenPerSection)
+// 6. Branching factor: report only. Wrapper sections (0 direct entries, LLM-invented names) are never created;
+//    a wide parent is allowed up to hardMaxChildren, and past that a rebuild (which undoes the smallest split) is due.
 const ST = SECTION_TREE;
 for (const sec of sections.filter((s) => s.domain === domain)) {
-  if (sec.childIds.length > ST.maxChildrenPerSection) {
-    notify?.(`  group children: ${sec.id} has ${sec.childIds.length} children (max ${ST.maxChildrenPerSection})`);
-    // Group via k-means on child centroids
-    const childSecs = sec.childIds.map((cid) => sections.find((s) => s.id === cid)!).filter(Boolean);
-    const k = Math.ceil(childSecs.length / ST.maxChildrenPerSection);
-    if (k >= 2) {
-      // Simple grouping: sort by centroid similarity and chunk
-      const childVectors = childSecs.map((s) => s.centroid);
-      const domCentroid = domainVectors.length > 0 ? computeCentroid(domainVectors.map((v) => v.vector)) : [];
-      // Use cosine to domain centroid to sort, then chunk
-      const sorted = childSecs
-        .map((s) => ({ sec: s, sim: cosine(s.centroid, domCentroid) }))
-        .sort((a, b) => b.sim - a.sim);
-      const chunkSize = Math.ceil(sorted.length / k);
-      const newChildIds: SectionId[] = [];
-      for (let i = 0; i < sorted.length; i += chunkSize) {
-        const chunk = sorted.slice(i, i + chunkSize);
-        if (chunk.length === 1) {
-          newChildIds.push(chunk[0].sec.id);
-          continue;
-        }
-        const groupId = mkSectionId(domain);
-        const groupCentroid = computeCentroid(chunk.map((c) => c.sec.centroid));
-        for (const c of chunk) {
-          c.sec.parent = groupId;
-          c.sec.depth = sec.depth + 2;
-        }
-        sections.push(mkChildSection({
-          id: groupId,
-          domain,
-          parent: sec.id,
-          depth: sec.depth + 1,
-          centroid: groupCentroid,
-          memberCount: 0,
-          childIds: chunk.map((c) => c.sec.id),
-        }));
-        newChildIds.push(groupId);
-        result.splits++;
-      }
-      sec.childIds = newChildIds;
-      sec.dirty = true;
-    }
+  if (sec.childIds.length > ST.hardMaxChildren) {
+    notify?.(`  width: ${sec.id} has ${sec.childIds.length} children (hard max ${ST.hardMaxChildren}); a rebuild is due`);
+  } else if (sec.childIds.length > ST.maxChildrenPerSection) {
+    notify?.(`  width: ${sec.id} has ${sec.childIds.length} children (soft limit ${ST.maxChildrenPerSection})`);
   }
 }
 

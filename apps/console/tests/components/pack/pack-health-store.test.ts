@@ -1,4 +1,4 @@
-/** work-wolfpack-6imFEq7: the pack-health store keeps one stream open while anything needs it, the open modal included. */
+/** work-wolfpack-6imFEq7: the pack-health store keeps one stream open while anything needs it, the open Pack page included. */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -18,30 +18,30 @@ const g = globalThis as Record<string, unknown>;
 g.EventSource = FakeEventSource;
 g.window = { setTimeout: () => 0, clearTimeout: () => {} }; // inert timers: no stall fallback during the test
 
-const { subscribePackHealth, openPackHealth, closePackHealth, requestedPackSection } = await import("../../../components/pack/pack-health-store.ts");
+const { subscribePackHealth, holdPackHealth, getPackHealth } = await import("../../../components/pack/pack-health-store.ts");
 const openStreams = () => FakeEventSource.all.filter((s) => !s.closed).length;
 
 describe("pack health store", () => {
-	it("the open modal keeps the stream alive after every bar unmounts, and closing it stops the stream", () => {
+	it("the held Pack page keeps the stream alive after every bar unmounts, and releasing it stops the stream", () => {
 		const unBar1 = subscribePackHealth(() => {});
 		const unBar2 = subscribePackHealth(() => {});
 		assert.equal(openStreams(), 1);
-		openPackHealth(null);
+		const release = holdPackHealth();
+		assert.equal(getPackHealth().held, true);
 		unBar1();
 		unBar2();
 		assert.equal(openStreams(), 1);
-		closePackHealth();
+		release();
+		assert.equal(getPackHealth().held, false);
 		assert.equal(openStreams(), 0);
 	});
 
-	it("opens on the section it was asked for, and on Machines when asked for none or after a close", () => {
-		openPackHealth(null, "keys");
-		assert.equal(requestedPackSection(), "keys");
-		closePackHealth();
-		assert.equal(requestedPackSection(), "machines");
-		openPackHealth(null);
-		assert.equal(requestedPackSection(), "machines");
-		closePackHealth();
+	it("releasing one of two holds keeps the page held until the last release", () => {
+		const a = holdPackHealth();
+		const b = holdPackHealth();
+		a();
+		assert.equal(getPackHealth().held, true);
+		b();
+		assert.equal(getPackHealth().held, false);
 	});
 });
-

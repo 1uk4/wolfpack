@@ -69,9 +69,10 @@ describe("ci.yml uses pnpm", () => {
 		expect([...needs].sort()).toEqual(Object.keys(ci.jobs).filter((n) => n !== "ci").sort());
 	});
 
-	it("no job raised timeout-minutes above 30 (release-smoke keeps its 40)", () => {
-		const over = Object.entries(ci.jobs).filter(([n, j]) => ((j as { "timeout-minutes"?: number })["timeout-minutes"] ?? 0) > (n === "release-smoke" ? 40 : 30)).map(([n]) => n);
-		expect(over).toEqual([]);
+	it("every job's timeout-minutes equals its measured budget in .github/ci-budgets.json (and no job is missing from it)", () => {
+		const budgets = JSON.parse(readFileSync(new URL("../.github/ci-budgets.json", import.meta.url), "utf8")) as Record<string, number>;
+		const actual = Object.fromEntries(Object.entries(ci.jobs).map(([n, j]) => [n, (j as { "timeout-minutes"?: number })["timeout-minutes"]]));
+		expect(actual).toEqual(budgets);
 	});
 
 	it("the checks job runs the lockfile guard right after the install", () => {
@@ -81,6 +82,16 @@ describe("ci.yml uses pnpm", () => {
 		expect(install).toBeGreaterThanOrEqual(0);
 		expect(guard).toBe(install + 1);
 		expect(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts["check:lockfiles"]).toBe("node scripts/check-lockfiles.mjs .");
+	});
+
+	it("the checks job lints the console and the final fail step accounts for it", () => {
+		const steps = effective(ci.jobs.checks);
+		const lint = steps.find((s) => s.run && /pnpm --filter @wolfpack\/console lint\b/.test(s.run)) as (Step & { "continue-on-error"?: boolean }) | undefined;
+		expect(lint, "console lint step").toBeDefined();
+		expect(lint!["continue-on-error"]).toBe(true);
+		const fail = steps.find((s) => s.name === "fail if any check failed")!;
+		expect(fail.env?.LINT).toBe(`\${{ steps.${lint!.id}.outcome }}`);
+		expect(fail.run).toMatch(/\$LINT" != success/);
 	});
 
 	it("every installing job gets its setup from the one composite action (jobs enumerated from the YAML)", () => {

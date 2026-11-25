@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readBindingFile, writeBindingFile } from "@wolfpack/memory";
 import { createObjectsExtension } from "./objects.js";
 import { openWolfEngine, type WolfEngine } from "./index.js";
 
@@ -30,10 +31,39 @@ async function append(conversationId: number, message: object): Promise<number> 
 type PinResult = { isError?: boolean; output: Array<{ text: string }> };
 
 /** Run the `pin` tool as the model would, from `conversationId`, for the call `callId`. The reader is registered under the store's directory. */
-async function runPin(conversationId: number, objectId: string, callId = "pin-call", den = dir): Promise<PinResult> {
+async function runPin(conversationId: number, objectId: string, callId = "pin-call", den = dir, pinned = true): Promise<PinResult> {
   const tool = createObjectsExtension(den).tools!.find((t) => t.name === "pin")!;
-  return (await tool.execute({ objectId, pinned: true } as never, { conversationId, callId } as never, {} as never)) as PinResult;
+  return (await tool.execute({ objectId, pinned } as never, { conversationId, callId } as never, {} as never)) as PinResult;
 }
+
+const bindTask = (conversationId: number) => writeBindingFile(dir, conversationId, { workId: "work-wolfpack-abc1234", domain: "wolfpack", boundAt: "2026-11-24T00:00:00Z" });
+
+describe("pin tool: the reserved objectId \"task\" (the bound-task chip)", () => {
+  it("accepts it while a task is bound, hide and show alike, without touching the binding", async () => {
+    const root = await engine.conversations.root({ model });
+    bindTask(Number(root.id));
+    const hide = await runPin(Number(root.id), "task", "c1", dir, false);
+    expect(hide.isError).toBeFalsy();
+    expect(hide.output[0]!.text).toBe('Unpinned "task".');
+    expect((await runPin(Number(root.id), "task", "c2")).output[0]!.text).toBe('Pinned "task".');
+    expect(readBindingFile(dir, Number(root.id))?.workId).toBe("work-wolfpack-abc1234");
+  });
+
+  it("errors with a clear message when no task is bound", async () => {
+    const root = await engine.conversations.root({ model });
+    const r = await runPin(Number(root.id), "task");
+    expect(r.isError).toBe(true);
+    expect(r.output[0]!.text).toContain("No task is bound");
+  });
+
+  it("still rejects an unknown id while a task is bound", async () => {
+    const root = await engine.conversations.root({ model });
+    bindTask(Number(root.id));
+    const r = await runPin(Number(root.id), "tasks");
+    expect(r.isError).toBe(true);
+    expect(r.output[0]!.text).toContain('No object "tasks"');
+  });
+});
 
 describe("pin tool object lookup", () => {
   it("finds an object shown in history a fork inherited", async () => {

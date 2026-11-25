@@ -82,11 +82,11 @@ jobs:
   # verify was one serialized job (install+build, tsc, vitest, console tests). It is now three parallel jobs (checks, vitest x2 shards, console-tests) behind the single `ci` aggregate.
   # Each job repeats the same setup (install, test env, tsc --build of the affected projects: the tests import workspace packages from dist).
   checks:
-    # lockfile guard + tsc --build (typecheck of the affected projects). There is no lint step today, so none is added.
+    # lockfile guard + console lint + tsc --build (typecheck of the affected projects). No other workspace has a real lint script (they echo "no lint configured").
     needs: detect
     if: needs.detect.outputs.any == 'true' && needs.detect.outputs.coveredByPr != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 5
     env:
       A: ${{ needs.detect.outputs.affected }}
     steps:
@@ -100,6 +100,10 @@ jobs:
         id: lock
         continue-on-error: true
         run: pnpm check:lockfiles
+      - name: lint (console, eslint)
+        id: lint
+        continue-on-error: true
+        run: pnpm --filter @wolfpack/console lint
       - name: tsc --build (affected projects)
         id: tsc
         continue-on-error: true
@@ -111,17 +115,18 @@ jobs:
         if: always()
         env:
           LOCK: ${{ steps.lock.outcome }}
+          LINT: ${{ steps.lint.outcome }}
           TSC: ${{ steps.tsc.outcome }}
         run: |
-          echo "lockfile guard: $LOCK; tsc --build: $TSC"
-          if [ "$LOCK" != success ] || [ "$TSC" != success ]; then exit 1; fi
+          echo "lockfile guard: $LOCK; console lint: $LINT; tsc --build: $TSC"
+          if [ "$LOCK" != success ] || [ "$LINT" != success ] || [ "$TSC" != success ]; then exit 1; fi
 
   vitest:
     # same affected-packages command as the old verify job plus vitest's --shard, applied after the file filter, so the shards together run every file once
     needs: detect
     if: needs.detect.outputs.any == 'true' && needs.detect.outputs.coveredByPr != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 9
     strategy:
       fail-fast: false
       matrix:
@@ -170,7 +175,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.any == 'true' && needs.detect.outputs.coveredByPr != 'true' && fromJSON(needs.detect.outputs.affected).consoleTests
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
     env:
       A: ${{ needs.detect.outputs.affected }}
     steps:
@@ -196,7 +201,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.coveredByPr != 'true' && (needs.detect.outputs.release == 'true' || fromJSON(needs.detect.outputs.affected).tracer)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v6
         with:
@@ -216,7 +221,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.coveredByPr != 'true' && (needs.detect.outputs.release == 'true' || fromJSON(needs.detect.outputs.affected).release)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 7
     steps:
       - uses: actions/checkout@v6
         with:
@@ -235,7 +240,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.release == 'true' && needs.detect.outputs.coveredByPr != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 4
     concurrency:
       group: ci-eval-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: false   # an eval run is expensive: let it finish rather than cancel on a new push
@@ -259,6 +264,7 @@ jobs:
     if: always()
     needs: [detect, checks, vitest, console-tests, tracer, release-smoke, eval]
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: covered by PR (a push whose sha is the head of an open PR; the pull_request run is the check)
         if: needs.detect.outputs.coveredByPr == 'true'

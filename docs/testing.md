@@ -44,3 +44,34 @@ The git commit standard lives in [`packages/agents/standards/git.md`](../package
 | PR into `stable`, push to `stable` (a "release") | the whole suite as if everything were affected, tracer and release-smoke always, and the `eval` job (`pnpm test:eval`) |
 
 `pnpm test:live` runs only in `wolfpack pr prepare`, on the Mac.
+
+## CI time budgets
+Each `ci.yml` job's `timeout-minutes` is a budget, not a ceiling: ceil(2 x p95 of the job's wall time), floor 3. A job twice as slow as usual fails the run. `.github/ci-budgets.json` holds the numbers; `scripts/ci-workflow.test.ts` fails if a job's `timeout-minutes` differs from it or a job is missing.
+
+Measured 2026-11-20 over 23 `ci.yml` runs since the verify split (created after 2026-11-20T22:00Z, includes pre-cache runs, so conservative). Only successful jobs count; vitest shards pool into one row. Command: `node scripts/ci-budgets.mjs --since 2026-11-20T22:00:00Z --limit 80`.
+
+| job | n | p50 (min) | p95 (min) | max | budget (min) |
+|---|---|---|---|---|---|
+| detect | 23 | 0.3 | 0.3 | 0.4 | 5 (kept at 5; measured 3) |
+| checks | 11 | 1.1 | 1.8 | 1.8 | 5 (measured 4; +1 for the console lint step, not in the samples) |
+| release-smoke | 11 | 2.5 | 3.5 | 3.5 | 7 |
+| console-tests | 9 | 3.7 | 4.7 | 4.7 | 10 |
+| tracer | 15 | 3.5 | 4.0 | 4.0 | 8 |
+| vitest | 23 | 3.0 | 4.4 | 4.6 | 9 |
+| eval | 6 | 1.6 | 2.0 | 2.0 | 4 |
+| ci | 19 | 0.1 | 0.1 | 0.1 | 5 (aggregate; small fixed value) |
+
+Rerun the script after a change that legitimately slows a job, then update the JSON and the workflow together.
+
+## What makes CI rerun everything
+Affected-only selection (`scripts/affected.mjs`) marks every workspace when a change touches one of these inputs (`ROOT_CONFIG`, checked by `scripts/affected.test.ts`):
+- `package-lock.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`
+- root `package.json` and `tsconfig*.json`
+- `vitest.config` / `vitest.setup` files, `turbo.json`
+- `.github/workflows/**`
+- `scripts/affected.*` (the selector itself)
+- an unknown, zero or unreachable base commit
+
+Docs (`*.md`, `docs/**`, `LICENSE`) mark nothing.
+
+A workspace that reaches another at runtime without importing it (it spawns a built `hubd.mjs`, runs `hubd pair`, mints hub tokens against it) must say so in its own `package.json`: `"ci": { "affectedBy": ["@wolfpack/hubd"] }`. `affected.mjs` treats those names like declared dependencies, so a change in them marks the consumer and its tests. `@wolfpack/cli` and `@wolfpack/desktop` do this today; the 4a88a410 owner-device gate on hubd slipped past an affected-only run because they did not.

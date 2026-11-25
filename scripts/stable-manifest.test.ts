@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { buildManifest, writeManifest } from "./stable-manifest.mjs";
 
@@ -95,5 +96,24 @@ describe("writeManifest with --check-releases", () => {
 		const run = () => writeManifest({ repo: REPO, tags: workerdTags, components: ["workerd"], now: at, checkReleases: true, out, sleep: noWait, gh: ghStub({ "workerd/v0.1.7": [unavailable], "workerd/v0.1.6": [published] }) });
 		expect(run).toThrow(/workerd\/v0\.1\.7[\s\S]*HTTP 503: Service Unavailable/);
 		expect(fs.existsSync(out)).toBe(false);
+	});
+});
+
+describe("stable-manifest CLI", () => {
+	it("reads orphan tags from the checkout's HEAD; --ref is only the manifest label, never a git revision", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "manifest-cli-"));
+		fs.mkdirSync(path.join(dir, "scripts"));
+		for (const f of ["stable-manifest.mjs", "release-components.json"]) fs.copyFileSync(path.join(__dirname, f), path.join(dir, "scripts", f));
+		const git = (...a: string[]) => spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...a], { cwd: dir, encoding: "utf8" });
+		git("init", "-q");
+		git("commit", "-q", "--allow-empty", "-m", "x");
+		git("tag", "console/v0.1.25-main.1");
+		const out = path.join(dir, "main.json");
+		const r = spawnSync("node", [path.join(dir, "scripts/stable-manifest.mjs"), "--repo", "o/r", "--channel", "main", "--ref", "wolf/not-a-ref", "--out", out], { encoding: "utf8" });
+		expect(r.stderr).not.toMatch(/malformed object name/);
+		expect(r.status).toBe(0);
+		const m = JSON.parse(fs.readFileSync(out, "utf8"));
+		expect(m.ref).toBe("wolf/not-a-ref");
+		expect(m.components.console.version).toBe("0.1.25-main.1");
 	});
 });

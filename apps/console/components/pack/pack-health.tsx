@@ -12,19 +12,16 @@
  *   dev:   ?healthFixture=<name> (components/pack/pack-health-fixtures.ts; not in production).
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { createPortal } from "react-dom";
-import { PackPanel } from "@/components/pack/pack-panel";
+import { useRouter } from "next/navigation";
+import { setPackNavigator } from "@/components/pack/pack-nav";
 import {
-	closePackHealth,
-	focusPackHealthOpener,
 	getPackHealth,
 	getServerPackHealth,
-	openPackHealth,
 	subscribePackHealth,
 	watchPackHealth,
 	type PackHealthState,
 } from "@/components/pack/pack-health-store";
-import { kbRelativeTime, packSectionFromSearch, BACK_MS, packSummary, type HealthSnapshotView } from "@/src/core";
+import { kbRelativeTime, BACK_MS, packSummary, type HealthSnapshotView } from "@/src/core";
 
 const TICK_MS = 2_000;
 
@@ -50,14 +47,14 @@ export function usePackHealth(): HealthState {
 	const until = backUntil(s.snapshot);
 	useEffect(() => {
 		setNow(Date.now());
-		const ticking = () => s.modalOpen || Date.now() < until;
+		const ticking = () => s.held || Date.now() < until;
 		if (!ticking()) return;
 		const t = setInterval(() => {
 			setNow(Date.now());
 			if (!ticking()) clearInterval(t);
 		}, TICK_MS);
 		return () => clearInterval(t);
-	}, [s.modalOpen, until, s.updatedAt]);
+	}, [s.held, until, s.updatedAt]);
 	return { ...s, now };
 }
 
@@ -69,10 +66,9 @@ function announcement(s: PackHealthState): string {
 }
 
 /**
- * Rendered once in the app shell: the modal (portaled to body, above the phone list layer and outside the sidebar's
- * aria-hidden aside) and a polite live region for changes of the overall summary. It watches the store without counting
- * as a subscriber; the bars and the open modal are the subscribers (openPackHealth takes the modal's hold on the stream,
- * closePackHealth drops it, and unmounting the host with the modal open closes it).
+ * Rendered once in the app shell: a polite live region for changes of the overall summary, the router hand-off for
+ * openPackPage. (The ?pack=<section> redirect is proxy.ts, before any page renders.) It watches the store
+ * without counting as a subscriber; the bars and the open Pack page (holdPackHealth) are the subscribers.
  */
 export function PackHealthHost() {
 	const s = useSyncExternalStore(watchPackHealth, getPackHealth, getServerPackHealth);
@@ -84,23 +80,16 @@ export function PackHealthHost() {
 		if (prev.current !== "" && said !== prev.current) setLive(said); // the state on page load is not news
 		prev.current = said;
 	}, [said]);
+	const router = useRouter();
 	useEffect(() => {
-		// ?pack=<section> opens the Pack on page load (an unknown name opens Machines).
-		const wanted = packSectionFromSearch(window.location.search);
-		if (wanted !== null) openPackHealth(null, wanted);
-		return () => void (getPackHealth().modalOpen && closePackHealth());
-	}, []);
-	const wasOpen = useRef(false);
-	useEffect(() => {
-		if (wasOpen.current && !s.modalOpen) focusPackHealthOpener(); // after OverlayShell's own restore, which may hit a hidden bar
-		wasOpen.current = s.modalOpen;
-	}, [s.modalOpen]);
+		setPackNavigator((href) => router.push(href));
+		return () => setPackNavigator(null);
+	}, [router]);
 	return (
 		<>
 			<div aria-live="polite" role="status" className="sr-only" data-testid="pack-health-live">
 				{live}
 			</div>
-			{s.modalOpen && typeof document !== "undefined" && createPortal(<PackPanel />, document.body)}
 		</>
 	);
 }

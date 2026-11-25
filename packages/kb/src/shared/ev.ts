@@ -40,8 +40,9 @@ export const ev = {
     wolf: string,
     denTopicId: string,
     canonicalId: string,
-    hash: string
-  ): KbEvent => ({ t: "aliased", ...stamp(), wolf, denTopicId, canonicalId, hash }),
+    hash: string,
+    claim?: { bodyHash: string; bodyShapeHash: string }
+  ): KbEvent => ({ t: "aliased", ...stamp(), wolf, denTopicId, canonicalId, hash, ...(claim ?? {}) }),
 
   clustered: (
     contribution: string,

@@ -1,0 +1,10 @@
+{
+  "detect": 5,
+  "checks": 5,
+  "vitest": 9,
+  "console-tests": 10,
+  "tracer": 8,
+  "release-smoke": 7,
+  "eval": 4,
+  "ci": 5
+}

@@ -147,7 +147,7 @@ function toRebuildPlan(p: PlanFile): RebuildPlan {
     state: { sections: p.tree.map((s) => ({ ...s, centroid: [] }) as Section), assignment: new Map(p.assignment) },
     moves: p.moves, crossMoves: p.crossMoves, unmatchedApprovals: [], blockedApprovals: [], rejected: [],
     leftovers: new Map(), splitChildren: new Map(), unnamed: [], grouped: new Map(p.grouped),
-    reused: new Set(), labelKept: new Set(), capWrappers: new Set(), judged: [], initialTitles: new Map(),
+    reused: new Set(), labelKept: new Set(), noSubject: new Set(), judged: [], initialTitles: new Map(),
     from: p.flags.from, oldSectionCount: p.oldSectionCount, fileIds: p.fileIds,
   };
 }

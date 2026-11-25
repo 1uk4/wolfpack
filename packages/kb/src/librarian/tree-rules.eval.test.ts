@@ -10,15 +10,19 @@
  *  - null p is 0.0099 (the floor with 100 replicates) for ALL five sets, grab bag
  *    included: the permutation null is weak (the experiment said so). What
  *    separates the grab bag and Console Chat is the seed/bootstrap stability gate.
- *  - Work Item Tracking and Graduation split into 2 groups; the accepted partition is
- *    identical across seeds, but they sit near the ARI .7 gate (mean ~.75), so the
- *    accept/reject decision itself flips on ~1 seed in 6. In production the seed is
- *    derived from the member ids, so a given section always decides the same way.
+ *  - Current rules (work-wolfpack-Fs0BlY6, work-wolfpack-HIr2pfl): a split needs >= minCoherentGroups (3) groups and
+ *    >= minCoverage (70%) of members covered; the size threshold is per domain (splitThresholdFor(domainSize), 12..24).
+ *    These evals pass ignoreSize, so only the stability gate, group count and coverage decide.
+ *  - Verdicts on the frozen sections, identical on seeds 1, 2 and 4: Console Chat and Game Tracking are rejected
+ *    "unstable"; Work Item Tracking and Graduation (2 groups each) are rejected "too-few-groups".
+ *    NO fixture section is accepted any more, so there is no accepted split to check for coherence here; the
+ *    leave-one-out coherence check on real data was removed with them (leftovers/minGroup are covered on synthetic
+ *    data in tree-rules.test.ts). If a section is ever re-recorded and accepted, add the real-data checks back.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import {
-  chooseSplit, isSplit, ari, cosine, meanVec, DEFAULT_RULES, type SplitDecision, type SplitRejected, type Vec,
+  chooseSplit, isSplit, ari, DEFAULT_RULES, type SplitDecision, type SplitRejected, type Vec,
 } from "./tree-rules.js";
 import { planRebuild, insertEntry, repairPath, type RebuildEntry, type RebuildState } from "./rebuild.js";
 
@@ -44,14 +48,14 @@ describe("fixtures", () => {
 });
 
 describe("determinism", () => {
-  it("one partition across seeds: every accepted split is the same grouping", async () => {
+  it("two-group sections are rejected on every seed: too-few-groups, or unstable on a seed near the ARI gate", async () => {
     for (const sid of [WORK, GRAD]) {
-      const runs = [];
-      for (const s of [1, 2, 3, 4, 5, 6]) { runs.push(run(set(sid), s)); await yieldLoop(); }
-      const ok = runs.filter(accepted);
-      expect(ok.length, `${sid} accepted in ${ok.length}/6 seeds`).toBeGreaterThanOrEqual(4);
-      for (const r of ok) expect(ari(ok[0].labels, r.labels)).toBeCloseTo(1, 6);
-      expect(ok[0].k).toBe(2);
+      for (const s of [1, 2, 3, 4, 5, 6]) {
+        const r = run(set(sid), s);
+        await yieldLoop();
+        expect(accepted(r), `${sid} seed ${s}`).toBe(false);
+        expect(["too-few-groups", "unstable"], `${sid} seed ${s}`).toContain((r as SplitRejected).reason);
+      }
     }
   }, SLOW);
 
@@ -88,36 +92,13 @@ describe("negative control: the grab bag", () => {
   }, SLOW);
 });
 
-describe("accepted splits are coherent", () => {
-  const dec = (sid: string) => {
-    for (const seed of [1, 2, 4]) {
-      const r = run(set(sid), seed);
-      if (accepted(r)) return r;
-    }
-    throw new Error(`${sid} never accepted`);
-  };
-
-  it("leave-one-out: most entries are closer to their own group's other members than to the other group", () => {
-    for (const sid of [WORK, GRAD]) {
-      const es = set(sid), d = dec(sid);
-      let good = 0, total = 0;
-      es.forEach((e, i) => {
-        if (d.labels[i] < 0) return;
-        const own = es.filter((x, j) => j !== i && d.labels[j] === d.labels[i]).map((x) => x.vec);
-        const other = es.filter((x, j) => d.labels[j] >= 0 && d.labels[j] !== d.labels[i]).map((x) => x.vec);
-        total++;
-        if (cosine(meanVec(own), e.vec) > cosine(meanVec(other), e.vec)) good++;
-      });
-      expect(good / total, sid).toBeGreaterThanOrEqual(0.85);
-    }
-  }, SLOW);
-
-  it("leftovers are at most 25% of the section and every group has >= minGroup", () => {
-    for (const sid of [WORK, GRAD]) {
-      const d = dec(sid);
-      expect(d.leftovers.length / set(sid).length).toBeLessThanOrEqual(0.25);
-      for (let g = 0; g < d.k; g++) expect(d.labels.filter((l) => l === g).length).toBeGreaterThanOrEqual(DEFAULT_RULES.minGroup);
-    }
+describe("no real section is accepted under the current rules", () => {
+  it("each frozen section is rejected with its specific reason", () => {
+    const reasons = Object.fromEntries([CONSOLE, WORK, GRAD, GAME].map((sid) => {
+      const r = run(set(sid), 1);
+      return [sid, accepted(r) ? "accepted" : r.reason];
+    }));
+    expect(reasons).toEqual({ [CONSOLE]: "unstable", [WORK]: "too-few-groups", [GRAD]: "too-few-groups", [GAME]: "unstable" });
   }, SLOW);
 });
 
@@ -141,9 +122,9 @@ const EQUIV_ARI = 0.7;
 /**
  * Tree shapes the top-down rebuild produces on the fixtures (default seed; inserts give the same shapes):
  *  - Console Chat (30):   one section, 30 entries (split rejected: unstable). Intended: no stable substructure.
- *  - Work Item Tracking (14): root with 2 children of 8 and 6, no leftovers.
- *  - Graduation (9):      one section, 9 entries (below splitAbove).
- *  - Game Tracking (9):   one section, 9 entries (below splitAbove).
+ *  - Work Item Tracking (14): one section, 14 entries (split rejected: too-few-groups, 2 groups < 3).
+ *  - Graduation (9):      one section, 9 entries (below the split threshold, now >= 12).
+ *  - Game Tracking (9):   one section, 9 entries (below the split threshold, now >= 12).
  *  - grab bag (14):       one section, 14 entries (rejected: unstable).
  */
 describe("acceptance: one-by-one inserts ≈ top-down rebuild (work-wolfpack-t800z3L)", () => {

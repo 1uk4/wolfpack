@@ -38,6 +38,7 @@ import {
 	defaultComponents,
 } from "streamdown";
 import { WorkIdChip } from "@/components/work/work-id-chip";
+import { useOpenView, viewFromHref } from "@/components/viewer/viewer-context";
 import { isFullWorkId, workIdFromHref } from "@/src/core";
 import type { ExtraProps } from "streamdown";
 import { MERMAID_FONT_SIZE, renderMermaid } from "@/components/shell/mermaid-render";
@@ -572,8 +573,27 @@ export function InertImage(props: ComponentProps<"img"> & ExtraProps) {
 
 /** Links: a rewritten work id (src/core/work/work-id-link) → chip; any other link is Streamdown's default. */
 export function MarkdownLink(props: ComponentProps<"a"> & ExtraProps) {
+	const open = useOpenView();
 	const id = workIdFromHref(props.href);
 	if (id) return <WorkIdChip id={id} />;
+	const view = viewFromHref(props.href ?? null);
+	if (view && open?.canOpen(view.kind)) {
+		// Thread page: KB entry / work page links open the viewer. Streamdown's default link is a button, so render an anchor.
+		return (
+			<a
+				href={props.href}
+				data-streamdown="link"
+				className="wrap-anywhere font-medium text-primary underline"
+				onClick={(e) => {
+					if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+					e.preventDefault();
+					open(view);
+				}}
+			>
+				{props.children}
+			</a>
+		);
+	}
 	const Default = defaultComponents.a as ComponentType<ComponentProps<"a"> & ExtraProps>;
 	return <Default {...props} />;
 }

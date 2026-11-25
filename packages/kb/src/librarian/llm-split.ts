@@ -11,11 +11,11 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { atomicWrite } from "@wolfpack/engine";
+import { atomicWrite, SECTION_TREE } from "@wolfpack/engine";
 import type { Engine } from "@wolfpack/engine";
 import { proposeSplit, type SplitMember, type SplitProposal } from "./summarize.js";
 import {
-  DEFAULT_RULES, chooseSplit, isSplit, validatePartition, isPartition, applyJoin,
+  DEFAULT_RULES, chooseSplit, isSplit, validatePartition, isPartition, applyJoin, splitCoverage,
   type CategoryReport, type PartitionDecision, type SplitDecision, type SplitRejected, type TreeRules, type Vec,
 } from "./tree-rules.js";
 
@@ -177,8 +177,12 @@ export async function judgeSplit(
   if (!isPartition(result) && result.single) {
     // One category survived: the leftovers may hold its partner.
     const two = await secondPass(deps, rules, args, members, vectors, result.single);
-    if (two.d.k >= 2) {
+    if (two.d.k >= SECTION_TREE.minCoherentGroups) {
       const j = applyJoin(vectors, two.d, rules);
+      if (splitCoverage(j.d.labels) < SECTION_TREE.minCoverage) {
+        deps.notify?.("no split: low-coverage");
+        return { source: "llm", reason: "low-coverage", categories: two.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, kmeansSkipped: diagSkipped, cached };
+      }
       return {
         source: "llm", decision: { labels: j.d.labels, k: j.d.k, names: j.d.names, leftovers: j.d.leftovers }, joined: j.joined,
         categories: two.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, kmeansSkipped: diagSkipped, cached: cached && !two.asked,
@@ -191,6 +195,10 @@ export async function judgeSplit(
   }
   const final = await secondPass(deps, rules, args, members, vectors, result);
   const j = applyJoin(vectors, final.d, rules);
+  if (splitCoverage(j.d.labels) < SECTION_TREE.minCoverage) {
+    deps.notify?.("no split: low-coverage");
+    return { source: "llm", reason: "low-coverage", categories: final.d.categories, doesntFit: proposal.doesntFit, kmeans: diag, kmeansSkipped: diagSkipped, cached };
+  }
   return {
     source: "llm", joined: j.joined,
     decision: { labels: j.d.labels, k: j.d.k, names: j.d.names, leftovers: j.d.leftovers },

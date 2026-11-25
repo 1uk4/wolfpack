@@ -275,10 +275,24 @@ export class GraduateStore {
 						if (!this.current(id, g)) return;
 						if (!ap.ok) {
 							if (ap.code !== "forbidden" && ap.code !== "request_forbidden") {
-								// The request is filed and its preview token used: no retry from Review, the owner starts over or approves it in Needs-you.
-								return void this.fail(id, { wolf, title: cur.title }, "confirm", { ...ap, message: `The wolf filed the request, but approving it failed: ${ap.message} Approve it in Needs-you.` });
+								// The request state is what counts: an approve that timed out here, or answered "already approved", may have gone through on the hub.
+								let approved = ap.code === "invalid_request" && /already approved/i.test(ap.message);
+								if (!approved) {
+									try {
+										const rr = await client.request(s.result.requestId);
+										approved = rr.ok && rr.data.request.status === "approved";
+									} catch {
+										// the read failed: the request stays unproven
+									}
+									if (!this.current(id, g)) return;
+								}
+								if (!approved) {
+									// The request is filed and its preview token used: no retry from Review, the owner starts over or approves it in Needs-you.
+									return void this.fail(id, { wolf, title: cur.title }, "confirm", { ...ap, message: `The wolf filed the request, but approving it failed: ${ap.message} The request is still pending: approve it in Needs-you.` });
+								}
+							} else {
+								awaitingApproval = true;
 							}
-							awaitingApproval = true;
 						}
 					}
 					this.set(id, undefined);

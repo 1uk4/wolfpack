@@ -16,9 +16,12 @@
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, PanelRightOpenIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, ClockIcon, ChevronUpIcon, PanelRightOpenIcon, SearchIcon } from "lucide-react";
 import { TopBar } from "@/components/shell/top-bar";
+import { useRouter } from "next/navigation";
 import { useWorkReader } from "./work-reader";
+import { isPlainClick } from "./work-reader-nav";
+import { useOpenView } from "@/components/viewer/viewer-context";
 import { MenuShell } from "@/components/shell/menu-shell";
 import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 import {
@@ -168,7 +171,7 @@ const INDENT_PX = [8, 20, 32] as const;
 interface RowCtx {
 	expanded: ReadonlySet<string>;
 	onToggle: (key: string) => void;
-	onSelect: (id: string) => void;
+	onSelect: (id: string, e?: ClickMods) => void;
 	/** The item the reader shows (its row is marked). */
 	openId: string | null;
 	/** The group's gutter width (px), added to the indent of the rows below the group row. */
@@ -338,9 +341,9 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 	const hasKids = row.children.length > 0;
 	const open = isOpenRow(row, ctx);
 	// A tap on a row with children expands/collapses it (the chevron's job); a row without children opens the reader.
-	const activate = (): void => {
+	const activate = (e?: ClickMods): void => {
 		if (hasKids) onToggle(row.key);
-		else if (row.id) onSelect(row.id);
+		else if (row.id) onSelect(row.id, e);
 	};
 	const mv = ctx.move;
 	const target = dropOption(row, ctx);
@@ -368,7 +371,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 					mv!.onDragEnd();
 					mv!.onMove(id, target.to);
 				} : undefined}
-				onClick={hasKids || row.id ? activate : undefined}
+				onClick={hasKids || row.id ? (e) => activate(e) : undefined}
 				onKeyDown={(e) => {
 					if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
 					e.preventDefault();
@@ -408,7 +411,21 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 					</span>
 					{/* Only a ready feature (or one with a job in flight) shows the button; why a feature is not ready is the stage cell's tooltip. */}
 					<span className="inline-flex shrink-0" onClick={(e) => e.stopPropagation()}>
-					<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready && !ctx.pendingApproval?.has(row.id) ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
+					{row.id && ctx.pendingApproval?.has(row.id) ? (
+						<button
+							type="button"
+							data-testid="work-awaiting-approval"
+							title="A graduate/archive/reassign request is pending; approve it on the item page or in Needs-you"
+							aria-label="Awaiting approval"
+							onClick={(e) => onSelect(row.id, e)}
+							className="shrink-0 whitespace-nowrap rounded-md border border-border/70 px-1 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:px-1.5"
+						>
+							<ClockIcon className="size-3 md:hidden" aria-hidden />
+							<span className="hidden md:inline">awaiting approval</span>
+						</button>
+					) : (
+						<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate.show && row.graduate.ready ? row.graduate : NO_GRADUATE} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
+					)}
 					</span>
 					<AssigneeCell row={row} ctx={ctx} />
 					<span className={`${COLS.status} flex min-w-0 flex-col md:flex-row md:items-center md:gap-2`}>
@@ -435,7 +452,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 							title="Open"
 							onClick={(e) => {
 								e.stopPropagation();
-								onSelect(row.id);
+								onSelect(row.id, e);
 							}}
 							className="flex size-6 shrink-0 items-center justify-center gap-1 rounded-md border border-border/70 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:w-auto md:px-1.5"
 						>
@@ -493,6 +510,9 @@ function GroupView({ group, ctx }: { group: TableRow; ctx: RowCtx }) {
 	);
 }
 
+/** The modifier state of a click that opened a row. */
+type ClickMods = { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean };
+
 const HEADERS: { col: WorkSortCol; label: string; cls: string }[] = [
 	{ col: "name", label: "Name", cls: "flex-1 pl-[1.125rem]" },
 	{ col: "stage", label: "Status", cls: COLS.status },
@@ -500,7 +520,19 @@ const HEADERS: { col: WorkSortCol; label: string; cls: string }[] = [
 ];
 
 export function WorkList({ client: injected, graduate: injectedGraduate, undoMs = WORK_UNDO_MS }: { client?: WorkClient; graduate?: GraduateClient; undoMs?: number }) {
-	const { open: openItem, itemId } = useWorkReader();
+	const { open: openReader, itemId } = useWorkReader();
+	const router = useRouter();
+	const openView = useOpenView();
+	// Inside a page viewer a plain click opens the item in its panel; a modified click goes to the full page; with no viewer the ?item= reader is used.
+	const openItem = useCallback(
+		(id: string, e?: ClickMods) => {
+			if (openView?.canOpen("work")) {
+				if (e && !isPlainClick({ ...e, defaultPrevented: false })) router.push(`/kb/work/${encodeURIComponent(id)}`);
+				else openView({ kind: "work", id });
+			} else openReader(id);
+		},
+		[openView, router, openReader],
+	);
 	const client = useMemo(() => injected ?? createWorkClient(), [injected]);
 	const [domain, setDomainState] = useState(readDomain);
 	const [domains, setDomains] = useState<WorkDomain[]>([]);

@@ -52,7 +52,7 @@ jobs:
   # repo; read by @wolfpack/protocol createManifestFetcher). Logic: scripts/stable-manifest.mjs (unit-tested); this job is glue.
   manifest:
     needs: [tag, build]
-    if: ${{ always() && needs.tag.result == 'success' && needs.tag.outputs.tags != '[]' }}
+    if: ${{ always() && needs.tag.result == 'success' && needs.build.result != 'failure' && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

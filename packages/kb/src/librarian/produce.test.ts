@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { produceEntry, type ProduceEntryInput } from "./produce.js";
+import { produceEntry, deriveOriginDate, type ProduceEntryInput } from "./produce.js";
 import type { Engine } from "@wolfpack/engine";
 import type { ParsedContribution } from "../shared/index.js";
 import {
@@ -482,4 +482,139 @@ describe("produceEntry: prevent at source", () => {
       expect(r.entry.detail.match(/by similarity alone/g)).toHaveLength(1);
       expect(r.deduped).toHaveLength(2);
     });
+});
+
+describe("deriveOriginDate", () => {
+  const c = (o: Record<string, string | undefined>) => ({ summary: "", body: "", sourceUpdated: undefined, groupDate: undefined, sourceCreated: undefined, submitted: undefined, ...o }) as Parameters<typeof deriveOriginDate>[0];
+  const today = "2026-11-21";
+
+  it("takes sourceUpdated, then groupDate, then sourceCreated, then submitted, before any date in the text", () => {
+    const body = "2026-11-10 a Record line";
+    expect(deriveOriginDate(c({ body, sourceUpdated: "2026-10-01", groupDate: "2026-10-02", sourceCreated: "2026-10-03", submitted: "2026-10-04 12:00" }), today)).toBe("2026-10-01");
+    expect(deriveOriginDate(c({ body, groupDate: "2026-10-02", sourceCreated: "2026-10-03", submitted: "2026-10-04 12:00" }), today)).toBe("2026-10-02");
+    expect(deriveOriginDate(c({ body, sourceCreated: "2026-10-03", submitted: "2026-10-04 12:00" }), today)).toBe("2026-10-03");
+    expect(deriveOriginDate(c({ body, submitted: "2026-10-04 12:00" }), today)).toBe("2026-10-04");
+  });
+
+  it("falls back to dated lines in the text, ignoring Until/by/before phrases and dates after today", () => {
+    const body = "- Until 2026-11-18: the old count\nship by (2026-11-19) is a plan\n2026-10-25 the lint pass landed\n2027-01-01 planned\nnote (2026-10-28)";
+    expect(deriveOriginDate(c({ body }), today)).toBe("2026-10-28");
+    expect(deriveOriginDate(c({ body: "Until 2026-11-18 it was 3. Done by 2026-11-19." }), today)).toBeUndefined();
+  });
+});
+
+describe("produceEntry: date-aware merge", () => {
+  const hist = "- Until 2026-10-01: 10. Now 29, because of a sweep.";
+  const prev = `---\nid: kb-wolfpack-AbC1234\ncreated: 2026-10-01\nupdated: 2026-11-21\nfactsAsOf: 2026-11-20\n---\n\n# Lint\n\nlede\n\nThe lint count is 29.\n\n## History\n\n${hist}\n`;
+  const run = async (body: string, detail: string, input: Partial<ProduceEntryInput> = {}, contribution: Partial<ParsedContribution> = {}) => {
+    const call = vi.fn().mockResolvedValue({ title: "Lint", kind: { type: "architecture" }, summary: "lede", detail, confidence: "high", facets: {}, properties: {}, proposedRelations: [] });
+    const r = await produceEntry({ call } as unknown as Engine, {
+      contribution: mockContribution({ body, sourceUpdated: "2026-10-25", ...contribution }),
+      domain: "wolfpack",
+      section: SectionId.parse("sec-wolfpack-abc123"),
+      placement: { basis: "routed", fit: 1 },
+      entryId: "kb-wolfpack-AbC1234",
+      existingMarkdown: prev,
+      resolve: () => null,
+      ...input,
+    });
+    return { r, prompt: call.mock.calls[0][2].prompt as string, all: `${r.entry.summary}\n${r.entry.detail}` };
+  };
+
+  it("an older contribution leaves the body untouched, adds History only, and the Until date is the entry's factsAsOf", async () => {
+    const { r, prompt, all } = await run(
+      "the lint count was 42.",
+      `The lint count is 42.\n\n## History\n\n- Until 2026-10-25: 29. Now 42.\n${hist}`,
+    );
+    expect(prompt).toContain("ORIGIN DATE 2026-10-25; ENTRY FACTS AS OF 2026-11-20; CONTRIBUTION IS OLDER THAN THE ENTRY: yes");
+    expect(all).toContain("The lint count is 29.");
+    expect(all.split("## History")[0]).not.toContain("42");
+    expect(r.entry.detail).toContain("- Until 2026-11-20: 29. Now 42.");
+    expect(r.olderGuard?.discarded).toBe(true);
+    expect(r.entry.factsAsOf).toBe("2026-11-20");
+  });
+
+  it("a rewrap alone passes the guard; the model's History line is kept", async () => {
+    const { r, all } = await run("the lint count was 42.", `The lint\ncount is 29.\n\n## History\n\n- Until 2026-11-20: 29. Now 42.\n${hist}`);
+    expect(r.olderGuard).toBeUndefined();
+    expect(all).toContain("- Until 2026-11-20: 29. Now 42.");
+    expect(r.entry.factsAsOf).toBe("2026-11-20");
+  });
+
+  it("a changed figure in a line of identical length is caught", async () => {
+    const { r, all } = await run("the lint count was 92.", `The lint count is 92.\n\n## History\n\n${hist}`);
+    expect(r.olderGuard?.discarded).toBe(true);
+    expect(all).toContain("The lint count is 29.");
+    expect(all).not.toContain("92");
+  });
+
+  it("an entry with no lede or H1 keeps its real line when the model changes it", async () => {
+    const bare = `---\nid: kb-wolfpack-AbC1234\ncreated: 2026-10-01\nupdated: 2026-11-21\nfactsAsOf: 2026-11-20\n---\nThe lint count is 29.\n\n## History\n\n${hist}\n`;
+    const { r, all } = await run("the lint count was 92.", `The lint count is 92.\n\n## History\n\n${hist}`, { existingMarkdown: bare });
+    expect(r.olderGuard?.discarded).toBe(true);
+    expect(all).toContain("The lint count is 29.");
+    expect(all).not.toContain("92");
+  });
+
+  it("an existing History line the model restates adds nothing", async () => {
+    const { r, all } = await run("the lint count was 92.", `The lint count is 92.\n\n## History\n\n${hist}\n${hist}`);
+    expect(r.olderGuard).toMatchObject({ discarded: true, historyAdded: [] });
+    expect(all.split(hist).length - 1).toBe(1);
+  });
+
+  it("a newer contribution replaces the fact and advances factsAsOf to its date", async () => {
+    const { r, prompt, all } = await run(
+      "the lint count is 12.",
+      `The lint count is 12.\n\n## History\n\n- Until 2026-11-20: 29. Now 12.\n${hist}`,
+      {},
+      { sourceUpdated: "2026-11-25" },
+    );
+    expect(prompt).toContain("CONTRIBUTION IS OLDER THAN THE ENTRY: no");
+    expect(all).toContain("The lint count is 12.");
+    expect(r.entry.detail).toContain("- Until 2026-11-20: 29. Now 12.");
+    expect(r.olderGuard).toBeUndefined();
+    expect(r.entry.factsAsOf).toBe("2026-11-25");
+  });
+
+  it("a History-only merge does not advance factsAsOf", async () => {
+    const { r } = await run("a note", `The lint count is 29.\n\n## History\n\n- Until 2026-11-20: 28. Now 29.\n${hist}`, {}, { sourceUpdated: "2026-11-25" });
+    expect(r.entry.factsAsOf).toBe("2026-11-20");
+  });
+
+  it("an entry without factsAsOf derives it from its newest History date, else updated", async () => {
+    const noField = prev.replace("factsAsOf: 2026-11-20\n", "");
+    const a = await run("x", `The lint count is 29.\n\n## History\n\n${hist}`, { existingMarkdown: noField });
+    expect(a.prompt).toContain("ENTRY FACTS AS OF 2026-10-01");
+    const noHist = noField.replace(/## History[\s\S]*/, "");
+    const b = await run("x", "The lint count is 29.", { existingMarkdown: noHist });
+    expect(b.prompt).toContain("ENTRY FACTS AS OF 2026-11-21");
+  });
+
+  it("a contribution with no date anywhere is treated as newer", async () => {
+    const { r, prompt, all } = await run(
+      "The lint count is 12.",
+      `The lint count is 12.\n\n## History\n\n${hist}`,
+      {},
+      { sourceUpdated: undefined, submitted: undefined, summary: "s" } as Partial<ParsedContribution>,
+    );
+    expect(prompt).toContain("ORIGIN DATE unknown");
+    expect(prompt).toContain("CONTRIBUTION IS OLDER THAN THE ENTRY: no");
+    expect(all).toContain("The lint count is 12.");
+    expect(r.olderGuard).toBeUndefined();
+  });
+
+  it("a decision entry is never touched by the guard", async () => {
+    const decision = prev.replace("id: kb-wolfpack-AbC1234", "id: kb-wolfpack-AbC1234\nkind: decision");
+    const { r } = await run("the lint count was 42.", "The lint count is 42.", { existingMarkdown: decision });
+    expect(r.olderGuard).toBeUndefined();
+  });
+
+  it("update in place keeps the old body when the answer grows the entry by more than 10%", async () => {
+    const same = await run("Lint: 12 findings.", `The lint count is 12.\n\n## History\n\n${hist}`, { updateInPlace: true }, { sourceUpdated: undefined, submitted: undefined } as Partial<ParsedContribution>);
+    expect(same.prompt).toContain("UPDATE IN PLACE: yes");
+    expect(same.all).toContain("The lint count is 12.");
+    const grown = await run("Lint: 12 findings.", `The lint count is 12, across seven packages, and a whole new paragraph.\n\n## History\n\n${hist}`, { updateInPlace: true }, { sourceUpdated: undefined, submitted: undefined } as Partial<ParsedContribution>);
+    expect(grown.all).toContain("The lint count is 29.");
+    expect(grown.all).not.toContain("paragraph");
+  });
 });

@@ -41,6 +41,7 @@ const { FakeNav } = await import("../../helpers/fake-nav.tsx");
 const { GraphPane, clearPaneCache } = await import("../../../components/graph/graph-pane.tsx");
 const { GraduateStartDialog, GraduateToasts } = await import("../../../components/kb/graduate-dialog.tsx");
 const { graduateStore } = await import("../../../components/kb/graduate-store.ts");
+const { onGraduated } = await import("../../../components/kb/graduation-signal.ts");
 const { graduateState, graduationWolf } = await import("../../../src/core/kb/graduate.ts");
 const { buildWorkTable } = await import("../../../src/core/work/work-table.ts");
 const { describeNode } = await import("../../../src/core/graph/kb-graph-model.ts");
@@ -188,6 +189,8 @@ interface FakeGraduate extends GraduateClient {
 	/** Request ids this console approved. */
 	approved: string[];
 	approveResult: KbResult<unknown>;
+	/** What re-reading the request answers (default: still pending). */
+	requestResult: KbResult<{ request: { id: string; status: "pending" | "approved" | "rejected" } }>;
 	statusCalls: number;
 	runningPolls: number;
 	/** What the first status read says before any start (a job the wolf already holds). */
@@ -203,6 +206,8 @@ const fakeGraduate = (over: Partial<FakeGraduate> = {}): FakeGraduate => {
 		starts: [],
 		approved: [],
 		approveResult: { ok: true, data: {} },
+		requestResult: { ok: true, data: { request: { id: "req-1", status: "pending" } } },
+		request: async () => g.requestResult,
 		approve: async (rid) => {
 			g.approved.push(rid);
 			return g.approveResult;
@@ -874,6 +879,69 @@ describe("graduate store: jobs that cannot advance", () => {
 		const calls = reads;
 		await new Promise((r) => setTimeout(r, 30));
 		assert.equal(reads, calls, "the poll stopped");
+	});
+});
+
+describe("graduate store: an approval the hub finished after the console gave up", () => {
+	const T = { id: "ready", title: "Ready feature", assignee: "hal" };
+	const wait = async (what: string, cond: () => boolean) => {
+		for (let i = 0; i < 400; i++) {
+			if (cond()) return;
+			await new Promise((r) => setTimeout(r, 5));
+		}
+		assert.fail(`timed out waiting for ${what}`);
+	};
+	/** Preview, then confirm, on `g`; resolves once the job left `graduating`. */
+	const runConfirm = async (g: GraduateClient) => {
+		graduateStore.reset();
+		await graduateStore.startPreview(g, T, "hal");
+		await wait("Review", () => graduateStore.get("ready")?.phase === "ready");
+		await graduateStore.confirm(g, "ready");
+		await wait("the outcome", () => graduateStore.get("ready")?.phase !== "graduating");
+	};
+	const timeout: KbResult<unknown> = { ok: false, reason: "error", message: "The hub did not answer within 5000ms", code: "error" };
+	const signalled: string[] = [];
+	let off = () => {};
+	beforeEach(() => {
+		signalled.length = 0;
+		off = onGraduated((id) => signalled.push(id));
+	});
+	afterEach(() => off());
+
+	it("an approve that failed but whose request the hub says is approved is a success, not an error", async () => {
+		const g = fakeGraduate({ approveResult: timeout, requestResult: { ok: true, data: { request: { id: "req-1", status: "approved" } } } });
+		await runConfirm(g);
+		assert.equal(graduateStore.get("ready"), undefined);
+		assert.deepEqual(graduateStore.getDone().map((d) => d.id), ["ready"]);
+		assert.deepEqual(signalled, ["ready"]);
+	});
+	it("an 'already approved' answer to approve is a success", async () => {
+		const g = fakeGraduate({ approveResult: { ok: false, reason: "error", code: "invalid_request", message: "request req-1 is already approved" } });
+		await runConfirm(g);
+		assert.equal(graduateStore.get("ready"), undefined);
+		assert.deepEqual(signalled, ["ready"]);
+	});
+	it("a failed approve of a request still pending stays an error that says it is still pending and where to approve it", async () => {
+		const g = fakeGraduate({ approveResult: timeout });
+		await runConfirm(g);
+		const cur = graduateStore.get("ready") as { phase: string; message: string };
+		assert.equal(cur.phase, "error");
+		assert.match(cur.message, /still pending/);
+		assert.match(cur.message, /Needs-you/);
+		assert.deepEqual(signalled, []);
+	});
+	it("a successful graduation drops the failed-confirm banner of the earlier attempt", async () => {
+		const g = fakeGraduate({ confirmOutcome: { state: "preview_ready", jobId: "j", preview: PREVIEW, lastError: { kind: "confirm", code: "engine_error", message: "model exploded" } } });
+		await runConfirm(g);
+		assert.equal((graduateStore.get("ready") as { lastError?: unknown }).lastError !== undefined, true);
+		g.confirmOutcome = { state: "graduated", jobId: "j", result: RESULT };
+		await graduateStore.confirm(g, "ready");
+		await wait("done", () => graduateStore.getDone().length === 1);
+		assert.equal(graduateStore.get("ready"), undefined);
+		g.previewOutcome = { state: "preview_ready", jobId: "j", preview: PREVIEW };
+		await graduateStore.startPreview(g, T, "hal");
+		await wait("Review", () => graduateStore.get("ready")?.phase === "ready");
+		assert.equal((graduateStore.get("ready") as { lastError?: unknown }).lastError, undefined);
 	});
 });
 

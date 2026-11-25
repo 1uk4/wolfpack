@@ -42,6 +42,8 @@ import { createKbActivity, type KbActivity } from "./kb-activity.js";
 import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket, type SocketIdentity } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
 import { createRebuildService, type RebuildService } from "./kb-rebuild.js";
+import { createRebuildRequester, PreviewBusyError } from "./rebuild-requests.js";
+import { loadPlanFile } from "@wolfpack/kb/librarian";
 import { createHubHealth, createPackSummary, type HubHealth, type PackSummary } from "./health.js";
 import { createCurator, curatorEmbedderFactory, curatorEngineFactory, DEFAULT_CURATOR_POLL_MS, type Curator, type CuratorOptions, type CuratorRun } from "./curator.js";
 import { createEmbeddingCache, curatedTopics, matchKb, ollamaFromEnv, unchangedItems, type OllamaConfig } from "./crawl-endpoints.js";
@@ -327,6 +329,36 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   const machineKeys: MachineKeys = createMachineKeys(opts.dataDir);
   let health: HubHealth | undefined; // started inside the start try below, stopped there if startup fails
   let rebuild: RebuildService | undefined; // set with the curator below
+  // Sweep autonomy: a from=current preview through the rebuild service (same path as the admin route), then a request for the owner. Never applies.
+  let hubClosing = false;
+  const rebuildRequester = createRebuildRequester({
+    dataDir: opts.dataDir,
+    now: opts.now,
+    stopped: () => hubClosing,
+    preview: async (domain, started) => {
+      if (!rebuild) throw new Error("the rebuild service is not up yet");
+      let jobId: string;
+      try {
+        ({ jobId } = rebuild.preview(domain, { from: "current", applyCrossMoves: false, approvedCrossMoves: [], allowCollapse: false, allowKmeansFallback: false }));
+      } catch (e) {
+        if (e instanceof HubError && e.code === "conflict") throw new PreviewBusyError(e.message);
+        throw e;
+      }
+      started();
+      for (let i = 0; i < 900; i++) { // up to 30 min; the preview runs in the background job, this only polls
+        if (hubClosing || !rebuild) throw new Error("hub closing");
+        const job = rebuild!.list().jobs.find((j) => j.jobId === jobId);
+        if (job?.state === "failed") throw new Error(job.error ?? "preview failed");
+        if (job?.state === "done" && job.planId) {
+          const p = loadPlanFile(join(opts.dataDir, "rebuild-plans", `${job.planId}.json`));
+          return { planId: job.planId, domain, sectionIds: p.tree.map((t) => String(t.id)), assignment: p.assignment };
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      throw new Error("preview timed out");
+    },
+    notify: (r) => console.log(`hubd: a rebuild is proposed for ${r.domain}: plan ${r.planId} (${r.sections} sections, ${r.entries} entries; over the split threshold: ${r.oversize.map((o) => `${o.id} (${o.count})`).join(", ")}). Review and apply it with POST /v1/admin/kb/rebuild/apply`),
+  });
   let kbActivity: KbActivity | undefined; // set with the curator below (its on/off state is part of the answer)
   let kbWriter: ReturnType<typeof createKbWriter> | undefined; // taken inside the start try below, so a failed start releases it
   const writer = createWorkWriter({
@@ -1106,7 +1138,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     if (opts.socketPath === undefined) port = (server.address() as AddressInfo).port;
     revisions.start();
     // After the KB writer, the bus and the link exist: a refused start (wolf lease, foreign lane) throws here and releases everything.
-    curator = createCurator({ dataDir: opts.dataDir, roots, inboxRoot, receiptsRoot, commit: (a, r) => kbWriter!.commit(a, r), exclusive: (fn) => kbWriter!.exclusive(fn), emit: (d) => void bus.emit(d), options: { now: opts.now, ...opts.curator } });
+    curator = createCurator({ dataDir: opts.dataDir, roots, inboxRoot, receiptsRoot, commit: (a, r) => kbWriter!.commit(a, r), exclusive: (fn) => kbWriter!.exclusive(fn), emit: (d) => void bus.emit(d), options: { now: opts.now, ...opts.curator, ...(opts.curator?.autoRebuildPreview === true ? { onSplitDue: (domain: string, list: { id: string; count: number }[]) => rebuildRequester.onSplitDue(domain, list).then(() => undefined) } : {}) } });
     curator.start();
     kbActivity = createKbActivity({ roots, inboxRoot, receiptsRoot, curator, now: opts.now });
     rebuild = createRebuildService({
@@ -1145,6 +1177,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */
     close: () =>
       new Promise<void>((resolve) => {
+        hubClosing = true;
         health?.stop();
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
         revisions.stop(); // before the KB writer closes

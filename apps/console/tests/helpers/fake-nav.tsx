@@ -9,9 +9,11 @@ export interface NavLog {
 	/** history.state per entry (Next owns it; the reader stamps a marker into it with replaceState). */
 	states: unknown[];
 	index: number;
+	/** router.push/replace calls since the last reset (a test sets it to 0 before the click it measures). */
+	writes: number;
 }
 
-export const navLog: NavLog = { stack: [], states: [], index: 0 };
+export const navLog: NavLog = { stack: [], states: [], index: 0, writes: 0 };
 // window.history over the same stack: `state` is the current entry's, replaceState rewrites it.
 Object.defineProperty(window, "history", {
 	configurable: true,
@@ -24,6 +26,9 @@ Object.defineProperty(window, "history", {
 		},
 	},
 });
+/** Next applies router.push/replace after a transition, so searchParams are stale for a moment. `defer` mimics that: the URL changes a macrotask later. */
+export const navOptions = { defer: false };
+const later = (fn: () => void) => (navOptions.defer ? void setTimeout(fn, 0) : fn());
 export const currentUrl = (): string => navLog.stack[navLog.index]!;
 let setIdx: ((i: number) => void) | null = null;
 /** Browser Back / Forward. */
@@ -40,16 +45,18 @@ export function FakeNav({ start, children }: { start: string; children: ReactNod
 	const setIndex = (i: number) => { navLog.index = i; setTick((t) => t + 1); };
 	setIdx = setIndex;
 	const router = {
-		push: (h: string) => {
+		push: (h: string) => later(() => {
+			navLog.writes++;
 			navLog.stack = [...navLog.stack.slice(0, navLog.index + 1), h];
 			navLog.states = [...navLog.states.slice(0, navLog.index + 1), null];
 			setIndex(navLog.stack.length - 1);
-		},
-		replace: (h: string) => {
+		}),
+		replace: (h: string) => later(() => {
+			navLog.writes++;
 			navLog.stack[navLog.index] = h;
 			navLog.states[navLog.index] = null; // Next writes fresh state on replace: any marker is lost
 			setIndex(navLog.index);
-		},
+		}),
 		back: historyBack,
 		forward: historyForward,
 	};

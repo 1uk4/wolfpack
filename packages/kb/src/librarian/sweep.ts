@@ -29,11 +29,16 @@ import { anchorIndex, anchorOf, groupOf, oldHubFor } from "./anchors.js";
 import { syncDelivered } from "./groups.js";
 import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
-import { DEFAULT_RULES } from "./tree-rules.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
-import { resolveAliasedEntry, survivorOf } from "./alias.js";
+import { survivorOf } from "./alias.js";
+import { lookupAlias, applyAliasRoute, aliasClaim, claimHashes } from "./sweep-alias.js";
+import { maxMergeTargetCharsFor, mergeSizeLimit, exemptFromSizeGuard, notifyKeptOversize, shouldRoutePlacement } from "./sweep-size.js";
+import { exceedsSplitAbove, notifySplitDue, replaceMisfits, type OversizeSection, type SplitDueHook } from "./sweep-replace.js";
+import { splitThresholdFor } from "./tree-rules.js";
 import { produceEntry, produceVerbatim, type ProduceEntryInput } from "./produce.js";
+import { type VerbatimResult } from "./produce-verbatim.js";
+import { historyChildIdOf, withDetail, writeHistoryChild } from "./history-child.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
 import { tryRecoverAndRender, badJournalNote } from "./rebuild-recover.js";
@@ -100,6 +105,10 @@ export interface SweepContext {
   readLog?: () => KbEvent[] | Promise<KbEvent[]>;
   /** Step timings for the tick's one log line (see timings.ts). */
   timings?: Timings;
+  /** Host hook: a domain has parent sections over the split threshold. Called once per domain per sweep, never awaited; a throw is logged and ignored. */
+  onSplitDue?: SplitDueHook;
+  /** Re-placement of misfit entries (replaceMisfits): default TRUE = only log the planned moves; false writes them. */
+  replaceDryRun?: boolean;
 }
 
 /** One contribution the sweep could not commit, with a human-readable reason. */
@@ -347,13 +356,14 @@ export function emptyResult(): SweepResult {
  * stay-in-parent rule keeps leftovers there and the sweep never reorganises, so this is the signal a rebuild is due.
  * Called once per sweep. Grouped entries follow their holder and are not counted.
  */
-export async function oversizedParents(roots: KbRoots, sections: Section[], timings?: Timings): Promise<string[]> {
+export async function oversizedParents(roots: KbRoots, sections: Section[], timings?: Timings): Promise<OversizeSection[]> {
   let seen = 0;
-  const out: string[] = [];
+  const out: OversizeSection[] = [];
   for (const domain of new Set(sections.map((s) => String(s.domain)))) {
     const withKids = new Set(sections.filter((s) => String(s.domain) === domain && s.parent).map((s) => String(s.parent)));
     if (!withKids.size) continue;
     const counts = new Map<string, number>();
+    let domainSize = 0; // ungrouped entries: the split threshold scales with the domain (splitThresholdFor)
     const dir = join(roots.kbBase, "domains", domain, "entries");
     if (!existsSync(dir)) continue;
     for (const f of listEntryFiles(dir)) {
@@ -363,10 +373,12 @@ export async function oversizedParents(roots: KbRoots, sections: Section[], timi
       const t0 = performance.now();
       try { e = readEntryCached(join(dir, f)); } catch { continue; } finally { timings?.add("oversized", performance.now() - t0); }
       if (!e || e.group()) continue;
+      domainSize++;
       const sec = String(e.fields.section ?? "");
       if (sec && withKids.has(sec)) counts.set(sec, (counts.get(sec) ?? 0) + 1);
     }
-    for (const [id, n] of [...counts].sort()) if (n > DEFAULT_RULES.splitAbove) out.push(`${id} (${n})`);
+    const threshold = splitThresholdFor(domainSize);
+    for (const [id, n] of [...counts].sort()) if (exceedsSplitAbove(n, threshold)) out.push({ id, domain, count: n, threshold });
   }
   return out;
 }
@@ -438,7 +450,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   let sections: Section[] = timed("sections", () => readSections(roots));
   {
     const big = await oversizedParents(roots, sections, T);
-    if (big.length) ctx.notify?.(`sweep: ${big.length} parent section(s) hold more than ${DEFAULT_RULES.splitAbove} direct entries (${big.join(", ")}); a rebuild is due`);
+    void notifySplitDue(ctx.notify, big, ctx.onSplitDue);
   }
 
   const batch: KbEvent[] = [];
@@ -470,12 +482,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // registry and git commit are done by then).
   const itemEvents: SweepEvent[] = [];
 
-  // The contribution gets the whole run budget. The merge threshold derives from
-  // it: budget * mergeBudgetFraction / msPerMergeChar (600s -> 24,000 chars).
+  // The contribution gets the whole run budget. The merge target limit is a fixed 2x BODY_CAP (sweep-size.ts).
   const itemBudgetMs = budgetMs;
-  const maxMergeTargetChars = Math.floor(
-    (itemBudgetMs * SWEEP.mergeBudgetFraction) / SWEEP.msPerMergeChar
-  );
+  const maxMergeTargetChars = maxMergeTargetCharsFor();
 
   for (const c of contributions) {
     if (ctx.signal?.aborted) {
@@ -577,28 +586,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       let targetId: string | undefined;
       // An alias is an explicit routing decision: the entry is looked up in ITS
       // OWN domain, even when the contribution's domain hint differs.
-      let aliasedFrom: string | undefined;
-      let aliasMissing: string | undefined;
-      if (!c.anchor) {
-        for (const topic of reg.values()) {
-          const alias = topic.aliases.find((a) => a.wolf === c.from && a.denTopicId === c.denTopicId);
-          if (!alias) continue;
-          aliasedFrom = topic.entries[0];
-          const hit = aliasedFrom ? resolveAliasedEntry(roots, log, aliasedFrom, topic.domain || domain) : null;
-          if (hit) {
-            if (hit.followedFrom) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → alias ${hit.followedFrom} was retired, following it to ${hit.id}`);
-            if (hit.domain !== domain) {
-              ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → alias ${hit.id} is in domain ${hit.domain}, contribution says ${domain}: merging into the alias`);
-              routing.domainMismatch = { hint: domain, entry: hit.domain };
-              domain = hit.domain;
-            }
-            aliasedFrom = hit.id;
-          } else {
-            aliasMissing = aliasedFrom;
-          }
-          break;
-        }
-      }
+      const aliasLookup = lookupAlias(roots, log, reg, c, domain, routing, ctx.notify);
+      const { aliasedFrom, aliasMissing } = aliasLookup;
+      const claim = aliasClaim(reg, c); // once per item: the skip and the updateInPlace flag both read it
+      domain = aliasLookup.domain;
       // A decision another entry supersedes is history: contributions go to the
       // newest decision in the chain, never to the old one.
       const superseded = supersededIds(roots, domain);
@@ -649,17 +640,25 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           targetId = named;
           routing.route = "alias";
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${named} (update diff)`);
-        } else if (aliasedFrom && !aliasMissing) {
-          targetId = head(aliasedFrom);
-          routing.route = "alias";
-        } else if (aliasMissing) {
-          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry, WARNING: aliased entry ${aliasMissing} has no file and no survivor`);
-          routing.warning = `aliased entry ${aliasMissing} has no file and no survivor`;
+        } else if (aliasedFrom || aliasMissing) {
+          targetId = applyAliasRoute(aliasLookup, c, routing, head, ctx.notify) ?? targetId;
+          if (targetId && routing.route === "alias" && claim === "skip") {
+            const reason = "no-new-claim";
+            ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${targetId} already holds this claim, skipped (${reason})`);
+            await w.writeReceipt(roots, c.from, c, "reject", reason);
+            await w.markProcessed(c);
+            result.rejected++;
+            const decision: DecisionSummary = { outcome: "reject", reason, routing: routingSummary(routing) };
+            await recordDecision(decision);
+            itemEvent = { outcome: "reject", decision };
+            outcome = "skipped (no new claim)";
+            return null;
+          }
         }
       }
       // The size limit also keeps an oversized entry out of the candidates:
       // the merge rewrites the whole entry.
-      const sizeLimit = Number(process.env.KB_MAX_MERGE_TARGET_CHARS) || maxMergeTargetChars;
+      const sizeLimit = mergeSizeLimit(maxMergeTargetChars);
       if (!targetId && !c.anchor) {
         const ranked: Array<{ id: string; score: number; title: string; summary: string }> = [];
         for (const e of entryVectors) {
@@ -738,7 +737,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // (Similarity candidates were already filtered by size above; this
       // catches an alias match.)
       // (A verbatim anchored entry is replaced whole, not merged: no guard.)
-      if (targetId && !(c.anchor && c.verbatim)) {
+      if (targetId && !exemptFromSizeGuard(c)) {
         const size = readEntryMarkdown(roots, domain, targetId)?.length ?? 0;
         if (size > sizeLimit) {
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (target ${targetId} is ${size} chars, budget allows ${sizeLimit})`);
@@ -893,15 +892,29 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         liveIds,
         resolveLinks: (links) => links.map((id) => liveSurvivor(log, liveIds, id)).filter((id): id is string => !!id),
         allowOverflow: overflowOk,
+        updateInPlace: routing.route === "alias" && !!targetId && claim === "update-in-place",
       };
       // Verbatim: the anchored entry is the contribution as authored, no model call.
-      const { entry: produced, action, unchanged, supersedes, historyRestored, lint, overflow, deduped } = c.anchor && c.verbatim
-        ? produceVerbatim(produceInput)
-        : await produceEntry(itemEngine, produceInput);
-      const entry = withSourceProperties(produced, c.source, existingMarkdown);
+      const childId0 = historyChildIdOf(existingMarkdown);
+      const verbatim: VerbatimResult | undefined = c.anchor && c.verbatim
+        ? produceVerbatim({ ...produceInput, existingHistoryMarkdown: childId0 ? readEntryMarkdown(roots, domain, childId0) : null })
+        : undefined;
+      const { entry: produced, action, unchanged, supersedes, historyRestored, lint, overflow, deduped } = verbatim ?? await produceEntry(itemEngine, produceInput);
+      const { historyChild, fullDetail } = verbatim ?? ({} as Partial<VerbatimResult>);
+      let entry = withSourceProperties(produced, c.source, existingMarkdown);
+      // Anchor History fold: the child is written first; if that fails the parent keeps its History (no dangling pointer).
+      if (historyChild) {
+        try {
+          await w.appendLedger(roots, writeHistoryChild(roots, { parentId: entry.id, domain, section: entry.section, placement: entry.placement, date: entry.updated, ...historyChild }));
+        } catch (err) {
+          entry = withDetail(entry, fullDetail ?? entry.detail, !existingMarkdown || !historyChildIdOf(existingMarkdown));
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → History fold of ${entry.id} not written, kept in place: ${cleanError(err)}`);
+        }
+      }
       if (lint?.retried) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → produce retried for lint: ${lint.before.map((f) => f.code).join(",")}`);
       if (lint?.sizePass) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → size pass on ${entry.id}`);
-      if (lint?.oversizeChars) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → kept oversize: ${entry.id} ${lint.oversizeChars}`);
+      const over = notifyKeptOversize(ctx.notify, c, entry.id, lint?.oversizeChars, entry.detail);
+      if (over.parts.length) { entry = withDetail(entry, over.keep); for (const part of over.parts) requeueOverflow(roots, part, lane); }
       if (lint?.after.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entry.id} kept with lint findings: ${lint.after.map((f) => f.code).join(",")}`);
       if (lint?.strippedLinks?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → stripped ${lint.strippedLinks.length} link(s) to no entry from ${entry.id}: ${lint.strippedLinks.join(", ")}`);
       if (deduped?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → collapsed ${deduped.length} duplicate paragraph/line(s) in ${entry.id}`);
@@ -932,7 +945,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           fit: placement.fit,
         }));
       }
-      pend.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
+      pend.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash, claimHashes(c.body)));
       // The intent (same events) goes to disk BEFORE the entry is live; replayed at the next tick if we crash before the append.
       const patched = unchanged && existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry) ? patchSourceProperties(existingMarkdown, entry) : undefined;
       const expectText = !unchanged ? renderEntry(entry) : patched;
@@ -993,7 +1006,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       return { entry, action, domain, overflow, route: routing.route, decision };
       };
 
-      const placed = await place(c, domain, routing, !c.denTopicId.includes("~split-"));
+      const placed = await place(c, domain, routing, shouldRoutePlacement(c));
       if (!placed) return;
       const { entry, action } = placed;
       // A second subject the produce step split out: committed after the main
@@ -1103,6 +1116,15 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       ctx.notify?.(
         `item ${c.from}/${c.denTopicId}: ${route} · llm ${secs(llmMs)} · total ${secs(Date.now() - itemStart)} → ${outcome}`
       );
+    }
+  }
+
+  // ── RE-PLACEMENT (end of the placement phase): re-home misfit entries, bounded; never fails the sweep ──
+  if (touchedDomains.size > 0 && !ctx.signal?.aborted) {
+    try {
+      await replaceMisfits({ roots, sections, domains: [...touchedDomains], loadEntryVectors: ctx.loadEntryVectors, writer: w, notify: ctx.notify, dryRun: ctx.replaceDryRun !== false, ledger: log });
+    } catch (err) {
+      ctx.notify?.(`sweep: re-placement failed (skipped): ${cleanError(err)}`);
     }
   }
 

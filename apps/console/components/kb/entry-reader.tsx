@@ -1,7 +1,7 @@
 "use client";
 
 /** A KB entry PAGE (/kb/entry/[id]): breadcrumb, frontmatter facts, body with live wikilinks, related + backlinks. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronRightIcon } from "lucide-react";
@@ -35,7 +35,22 @@ export function entryReaderState(res: KbResult<KbEntryDetail>): EntryReaderState
 	return { kind: "error", message: res.message };
 }
 
-export function EntryReader({ id }: { id: string }) {
+/** An in-app KB link: `/kb/entry/<id>` is kind kb, `/kb/work/<id>` is kind work; anything else is null. */
+function viewFromHref(href: string | null): { kind: "kb" | "work"; id: string } | null {
+	const m = /^\/kb\/(entry|work)\/([^/?#]+)$/.exec(href ?? "");
+	if (!m) return null;
+	try {
+		return { kind: m[1] === "entry" ? "kb" : "work", id: decodeURIComponent(m[2]!) };
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * `chrome="none"` hosts the entry in the viewer shell: no top bar. EntryReader never handles Esc (only EntryReaderPage does).
+ * `onOpenView` takes over plain clicks on links to other entries / work items; modified or non-primary clicks and external links behave as usual.
+ */
+export function EntryReader({ id, chrome = "full", onTitle, onOpenView }: { id: string; chrome?: "full" | "none"; onTitle?: (title: string) => void; onOpenView?: (view: { kind: "kb" | "work"; id: string }) => void }) {
 	const [fetched, setFetched] = useState<{ id: string; state: EntryReaderState } | null>(null);
 
 	useEffect(() => {
@@ -49,7 +64,31 @@ export function EntryReader({ id }: { id: string }) {
 	}, [id]);
 
 	const state: EntryReaderState = fetched?.id === id ? fetched.state : { kind: "loading" };
-	return <EntryReaderView id={id} state={state} />;
+	const title = state.kind === "ready" ? state.entry.title : null;
+	const titleRef = useRef(onTitle);
+	titleRef.current = onTitle;
+	useEffect(() => {
+		if (title) titleRef.current?.(title);
+	}, [title]);
+	const view = <EntryReaderView id={id} state={state} chrome={chrome} />;
+	if (!onOpenView) return view;
+	return (
+		<div
+			className="contents"
+			// Capture phase: the anchor is a next/link whose own onClick preventDefaults and navigates, so a bubbling handler here runs too late.
+			onClickCapture={(e) => {
+				if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+				const a = (e.target as Element | null)?.closest?.("a");
+				const target = viewFromHref(a?.getAttribute("href") ?? null);
+				if (!target) return;
+				e.preventDefault();
+				e.stopPropagation();
+				onOpenView(target);
+			}}
+		>
+			{view}
+		</div>
+	);
 }
 
 /**
@@ -93,16 +132,16 @@ export function EntryReaderPage({ id }: { id: string }) {
 }
 
 /** Presentational half (SSR-testable). */
-export function EntryReaderView({ id, state }: { id: string; state: EntryReaderState }) {
+export function EntryReaderView({ id, state, chrome = "full" }: { id: string; state: EntryReaderState; chrome?: "full" | "none" }) {
 	const entry = state.kind === "ready" ? state.entry : null;
 	return (
-		<div className="flex h-dvh flex-col" data-testid="entry-reader" data-entry={id} data-state={state.kind}>
-			<TopBar>
+		<div className={chrome === "none" ? "flex flex-col" : "flex h-dvh flex-col"} data-testid="entry-reader" data-entry={id} data-state={state.kind}>
+			{chrome !== "none" && <TopBar>
 				<h1 className="min-w-0 truncate font-title text-3xl tracking-tight">{entry?.title ?? id}</h1>
 				<Link href={focusHref(`ent:${id}`)} className="ml-auto flex shrink-0 items-center text-xs text-muted-foreground underline underline-offset-2 max-md:min-h-11 max-md:min-w-11 max-md:justify-center" data-testid="entry-open-in-graph">
 					Open in graph
 				</Link>
-			</TopBar>
+			</TopBar>}
 			<div className="min-h-0 flex-1 overflow-y-auto">
 				<div className="mx-auto max-w-3xl px-6 py-8">
 					{state.kind === "loading" && <p className="text-sm text-muted-foreground">Loading…</p>}

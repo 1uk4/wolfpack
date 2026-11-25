@@ -8,8 +8,9 @@ import React, { act } from "react";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { WolfAllSettings, type WolfSettingsView } from "../../../components/pack/wolf-all-settings.tsx";
+import { WolfAllSettings, WolfRestartBar, type WolfSettingsView } from "../../../components/pack/wolf-all-settings.tsx";
 import { WolfDetail } from "../../../components/pack/pack-wolves.tsx";
+const { RouterStub } = await import("../../helpers/router-stub.tsx");
 
 const view: WolfSettingsView = {
 	etag: "e1",
@@ -25,23 +26,31 @@ const noCall = (async () => new Response("{}")) as typeof fetch;
 
 describe("Pack > Wolves > All settings", () => {
 	it("offers every editable setting except the three the Pack's own pickers own", () => {
-		const html = renderToStaticMarkup(<WolfAllSettings wolfName="hal" view={view} call={noCall} onView={() => {}} onReload={() => {}} />);
+		const html = renderToStaticMarkup(<WolfAllSettings wolfName="hal" view={view} call={noCall} onView={() => {}} sections={["models", "subagents", "compaction", "memory", "other", "env"]} />);
 		for (const k of ["models.main.thinking", "memory.enabled", "compaction.threshold"]) assert.match(html, new RegExp(`data-testid="field-${k}"`), k);
 		for (const k of ["models.main.model", "models.main.provider", "memory.model"]) assert.ok(!html.includes(`data-testid="field-${k}"`), k);
 		assert.ok(!html.includes('data-testid="field-prompts.structuredOutput"'), "structured-output editing is gone");
-		assert.match(html, /data-testid="banner-restart-needed"/);
-		assert.match(html, /data-testid="restart-button"/);
 		assert.match(html, /data-testid="env-ANTHROPIC_API_KEY"/);
 	});
 
-	it("shows no All settings section in a wolf this console cannot reach (the reachable case is in render-pack-settings-coverage)", () => {
+	it("renders only the sections a tab asks for, and the restart bar carries the banner and the Restart button", () => {
+		const only = renderToStaticMarkup(<WolfAllSettings wolfName="hal" view={view} call={noCall} onView={() => {}} sections={["env"]} />);
+		assert.match(only, /data-testid="section-env"/);
+		for (const id of ["color", "models", "subagents", "compaction", "memory", "other", "config"]) assert.ok(!only.includes(`data-testid="section-${id}"`), id);
+		const bar = renderToStaticMarkup(<WolfRestartBar wolfName="hal" view={view} call={noCall} onView={() => {}} onReload={() => {}} />);
+		assert.match(bar, /data-testid="banner-restart-needed"/);
+		assert.match(bar, /data-testid="restart-button"/);
+	});
+
+	it("shows no settings section in a wolf this console cannot reach (the reachable case is in render-pack-settings-coverage)", () => {
 		const machine = { hostId: "sfo", machine: "sfo-01", online: true, canSetKeys: true, slots: [], wolves: [{ name: "dewey", transport: "api" as const }] };
 		const wolf = machine.wolves[0]!;
 		const detail = (reach: { relay: boolean; machine: string }) =>
-			renderToStaticMarkup(<WolfDetail machine={machine} wolf={wolf} catalog={[]} reach={reach} call={noCall} onBack={() => {}} />);
+			renderToStaticMarkup(<RouterStub><WolfDetail machine={machine} wolf={wolf} catalog={[]} reach={reach} call={noCall} /></RouterStub>);
 		const away = detail({ relay: false, machine: "Mac" });
-		assert.ok(!away.includes('data-testid="wolf-all-settings"'));
+		assert.ok(!away.includes('data-testid="section-env"'));
 		assert.match(away, /data-testid="wolf-readonly"/);
+		assert.match(away, /data-testid="wolf-readonly"[^>]*>[^<]*\S/); // the note has text, not just the marker
 	});
 });
 
@@ -77,7 +86,7 @@ describe("Pack > Wolves > All settings (interaction)", () => {
 			calls.push({ url, init });
 			return new Response(JSON.stringify({ ...view, etag: "e2" }), { status: 200 });
 		}) as unknown as typeof fetch;
-		const { dom, root, q } = await mount(<WolfAllSettings wolfName="hal" view={view} call={call} onView={() => {}} onReload={() => {}} />);
+		const { dom, root, q } = await mount(<WolfAllSettings wolfName="hal" view={view} call={call} onView={() => {}} sections={["models", "subagents", "compaction", "memory", "other", "env"]} />);
 		await typeInto(dom, q("field-compaction.threshold")!, "90");
 		await click(dom, q("settings-save")!);
 		assert.equal(calls.length, 1);
@@ -89,7 +98,7 @@ describe("Pack > Wolves > All settings (interaction)", () => {
 
 	it("a 400 about a setting the form does not show still appears as a visible form error", async () => {
 		const call = (async () => new Response(JSON.stringify({ error: "memory.model: not a model" }), { status: 400 })) as unknown as typeof fetch;
-		const { dom, root, q } = await mount(<WolfAllSettings wolfName="hal" view={view} call={call} onView={() => {}} onReload={() => {}} />);
+		const { dom, root, q } = await mount(<WolfAllSettings wolfName="hal" view={view} call={call} onView={() => {}} sections={["models", "subagents", "compaction", "memory", "other", "env"]} />);
 		await typeInto(dom, q("field-compaction.threshold")!, "90");
 		await click(dom, q("settings-save")!);
 		assert.match(q("settings-form-error")?.textContent ?? "", /memory\.model: not a model/);
@@ -99,8 +108,8 @@ describe("Pack > Wolves > All settings (interaction)", () => {
 	it("a wolf whose settings fail to load shows the error in the All settings panel, not Loading", async () => {
 		const machine = { hostId: "sfo", machine: "sfo-01", online: true, canSetKeys: true, slots: [], wolves: [{ name: "dewey", transport: "api" as const }] };
 		const call = (async () => new Response(JSON.stringify({ error: "wolf is down" }), { status: 502 })) as unknown as typeof fetch;
-		const { root, q } = await mount(<WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "sfo-01" }} call={call} onBack={() => {}} />);
-		const panel = q("wolf-all-settings")!.textContent ?? "";
+		const { root, q } = await mount(<RouterStub><WolfDetail machine={machine} wolf={machine.wolves[0]!} catalog={[]} reach={{ relay: false, machine: "sfo-01" }} call={call} /></RouterStub>);
+		const panel = q("wolf-all-settings-error")!.textContent ?? "";
 		assert.match(panel, /wolf is down/);
 		assert.ok(!panel.includes("Loading"));
 		await act(async () => root.unmount());

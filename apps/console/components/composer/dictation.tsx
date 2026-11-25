@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { Loader2Icon, MicIcon } from "lucide-react";
-import { openPackHealth } from "@/components/pack/pack-health-store";
+import { openPackPage } from "@/components/pack/pack-nav";
 import { Hint } from "@/components/ui/hint";
 import { useSingleMac } from "@/components/shell/single-mac";
 import { cn } from "@/lib/utils";
@@ -107,7 +107,7 @@ export const METER_CELLS = 48;
 
 /** The keyless click: open the Pack at Keys, where the Deepgram key is added. */
 export function openDeepgramKeyInPack(): void {
-	openPackHealth(typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null), "keys");
+	openPackPage("keys");
 }
 
 /** The client-authored KEYLESS line (zero-keys wave, owner 2026-09-25):

@@ -183,6 +183,13 @@ describe("the Work list with a pending request", () => {
 		await click(q("work-toggle-no-initiative")!); // open the Inbox group the loose features sit in
 		assert.equal(q("work-graduate-f1"), null);
 		assert.ok(q("work-graduate-f9"), "the other item keeps its control");
+		const chips = document.querySelectorAll('[data-testid="work-awaiting-approval"]');
+		assert.equal(chips.length, 1, "only the pending item shows the chip");
+		assert.equal(chips[0]!.textContent, "awaiting approval");
+		// Narrow widths: the text is hidden below md and a text-free clock glyph stands in, so the chip cannot crowd out the title.
+		assert.equal(chips[0]!.querySelector("span")!.className, "hidden md:inline");
+		assert.ok(chips[0]!.querySelector("svg.md\\:hidden"), "compact glyph shows only below md");
+		assert.equal(q("work-graduate-f9")!.closest('[data-testid="work-awaiting-approval"]'), null);
 		assert.equal(q("work-assignee-f1")!.tagName, "SPAN", "static text, not a menu button");
 		assert.equal(q("work-assignee-f9")!.tagName, "BUTTON");
 	});

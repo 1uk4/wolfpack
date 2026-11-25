@@ -6,12 +6,17 @@
  * the members present; an entry it never categorised goes to "doesn't fit".
  *
  * Inserts vs rebuild (stay-in-parent placement rule): Work Item Tracking ARI .76 (passes), Console Chat .32 (known gap, below).
- * Tree shapes B produces at llmMinCoherence .7 (identical to .8 on these fixtures: every dropped category is far below .7) (rebuild from one root, default rules; "k" groups + leftovers kept in the parent):
- *   Console Chat (30)        4 groups of 4/4/5/5 (18 entries) + 12 leftovers ("Console chat UI" is kept as a partial group of its 4 coherent members; "CLI, providers" is dropped, 1/4 coherent)
- *   Work Item Tracking (14)  2 groups of 3/3 (6 entries)    + 8 leftovers    (three categories dropped or too small)
- *   Graduation (9)           not judged (<= splitAbove); with the size gate off: 2 groups of 3/4 + 2 leftovers
- *   Game Tracking (9)        not judged; with the size gate off: no coherent category, no split
+ * Current rules (work-wolfpack-Fs0BlY6, work-wolfpack-HIr2pfl): a split needs >= minCoherentGroups (3) coherent groups covering
+ * >= minCoverage (70%) of the members; the size threshold is per domain (splitThresholdFor, 12..24), but these evals pass
+ * ignoreSize, so only the group-count and coverage rules decide. With the recorded partitions (llmMinCoherence .7, identical
+ * at .8; same verdict with joinLeftovers on or off), NO fixture section is accepted any more:
+ *   Console Chat (30)        rejected: low-coverage. 4 categories survive ("Console chat UI" as a partial group of its coherent members;
+ *                            "CLI, providers" is dropped, 1/4 coherent) but they cover only 18/30 = 60% < 70%
+ *   Work Item Tracking (14)  rejected: fewer-than-three-groups. Only 2 categories survive (graph routes, operations/cutover)
+ *   Graduation (9)           rejected: fewer-than-three-groups. Only 2 categories survive (tree construction, graduation intake)
+ *   Game Tracking (9)        rejected: no-coherent-category
  *   grab bag (14)            nothing categorised: no split
+ * Because nothing is accepted, the rebuild shapes are all one section.
  */
 import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -51,29 +56,27 @@ const stub = (): Partitioner & { calls: string[][] } => {
 };
 const toMembers = (es: Fx[]) => es.map((e) => ({ id: e.id, title: e.title, summary: e.summary, vector: e.vec }));
 const toEntries = (es: Fx[]): RebuildEntry[] => es.map((e) => ({ id: e.id, title: e.title, summary: e.summary, vector: e.vec, kind: "fact" }));
-const groupSizes = (labels: number[], k: number) => Array.from({ length: k }, (_, g) => labels.filter((l) => l === g).length).sort((a, b) => a - b);
 
 describe("B: the validated LLM partition on the real sections (size gate off)", () => {
   const judge = (es: Fx[]) => judgeSplit({ partitioner: stub(), ignoreSize: true, rules: NO_JOIN }, { domain: "wp", parentTitle: "p", members: toMembers(es) });
 
-  it("Console Chat: four categories survive (one of them partial), the rest are leftovers", async () => {
+  it("Console Chat: four categories survive but cover only 60% of the members, so the split is rejected (low-coverage)", async () => {
     const v = await judge(set(CONSOLE));
-    expect(v.decision?.k).toBe(4);
-    expect(groupSizes(v.decision!.labels, 4)).toEqual([4, 4, 5, 5]);
-    expect(v.decision!.leftovers).toHaveLength(12);
+    expect(v.decision).toBeUndefined();
+    expect(v.reason).toBe("low-coverage");
+    expect(v.categories!.filter((c) => c.kept)).toHaveLength(4);
     expect(v.categories!.filter((c) => !c.kept).map((c) => c.name).sort()).toEqual(["CLI, providers and local runtime"]);
   });
-  it("Work Item Tracking: two categories survive", async () => {
+  it("Work Item Tracking: only two categories survive, so the split is rejected (fewer-than-three-groups)", async () => {
     const v = await judge(set(WORK));
-    expect(v.decision?.k).toBe(2);
-    expect(groupSizes(v.decision!.labels, 2)).toEqual([3, 3]);
-    expect(v.decision!.leftovers).toHaveLength(8);
-    expect(v.decision!.names!.sort()).toEqual(["Knowledge graph routes and visuals", "Operations, cleanup and cutover"]);
+    expect(v.decision).toBeUndefined();
+    expect(v.reason).toBe("fewer-than-three-groups");
+    expect(v.categories!.filter((c) => c.kept).map((c) => c.name).sort()).toEqual(["Knowledge graph routes and visuals", "Operations, cleanup and cutover"]);
   });
-  it("Graduation: two groups; Game Tracking: no coherent category", async () => {
+  it("Graduation: two groups, rejected (fewer-than-three-groups); Game Tracking: no coherent category", async () => {
     const g = await judge(set(GRAD));
-    expect(groupSizes(g.decision!.labels, g.decision!.k)).toEqual([3, 4]);
-    expect(g.decision!.leftovers).toHaveLength(2);
+    expect(g.decision).toBeUndefined();
+    expect(g.reason).toBe("fewer-than-three-groups");
     const game = await judge(set(GAME));
     expect(game.decision).toBeUndefined();
     expect(game.reason).toBe("no-coherent-category");
@@ -94,20 +97,15 @@ describe("B: rebuild shapes", () => {
   const rebuild = (es: Fx[]) => planRebuild({ domain: "wp", entries: toEntries(es), namer, partitioner: stub(), rules: NO_JOIN });
   const direct = (plan: Awaited<ReturnType<typeof rebuild>>, id: string) => [...plan.state.assignment.values()].filter((s) => s === id).length;
 
-  it("Console Chat (30): a root holding its 13 leftovers plus four groups", async () => {
+  it("Console Chat (30): the rejected split (low-coverage) leaves one section holding all 30", async () => {
     const plan = await rebuild(set(CONSOLE));
-    const root = plan.state.sections.find((s) => s.parent === null)!;
-    const kids = plan.state.sections.filter((s) => String(s.parent) === String(root.id));
-    expect(kids.map((k) => direct(plan, String(k.id))).sort()).toEqual([3, 4, 5, 5]);
-    expect(direct(plan, String(root.id))).toBe(13);
-    expect(plan.leftovers.get(String(root.id))).toHaveLength(12);
-    expect(plan.judged[0]).toMatchObject({ outcome: "split", source: "llm" });
+    expect(plan.state.sections).toHaveLength(1);
+    expect(direct(plan, String(plan.state.sections[0].id))).toBe(30);
   });
-  it("Work Item Tracking (14): root with 8 leftovers and groups of 3 and 3", async () => {
+  it("Work Item Tracking (14): the rejected split (two groups) leaves one section holding all 14", async () => {
     const plan = await rebuild(set(WORK));
-    expect(plan.state.sections).toHaveLength(3);
-    const root = plan.state.sections.find((s) => s.parent === null)!;
-    expect(direct(plan, String(root.id))).toBe(8);
+    expect(plan.state.sections).toHaveLength(1);
+    expect(direct(plan, String(plan.state.sections[0].id))).toBe(14);
   });
   it("Graduation, Game Tracking (9 each) and the grab bag (14) stay one section", async () => {
     for (const es of [set(GRAD), set(GAME), F.grabBag]) expect((await rebuild(es)).state.sections).toHaveLength(1);

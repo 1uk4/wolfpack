@@ -50,13 +50,21 @@ import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
 import { useWorkReader } from "../work/work-reader.tsx";
 import { Hint } from "@/components/ui/hint";
-import { dataStore } from "@/src/core";
+import { dataStore, entryIdOfNode } from "@/src/core";
+import { useOpenView, type OpenViewFn } from "@/components/viewer/viewer-context";
 
 /** What a click on a map node does: ANY work node (collapsed features included) only opens the reader; the graph's selection,
  *  route, camera and pane are untouched. Anything else (KB entries, the factory...) selects into the side pane. */
 export function nodeClickAction(nodeId: string): { kind: "open-work"; id: string } | { kind: "select" } {
 	const raw = rawWorkId(nodeId);
 	return raw ? { kind: "open-work", id: raw } : { kind: "select" };
+}
+
+/** A click on a KB entry node opens the entry in the page viewer (true); any other node, or no viewer host, is not handled (false). */
+export function openNodeInViewer(nodeId: string, open: OpenViewFn | null): boolean {
+	const id = entryIdOfNode(nodeId);
+	if (!id || !open || !open.canOpen("kb")) return false;
+	return open({ kind: "kb", id });
 }
 
 /** The default node look when a node carries no colour of its own. */
@@ -191,6 +199,9 @@ export function GraphView({
 	const reader = useWorkReader();
 	const openWorkRef = useRef(reader.open);
 	openWorkRef.current = reader.open;
+	const openView = useOpenView();
+	const openViewRef = useRef(openView);
+	openViewRef.current = openView;
 
 	// Search: the query text; ⌘F (shortcut wave C) focuses it — the find
 	// event is surface-scoped, dispatched as wolfpack:kbd-find (only this page
@@ -282,7 +293,7 @@ export function GraphView({
 				onSelect: (nodeId) => {
 					const act = nodeClickAction(nodeId);
 					if (act.kind === "open-work") openWorkRef.current(act.id); // the reader only: no selection, route or camera change
-					else setSelected({ id: nodeId });
+					else if (!openNodeInViewer(nodeId, openViewRef.current)) setSelected({ id: nodeId });
 				},
 				onStageClick: () => setSelected(null),
 				// (Debounced) remember where the camera stands.

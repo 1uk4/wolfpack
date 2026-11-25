@@ -2,7 +2,7 @@
  * Owner approvals (work-wolfpack-WITFT19) at the /api/work/requests seam: createApprovalsApi behind the real owner gate, hub faked at fetch.
  */
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import { createHealthApi } from "../../../src/server/pack/health-api.ts";
 import { createApprovalsApi } from "../../../src/server/work/approvals-api.ts";
 import { createSessionWitness } from "../../../src/server/thread/session-witness.ts";
@@ -53,5 +53,19 @@ describe("work approvals API", () => {
 		assert.equal(((await res.json()) as { code: string }).code, "forbidden");
 		const done = setup({ status: 409, body: { code: "conflict", message: "already decided", retryable: false } });
 		assert.equal((await done.api.approve(req("POST"), "r1")).status, 409);
+	});
+
+	it("logs one line per approve relay with the request id and status, and reads a single request", async () => {
+		const log = mock.method(console, "log", () => {});
+		try {
+			const { api, calls } = setup({ status: 200, body: { request: { id: "r9", status: "approved" } } });
+			await api.approve(req("POST"), "r9");
+			await api.get(req("GET"), "r9");
+			assert.equal(calls[1]?.url, "http://hub.test:3150/v1/work/requests/r9");
+			assert.equal(log.mock.calls.length, 1);
+			assert.match(String(log.mock.calls[0]?.arguments[0]), /^\[approvals\] approve r9: 200 in \d+ms$/);
+		} finally {
+			log.mock.restore();
+		}
 	});
 });

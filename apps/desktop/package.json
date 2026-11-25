@@ -12,6 +12,9 @@
 		"email": "85141937+1uk4@users.noreply.github.com"
 	},
 	"homepage": "https://github.com/1uk4/wolfpack",
+	"ci": {
+		"affectedBy": ["@wolfpack/hubd", "@wolfpack/workerd", "@wolfpack/harness"]
+	},
 	"scripts": {
 		"dev": "concurrently -k -n console,electron \"pnpm --filter @wolfpack/console run dev -p 3210\" \"until curl -sf -o /dev/null http://localhost:3210; do sleep 1; done; WOLFPACK_DEV_URL=http://localhost:3210 electron .\"",
 		"electron:dev": "WOLFPACK_DEV_URL=${WOLFPACK_DEV_URL:-http://localhost:3000} electron .",

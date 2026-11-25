@@ -14,7 +14,7 @@ import { getPendingPreview, graduateDirect, type GraduateVia } from "./graduate-
 
 const NO_ASSIGNEE = "This item has no assignee wolf to prepare the graduation.";
 
-export function GraduateButton({ itemId, assignee, via, title, client, onDone }: { itemId: string; assignee?: string; via: GraduateVia; title?: string; client?: GraduateClient; onDone?: () => void }) {
+export function GraduateButton({ itemId, assignee, via, title, client, onDone, testid = "graduate-button" }: { testid?: string; itemId: string; assignee?: string; via: GraduateVia; title?: string; client?: GraduateClient; onDone?: () => void }) {
 	const job = useGraduateJob(itemId);
 	const [real] = useState(() => client ?? createGraduateClient());
 	const c = client ?? real;
@@ -33,7 +33,7 @@ export function GraduateButton({ itemId, assignee, via, title, client, onDone }:
 		}
 	}, [job?.phase]);
 
-	if (done) return <span data-testid="graduate-button" data-phase="graduated" className="shrink-0 text-[11px] text-emerald-300">Graduated</span>;
+	if (done) return <span data-testid={testid} data-phase="graduated" className="shrink-0 text-[11px] text-emerald-300">Graduated</span>;
 
 	const target = { id: itemId, title: title ?? itemId, ...(assignee ? { assignee } : {}) };
 	const start = async () => {
@@ -84,7 +84,7 @@ export function GraduateButton({ itemId, assignee, via, title, client, onDone }:
 		<span className="relative inline-flex shrink-0 items-center gap-2" onClick={(e) => e.stopPropagation()}>
 			<button
 				type="button"
-				data-testid="graduate-button"
+				data-testid={testid}
 				data-phase={busy ? "busy" : (job?.phase ?? "idle")}
 				disabled={busy || !assignee}
 				title={assignee ? undefined : NO_ASSIGNEE}

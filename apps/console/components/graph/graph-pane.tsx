@@ -45,7 +45,7 @@ import { fetchKbEntry, fetchWolves, fetchWorkRecord } from "@/components/kb/kb-c
 import { EntryBody } from "@/components/kb/entry-reader";
 import { Field, KIND_LABEL, LinkList } from "./graph-card.tsx";
 import { createGraduateClient, type GraduateClient } from "../kb/graduate-client";
-import { GraduateControl } from "../kb/graduate-dialog";
+import { GraduateButton } from "../work/graduate-button";
 import { useGraduated } from "../kb/graduation-signal";
 import { RouteNav, isEditableTarget, type RouteNavModel } from "./graph-route-nav.tsx";
 
@@ -405,7 +405,12 @@ export function GraphPane({
 				)}
 				{card.kind === "work" && (
 					<div className="mt-3 empty:hidden">
-						<GraduateControl key={card.id} target={{ id: card.id.slice("work:".length), title: card.title, assignee: card.assignee }} state={graduateState_} client={graduateClient} showReason testid="pane-graduate" />
+						{graduateState_.show && graduateState_.ready && <GraduateButton key={card.id} itemId={card.id.slice("work:".length)} title={card.title} assignee={card.assignee} via="graph" client={graduateClient} testid="pane-graduate" />}
+						{graduateState_.show && !graduateState_.ready && (
+							<span data-testid="pane-graduate-reason" className="text-[11px] text-muted-foreground">
+								Not ready to graduate: {graduateState_.reason}
+							</span>
+						)}
 					</div>
 				)}
 				{threadError && (

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BookOpenIcon, GaugeIcon, GitForkIcon, ListChecksIcon, ListTreeIcon, PinIcon, ScaleIcon, XIcon, type LucideIcon } from "lucide-react";
+import { AppWindowIcon, BookOpenIcon, GaugeIcon, GitForkIcon, ListChecksIcon, ListTreeIcon, PinIcon, ScaleIcon, XIcon, type LucideIcon } from "lucide-react";
 import { ChecklistItems } from "@/components/thread/checklist-card";
 import { DecisionCard } from "@/components/thread/decision-card";
 import { PlanGraphCard } from "@/components/thread/plan-graph-card";
@@ -52,7 +52,7 @@ export function useSyncObjectPins(threadId: string, objects: readonly StripObjec
 	}, [threadId, objects]);
 }
 
-const KIND_ICON: Record<string, LucideIcon> = { work: ListTreeIcon, kb: BookOpenIcon, checklist: ListChecksIcon, decision: ScaleIcon, graph: GitForkIcon, task: GaugeIcon };
+const KIND_ICON: Record<string, LucideIcon> = { work: ListTreeIcon, kb: BookOpenIcon, checklist: ListChecksIcon, decision: ScaleIcon, graph: GitForkIcon, task: GaugeIcon, frame: AppWindowIcon };
 const INLINE = new Set(["checklist", "decision", "graph", "task"]);
 
 function useWide(): boolean {

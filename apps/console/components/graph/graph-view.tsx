@@ -47,6 +47,7 @@ import {
 } from "@/src/core";
 import { GraphCanvasRenderer } from "./graph-canvas.ts";
 import { LiveGraphLayer } from "./live/live-layer";
+import { ActivityFeed } from "./live/activity-feed";
 import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
 import { useWorkReader } from "../work/work-reader.tsx";
@@ -535,6 +536,7 @@ export function GraphView({
 						    label systems, hover) draws into it, once per frame. */}
 						<canvas ref={canvasRef} className="block h-full w-full touch-none" />
 						<LiveGraphLayer renderer={liveRenderer} settings={settings} />
+						<ActivityFeed renderer={liveRenderer} settings={settings} />
 					</div>
 				)}
 

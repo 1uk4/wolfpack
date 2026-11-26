@@ -58,7 +58,7 @@ import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "@/src/c
 import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, ROUTE_DONE_COLOR } from "@/src/core";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
-import type { LiveOverlay, OverlayHit, OverlayHost } from "./live/live-overlay";
+import type { LiveOverlay, OverlayHighlight, OverlayHit, OverlayHost } from "./live/live-overlay";
 import {
 	CHARGE_STRENGTH,
 	CLUSTER_PULL_STRENGTH,
@@ -1073,6 +1073,11 @@ export class GraphCanvasRenderer {
 		this.callbacks = { ...this.callbacks, onOverlayHover: cbs?.onOverlayHover, onOverlaySelect: cbs?.onOverlaySelect };
 		if (!o) this.setOverlayHover(null);
 		this.markDirty();
+	}
+
+	/** Ring a node / target / wolf on the overlay (the activity feed's hover); null clears it. */
+	setOverlayHighlight(h: OverlayHighlight | null): void {
+		this.overlay?.setHighlight(h);
 	}
 
 	/** Request a redraw (the overlay calls this when its state changes). */

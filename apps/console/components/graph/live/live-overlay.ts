@@ -68,6 +68,8 @@ export interface OverlayCard {
 	action?: { kind: "open-thread" | "open-work" | "answer"; label: string; wolf: string; threadId?: string; workId?: string };
 }
 export interface AttachedRef { wolf: string; threadId: string }
+/** What the activity feed asks the overlay to ring: a graph node id, an event target (resolved like a trail), or a wolf's glyph. */
+export interface OverlayHighlight { nodeId?: string; target?: LiveTarget; wolf?: string }
 
 const hash = (s: string) => {
 	let h = 7;
@@ -82,6 +84,7 @@ export class LiveOverlay {
 	private trailFrom = new Map<string, Pt>();
 	private you: Pt | null = null;
 	private attached: AttachedRef | null = null;
+	private highlight: OverlayHighlight | null = null;
 	private settings: OverlaySettings = LIVE_DEFAULTS;
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private lastSig = "";
@@ -113,6 +116,12 @@ export class LiveOverlay {
 			this.state = emptyLiveState(Date.now());
 			this.bodies.clear();
 		}
+		this.requestFrame();
+	}
+
+	/** Draw a soft ring on a node / target / wolf (the activity feed's hover). `null` clears it. */
+	setHighlight(h: OverlayHighlight | null): void {
+		this.highlight = h;
 		this.requestFrame();
 	}
 
@@ -160,6 +169,7 @@ export class LiveOverlay {
 		if (!this.settings.enabled) return false;
 		if (this.reduced) return false;
 		const s = this.state;
+		if (this.highlight) return true;
 		if (s.pulses.length > 0 || s.trails.length > 0 || this.pendingTugs.size > 0) return true;
 		if (Object.values(s.subagents).some((a) => a.finishedAt !== undefined)) return true;
 		if (Object.values(s.wolves).some((w) => w.needsYou)) return true;
@@ -414,6 +424,30 @@ export class LiveOverlay {
 			ctx.globalAlpha = 1;
 			if (it.needsYou && (it.kind === "wolf" || it.kind === "thread")) {
 				EFFECTS.ring!({ ctx, x: it.x, y: it.y, r: it.r, k, t: 0, color: AMBER, intensity: I, reduced, time: now, alpha: it.alpha });
+			}
+		}
+		const hl = this.highlight;
+		if (hl) {
+			let at: Pt | null = null;
+			let r = 9 / k;
+			let color = host.colors.hoverText;
+			if (hl.wolf) {
+				const it = items.find((i) => i.kind === "wolf" && i.wolf === hl.wolf);
+				if (it) [at, r, color] = [it, it.r + 4 / k, it.color];
+			}
+			if (!at) {
+				const id = hl.nodeId && host.hasNode(hl.nodeId) ? hl.nodeId : hl.target ? targetNodeId(hl.target, (n) => host.hasNode(n)) : null;
+				at = id ? host.nodePos(id) : null;
+			}
+			if (at) {
+				const pulse = reduced ? 0 : 0.5 + 0.5 * Math.sin(now / 260);
+				ctx.beginPath();
+				ctx.arc(at.x, at.y, r + pulse * 1.5 / k, 0, Math.PI * 2);
+				ctx.fillStyle = rgba(color, 0.12);
+				ctx.fill();
+				ctx.lineWidth = 1.5 / k;
+				ctx.strokeStyle = rgba(color, 0.8);
+				ctx.stroke();
 			}
 		}
 		ctx.restore();

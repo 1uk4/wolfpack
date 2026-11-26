@@ -207,9 +207,11 @@ export class HttpConsoleClient implements ConsoleClient {
     await this.json("bindCardText", { id: threadId, callId, qid }, ROUTES.bindCardText.response.schema, { ...(text ? { text } : {}), ...(attachments?.length ? { attachments } : {}), ...(multi ?? {}), ...(stepsKey ? { stepsKey } : {}) }, threadId);
   }
 
-  async getFrameFile(wolf: string, path: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
-    const res = await this.request("getFrameFile", { name: wolf }, {}, wolf, `?path=${encodeURIComponent(path)}`);
-    return { bytes: new Uint8Array(await res.arrayBuffer()), mimeType: res.headers.get("content-type") ?? "application/octet-stream" };
+  async getFrameFile(wolf: string, path: string, ifNoneMatch?: string): Promise<{ bytes: Uint8Array; mimeType: string; etag?: string; notModified?: boolean }> {
+    const res = await this.request("getFrameFile", { name: wolf }, ifNoneMatch ? { headers: { "If-None-Match": ifNoneMatch } } : {}, wolf, `?path=${encodeURIComponent(path)}`, [304]);
+    const etag = res.headers.get("etag") ?? undefined;
+    if (res.status === 304) return { bytes: new Uint8Array(0), mimeType: "text/html; charset=utf-8", notModified: true, ...(etag ? { etag } : {}) };
+    return { bytes: new Uint8Array(await res.arrayBuffer()), mimeType: res.headers.get("content-type") ?? "application/octet-stream", ...(etag ? { etag } : {}) };
   }
 
   async getDiagram(threadId: string, diagramId: string): Promise<{ bytes: Uint8Array; mimeType: string }> {

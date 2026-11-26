@@ -93,6 +93,25 @@ describe("frame-file route", () => {
     expect(await code(get(w, "d.html"))).toBe("forbidden");
   });
 
+  it("sends an ETag and answers 304 to a matching If-None-Match, and a new ETag once the file changes", async () => {
+    const w = await boot();
+    const file = join(w.root, "frames", "v.html");
+    writeFileSync(file, "<p>one</p>");
+    const url = `${w.url}/v1/wolves/testwolf/frame-file?path=v.html`;
+    const first = await fetch(url);
+    const etag = first.headers.get("etag");
+    expect(first.status).toBe(200);
+    expect(etag).toMatch(/^"[^"]+"$/);
+    const same = await fetch(url, { headers: { "If-None-Match": etag! } });
+    expect(same.status).toBe(304);
+    expect(await same.text()).toBe("");
+    writeFileSync(file, "<p>two!</p>");
+    const changed = await fetch(url, { headers: { "If-None-Match": etag! } });
+    expect(changed.status).toBe(200);
+    expect(await changed.text()).toBe("<p>two!</p>");
+    expect(changed.headers.get("etag")).not.toBe(etag);
+  });
+
   it("answers 404 for a missing file", async () => {
     const w = await boot();
     await expect(get(w, "gone.html")).rejects.toBeInstanceOf(NotFoundError);

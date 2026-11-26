@@ -103,6 +103,23 @@ afterEach(async () => {
 	document.body.innerHTML = "";
 });
 
+describe("frame badges from a link", () => {
+	it("opening ?view=frame:<path> adds a badge titled with the path, and a dismissed one does not come back from the same link", async () => {
+		await mount([], { start: "/wolf/1uk4/thread/home?view=frame%3Aviz%2Fa.html" });
+		assert.deepEqual(labels(), ["viz/a.html"]);
+		assert.equal(JSON.parse(store.get(`wolfpack:frames:${TID}`)!)[0].path, "viz/a.html");
+		await click(q('[data-testid="frame-badge-dismiss"]')!);
+		await settle(30);
+		assert.deepEqual(labels(), []);
+		// the same link again (a reload): the stored frames and dismissal survive, the badge stays hidden
+		await act(async () => root?.unmount());
+		vs.resetViewerCache();
+		document.body.innerHTML = "";
+		await mount([], { start: "/wolf/1uk4/thread/home?view=frame%3Aviz%2Fa.html" });
+		assert.deepEqual(labels(), []);
+	});
+});
+
 describe("frame badges", () => {
 	it("only frames get a badge: one per objectId with the latest rev's title, file name when untitled, none for other views", async () => {
 		await mount([kbPart, framePart("f1", 1, "a.html", "Old"), framePart("f1", 2, "a.html", "New"), framePart("f2", 1, "notes/plan.html")]);

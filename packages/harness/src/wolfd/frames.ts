@@ -35,6 +35,7 @@ export interface FrameStat {
   size: number;
   dev: number;
   ino: number;
+  mtimeMs: number;
 }
 
 const errno = (e: unknown): string | undefined => (e as NodeJS.ErrnoException | null)?.code;
@@ -80,7 +81,7 @@ export async function statFrame(wolfHome: string, rel: string | null): Promise<F
   }
   if (!st.isFile()) throw new HttpError("forbidden", "not a regular file");
   if (st.size > FRAME_MAX_BYTES) throw new HttpError("too_large", `frame file is over ${FRAME_MAX_BYTES} bytes`);
-  return { path: real, size: st.size, dev: st.dev, ino: st.ino };
+  return { path: real, size: st.size, dev: st.dev, ino: st.ino, mtimeMs: st.mtimeMs };
 }
 
 /** The file's bytes, or an HttpError: 400 bad path / extension, 403 refused, 404 missing, 413 too large. */

@@ -3,6 +3,10 @@
  * wolfd runs a thread's turn inside `runInTurnContext`; HttpWorkRecordStore reads it and adds the
  * `x-wolfpack-thread-id` / `x-wolfpack-subagent` headers so the hub can attribute the write on the live pack map.
  * Outside a turn (background consolidation, CLI) nothing is set and no header is sent.
+ *
+ * LIMIT: attribution works only for IN-PROCESS tool calls (the AsyncLocalStorage store follows the async chain). Writes that go through
+ * wolfd's local work server, or from out-of-process tools (a spawned CLI, an MCP server), run outside the turn and lose the headers:
+ * the hub then shows them as the wolf alone, not the thread or subagent.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 

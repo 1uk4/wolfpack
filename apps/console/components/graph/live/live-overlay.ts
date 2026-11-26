@@ -23,10 +23,10 @@ import {
 	type LiveTarget,
 } from "@/src/core";
 import { ownerThreadKey, targetNodeId, threadSlugOf } from "@/src/core";
-import { DEFAULT_PHYSICS, stepWolves, wolvesMoving, type WolfBody } from "@/src/core";
+import { DEFAULT_PHYSICS, stepWolves, type WolfBody } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba } from "./live-effects";
-import { floatOffset, nameHash } from "./live-float";
+import { floatOffset, nameHash, roamOffset } from "./live-float";
 import { redact } from "@/src/core";
 
 export interface Pt { x: number; y: number }
@@ -35,6 +35,8 @@ export interface OverlayHost {
 	hasNode(id: string): boolean;
 	nodeColor(id: string): string | undefined;
 	center(): Pt;
+	/** Extent (world radius) of a domain's node cluster; absent or null: the wolf does not roam. Cached by the host. */
+	clusterRadius?(domain: string): number | null;
 	colors: { node: string; edge: string; label: string; hoverText: string };
 	fontFamily: string;
 }
@@ -84,6 +86,15 @@ const FLOAT_COMPACT_AMP = 0.3;
 const FAST_MS = 16;
 const FAST_MOBILE_MS = 30;
 const SLOW_MS = 100;
+/** Roam: the wolf wanders about this fraction of its domain cluster's radius, clamped in reference px (x scaleFor(k).m). */
+const ROAM_FRAC = 0.32;
+const ROAM_MIN_PX = 20;
+const ROAM_MAX_PX = 140;
+/** Roam clock speed: a working wolf roams at 1x, an idle one slower, an offline one nearly still (eased, so a change never jumps). */
+const ROAM_SPEED_WORKING = 1;
+const ROAM_SPEED_IDLE = 0.55;
+const ROAM_SPEED_OFFLINE = 0.08;
+type Body = WolfBody & { offline?: boolean; /** Roam clock (ms) and its eased speed. */ rt?: number; rs?: number };
 const FLOAT_MS = 40;
 const FLOAT_MOBILE_MS = 60;
 
@@ -117,6 +128,8 @@ export interface OverlayItem {
 	alpha: number;
 	needsYou: boolean;
 	online: boolean;
+	/** Wolf: any thread or subagent running. Thread: active (within its heartbeat life). */
+	working?: boolean;
 	color: string;
 	label: string;
 }
@@ -140,13 +153,15 @@ interface WolfMeta { w: LiveWolf; dom: string | undefined; ang: number }
 
 export class LiveOverlay {
 	private state: LiveState = emptyLiveState(Date.now());
-	private bodies = new Map<string, WolfBody & { offline?: boolean }>();
+	private bodies = new Map<string, Body>();
+	private roamTmp = { dx: 0, dy: 0 };
+	private workingSet = new Set<string>();
 	/** A target a wolf should drift to; dropped after TUG_STALE_MS if no frame consumed it (so it can never hold the frame loop). */
 	private pendingTugs = new Map<string, { target: LiveTarget; at: number }>();
 	private need: FrameNeed = "none";
 	private wolfMeta = new Map<string, WolfMeta>();
 	private hashes = new Map<string, number>();
-	private bodyList: (WolfBody & { offline?: boolean })[] = [];
+	private bodyList: Body[] = [];
 	/** Per-frame indexes (rebuilt by items()): the wolf and thread items by key. */
 	private wolfItems = new Map<string, OverlayItem>();
 	private threadItems = new Map<string, OverlayItem>();
@@ -291,7 +306,8 @@ export class LiveOverlay {
 		if (this.highlight || s.pulses.length > 0 || this.youMoving) return "fast";
 		const wall = Date.now();
 		for (const p of this.pendingTugs.values()) if (wall - p.at < TUG_STALE_MS) return "fast";
-		if (wolvesMoving(this.bodyList, now)) return "fast";
+		// Roam keeps every body moving, so only an unspent tug (the ease back into the roam) counts as fast motion.
+		for (const b of this.bodyList) if (b.tug && now - b.tug.at < 8000) return "fast";
 		for (const w in s.wolves) return "float"; // any wolf at all
 		const fade = this.settings.subagentFadeSec;
 		// Trails and fades keep frames coming only while they are still visibly fading.
@@ -326,12 +342,22 @@ export class LiveOverlay {
 
 	// ── physics + layout ──
 
+	/** Wolves with an active thread or a running subagent, into `workingSet` (reused, no allocation per frame). */
+	private markWorking(): void {
+		const ws = this.workingSet;
+		ws.clear();
+		const s = this.state;
+		for (const id in s.threads) if (s.threads[id]!.active) ws.add(s.threads[id]!.wolf);
+		for (const id in s.subagents) if (s.subagents[id]!.finishedAt === undefined) ws.add(s.subagents[id]!.wolf);
+	}
+
 	step(now: number, dtSec: number, host: OverlayHost, k: number): void {
 		if (!this.settings.enabled) return;
 		const s = this.state;
 		const { m } = scaleFor(k);
 		const bodies = this.bodyList;
 		bodies.length = 0;
+		this.markWorking();
 		for (const name in s.wolves) {
 			const w = s.wolves[name]!;
 			// Home domain and angle only change when the wolf's state object does.
@@ -343,14 +369,27 @@ export class LiveOverlay {
 			const dom = meta.dom;
 			const homePt = (dom ? host.nodePos(`dom:${dom}`) : null) ?? host.center();
 			const ang = meta.ang;
-			const home = { x: homePt.x + Math.cos(ang) * HOME_ORBIT * m, y: homePt.y + Math.sin(ang) * HOME_ORBIT * m };
+			const off = !w.online;
+			const h = this.hashOf(w.name);
 			let b = this.bodies.get(w.name);
+			const target = off ? ROAM_SPEED_OFFLINE : this.workingSet.has(w.name) ? ROAM_SPEED_WORKING : ROAM_SPEED_IDLE;
+			// The roam clock advances at an eased speed; the offset itself is a pure function of that clock (no drift to accumulate).
+			const rs = (b?.rs ?? target) + (target - (b?.rs ?? target)) * (1 - Math.exp(-dtSec * 2));
+			const rt = (b?.rt ?? (h % 60_000)) + Math.min(Math.max(dtSec, 0), 0.25) * 1000 * rs;
+			const cr = dom && host.clusterRadius ? host.clusterRadius(dom) : null;
+			const R = cr && cr > 0 ? Math.min(ROAM_MAX_PX * m, Math.max(ROAM_MIN_PX * m, cr * ROAM_FRAC)) : 0;
+			const ro = roamOffset(h, rt, R, this.reduced, this.roamTmp);
+			const hx = homePt.x + Math.cos(ang) * HOME_ORBIT * m + ro.dx;
+			const hy = homePt.y + Math.sin(ang) * HOME_ORBIT * m + ro.dy;
 			if (!b) {
-				b = { x: home.x, y: home.y, vx: 0, vy: 0 };
+				b = { x: hx, y: hy, vx: 0, vy: 0 };
 				this.bodies.set(w.name, b);
 			}
-			b.home = home;
-			const off = !w.online;
+			b.rs = rs;
+			b.rt = rt;
+			const home = b.home ?? (b.home = { x: hx, y: hy });
+			home.x = hx;
+			home.y = hy;
 			if (off && !b.offline) b.tug = { x: home.x, y: home.y, at: now };
 			b.offline = off;
 			const tgt = this.pendingTugs.get(w.name)?.target;
@@ -468,6 +507,7 @@ export class LiveOverlay {
 		}
 		this.wolfItems.clear();
 		this.threadItems.clear();
+		this.markWorking();
 		const placed = new Set<string>();
 		for (const name in s.wolves) {
 			const w = s.wolves[name]!;
@@ -479,7 +519,7 @@ export class LiveOverlay {
 			const fo = floatOffset(this.hashOf(w.name), now, FLOAT_WOLF_PX * m * (sc.compact ? FLOAT_COMPACT_AMP : 1) * (w.online ? 1 : FLOAT_OFFLINE_AMP), { reduced, slow: w.online ? 1 : FLOAT_OFFLINE_SLOW });
 			const wx = b.x + fo.dx;
 			const wy = b.y + fo.dy;
-			const wolfItem: OverlayItem = { kind: "wolf", key: w.name, wolf: w.name, x: wx, y: wy, r: sc.wolfPx / 2 / k, alpha: w.online ? 1 : 0.35, needsYou: w.needsYou, online: w.online, color, label: w.name };
+			const wolfItem: OverlayItem = { kind: "wolf", key: w.name, wolf: w.name, x: wx, y: wy, r: sc.wolfPx / 2 / k, alpha: w.online ? 1 : 0.35, needsYou: w.needsYou, online: w.online, working: w.online && this.workingSet.has(w.name), color, label: w.name };
 			out.push(wolfItem);
 			this.wolfItems.set(w.name, wolfItem);
 			const mine = sc.compact ? [] : (threadsByWolf.get(w.name) ?? []).sort((a, c) => (a.t.id < c.t.id ? -1 : 1));
@@ -488,7 +528,7 @@ export class LiveOverlay {
 				const tx = wx + Math.cos(ang) * SAT_ORBIT * m;
 				const ty = wy + Math.sin(ang) * SAT_ORBIT * m;
 				const tkey = `${t.wolf}/${t.id}`;
-				const threadItem: OverlayItem = { kind: "thread", key: tkey, wolf: t.wolf, threadId: t.id, x: tx, y: ty, r: THREAD_DOT_R * m, alpha: (t.active ? 0.95 : 0.55) * alpha, needsYou: t.needsYou, online: w.online, color, label: t.title ?? threadSlugOf(t.wolf, t.id) };
+				const threadItem: OverlayItem = { kind: "thread", key: tkey, wolf: t.wolf, threadId: t.id, x: tx, y: ty, r: THREAD_DOT_R * m, alpha: (t.active ? 1 : 0.45) * alpha, needsYou: t.needsYou, online: w.online, working: t.active, color, label: t.title ?? threadSlugOf(t.wolf, t.id) };
 				out.push(threadItem);
 				this.threadItems.set(tkey, threadItem);
 				const subs = subsByThread.get(tkey) ?? [];
@@ -598,7 +638,13 @@ export class LiveOverlay {
 		for (const it of items) {
 			ctx.globalAlpha = it.alpha;
 			if (it.kind === "wolf") {
-				if (it.online) EFFECTS.glow!({ ctx, x: it.x, y: it.y, r: it.r, k, t: 0, color: it.color, intensity: I, reduced });
+				if (it.online) {
+					// Working: a stronger glow that slowly breathes (static and bright under reduced motion). Idle: a calm, faint one.
+					const breath = it.working ? (reduced ? 1 : 0.8 + 0.2 * Math.sin(now / 900)) : 0.5;
+					ctx.globalAlpha = it.alpha * breath;
+					EFFECTS.glow!({ ctx, x: it.x, y: it.y, r: it.r * (it.working ? 1.25 : 1), k, t: 0, color: it.color, intensity: it.working ? Math.min(5, I + 1) : I, reduced });
+					ctx.globalAlpha = it.alpha;
+				}
 				// The Wolfpack wolf-head centred on the body in the wolf's colour (alpha dims an offline wolf).
 				ctx.save();
 				ctx.translate(it.x - it.r, it.y - it.r);
@@ -609,8 +655,9 @@ export class LiveOverlay {
 			} else if (it.kind === "thread") {
 				ctx.beginPath();
 				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
-				ctx.fillStyle = rgba(it.color, 0.9);
+				ctx.fillStyle = rgba(it.color, it.working ? 1 : 0.7);
 				ctx.fill();
+				if (it.working) this.drawWorkingRing(ctx, it, k, now, reduced);
 			} else if (it.kind === "subagent") {
 				ctx.save();
 				ctx.translate(it.x - it.r, it.y - it.r);
@@ -662,6 +709,30 @@ export class LiveOverlay {
 				ctx.stroke();
 			}
 		}
+	}
+
+	/** An active thread's soft pulsing ring and a short comet arc circling the dot; reduced motion: one static brighter ring. */
+	private drawWorkingRing(ctx: CanvasRenderingContext2D, it: OverlayItem, k: number, now: number, reduced: boolean): void {
+		ctx.lineWidth = 1.2 / k;
+		if (reduced) {
+			ctx.beginPath();
+			ctx.arc(it.x, it.y, it.r * 1.9, 0, Math.PI * 2);
+			ctx.strokeStyle = rgba(it.color, 0.5 * it.alpha);
+			ctx.stroke();
+			return;
+		}
+		const ph = ((now / 1600 + (this.hashOf(it.key) % 100) / 100) % 1 + 1) % 1;
+		ctx.beginPath();
+		ctx.arc(it.x, it.y, it.r * (1.5 + 1.0 * ph), 0, Math.PI * 2);
+		ctx.strokeStyle = rgba(it.color, 0.5 * (1 - ph) * it.alpha);
+		ctx.stroke();
+		const a0 = now / 650 + (this.hashOf(it.key) % 628) / 100;
+		ctx.beginPath();
+		ctx.arc(it.x, it.y, it.r * 1.9, a0, a0 + 1.1);
+		ctx.strokeStyle = rgba(it.color, 0.75 * it.alpha);
+		ctx.lineCap = "round";
+		ctx.stroke();
+		ctx.lineCap = "butt";
 	}
 
 	private line(ctx: CanvasRenderingContext2D, a: Pt, b: Pt, style: string): void {

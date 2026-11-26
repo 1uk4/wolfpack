@@ -41,6 +41,7 @@ import {
 
 
 import { MachineCard } from "@/components/pack/pack-machines";
+import { WhatsNewButton } from "@/components/shell/whats-new";
 import { LOGGABLE, UpdateDetails, feedLabel, type DetailsLog } from "@/components/pack/update-details";
 
 export const BTN = "rounded-sm border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50 max-md:min-h-11 max-md:px-3 max-md:py-2";
@@ -73,6 +74,7 @@ export function AppUpdateBlock({ version, state, heading }: { version: string | 
 			<div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
 				<span data-testid="machine-app-version" className="text-foreground">{version ? `Wolfpack v${version}` : "Wolfpack"}</span>
 				<span className="ml-auto flex flex-wrap items-center gap-1.5">
+					<WhatsNewButton kind="desktop" version={version ?? stage?.current ?? null} />
 					{restart && <button type="button" data-testid="machine-app-restart" onClick={() => bridge?.installUpdate?.()} className={BTN}>{restart}</button>}
 					{bridge?.checkForUpdates && <button type="button" data-testid="machine-app-check" disabled={checking} onClick={() => { setChecking(true); setNote(null); void bridge.checkForUpdates!().then((r) => setNote(appCheckNote(r))).catch(() => setNote(appCheckNote({ ok: false }))).finally(() => setChecking(false)); }} className={BTN}>Check now</button>}
 				</span>
@@ -388,6 +390,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 				<span className="text-muted-foreground/70">wolfd always waits for you</span>
 				{sub?.exists === false && sub.mode === "unknown" && <span className="text-muted-foreground/70">not set (host default)</span>}
 			</div>
+			{!singleMac && <div className="mt-2"><WhatsNewButton kind="console" /></div>}
 			{saveErr && <p data-testid="machine-save-error" className="mt-1 text-red-600 dark:text-red-400">{saveErr}</p>}
 		</div>
 	);

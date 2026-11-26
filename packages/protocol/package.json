@@ -14,6 +14,7 @@
     "./contract": "./dist/contract/index.js",
     "./health-lag": "./dist/health-lag.js",
     "./update-state": "./dist/update-state.js",
+    "./updates": "./dist/updates.js",
     "./runtime-home": "./dist/runtime-home.js",
     "./seal": "./dist/seal.js",
     "./providers": "./dist/providers.js"

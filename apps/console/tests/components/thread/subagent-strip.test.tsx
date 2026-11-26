@@ -11,7 +11,7 @@ import { parseHTML } from "linkedom";
 const dom = parseHTML("<html><body></body></html>");
 const store = new Map<string, string>();
 Object.assign(globalThis, {
-	window: dom.window,
+	window: Object.assign(dom.window, { location: { search: "" } }),
 	self: globalThis, // next/link prefetch (requestIdleCallback)
 	document: dom.document,
 	Element: dom.window.Element,

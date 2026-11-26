@@ -7,6 +7,7 @@ import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, NetworkIcon, Workflow
 import { useSubagentModal } from "@/components/thread/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle, ReplyNotifier } from "@/components/shell/needs-you";
 import { UpdateNotice } from "@/components/shell/update-notice";
+import { WhatsNew } from "@/components/shell/whats-new";
 import { PackHealthHost } from "@/components/pack/pack-health";
 import { PackSettingsEntry } from "@/components/pack/pack-settings-entry";
 import { useMultiMachine } from "@/components/shell/single-mac";
@@ -1087,6 +1088,7 @@ export function SessionsSidebar() {
 					    dialog (also mod+, in the keyboard registry). */}
 					<div className="px-3 pb-3 pt-1">
 						{multiMachine && <UpdateNotice />}
+						<WhatsNew />
 						<NotifyToggle />
 						{/* Pack health at a glance (work-wolfpack-6imFEq7): works with the hub down; opens the health modal. */}
 						{/* One Pack for any number of machines, one included; mod+, opens it too. */}

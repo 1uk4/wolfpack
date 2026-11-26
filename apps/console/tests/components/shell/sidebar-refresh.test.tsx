@@ -11,7 +11,7 @@ const dom = parseHTML("<html><body></body></html>");
 const mem = new Map<string, string>();
 const localStorage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v), removeItem: (k: string) => void mem.delete(k) };
 Object.assign(globalThis, {
-	window: Object.assign(dom.window, { localStorage }),
+	window: Object.assign(dom.window, { localStorage, location: { search: "" } }),
 	document: dom.document,
 	Element: dom.window.Element,
 	HTMLElement: dom.window.HTMLElement,

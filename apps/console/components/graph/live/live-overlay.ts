@@ -11,6 +11,7 @@ import {
 	liveSignature,
 	reduceLive,
 	subagentAlpha,
+	threadAlpha,
 	trailAlpha,
 	visibleThreads,
 	type LiveAction,
@@ -206,6 +207,10 @@ export class LiveOverlay {
 		if (s.trails.some((t) => this.trailFrom.has(t.id) && trailAlpha(t, wall, this.settings.trailSec) > 0)) return true;
 		if ([...this.pendingTugs.values()].some((p) => wall - p.at < TUG_STALE_MS)) return true;
 		if (Object.values(s.subagents).some((a) => a.finishedAt !== undefined && subagentAlpha(a, wall, this.settings.subagentFadeSec) > 0.02)) return true;
+		if (Object.values(s.threads).some((t) => {
+			const al = threadAlpha(s, t, wall, this.settings.subagentFadeSec);
+			return !t.active && al > 0.02 && al < 1;
+		})) return true; // an idle thread is fading out
 		if (wolvesMoving([...this.bodies.values()], now) || this.youMoving) return true;
 		// A needs-you ring alone does not hold the rAF loop: it asks for a frame itself at about 8 fps.
 		if (Object.values(s.wolves).some((w) => w.needsYou) && !this.ringTimer) {
@@ -327,7 +332,7 @@ export class LiveOverlay {
 	items(host: OverlayHost, k: number, now: number): OverlayItem[] {
 		const s = this.state;
 		const out: OverlayItem[] = [];
-		const threads = visibleThreads(s);
+		const threads = visibleThreads(s, this.settings.subagentFadeSec, now);
 		for (const w of Object.values(s.wolves)) {
 			const b = this.bodies.get(w.name);
 			if (!b) continue;
@@ -339,7 +344,7 @@ export class LiveOverlay {
 				const ang = -Math.PI / 2 + (i - (mine.length - 1) / 2) * 0.75 + 0.35;
 				const tx = b.x + Math.cos(ang) * 17 / k;
 				const ty = b.y + Math.sin(ang) * 17 / k;
-				out.push({ kind: "thread", key: `${t.wolf}/${t.id}`, wolf: t.wolf, threadId: t.id, x: tx, y: ty, r: 3.2 / k, alpha: t.active ? 0.95 : 0.55, needsYou: t.needsYou, online: w.online, color, label: t.title ?? threadSlugOf(t.wolf, t.id) });
+				out.push({ kind: "thread", key: `${t.wolf}/${t.id}`, wolf: t.wolf, threadId: t.id, x: tx, y: ty, r: 3.2 / k, alpha: (t.active ? 0.95 : 0.55) * threadAlpha(s, t, now, this.settings.subagentFadeSec), needsYou: t.needsYou, online: w.online, color, label: t.title ?? threadSlugOf(t.wolf, t.id) });
 				const subs = Object.values(s.subagents).filter((a) => a.wolf === t.wolf && a.parentThreadId === t.id);
 				subs.forEach((a, j) => {
 					const al = subagentAlpha(a, now, this.settings.subagentFadeSec);

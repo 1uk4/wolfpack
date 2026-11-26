@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ActivityEvent, PresenceSnapshot } from "@wolfpack/protocol";
-import { emptyLiveState, homeDomainOf, reduceLive, subagentAlpha, visibleThreads, type LiveState } from "../../../src/core/graph/live/live-state.ts";
+import { emptyLiveState, homeDomainOf, reduceLive, subagentAlpha, threadAlpha, visibleThreads, type LiveState } from "../../../src/core/graph/live/live-state.ts";
 
 let n = 0;
 const ev = (verb: string, o: Record<string, unknown> = {}): ActivityEvent =>
@@ -12,12 +12,28 @@ const kb = { kind: "kb-entry", id: "kb-x", domain: "personal" };
 const sub = { kind: "subagent", wolf: "hal", subagent: "w1", parentThreadId: "t1" };
 
 describe("live overlay reducer", () => {
-	it("thread-active brings the wolf online with a visible thread; thread-idle hides an unbound thread", () => {
+	it("thread-active brings the wolf online with a visible thread; thread-idle fades an unbound thread out over the fade window", () => {
 		let s = feed(emptyLiveState(), ev("thread-active", { actor: { kind: "thread", wolf: "hal", threadId: "t1", title: "Plan" } }), 1000);
 		assert.equal(s.wolves.hal!.online, true);
 		assert.deepEqual(visibleThreads(s).map((t) => [t.id, t.title]), [["t1", "Plan"]]);
 		s = feed(s, ev("thread-idle"), 2000);
-		assert.deepEqual(visibleThreads(s), []);
+		assert.deepEqual(visibleThreads(s, 15, 10_000).map((t) => t.id), ["t1"]); // still there, dimmed, 8 s into the 15 s fade
+		assert.equal(threadAlpha(s, s.threads["hal/t1"]!, 9500, 15), 0.5);
+		assert.deepEqual(visibleThreads(s, 15, 17_000), []);
+		s = tick(s, 17_100);
+		assert.deepEqual(Object.keys(s.threads), []);
+	});
+
+	it("an idle thread stays visible as long as its subagent runs, and fades after the subagent finished", () => {
+		let s = feed(emptyLiveState(), ev("thread-active"), 0);
+		s = feed(s, ev("subagent-spawned", { actor: sub, ttlMs: 600_000 }), 100);
+		s = feed(s, ev("thread-idle"), 200);
+		s = tick(s, 100_000);
+		assert.deepEqual(visibleThreads(s, 15, 100_000).map((t) => t.id), ["t1"]);
+		assert.equal(threadAlpha(s, s.threads["hal/t1"]!, 100_000, 15), 1);
+		s = feed(s, ev("subagent-finished", { actor: sub }), 100_000);
+		assert.deepEqual(visibleThreads(s, 15, 110_000).map((t) => t.id), ["t1"]);
+		assert.deepEqual(visibleThreads(s, 15, 116_000), []);
 	});
 
 	it("a bound thread stays visible while idle, carrying its work item; unbound hides it", () => {
@@ -25,7 +41,7 @@ describe("live overlay reducer", () => {
 		s = feed(s, ev("thread-idle"), 10);
 		assert.equal(visibleThreads(s)[0]!.bound?.id, "work-x-1");
 		s = feed(s, ev("unbound"), 20);
-		assert.equal(visibleThreads(s).length, 0);
+		assert.equal(visibleThreads(s, 15, 15_011).length, 0); // idle since 10 ms: gone once the fade is over
 	});
 
 	it("kb-read sets the wolf's last target and adds a pulse and a trail; unknown verbs are ignored", () => {

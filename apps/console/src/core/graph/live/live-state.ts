@@ -44,6 +44,8 @@ export interface LiveThread {
 	wolf: string;
 	title?: string;
 	active: boolean;
+	/** When the thread last went idle (it fades out from there, like a finished subagent). */
+	idleAt?: number;
 	bound?: LiveTarget;
 	needsYou: boolean;
 	expiresAt: number;
@@ -108,9 +110,25 @@ export function homeDomainOf(w: LiveWolf | undefined, name: string): string | un
 	return best ?? HOME_DOMAIN_GUESS[name];
 }
 
-/** Threads worth drawing: active, bound to a work item or waiting on you. Idle unbound ones are hidden. */
-export function visibleThreads(s: LiveState): LiveThread[] {
-	return Object.values(s.threads).filter((t) => t.active || t.bound !== undefined || t.needsYou);
+/**
+ * 0..1 opacity of a thread: 1 while active, bound, waiting on you or with a running subagent; an idle unbound thread fades linearly to 0
+ * over the fade window, counted from the later of going idle and its last subagent finishing.
+ */
+export function threadAlpha(s: LiveState, t: LiveThread, now: number, fadeSec: number): number {
+	if (t.active || t.bound !== undefined || t.needsYou) return 1;
+	let from = t.idleAt;
+	for (const a of Object.values(s.subagents)) {
+		if (a.wolf !== t.wolf || a.parentThreadId !== t.id) continue;
+		if (a.finishedAt === undefined) return 1;
+		from = Math.max(from ?? -Infinity, a.finishedAt);
+	}
+	if (from === undefined) return 0;
+	return fadeSec <= 0 ? 0 : Math.max(0, 1 - (now - from) / (fadeSec * 1000));
+}
+
+/** Threads worth drawing: active, bound, waiting on you, with a running subagent, or idle and still fading out. */
+export function visibleThreads(s: LiveState, fadeSec = DEFAULT_LIVE_OPTIONS.subagentFadeSec, now = s.now): LiveThread[] {
+	return Object.values(s.threads).filter((t) => threadAlpha(s, t, now, fadeSec) > 0);
 }
 
 /** 0..1 opacity of a subagent: 1 while running, linear fade to 0 over the fade window after it finished. */
@@ -173,12 +191,18 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 	switch (e.verb) {
 		case "thread-active":
 			if (tKey) {
-				putThread({ ...mkThread(), active: true });
+				putThread({ ...mkThread(), active: true, idleAt: undefined });
 				wolf = { ...wolf, activeThreadId: threadId };
 			}
 			break;
 		case "thread-idle":
-			if (tKey && thread0) putThread({ ...thread0, active: false });
+			if (tKey && thread0) {
+				putThread({ ...thread0, active: false, idleAt: now });
+				// An idle thread lives only for its fade (bound or waiting ones keep their event life).
+				const cur = st.threads[tKey]!;
+				const keep = cur.bound !== undefined || cur.needsYou;
+				st = { ...st, threads: { ...st.threads, [tKey]: { ...cur, expiresAt: keep ? cur.expiresAt : now + o.subagentFadeSec * 1000 } } };
+			}
 			if (wolf.activeThreadId === threadId) wolf = { ...wolf, activeThreadId: undefined };
 			break;
 		case "bound":
@@ -233,8 +257,10 @@ function tick(s: LiveState, now: number, o: LiveOptions): LiveState {
 		// An offline wolf stays, with no thread or alert state of its own.
 		wolves[k] = online === w.online ? w : { ...w, online, activeThreadId: online ? w.activeThreadId : undefined, needsYou: online ? w.needsYou : false, needsYouThreadless: online ? w.needsYouThreadless : false };
 	}
-	const threads = Object.fromEntries(Object.entries(s.threads).filter(([, t]) => t.expiresAt > now));
 	const subagents = Object.fromEntries(Object.entries(s.subagents).filter(([, a]) => (a.finishedAt === undefined ? a.expiresAt > now : now < a.finishedAt + o.subagentFadeSec * 1000)));
+	// A thread outlives its own expiry while one of its subagents is still in state (running or fading).
+	const held = new Set(Object.values(subagents).map((a) => `${a.wolf}/${a.parentThreadId}`));
+	const threads = Object.fromEntries(Object.entries(s.threads).filter(([k, t]) => t.expiresAt > now || held.has(k)));
 	return withWolfNeeds({
 		wolves,
 		threads,

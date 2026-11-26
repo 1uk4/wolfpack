@@ -33,7 +33,8 @@ done
 if [ "$CMD" = uninstall ]; then
   run systemctl disable --now wolfpack-auto-update.timer || true
   run systemctl stop wolfpack-auto-update-now.service || true
-  run rm -f "$UNIT_DIR/wolfpack-auto-update.timer" "$UNIT_DIR/wolfpack-auto-update.service" "$UNIT_DIR/wolfpack-auto-update-now.service" "$UNIT_DIR/wolfpack-auto-update-now@.service"
+  run systemctl stop wolfpack-auto-update-retry.service || true
+  run rm -f "$UNIT_DIR/wolfpack-auto-update.timer" "$UNIT_DIR/wolfpack-auto-update.service" "$UNIT_DIR/wolfpack-auto-update-now.service" "$UNIT_DIR/wolfpack-auto-update-now@.service" "$UNIT_DIR/wolfpack-auto-update-retry.service" "$UNIT_DIR/wolfpack-auto-update-retry@.service"
   run systemctl daemon-reload
   run rm -rf --one-file-system "$OPT"
   log "removed; $ENV_FILE and /var/lib/wolfpack-auto-update kept"
@@ -41,7 +42,7 @@ if [ "$CMD" = uninstall ]; then
 fi
 
 SRC=("$ROOT/scripts/auto-update.mjs" "$ROOT/scripts/release-components.json" "$ROOT/infra/release/deploy-release.sh" "$HERE/RUNBOOK.md")
-for f in "${SRC[@]}" "$HERE/wolfpack-auto-update.service" "$HERE/wolfpack-auto-update-now.service" "$HERE/wolfpack-auto-update-now@.service" "$HERE/wolfpack-auto-update.timer" "$HERE/auto-update.env.example"; do
+for f in "${SRC[@]}" "$HERE/wolfpack-auto-update.service" "$HERE/wolfpack-auto-update-now.service" "$HERE/wolfpack-auto-update-now@.service" "$HERE/wolfpack-auto-update-retry.service" "$HERE/wolfpack-auto-update-retry@.service" "$HERE/wolfpack-auto-update.timer" "$HERE/auto-update.env.example"; do
   [ -f "$f" ] || die "missing $f (run from a full repo copy)"
 done
 node=$(command -v node) || die "node not found"
@@ -57,7 +58,7 @@ if [ -e "$ENV_FILE" ]; then echo "keeping existing $ENV_FILE"; run chmod 600 "$E
 else run install -m 0600 -o root -g root "$HERE/auto-update.env.example" "$ENV_FILE"; fi
 
 log "systemd units (timer NOT enabled)"
-if ((DRY)); then echo "DRY-RUN: write $UNIT_DIR/wolfpack-auto-update.service (@NODE@=$node), wolfpack-auto-update-now.service and .timer"; else
+if ((DRY)); then echo "DRY-RUN: write $UNIT_DIR/wolfpack-auto-update.service (@NODE@=$node), wolfpack-auto-update-now.service, wolfpack-auto-update-retry.service, the @ variants and .timer"; else
   sed "s|@NODE@|$node|" "$HERE/wolfpack-auto-update.service" >"$UNIT_DIR/wolfpack-auto-update.service.tmp"
   chmod 644 "$UNIT_DIR/wolfpack-auto-update.service.tmp"; mv "$UNIT_DIR/wolfpack-auto-update.service.tmp" "$UNIT_DIR/wolfpack-auto-update.service"
   install -m 0644 "$HERE/wolfpack-auto-update.timer" "$UNIT_DIR/wolfpack-auto-update.timer"
@@ -65,6 +66,9 @@ if ((DRY)); then echo "DRY-RUN: write $UNIT_DIR/wolfpack-auto-update.service (@N
   chmod 644 "$UNIT_DIR/wolfpack-auto-update-now.service.tmp"; mv "$UNIT_DIR/wolfpack-auto-update-now.service.tmp" "$UNIT_DIR/wolfpack-auto-update-now.service"
   sed "s|@NODE@|$node|" "$HERE/wolfpack-auto-update-now@.service" >"$UNIT_DIR/wolfpack-auto-update-now@.service.tmp"
   chmod 644 "$UNIT_DIR/wolfpack-auto-update-now@.service.tmp"; mv "$UNIT_DIR/wolfpack-auto-update-now@.service.tmp" "$UNIT_DIR/wolfpack-auto-update-now@.service"
+  for u in wolfpack-auto-update-retry.service wolfpack-auto-update-retry@.service; do # the console's Retry (work-wolfpack-s0Tnbth): same as now, plus --clear-failed
+    sed "s|@NODE@|$node|" "$HERE/$u" >"$UNIT_DIR/$u.tmp"; chmod 644 "$UNIT_DIR/$u.tmp"; mv "$UNIT_DIR/$u.tmp" "$UNIT_DIR/$u"
+  done
 fi
 run systemctl daemon-reload
 

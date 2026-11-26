@@ -11,6 +11,7 @@
 import { execFile } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import type { UpdateState } from "@wolfpack/protocol/update-state";
 import { isNewerVersion as isNewer } from "../../core/pack/pack-health-view.ts";
 import { execRunner, type CommandRunner, type PackHealth } from "./pack-health.ts";
 
@@ -215,6 +216,8 @@ export function createRollbacker(o: { releases: () => ReleaseInfo[]; run?: Comma
 // ---- UPDATE (work-wolfpack-7eP9W3Z) ----
 
 export const UPDATE_UNIT = "wolfpack-auto-update-now.service";
+/** Same as UPDATE_UNIT but `run --now --clear-failed`: lifts the held failure first (Retry in the console). */
+export const RETRY_UNIT = "wolfpack-auto-update-retry.service";
 
 /** One component that has a newer stable release than the one running. */
 export interface UpdateUnit {
@@ -232,11 +235,13 @@ export const UPDATE_COMPONENTS = ["console", "hubd", "wolfd", "workerd"] as cons
 
 export interface Updater {
 	/** `component` undefined = Update all (the all-units unit); else just that component (400 unknown, 409 up_to_date). */
-	update(by: string, component?: unknown): Promise<UpdateOutcome>;
+	update(by: string, component?: unknown, opts?: { clearFailed?: boolean }): Promise<UpdateOutcome>;
 	/** The manual unit's last run (systemctl show, argv, 3 s timeout); null: never ran or unreadable. */
 	last(unit?: string): Promise<RollbackLast | null>;
 	/** The components behind the latest stable release now. */
 	available(refresh?: boolean): Promise<UpdateUnit[]>;
+	/** The host updater's failed or installing state (plain words), when it has one. */
+	hostState(refresh?: boolean): Promise<UpdateState | undefined>;
 }
 
 /**
@@ -246,26 +251,37 @@ export interface Updater {
  * (`--now`), so it bypasses every failedTarget hold (a rollback hold or a failed install); a hold is cleared only by a successful
  * install of that unit. Never automatic: only POST /api/health/update calls it.
  */
-export function createUpdater(o: { available: (refresh?: boolean) => Promise<UpdateUnit[]>; run?: CommandRunner; show?: CommandRunner; now?: () => number; log?: (m: string) => void }): Updater {
+export function createUpdater(o: { available: (refresh?: boolean) => Promise<UpdateUnit[]>; hostState?: (refresh?: boolean) => Promise<UpdateState | undefined>; run?: CommandRunner; show?: CommandRunner; now?: () => number; log?: (m: string) => void }): Updater {
 	const run = o.run ?? execRunner;
 	const show = o.show ?? showRunner;
 	const now = o.now ?? Date.now;
 	const log = o.log ?? ((m: string) => console.log(m));
 	let starting = false;
 	const available = (refresh?: boolean) => o.available(refresh).catch(() => [] as UpdateUnit[]);
-	const last = async (unit: string = UPDATE_UNIT): Promise<RollbackLast | null> => {
+	const lastOf = async (unit: string): Promise<RollbackLast | null> => {
 		const r = await show("systemctl", ["show", unit, "-p", SHOW_PROPS, "--timestamp=unix"]);
 		return r.code === 0 ? parseShow(r.stdout ?? "") : null;
+	};
+	/** One unit's last run; with no unit, the all-units run: the normal or the retry unit, whichever is running or ran last. */
+	const last = async (unit?: string): Promise<RollbackLast | null> => {
+		if (unit) return lastOf(unit);
+		const [a, b] = await Promise.all([lastOf(UPDATE_UNIT), lastOf(RETRY_UNIT)]);
+		if (!a || !b) return a ?? b;
+		if (a.result === "running") return a;
+		if (b.result === "running") return b;
+		return Date.parse(b.at ?? "") > Date.parse(a.at ?? "") ? b : a;
 	};
 	return {
 		last,
 		available,
-		async update(by, component) {
+		hostState: (refresh) => (o.hostState ? o.hostState(refresh).catch(() => undefined) : Promise.resolve(undefined)),
+		async update(by, component, opts) {
 			if (component !== undefined && !(UPDATE_COMPONENTS as readonly unknown[]).includes(component)) return { ok: false, service: "update", code: "invalid_request", message: "unknown component" };
 			const all = await available();
 			const units = component === undefined ? all : all.filter((u) => u.component === component);
 			if (units.length === 0) return component === undefined ? { ok: false, service: "update", code: "no_update", message: "nothing is behind the latest release" } : { ok: false, service: "update", code: "up_to_date", message: `${component as string} is up to date` };
-			const unit = component === undefined ? UPDATE_UNIT : `wolfpack-auto-update-now@${component as string}.service`;
+			const retry = opts?.clearFailed === true; // the retry units run auto-update with --clear-failed (a unit cannot take a flag from systemctl start)
+			const unit = component === undefined ? (retry ? RETRY_UNIT : UPDATE_UNIT) : `wolfpack-auto-update-${retry ? "retry" : "now"}@${component as string}.service`;
 			const t = now();
 			// `starting` is set before the first await, so a second press arriving while `last()` is read cannot also start the unit.
 			if (starting) return { ok: false, service: "update", code: "running", message: "an update is already running" };
@@ -273,7 +289,7 @@ export function createUpdater(o: { available: (refresh?: boolean) => Promise<Upd
 			let r: Awaited<ReturnType<CommandRunner>>;
 			try {
 				// One check: the all-units run or this component's run is still going (the script's own lock covers the rest).
-				if ((await last(UPDATE_UNIT))?.result === "running" || (unit !== UPDATE_UNIT && (await last(unit))?.result === "running")) return { ok: false, service: "update", code: "running", message: "an update is already running" };
+				if ((await last())?.result === "running" || (unit !== UPDATE_UNIT && unit !== RETRY_UNIT && (await last(unit))?.result === "running")) return { ok: false, service: "update", code: "running", message: "an update is already running" };
 				r = await run("systemctl", ["--no-ask-password", "--no-block", "start", unit]);
 			} finally {
 				starting = false;

@@ -20,7 +20,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DEFAULT_MANIFEST_URL, checkUpdates, createManifestFetcher, probeHealth, type ManifestResult, type UpdateRow } from "@wolfpack/protocol";
 import { stampedVersion, subscriptionFile } from "@wolfpack/protocol/health-lag";
-import { mapHostStatus, STALE_AFTER_MS as HOST_STALE_AFTER_MS, type UpdateState } from "@wolfpack/protocol/update-state";
+import { failedLine, mapHostStatus, plainError, STALE_AFTER_MS as HOST_STALE_AFTER_MS, type UpdateState } from "@wolfpack/protocol/update-state";
 import { readSubscription } from "./subscription-api.ts";
 
 export type HostUnitState = "idle" | "updating" | "updated" | "failed" | "disabled";
@@ -62,12 +62,14 @@ export interface UpdatesBody {
 	manifestError?: string;
 }
 
-const STEPS: Record<string, string> = {
-	console: "Deploy the console release to sfo-01 (deploy/console/RUNBOOK.md); on the Mac, pnpm runtime:update.",
-	hubd: "Deploy the hubd release to sfo-01 (deploy/hubd/RUNBOOK.md).",
-	workerd: "On the Mac: pnpm runtime:update, then pnpm stack restart.",
-	wolfd: "On the Mac: pnpm runtime:update, then pnpm stack restart (sfo-01 wolves: deploy the wolfd release).",
-};
+/** What the owner does next when the host updates nothing by itself: plain words, no shell command or repo path. */
+const MANUAL_STEP = "Use Update now in Pack > Machines.";
+
+/** The one component state a machine card shows: a failed one first, else one installing; undefined when the host reports neither. */
+export function worstHostState(components: { updateState?: UpdateState }[]): UpdateState | undefined {
+	const states = components.flatMap((c) => (c.updateState ? [c.updateState] : []));
+	return states.find((s) => s.state === "failed") ?? states.find((s) => s.state === "installing");
+}
 
 export const DEFAULT_MAIN_MANIFEST_URL = DEFAULT_MANIFEST_URL.replace("stable-manifest/stable.json", "main-manifest/main.json");
 
@@ -120,16 +122,16 @@ export function componentStatus(s: StatusFile, component: string, nowMs: number 
 }
 
 function stepFor(component: string, st: UpdateStatus | undefined): string {
-	if (!st) return STEPS[component] ?? "";
+	if (!st) return MANUAL_STEP;
 	const where = `${st.unit ?? component} on ${st.host}`;
-	if (st.manual && st.state !== "failed" && st.state !== "updating") return `Manual updates on ${st.host}. ${STEPS[component] ?? ""}`.trim();
+	if (st.manual && st.state !== "failed" && st.state !== "updating") return `Manual updates on ${st.host}. ${MANUAL_STEP}`;
 	switch (st.state) {
 		case "failed":
-			return `Auto-update of ${where} failed (${st.code ?? "error"}); left as it is and not retried for this version. Fix the cause, then run the update again with --clear-failed.`;
+			return failedLine({ error: plainError("pack", { code: st.code, message: st.message }) });
 		case "updating":
 			return `Updating ${where} now.`;
 		case "disabled":
-			return `Auto-update is off on ${st.host}${st.message ? ` (${st.message})` : ""}. ${STEPS[component] ?? ""}`.trim();
+			return `Auto-updates are paused on ${st.host}. ${MANUAL_STEP}`;
 		default:
 			return `${st.host} updates itself on its next check (auto-update timer).`;
 	}
@@ -178,6 +180,7 @@ export function createUpdatesHandler(o: UpdatesOptions = {}): (q?: { refresh?: b
 	const statusFile = env.WOLFPACK_AUTO_UPDATE_STATUS?.trim() || DEFAULT_AUTO_UPDATE_STATUS;
 	return async (q) => {
 		const hostStatus = readStatusFile(statusFile);
+		const channel = readSubscription(subFile).channel;
 		const [m, hubd, workerd] = await Promise.all([
 			manifest(q),
 			serviceVersion(base(env.WOLFPACK_HUB_URL), "hubd", timeoutMs),
@@ -186,7 +189,7 @@ export function createUpdatesHandler(o: UpdatesOptions = {}): (q?: { refresh?: b
 		const rows = checkUpdates(m.manifest, { console: own, hubd, workerd, wolfd: undefined });
 		const components = rows.map((r) => {
 			const updateStatus = hostStatus && componentStatus(hostStatus, r.component, (o.now ?? Date.now)());
-			const updateState = hostStatus && mapHostStatus(hostStatus, r.component, { now: (o.now ?? Date.now)(), channel: readSubscription(subFile).channel });
+			const updateState = hostStatus && mapHostStatus(hostStatus, r.component, { now: (o.now ?? Date.now)(), channel });
 			return { ...r, updateStep: stepFor(r.component, updateStatus), ...(updateStatus ? { updateStatus } : {}), ...(updateState ? { updateState } : {}) };
 		});
 		return {

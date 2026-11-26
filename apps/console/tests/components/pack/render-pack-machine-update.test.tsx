@@ -118,6 +118,31 @@ describe("Pack > Machines > host update stage (work-wolfpack-WIaZh5k)", () => {
 	});
 });
 
+const FAILED = hostState("failed", { error: { code: "unhealthy", message: "The update installed but the service did not start healthy, so it was left as it is.", retryable: false } });
+
+describe("Pack > Machines > Retry a failed update (work-wolfpack-s0Tnbth)", () => {
+	it("a failed update on this machine shows the plain reason and Retry, never a command; Retry sends one POST with clearFailed and is gone while the run is pending", async () => {
+		const s = script({ updateState: FAILED });
+		const m = await mount(own());
+		assert.match(m.q("machine-host-stage")!.textContent ?? "", /^Update failed.*did not start healthy/);
+		assert.doesNotMatch(m.text(), /--clear-failed|ssh|RUNBOOK|runtime:update|pnpm/i);
+		assert.equal(m.q("machine-update-retry")!.textContent, "Retry");
+		s.last = { result: "running", exitStatus: null, at: null };
+		await m.click("machine-update-retry");
+		assert.deepEqual(posts(s).map((c) => c.body), [{ service: "update", clearFailed: true }]);
+		assert.equal(m.q("machine-update-retry"), null, "no second send while pending");
+		await m.unmount();
+	});
+
+	it("a failed update on another machine says to open its console, with no button", () => {
+		const view = machineCard(host({ console: false }), null);
+		const out = plain(renderToStaticMarkup(<MachineCard view={view} logs={{}} hostUpdate={FAILED as never} />));
+		assert.match(out, /Update failed: The update installed but the service did not start healthy/);
+		assert.match(out, /Open sfo-01's console to retry\./);
+		assert.ok(!out.includes("machine-update-retry"));
+	});
+});
+
 describe("Pack > Machines > Update (own machine)", () => {
 	it("shows Update available with the target version and an Update button only on this console's own card", async () => {
 		script({});
@@ -195,7 +220,7 @@ describe("Pack > Machines > Update (own machine)", () => {
 		const m = await mount(own());
 		s.last = { result: "exit-code", exitStatus: 4, at: later(Date.now() + 1000) };
 		await ask(m);
-		assert.match(m.q("machine-update-error")!.textContent ?? "", /Update failed \(another update run holds the lock\)/);
+		assert.match(m.q("machine-update-error")!.textContent ?? "", /Update failed: Another update is already running\./);
 		assert.ok(m.q("machine-update-button"), "the button is back after the run finished");
 		await m.unmount();
 	});
@@ -205,7 +230,7 @@ describe("Pack > Machines > Update (own machine)", () => {
 		const m = await mount(own());
 		s.last = { result: "exit-code", exitStatus: 1, at: later(Date.now() + 1000) };
 		await m.click("machine-check");
-		assert.match(m.q("machine-update-error")!.textContent ?? "", /Update failed \(exit 1\)/);
+		assert.match(m.q("machine-update-error")!.textContent ?? "", /Update failed: The update did not finish\./);
 		assert.ok(m.q("machine-update-button"));
 		assert.equal(m.q("machine-update-running"), null);
 		await m.unmount();
@@ -221,7 +246,7 @@ describe("Pack > Machines > Update (own machine)", () => {
 		assert.ok(m.q("machine-update-running"), "still within the bound");
 		mock.timers.tick(2 * 60_000);
 		await m.click("machine-check");
-		assert.match(m.q("machine-update-error")!.textContent ?? "", /No result from the update after 10 min — see Logs/);
+		assert.match(m.q("machine-update-error")!.textContent ?? "", /Update failed: No result after 10 minutes\./);
 		assert.equal(m.q("machine-update-running"), null);
 		assert.ok(m.q("machine-update-button"));
 		assert.ok(s.calls.length > 0);
@@ -239,7 +264,7 @@ describe("Pack > Machines > Update (own machine)", () => {
 		s.post = 504;
 		await m.click("machine-check");
 		await ask(m);
-		assert.match(m.q("machine-update-error")!.textContent ?? "", /HTTP 504/);
+		assert.match(m.q("machine-update-error")!.textContent ?? "", /Update failed: The console answered with an error\./);
 		assert.equal(posts(s).length, 2, "one POST per tap, no automatic retry");
 		await m.unmount();
 	});

@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { useSingleMac } from "@/components/shell/single-mac";
 import { useAppBridge } from "@/components/settings/app-bridge";
 import { useAppUpdateState } from "@/components/settings/use-app-update-state";
-import { stageLabel, type UpdateState } from "@wolfpack/protocol/update-state";
+import { failedLine, remoteRetryText, retryLabel, stageLabel, type UpdateState } from "@wolfpack/protocol/update-state";
 import {
 	appCheckNote,
 	appRestartLabel,
@@ -83,11 +83,11 @@ export function AppUpdateBlock({ version, state }: { version: string | null; sta
 				</span>
 			</div>
 			{label && (
-				<p data-testid="machine-app-stage" className={stage?.state === "failed" ? "mt-1 text-red-600 dark:text-red-400" : "mt-1 text-foreground"}>
-					{label}
-					{stage?.state === "failed" && stage.error && <span className="block text-muted-foreground">{stage.error.message}</span>}
+				<p data-testid="machine-app-stage" className={stage?.state === "failed" ? (stage.error?.quiet ? "mt-1 text-muted-foreground" : "mt-1 text-red-600 dark:text-red-400") : "mt-1 text-foreground"}>
+					{stage?.state === "failed" ? failedLine(stage) : label}
 				</p>
 			)}
+			{stage?.state === "failed" && bridge?.checkForUpdates && <button type="button" data-testid="machine-app-retry" disabled={checking} onClick={() => { setChecking(true); setNote(null); void bridge.checkForUpdates!().then((r) => setNote(appCheckNote(r))).catch(() => setNote(appCheckNote({ ok: false }))).finally(() => setChecking(false)); }} className={cn(BTN, "mt-1")}>{retryLabel}</button>}
 			{note && <p data-testid={note.tone === "error" ? "machine-app-update-error" : "machine-app-update-ok"} className={note.tone === "error" ? "mt-1 text-red-600 dark:text-red-400" : "mt-1"}>{note.text}</p>}
 		</div>
 	);
@@ -107,6 +107,8 @@ export function MachineCard(p: {
 	channelDisabled?: boolean;
 	/** The update banner and the auto switch (the console's own machine only); other machines say where to update. */
 	update?: ReactNode;
+	/** The host's own update state (failed or installing). A failure on a machine without `update` says to open that machine's console to retry. */
+	hostUpdate?: UpdateState | null;
 }) {
 	const { view } = p;
 	return (
@@ -123,6 +125,12 @@ export function MachineCard(p: {
 				))}
 			</ul>
 			{view.update?.kind === "app" && <AppUpdateBlock version={view.update.version} />}
+			{view.update?.kind === "pack" && !p.update && p.hostUpdate?.state === "failed" && (
+				<p data-testid="machine-remote-failed" className="mt-2 text-red-600 dark:text-red-400">
+					{failedLine(p.hostUpdate)}
+					<span className="block text-muted-foreground">{remoteRetryText(view.label)}</span>
+				</p>
+			)}
 			{view.update?.kind === "pack" && (p.update ?? <p data-testid="machine-update-readonly" className="mt-2 text-muted-foreground/70">{UPDATE_READONLY_NOTE}</p>)}
 			{view.update?.kind === "pack" && <div data-testid="machine-channel" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
 				<span>Update channel</span>
@@ -279,7 +287,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 		if (now - run.since > 600_000) {
 			setRun(null);
 			setGaveUp(true);
-			setUi({ phase: "error", message: "No result from the update after 10 min — see Logs" });
+			setUi({ phase: "error", message: "Update failed: No result after 10 minutes." });
 		}
 	}, [run, ui.phase, state, now]);
 	useEffect(() => {
@@ -289,7 +297,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 		const t = setTimeout(() => setTick((n) => n + 1), 1000);
 		return () => clearTimeout(t);
 	}, [ui, tick]);
-	const send = async () => {
+	const send = async (opts: { clearFailed?: boolean } = {}) => {
 		setDone(null);
 		setGaveUp(false);
 		setRun({ after: state?.last?.at ?? null, since: Date.now() });
@@ -299,7 +307,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 		let body: unknown = null;
 		try {
 			// One POST per tap, never resent: a 504 is an unknown outcome and the owner decides.
-			const r = await call("/api/health/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ service: "update" }) });
+			const r = await call("/api/health/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ service: "update", ...(opts.clearFailed ? { clearFailed: true } : {}) }) });
 			status = r.status;
 			retry = r.headers.get("Retry-After");
 			if (status !== 202) body = await r.json().catch(() => null);
@@ -400,10 +408,14 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 						</span>
 					</div>
 					{hostStage && (
-						<p data-testid="machine-host-stage" className={hostStage.state === "failed" ? "mt-1 text-red-600 dark:text-red-400" : "mt-1 text-foreground"}>
-							{stageLabel(hostStage)}
-							{hostStage.state === "failed" && hostStage.error && <span className="block text-muted-foreground">{hostStage.error.message}</span>}
-						</p>
+						<div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+							<p data-testid="machine-host-stage" className={hostStage.state === "failed" ? "text-red-600 dark:text-red-400" : "text-foreground"}>
+								{hostStage.state === "failed" ? failedLine(hostStage) : stageLabel(hostStage)}
+							</p>
+							{hostStage.state === "failed" && !running && !busy && ui.phase === "idle" && (
+								<button type="button" data-testid="machine-update-retry" disabled={!canAct} onClick={() => void send({ clearFailed: true })} className={cn(BTN, "ml-auto")}>{retryLabel}</button>
+							)}
+						</div>
 					)}
 					{ui.phase === "error" && <p data-testid="machine-update-error" className="mt-1 text-red-600 dark:text-red-400">{ui.message}</p>}
 				</div>

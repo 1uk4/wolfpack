@@ -38,7 +38,7 @@ describe("Mac app update progress on the machine card", () => {
 		assert.match(out(st("downloading", { progress: 42 })), /Downloading 42%/);
 		assert.match(out(st("ready", { progress: 100 })), /Ready, restart to update/);
 		assert.match(out(st("installing")), /Installing…/);
-		assert.match(out(st("failed", { error: { code: "offline", message: "Couldn't reach the update server.", retryable: true } })), /Update failed Couldn(&#x27;|')t reach the update server\./);
+		assert.match(out(st("failed", { error: { code: "offline", message: "Couldn't reach the update server.", retryable: true } })), /Update failed: Couldn(&#x27;|')t reach the update server\./);
 		assert.doesNotMatch(out(st("idle")), /Checking|Downloading|Installing|Update failed/);
 	});
 });
@@ -49,6 +49,26 @@ describe("Mac app ready state on the machine card (work-wolfpack-WIaZh5k)", () =
 		const ready = { target: "app", host: "this Mac", state: "ready", current: "0.2.0", latest: "0.2.1", progress: 100, lastCheck: null, channel: "stable", auto: "on" } as never;
 		const out = renderToStaticMarkup(<AppBridgeContext.Provider value={bridge}><AppUpdateBlock version="0.2.0" state={ready} /></AppBridgeContext.Provider>);
 		assert.match(out, /data-testid="machine-app-restart"[^>]*>Restart to update to v0\.2\.1/);
+	});
+});
+
+describe("Mac app failed update on the machine card (work-wolfpack-s0Tnbth)", () => {
+	it("offers Retry, which checks for updates again, and shows no command", () => {
+		const bridge = { checkForUpdates: async () => ({ ok: true }) } as unknown as AppBridge;
+		const failed = { target: "app", host: "this Mac", state: "failed", current: "0.2.0", latest: null, progress: null, lastCheck: null, channel: "stable", auto: "on", error: { code: "offline", message: "Couldn't reach the update server.", retryable: true } } as never;
+		const out = renderToStaticMarkup(<AppBridgeContext.Provider value={bridge}><AppUpdateBlock version="0.2.0" state={failed} /></AppBridgeContext.Provider>);
+		assert.match(out, /data-testid="machine-app-retry"[^>]*>Retry/);
+		assert.doesNotMatch(out, /--clear-failed|ssh|runtime:update|RUNBOOK/i);
+	});
+});
+
+describe("Mac app quiet failure on the machine card", () => {
+	it("shows a background check failure in plain grey text with Retry", () => {
+		const bridge = { checkForUpdates: async () => ({ ok: true }) } as unknown as AppBridge;
+		const failed = { target: "app", host: "this Mac", state: "failed", current: "0.2.0", latest: null, progress: null, lastCheck: null, channel: "stable", auto: "on", error: { code: "offline", message: "Couldn't reach the update server.", retryable: true, quiet: true } } as never;
+		const out = renderToStaticMarkup(<AppBridgeContext.Provider value={bridge}><AppUpdateBlock version="0.2.0" state={failed} /></AppBridgeContext.Provider>);
+		assert.match(out, /data-testid="machine-app-stage" class="mt-1 text-muted-foreground"[^>]*>Update failed: Couldn/);
+		assert.match(out, /data-testid="machine-app-retry"/);
 	});
 });
 

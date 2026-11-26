@@ -120,6 +120,17 @@ export function stageLabel(s: Pick<UpdateState, "state" | "progress">): string |
 	}
 }
 
+/** A failed update as one line: "Update failed: <plain reason>" (just "Update failed" when no reason is known). */
+export function failedLine(s: Pick<UpdateState, "error">): string {
+	return s.error?.message ? `Update failed: ${s.error.message}` : "Update failed";
+}
+
+/** The button on a failed update: it clears the held failure and tries again. */
+export const retryLabel = "Retry";
+
+/** What a machine other than the one this console runs on shows instead of a Retry button. */
+export const remoteRetryText = (host: string): string => `Open ${host}'s console to retry.`;
+
 /** The next app state after one updater event. `prev` is undefined before the first event. */
 export function mapAppEvent(prev: UpdateState | undefined, e: AppUpdaterEvent, ctx: UpdateContext): UpdateState {
 	const { error: _drop, ...p } = prev ?? ({} as Partial<UpdateState>);

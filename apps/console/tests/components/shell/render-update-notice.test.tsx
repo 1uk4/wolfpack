@@ -42,8 +42,24 @@ describe("sidebar update notice", () => {
 	it("reads a failed update as plain text and shows no raw state, code or repo path", () => {
 		const h = html([row("hubd", "0.1.23", "sfo-01", { state: "failed", code: "unhealthy" }), row("console", "0.1.30", "sfo-01", { state: "updated", stale: true, manual: true })]);
 		const t = text(h);
-		assert.match(t, /Update failed on sfo-01/);
+		assert.match(t, /sfo-01: Update failed(?!:)/);
 		assert.doesNotMatch(t, /\[|\]|unhealthy|failed:|RUNBOOK|deploy\/|updates itself|Manual updates|hasn't run/);
+	});
+
+	it("a failed pack update reads Update failed: <plain reason> with Retry (not Update now), disabled while a retry is pending", () => {
+		const failed = { ...row("hubd", "0.1.23", "sfo-01", { state: "failed", code: "unhealthy" }), updateState: { state: "failed", progress: null, error: { code: "unhealthy", message: "The update installed but the service did not start healthy, so it was left as it is.", retryable: false } } };
+		const view = (retrying: boolean) => renderToStaticMarkup(<UpdateNoticeView rows={[failed as never]} dismissed={new Set()} onDismiss={() => {}} onRetry={() => {}} retrying={retrying} />);
+		const t = text(view(false));
+		assert.match(t, /sfo-01: Update failed: The update installed but the service did not start healthy, so it was left as it is\./);
+		assert.match(t, /Retry/);
+		assert.doesNotMatch(t, /Update now|--clear-failed|ssh|RUNBOOK|runtime:update|deploy\//i);
+		assert.match(view(true), /<button[^>]*disabled=""[^>]*>Retry/);
+	});
+
+	it("a failed Mac app update offers Retry", () => {
+		const app = { target: "app", host: "this Mac", state: "failed", current: "0.2.0", latest: null, progress: null, lastCheck: null, channel: "stable", auto: "on", error: { code: "offline", message: "Couldn't reach the update server.", retryable: true } };
+		const t = text(renderToStaticMarkup(<UpdateNoticeView rows={[]} app={app as never} dismissed={new Set()} onDismiss={() => {}} onRetryApp={() => {}} />));
+		assert.match(t, /Update failed: Couldn't reach the update server\. Retry/);
 	});
 
 	it("points Update now at the Pack machines page with machine and components", () => {
@@ -59,8 +75,21 @@ describe("sidebar update notice", () => {
 		assert.match(view(app("ready", { progress: 100 })), /Update now/);
 		assert.match(view(app("installing")), /Installing…/);
 		const failed = view(app("failed", { error: { code: "offline", message: "Couldn't reach the update server.", retryable: true } }));
-		assert.match(failed, /Update failed Couldn't reach the update server\./);
+		assert.match(failed, /Update failed: Couldn't reach the update server\./);
 		for (const s of ["idle", "updated", "available"]) assert.equal(view(app(s)), "");
+	});
+
+	it("hides a quiet (background) Mac app failure in the sidebar but keeps a user-pressed one", () => {
+		const failed = (quiet: boolean) => ({ target: "app", host: "this Mac", state: "failed", current: "0.2.0", latest: null, progress: null, lastCheck: null, channel: "stable", auto: "on", error: { code: "offline", message: "Couldn't reach the update server.", retryable: true, ...(quiet ? { quiet: true } : {}) } }) as never;
+		const view = (a: unknown) => text(renderToStaticMarkup(<UpdateNoticeView rows={[]} app={a as never} dismissed={new Set()} onDismiss={() => {}} onRetryApp={() => {}} />));
+		assert.equal(view(failed(true)), "");
+		assert.match(view(failed(false)), /Update failed/);
+	});
+
+	it("shows why a Retry on the pack failed, in the card", () => {
+		const failed = { ...row("hubd", "0.1.23", "sfo-01", { state: "failed", code: "unhealthy" }), updateState: { state: "failed", progress: null, error: { code: "unhealthy", message: "It did not start.", retryable: false } } };
+		const t = text(renderToStaticMarkup(<UpdateNoticeView rows={[failed as never]} dismissed={new Set()} onDismiss={() => {}} onRetry={() => {}} retryError="Update failed: This machine needs its update service reinstalled." />));
+		assert.match(t, /This machine needs its update service reinstalled\./);
 	});
 
 	it("shows a pack host that is installing with the installing label", () => {

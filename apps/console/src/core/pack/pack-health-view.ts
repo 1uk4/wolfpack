@@ -445,9 +445,10 @@ export function updateQuestion(units: UpdateUnitView[]): string {
 }
 
 /** scripts/auto-update.mjs `run --now` exit codes the owner can act on: 3 kill switch, 4 lock held; 203 is systemd's "cannot exec". */
-const UPDATE_EXIT_TEXT: Record<number, string> = { 3: "auto-update is switched off on the host (kill switch)", 4: "another update run holds the lock", 203: "update script missing on the host" };
+const UPDATE_EXIT_TEXT: Record<number, string> = { 3: "Auto-update is switched off on this machine.", 4: "Another update is already running.", 203: "The update script is missing on this machine." };
 
-const UPDATE_RESULT_TEXT: Record<string, string> = { exec: "update script missing on the host", assert: "update script missing on the host", timeout: "timed out", signal: "killed", "core-dump": "crashed", "start-limit-hit": "started too often" };
+const UPDATE_DEFAULT_TEXT = "The update did not finish.";
+const UPDATE_RESULT_TEXT: Record<string, string> = { exec: "The update script is missing on this machine.", assert: "The update script is missing on this machine.", timeout: "It took too long.", signal: "It was stopped.", "core-dump": "It crashed.", "start-limit-hit": "It was started too often." };
 
 /**
  * Whether an update sent from this page has finished, read off wolfpack-auto-update-now's last run. `sentAfter`: the `last.at` seen when it
@@ -457,9 +458,9 @@ export function updateFinished(last: UpdateLast | null | undefined, sentAfter: s
 	if (!last || last.result === "running" || !last.at) return null;
 	if (sentAfter !== null && Date.parse(last.at) <= Date.parse(sentAfter)) return null;
 	// `unitsBehind`: components still behind in the poll that reported this run. An ok exit that left some behind changed nothing.
-	if (last.result === "success" && last.exitStatus === 0) return unitsBehind > 0 ? { ok: false, message: "Nothing changed — see Logs" } : { ok: true };
-	const why = last.result === "exit-code" && last.exitStatus !== null ? (UPDATE_EXIT_TEXT[last.exitStatus] ?? `exit ${last.exitStatus}`) : (UPDATE_RESULT_TEXT[last.result] ?? last.result);
-	return { ok: false, message: `Update failed (${why}) — see Logs` };
+	if (last.result === "success" && last.exitStatus === 0) return unitsBehind > 0 ? { ok: false, message: "Update failed: Nothing changed." } : { ok: true };
+	const why = last.result === "exit-code" && last.exitStatus !== null ? (UPDATE_EXIT_TEXT[last.exitStatus] ?? UPDATE_DEFAULT_TEXT) : (UPDATE_RESULT_TEXT[last.result] ?? UPDATE_DEFAULT_TEXT);
+	return { ok: false, message: `Update failed: ${why}` };
 }
 
 /** What the button shows after POST /api/health/update (`body` its JSON when read). */
@@ -469,9 +470,9 @@ export function updateOutcome(status: number, retryAfter: string | null, body?: 
 	if (status === 401) return { kind: "error", message: SIGN_IN };
 	if (status === 409 && (body as { code?: unknown } | null | undefined)?.code === "running") return { kind: "error", message: "An update is already running" };
 	if (status === 409) return { kind: "error", message: machine ? `Already up to date on ${machine}` : "Already up to date" };
-	if (status === 502) return { kind: "error", message: "systemctl refused the update (is the update unit and polkit rule installed?)" };
-	if (status === 0) return { kind: "error", message: "Console unreachable; update not sent" };
-	return { kind: "error", message: `Update failed (HTTP ${status})` };
+	if (status === 502) return { kind: "error", message: "Update failed: This machine needs its update service reinstalled." };
+	if (status === 0) return { kind: "error", message: "Update failed: Couldn't reach the console, so nothing was sent." };
+	return { kind: "error", message: "Update failed: The console answered with an error." };
 }
 
 /** How long "back" shows after a link returns to ok. */

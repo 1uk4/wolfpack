@@ -217,7 +217,7 @@ describe("wolf spacing: ring anchors, activity bias, soft separation", () => {
 		assert.ok(gap(w[0]!, w[1]!) >= 2 * DIAM, `pushed apart (${gap(w[0]!, w[1]!)})`);
 	});
 
-	it("recent feature activity eases the anchor part of the way toward the hub, never all the way", () => {
+	it("a wolf with one feature hub settles about halfway toward it, never all the way", () => {
 		reduce();
 		const host = mk(1000);
 		const pos = (threadId: string) => {
@@ -233,6 +233,7 @@ describe("wolf spacing: ring anchors, activity bias, soft separation", () => {
 		const hub = nodes.get("work:ELzLSkV")!;
 		const biased = pos("hal/feature-work-wolfpack-ELzLSkV");
 		const frac = 1 - gap(biased, hub) / gap(plain, hub);
-		assert.ok(frac > 0.2 && frac < 0.5, `moved ${(frac * 100).toFixed(0)}% toward the hub`);
+		// One hub's invisible spring pulls the anchor half the way (wolfSpringAnchor: n / (1 + n)).
+		assert.ok(Math.abs(frac - 0.5) < 0.05, `moved ${(frac * 100).toFixed(0)}% toward the hub`);
 	});
 });

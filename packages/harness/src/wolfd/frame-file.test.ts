@@ -33,6 +33,16 @@ describe("frame-file route", () => {
     expect(r.mimeType).toBe("text/html; charset=utf-8");
   });
 
+  it("sends the CSP sandbox header, so a frame opened directly is never a same-origin page", async () => {
+    const w = await boot();
+    writeFileSync(join(w.root, "frames", "a.html"), "<p>hi</p>");
+    const res = await fetch(`${w.url}/v1/wolves/${w.home.split("/")[0]}/frame-file?path=a.html`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-security-policy")).toBe("sandbox");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
   it("refuses traversal and absolute paths with 400", async () => {
     const w = await boot();
     writeFileSync(join(w.root, "secret.html"), "x");

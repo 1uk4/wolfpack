@@ -1099,6 +1099,7 @@ export class WolfServer {
           "Content-Type": "text/html; charset=utf-8",
           "Content-Length": bytes.length,
           "X-Content-Type-Options": "nosniff",
+          "Content-Security-Policy": "sandbox",
           "Cache-Control": "no-store",
         });
         res.end(bytes);

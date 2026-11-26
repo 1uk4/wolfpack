@@ -122,6 +122,7 @@ describe("sanitizeRenderSettings", () => {
 			regions: DEFAULT_REGION_TUNING,
 			physics: DEFAULT_PHYSICS_TUNING,
 			live: { enabled: false, subagentFadeSec: 30, trailSec: 20, intensity: 3 },
+			privateView: true,
 		};
 		assert.deepEqual(sanitizeRenderSettings(valid), valid); // every value a ladder member
 	});

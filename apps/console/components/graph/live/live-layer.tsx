@@ -82,6 +82,13 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 		};
 	}, [renderer, answer, openThread]);
 
+	// Private view: cards show kind and wolf only; a card already open is closed so no real title stays on screen.
+	const priv = (settings as { privateView?: boolean } | null)?.privateView === true;
+	useEffect(() => {
+		overlayRef.current?.setPrivate(priv);
+		setShown(null);
+	}, [renderer, priv]);
+
 	// Settings (live.enabled, intensity, trailSec, subagentFadeSec).
 	useEffect(() => {
 		overlayRef.current?.configure(live);

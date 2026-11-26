@@ -88,6 +88,8 @@ export interface GraphRenderSettings {
 	physics: PhysicsTuning;
 	/** The live pack overlay (wolves, threads, pulses; work-wolfpack-H1OQNIh adds the fields, the overlay task reads them). */
 	live: LiveSettings;
+	/** Private view: blur or hide every personal title and detail on the graph page; the visuals stay. Default off. */
+	privateView: boolean;
 }
 
 /** Live overlay settings. Only `enabled` has UI so far; the rest are stored with defaults for the overlay task. */
@@ -190,6 +192,7 @@ export function sanitizeRenderSettings(raw: unknown): GraphRenderSettings {
 			: sanitizeRegionTuning(r.regions),
 		physics: sanitizePhysicsTuning(r.physics),
 		live: sanitizeLiveSettings(r.live),
+		privateView: r.privateView === true,
 	};
 }
 
@@ -353,6 +356,7 @@ export const DEFAULT_RENDER_SETTINGS: GraphRenderSettings = {
 	regions: DEFAULT_REGION_TUNING,
 	physics: DEFAULT_PHYSICS_TUNING,
 	live: DEFAULT_LIVE_SETTINGS,
+	privateView: false,
 };
 
 // ─── The slider ladders (2026-09-17) ─────────────────────────────────────────

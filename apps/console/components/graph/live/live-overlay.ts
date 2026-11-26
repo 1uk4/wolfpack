@@ -19,6 +19,7 @@ import {
 import { ownerThreadKey, targetNodeId, threadSlugOf } from "@/src/core/graph/live/live-targets";
 import { DEFAULT_PHYSICS, stepWolves, wolvesMoving, type WolfBody } from "@/src/core/graph/live/live-physics";
 import { AMBER, EFFECTS, rgba } from "./live-effects";
+import { redact } from "@/src/core/graph/privacy";
 
 export interface Pt { x: number; y: number }
 export interface OverlayHost {
@@ -109,6 +110,13 @@ export class LiveOverlay {
 
 	private liveOpts(): LiveOptions {
 		return { ...DEFAULT_LIVE_OPTIONS, subagentFadeSec: this.settings.subagentFadeSec, trailSec: this.settings.trailSec, maxTrails: this.mobile ? 100 : 200 };
+	}
+
+	private privateView = false;
+	/** Private view: hover and pin cards show kind and wolf only (work-wolfpack-xH0rRtw). */
+	setPrivate(on: boolean): void {
+		this.privateView = on;
+		this.requestFrame();
 	}
 
 	configure(s: OverlaySettings): void {
@@ -496,28 +504,29 @@ export class LiveOverlay {
 	/** The card text for a hit (name, online, current thread, bound item; thread title and bound item; subagent name and parent). */
 	cardFor(hit: OverlayHit): OverlayCard {
 		const s = this.state;
+		const p = this.privateView;
 		const it = hit.item;
 		if (it.kind === "wolf") {
 			const w = s.wolves[it.wolf];
 			const t = w?.activeThreadId ? s.threads[`${it.wolf}/${w.activeThreadId}`] : undefined;
 			const lines = [w?.online ? "Online" : "Offline"];
-			if (t) lines.push(`Thread: ${t.title ?? threadSlugOf(t.wolf, t.id)}`);
-			if (t?.bound) lines.push(`Working on: ${t.bound.title ?? t.bound.id}`);
+			if (t) lines.push(`Thread: ${redact(t.title ?? threadSlugOf(t.wolf, t.id), p)}`);
+			if (t?.bound) lines.push(`Working on: ${redact(t.bound.title ?? t.bound.id, p)}`);
 			if (w?.needsYou) lines.push("Waiting for you");
 			return { title: it.label, lines, action: t ? { kind: "open-thread", label: "Open thread", wolf: it.wolf, threadId: t.id } : undefined };
 		}
 		if (it.kind === "thread") {
 			const t = s.threads[it.key];
 			const lines = [t?.active ? "Active" : "Idle"];
-			if (t?.bound) lines.push(`Working on: ${t.bound.title ?? t.bound.id}`);
-			if (t?.needsYou) return { title: it.label, lines: [...lines, "Waiting for you"], action: { kind: "answer", label: "Answer in chat", wolf: it.wolf, threadId: it.threadId } };
-			return { title: it.label, lines: [`Wolf: ${it.wolf}`, ...lines], action: { kind: "open-thread", label: "Open thread", wolf: it.wolf, threadId: it.threadId } };
+			if (t?.bound) lines.push(`Working on: ${redact(t.bound.title ?? t.bound.id, p)}`);
+			if (t?.needsYou) return { title: redact(it.label, p), lines: [...lines, "Waiting for you"], action: { kind: "answer", label: "Answer in chat", wolf: it.wolf, threadId: it.threadId } };
+			return { title: redact(it.label, p), lines: [`Wolf: ${it.wolf}`, ...lines], action: { kind: "open-thread", label: "Open thread", wolf: it.wolf, threadId: it.threadId } };
 		}
 		if (it.kind === "subagent") {
 			const parent = it.threadId ? s.threads[`${it.wolf}/${it.threadId}`] : undefined;
-			return { title: it.label, lines: [`Subagent of ${it.wolf}`, ...(parent ? [`Parent: ${parent.title ?? threadSlugOf(parent.wolf, parent.id)}`] : [])], action: it.threadId ? { kind: "open-thread", label: "Open parent thread", wolf: it.wolf, threadId: it.threadId } : undefined };
+			return { title: redact(it.label, p), lines: [`Subagent of ${it.wolf}`, ...(parent ? [`Parent: ${redact(parent.title ?? threadSlugOf(parent.wolf, parent.id), p)}`] : [])], action: it.threadId ? { kind: "open-thread", label: "Open parent thread", wolf: it.wolf, threadId: it.threadId } : undefined };
 		}
 		const v = s.owner?.viewing;
-		return { title: "You", lines: v ? [`Viewing: ${v.title ?? v.id}`] : this.attached ? ["In the floating chat"] : [] };
+		return { title: "You", lines: v ? [`Viewing: ${redact(v.title ?? v.id, p)}`] : this.attached ? ["In the floating chat"] : [] };
 	}
 }

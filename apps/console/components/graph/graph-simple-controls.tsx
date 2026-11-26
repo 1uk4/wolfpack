@@ -15,7 +15,7 @@
  */
 
 import type { ComponentType, ReactNode } from "react";
-import { Blend, Expand, Ghost, Gauge, Kanban, LayoutGrid, Layers, Radio, Route, Tags } from "lucide-react";
+import { Blend, EyeOff, Expand, Ghost, Gauge, Kanban, LayoutGrid, Layers, Radio, Route, Tags } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
 import {
 	PRESET_IDS,
@@ -305,6 +305,13 @@ export function SimpleControls({
 					Icon={Tags}
 					checked={labelsOn(settings)}
 					onChange={(on) => changeSettings((cur) => setLabels(cur, on))}
+				/>
+				<Switch
+					label="Private"
+					hint="Private view: blur titles and personal details on the graph, the overlay and the feed"
+					Icon={EyeOff}
+					checked={settings.privateView}
+					onChange={(on) => changeSettings((cur) => ({ ...cur, privateView: on }))}
 				/>
 			</div>
 			<SimpleSlider

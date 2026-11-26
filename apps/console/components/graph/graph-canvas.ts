@@ -56,6 +56,7 @@ import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "@/src/core";
 import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, ROUTE_DONE_COLOR } from "@/src/core";
+import { redactLines } from "@/src/core/graph/privacy.ts";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import type { LiveOverlay, OverlayHighlight, OverlayHit, OverlayHost } from "./live/live-overlay";
@@ -520,14 +521,26 @@ function drawNameLines(
 	world: WorldSizes,
 	radius: number,
 	color: string,
+	privateView = false,
 ): void {
 	context.fillStyle = color;
 	context.textAlign = "center";
 	context.textBaseline = "top";
 	const firstTop = y + radius + world.labelGap;
-	for (let i = 0; i < lines.length; i++) {
-		context.fillText(lines[i]!, x, firstTop + i * world.labelSize * LABEL_LINE_HEIGHT);
+	// Private view: the same footprint as soft blurred dots, no readable text.
+	if (privateView) blurLabels(context, color, world.labelSize * 0.45);
+	const shown = redactLines(lines, privateView);
+	for (let i = 0; i < shown.length; i++) {
+		context.fillText(shown[i]!, x, firstTop + i * world.labelSize * LABEL_LINE_HEIGHT);
 	}
+	if (privateView) context.shadowBlur = 0;
+}
+
+/** Private view: a soft glow under the redacted label (shadowBlur works in every canvas, unlike ctx.filter on Safari). `blurWorld` is in
+ *  world units; shadowBlur ignores the transform, so it is scaled by the current zoom. Callers reset it. */
+function blurLabels(context: CanvasRenderingContext2D, color: string, blurWorld: number): void {
+	context.shadowColor = color;
+	context.shadowBlur = blurWorld * (context.getTransform?.().a ?? 1);
 }
 
 /** One batch of nodes that share a look: drawn with a single fill (disc)
@@ -2059,7 +2072,7 @@ export class GraphCanvasRenderer {
 				const a = labelAlpha(ratio, settings.labelZoom * (n.labelGate ?? 1)) * (routeDone ? DEP_STYLE.routeDoneNodeAlpha : (n.dim ? DIM_LABEL_ALPHA : 1) * this.restDim(id));
 				if (a <= 0.01) continue;
 				ctx.globalAlpha = a;
-				drawNameLines(ctx, n.x, n.y, lines, this.world, this.radiusOf(n), routeDone ? ROUTE_DONE_COLOR : data.colors.label);
+				drawNameLines(ctx, n.x, n.y, lines, this.world, this.radiusOf(n), routeDone ? ROUTE_DONE_COLOR : data.colors.label, settings.privateView);
 			}
 			ctx.restore();
 		}
@@ -2087,7 +2100,7 @@ export class GraphCanvasRenderer {
 				ctx.save();
 				ctx.globalAlpha = this.hoverFade;
 				ctx.font = this.worldLabelFont;
-				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, nodeR, data.colors.hoverText);
+				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, nodeR, data.colors.hoverText, settings.privateView);
 				ctx.restore();
 			}
 		}
@@ -2146,9 +2159,12 @@ export class GraphCanvasRenderer {
 				if (!rm.lines) continue;
 				ctx.fillStyle = rgbaFromHex(rm.color, 0.9);
 				const firstOffset = (-(rm.lines.length - 1) / 2) * lineH;
-				for (let i = 0; i < rm.lines.length; i++) {
-					ctx.fillText(rm.lines[i]!, rm.cx, rm.cy + firstOffset + i * lineH);
+				const shownLines = redactLines(rm.lines, settings.privateView);
+				if (settings.privateView) blurLabels(ctx, rgbaFromHex(rm.color, 0.9), (settings.clusterLabelSize * 0.45) / k);
+				for (let i = 0; i < shownLines.length; i++) {
+					ctx.fillText(shownLines[i]!, rm.cx, rm.cy + firstOffset + i * lineH);
 				}
+				ctx.shadowBlur = 0;
 			}
 			ctx.restore();
 		}

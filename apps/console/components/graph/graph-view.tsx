@@ -203,6 +203,9 @@ export function GraphView({
 	const reader = useWorkReader();
 	const openWorkRef = useRef(reader.open);
 	openWorkRef.current = reader.open;
+	// Private view: a node click shows the redacted card, never the reader or viewer with the real page.
+	const privateRef = useRef(settings.privateView);
+	privateRef.current = settings.privateView;
 	const openView = useOpenView();
 	const openViewRef = useRef(openView);
 	openViewRef.current = openView;
@@ -296,7 +299,8 @@ export function GraphView({
 			{
 				onSelect: (nodeId) => {
 					const act = nodeClickAction(nodeId);
-					if (act.kind === "open-work") openWorkRef.current(act.id); // the reader only: no selection, route or camera change
+					if (privateRef.current) setSelected({ id: nodeId });
+					else if (act.kind === "open-work") openWorkRef.current(act.id); // the reader only: no selection, route or camera change
 					else if (!openNodeInViewer(nodeId, openViewRef.current)) setSelected({ id: nodeId });
 				},
 				onStageClick: () => setSelected(null),
@@ -564,6 +568,7 @@ export function GraphView({
 			{selected && card && !isEmpty && (
 				<GraphPane
 					card={card}
+					privateView={settings.privateView}
 					routeNav={routeNav}
 					onClose={() => setSelected(null)}
 					onFocus={(ids) => focusNodes(ids, card.id)}

@@ -16,6 +16,7 @@
 export * from "./contracts.ts";
 export * from "./ui/ports.ts";
 export * from "./graph/render-settings.ts";
+export * from "./graph/privacy.ts";
 export * from "./graph/simple-settings.ts";
 export * from "./ui/mobile-layout.ts";
 

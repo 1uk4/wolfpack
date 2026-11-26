@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MachineCard } from "../../../components/pack/pack-machines.tsx";
+import { AppUpdateBlock } from "../../../components/pack/pack-machines.tsx";
 import { AppBridgeContext, type AppBridge } from "../../../components/settings/app-bridge.ts";
 import { machineCard } from "../../../src/core/pack/machine-card.ts";
 import type { HealthLink } from "../../../src/core/pack/pack-health-view.ts";
@@ -26,6 +27,28 @@ describe("Pack > Machines card, single-Mac", () => {
 		assert.match(out, /data-testid="machine-app-version"[^>]*>Wolfpack v0\.3\.4/);
 		assert.match(out, /data-testid="machine-app-check"[^>]*>Check now/);
 		for (const gone of ["machine-channel", "machine-auto-switch", "machine-update-readonly", "machine-check\""]) assert.ok(!out.includes(`data-testid="${gone.replace('"', "")}${gone.endsWith('"') ? '"' : ""}`), gone);
+	});
+});
+
+describe("Mac app update progress on the machine card", () => {
+	it("shows the stage label per stage, the percent while downloading and the plain error when failed", () => {
+		const st = (state: string, extra: Record<string, unknown> = {}) => ({ target: "app", host: "this Mac", state, current: "0.2.0", latest: "0.2.1", progress: null, lastCheck: null, channel: "stable", auto: "on", ...extra }) as never;
+		const out = (s: unknown) => renderToStaticMarkup(<AppUpdateBlock version="0.2.0" state={s as never} />).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+		assert.match(out(st("checking")), /Checking for updates…/);
+		assert.match(out(st("downloading", { progress: 42 })), /Downloading 42%/);
+		assert.match(out(st("ready", { progress: 100 })), /Ready, restart to update/);
+		assert.match(out(st("installing")), /Installing…/);
+		assert.match(out(st("failed", { error: { code: "offline", message: "Couldn't reach the update server.", retryable: true } })), /Update failed Couldn(&#x27;|')t reach the update server\./);
+		assert.doesNotMatch(out(st("idle")), /Checking|Downloading|Installing|Update failed/);
+	});
+});
+
+describe("Mac app ready state on the machine card (work-wolfpack-WIaZh5k)", () => {
+	it("offers Restart to update to the new version when the state is ready, with no downloaded push", () => {
+		const bridge = { checkForUpdates: async () => ({ ok: true }), installUpdate: () => {} } as unknown as AppBridge;
+		const ready = { target: "app", host: "this Mac", state: "ready", current: "0.2.0", latest: "0.2.1", progress: 100, lastCheck: null, channel: "stable", auto: "on" } as never;
+		const out = renderToStaticMarkup(<AppBridgeContext.Provider value={bridge}><AppUpdateBlock version="0.2.0" state={ready} /></AppBridgeContext.Provider>);
+		assert.match(out, /data-testid="machine-app-restart"[^>]*>Restart to update to v0\.2\.1/);
 	});
 });
 

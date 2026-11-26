@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapAppEvent, mapHostStatus, plainError, type HostStatusFile, type UpdateState } from "./update-state.js";
+import { mapAppEvent, stageLabel, mapHostStatus, plainError, type HostStatusFile, type UpdateState } from "./update-state.js";
 
 const NOW = Date.parse("2026-11-09T12:00:00.000Z");
 const app = { version: "0.2.0", channel: "stable" as const, now: NOW, host: "this Mac" };
@@ -110,5 +110,18 @@ describe("plainError", () => {
     expect(plainError("pack", { code: "checksum" }, c)).toEqual({ code: "checksum", message: "The downloaded update did not match its checksum, so it was not installed. Try again later.", retryable: true });
     expect(plainError("pack", { code: "rolled-back" }, c)).toEqual({ code: "rolled-back", message: "The update did not start cleanly, so the previous version was put back.", retryable: false });
     expect(plainError("app", { message: "boom at /Users/me/x.js --flag" }, c)).toEqual({ code: "unknown", message: "The update failed. Try again later, and if it keeps failing check the logs.", retryable: true });
+  });
+});
+
+describe("stageLabel", () => {
+  it("gives the five owner-approved labels and nothing for the quiet stages", () => {
+    const at = (state: UpdateState["state"], progress: number | null = null): UpdateState => ({ ...idle, state, progress });
+    expect(stageLabel(at("checking"))).toBe("Checking for updates…");
+    expect(stageLabel(at("downloading", 42))).toBe("Downloading 42%");
+    expect(stageLabel(at("downloading"))).toBe("Downloading 0%");
+    expect(stageLabel(at("ready", 100))).toBe("Ready, restart to update");
+    expect(stageLabel(at("installing"))).toBe("Installing…");
+    expect(stageLabel(at("failed"))).toBe("Update failed");
+    for (const s of ["idle", "available", "updated", "manual", "paused", "stale"] as const) expect(stageLabel(at(s))).toBeNull();
   });
 });

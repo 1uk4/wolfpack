@@ -11,13 +11,16 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowUpCircleIcon, XIcon } from "lucide-react";
+import { stageLabel, type UpdateState } from "@wolfpack/protocol/update-state";
+import { useAppBridge } from "@/components/settings/app-bridge";
+import { useAppUpdateState } from "@/components/settings/use-app-update-state";
 
-type Row = { component: string; running: string | null; latest: string | null; outdated: boolean | null; notesUrl: string | null; updateStep?: string; updateStatus?: { state: string; host?: string } };
+type Row = { component: string; running: string | null; latest: string | null; outdated: boolean | null; notesUrl: string | null; updateStep?: string; updateStatus?: { state: string; host?: string }; updateState?: { state: string; progress?: number | null } };
 
 const HOUR = 60 * 60_000;
 const STORE = "wolfpack.update-notice.dismissed";
 
-type Group = { machine: string; items: { component: string; latest: string | null; key: string }[]; failed: boolean; notesUrl: string | null };
+type Group = { machine: string; items: { component: string; latest: string | null; key: string }[]; failed: boolean; installing: boolean; notesUrl: string | null };
 
 const keyOf = (r: Row) => `${r.component}@${r.latest ?? "?"}`;
 
@@ -26,9 +29,11 @@ function groupRows(rows: Row[], dismissed: ReadonlySet<string>): Group[] {
 	for (const r of rows) {
 		if (dismissed.has(keyOf(r))) continue;
 		const failed = r.updateStatus?.state === "failed";
-		if (r.outdated !== true && !failed) continue;
+		const installing = r.updateState?.state === "installing";
+		if (r.outdated !== true && !failed && !installing) continue;
 		const machine = r.updateStatus?.host || "this machine";
-		const g = by.get(machine) ?? { machine, items: [], failed: false, notesUrl: null };
+		const g = by.get(machine) ?? { machine, items: [], failed: false, installing: false, notesUrl: null };
+		g.installing ||= installing;
 		g.items.push({ component: r.component, latest: r.latest, key: keyOf(r) });
 		g.failed ||= failed;
 		g.notesUrl ??= r.notesUrl;
@@ -41,16 +46,42 @@ export const updateHref = (g: Pick<Group, "machine" | "items">) => `/pack/machin
 
 function title(g: Group): string {
 	if (g.failed) return `Update failed on ${g.machine}`;
+	if (g.installing) return `${g.machine}: ${stageLabel({ state: "installing", progress: null })}`;
 	if (g.items.length > 1) return `${g.machine}: ${g.items.length} updates available`;
 	const i = g.items[0]!;
 	return `${g.machine}: ${i.component}${i.latest ? ` ${i.latest}` : ""} is available`;
 }
 
-export function UpdateNoticeView({ rows, dismissed, onDismiss }: { rows: Row[]; dismissed: ReadonlySet<string>; onDismiss: (keys: string[]) => void }) {
+/** The Mac app's own stage: shown while downloading, ready, installing or failed; idle/checking/updated stay quiet in the sidebar. */
+function AppRow({ app, onInstall }: { app: UpdateState; onInstall?: () => void }) {
+	const failed = app.state === "failed";
+	return (
+		<div data-testid="update-notice-app" className="rounded-md border border-teal-500/30 bg-teal-500/5 px-2.5 py-2 text-xs">
+			<div className="flex items-start gap-1.5 text-foreground">
+				<ArrowUpCircleIcon className={`mt-0.5 size-3 shrink-0 ${failed ? "text-red-400" : "text-teal-400"}`} />
+				<span>{stageLabel(app)}</span>
+			</div>
+			{failed && app.error && <div className="mt-0.5 pl-[18px] text-muted-foreground">{app.error.message}</div>}
+			{app.state === "ready" && onInstall && (
+				<div className="mt-1.5 pl-[18px]">
+					<button type="button" onClick={onInstall} className="rounded-sm border border-teal-500/40 bg-teal-500/15 px-2 py-0.5 font-medium text-teal-300 hover:bg-teal-500/25">
+						Update now
+					</button>
+				</div>
+			)}
+		</div>
+	);
+}
+
+const APP_SHOWN = new Set(["downloading", "ready", "installing", "failed"]);
+
+export function UpdateNoticeView({ rows, dismissed, onDismiss, app, onInstall }: { rows: Row[]; dismissed: ReadonlySet<string>; onDismiss: (keys: string[]) => void; app?: UpdateState | null; onInstall?: () => void }) {
 	const groups = groupRows(rows, dismissed);
-	if (!groups.length) return null;
+	const showApp = app != null && APP_SHOWN.has(app.state);
+	if (!groups.length && !showApp) return null;
 	return (
 		<div data-testid="update-notice" className="mb-1 flex flex-col gap-1.5">
+			{showApp && <AppRow app={app} onInstall={onInstall} />}
 			{groups.map((g) => (
 				<div key={g.machine} className="relative rounded-md border border-teal-500/30 bg-teal-500/5 px-2.5 py-2 text-xs">
 					<button type="button" aria-label="Dismiss" onClick={() => onDismiss(g.items.map((i) => i.key))} className="absolute right-1 top-1 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground">
@@ -113,5 +144,7 @@ export function UpdateNotice() {
 			/* storage unavailable: hidden for this page view only */
 		}
 	};
-	return <UpdateNoticeView rows={rows} dismissed={dismissed} onDismiss={dismiss} />;
+	const bridge = useAppBridge();
+	const app = useAppUpdateState();
+	return <UpdateNoticeView rows={rows} dismissed={dismissed} onDismiss={dismiss} app={app} onInstall={() => void bridge?.installUpdate?.()} />;
 }

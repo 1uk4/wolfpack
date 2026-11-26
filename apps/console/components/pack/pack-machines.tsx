@@ -13,6 +13,8 @@ import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { cn } from "@/lib/utils";
 import { useSingleMac } from "@/components/shell/single-mac";
 import { useAppBridge } from "@/components/settings/app-bridge";
+import { useAppUpdateState } from "@/components/settings/use-app-update-state";
+import { stageLabel, type UpdateState } from "@wolfpack/protocol/update-state";
 import {
 	appCheckNote,
 	appRestartLabel,
@@ -59,13 +61,17 @@ export function fakeSend(outcome: string): Send {
  * Single-Mac: the desktop app's own updater (electron-updater downloads in the background and installs on quit). Says so, shows the app
  * version, offers Check now (the app answers with its own dialog) and, once an update is downloaded, Restart to update.
  */
-export function AppUpdateBlock({ version }: { version: string | null }) {
+export function AppUpdateBlock({ version, state }: { version: string | null; state?: UpdateState | null }) {
 	const bridge = useAppBridge();
+	const hooked = useAppUpdateState({ version });
+	const stage = state === undefined ? hooked : state;
+	const label = stage ? stageLabel(stage) : null;
 	const [ready, setReady] = useState<string | null>(null);
 	const [checking, setChecking] = useState(false);
 	const [note, setNote] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
 	useEffect(() => bridge?.onUpdateStatus?.((s) => { if (s.status === "downloaded" && "version" in s && s.version) setReady(s.version); }), [bridge]);
-	const restart = appRestartLabel(ready);
+	// `ready` from the seeded state counts too: a window opened after the download gets no legacy push (work-wolfpack-WIaZh5k).
+	const restart = appRestartLabel(ready ?? (stage?.state === "ready" ? (stage.latest ?? "") : null)) ?? (stage?.state === "ready" ? "Restart to update" : null);
 	return (
 		<div data-testid="machine-app-update" className="mt-2 rounded-md border px-2 py-1.5 text-muted-foreground">
 			<p data-testid="machine-app-update-note">Updates install by themselves: the app downloads them in the background and asks you to restart.</p>
@@ -76,6 +82,12 @@ export function AppUpdateBlock({ version }: { version: string | null }) {
 					{bridge?.checkForUpdates && <button type="button" data-testid="machine-app-check" disabled={checking} onClick={() => { setChecking(true); setNote(null); void bridge.checkForUpdates!().then((r) => setNote(appCheckNote(r))).catch(() => setNote(appCheckNote({ ok: false }))).finally(() => setChecking(false)); }} className={BTN}>Check now</button>}
 				</span>
 			</div>
+			{label && (
+				<p data-testid="machine-app-stage" className={stage?.state === "failed" ? "mt-1 text-red-600 dark:text-red-400" : "mt-1 text-foreground"}>
+					{label}
+					{stage?.state === "failed" && stage.error && <span className="block text-muted-foreground">{stage.error.message}</span>}
+				</p>
+			)}
 			{note && <p data-testid={note.tone === "error" ? "machine-app-update-error" : "machine-app-update-ok"} className={note.tone === "error" ? "mt-1 text-red-600 dark:text-red-400" : "mt-1"}>{note.text}</p>}
 		</div>
 	);
@@ -174,7 +186,7 @@ function ServiceRow({ s, log, note, busy, onRestart, onRefresh }: { s: MachineSe
 }
 
 type Sub = { channel: "stable" | "main"; mode: "off" | "button" | "auto" | "unknown"; exists?: boolean };
-type HealthUpdateState = { units: UpdateUnitView[]; last: { result: string; exitStatus: number | null; at: string | null } | null };
+type HealthUpdateState = { units: UpdateUnitView[]; last: { result: string; exitStatus: number | null; at: string | null } | null; /** The host updater's failed or installing state. */ updateState?: UpdateState };
 type Ui = { phase: "idle" } | { phase: "confirm" } | { phase: "sending" } | { phase: "issued"; at: number } | { phase: "wait"; until: number } | { phase: "error"; message: string };
 
 /**
@@ -215,7 +227,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 			const r = await call(refresh ? "/api/health/update?refresh=1" : "/api/health/update", { cache: "no-store" });
 			if (!r.ok) throw new Error(String(r.status));
 			const b = (await r.json()) as Partial<HealthUpdateState>;
-			const next = { units: Array.isArray(b.units) ? b.units : [], last: b.last ?? null };
+			const next = { units: Array.isArray(b.units) ? b.units : [], last: b.last ?? null, ...(b.updateState ? { updateState: b.updateState } : {}) };
 			if (alive()) {
 				setState(next);
 				setOffline(false);
@@ -351,7 +363,8 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 	};
 	const units = state?.units ?? [];
 	const recentlyDone = done !== null && now - done < 120_000;
-	const showBanner = updateOffered(actions, units) || ui.phase !== "idle" || running || recentlyDone;
+	const hostStage = state?.updateState && stageLabel(state.updateState) && (state.updateState.state === "installing" || state.updateState.state === "failed") ? state.updateState : null;
+	const showBanner = updateOffered(actions, units) || ui.phase !== "idle" || running || recentlyDone || hostStage !== null;
 	const busy = ui.phase === "sending";
 	const waitS = ui.phase === "wait" ? Math.max(0, Math.ceil((ui.until - Date.now()) / 1000)) : 0;
 	const update = (
@@ -386,6 +399,12 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 							)}
 						</span>
 					</div>
+					{hostStage && (
+						<p data-testid="machine-host-stage" className={hostStage.state === "failed" ? "mt-1 text-red-600 dark:text-red-400" : "mt-1 text-foreground"}>
+							{stageLabel(hostStage)}
+							{hostStage.state === "failed" && hostStage.error && <span className="block text-muted-foreground">{hostStage.error.message}</span>}
+						</p>
+					)}
 					{ui.phase === "error" && <p data-testid="machine-update-error" className="mt-1 text-red-600 dark:text-red-400">{ui.message}</p>}
 				</div>
 			)}

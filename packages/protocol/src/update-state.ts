@@ -102,6 +102,24 @@ export function plainError(_source: "app" | "pack", raw: { code?: string; messag
 	return { code: "unknown", message: "The update failed. Try again later, and if it keeps failing check the logs.", retryable: true };
 }
 
+/** The one place the in-flight stage labels live (owner-approved wording); null for stages that show nothing. */
+export function stageLabel(s: Pick<UpdateState, "state" | "progress">): string | null {
+	switch (s.state) {
+		case "checking":
+			return "Checking for updates…";
+		case "downloading":
+			return `Downloading ${s.progress ?? 0}%`;
+		case "ready":
+			return "Ready, restart to update";
+		case "installing":
+			return "Installing…";
+		case "failed":
+			return "Update failed";
+		default:
+			return null;
+	}
+}
+
 /** The next app state after one updater event. `prev` is undefined before the first event. */
 export function mapAppEvent(prev: UpdateState | undefined, e: AppUpdaterEvent, ctx: UpdateContext): UpdateState {
 	const { error: _drop, ...p } = prev ?? ({} as Partial<UpdateState>);

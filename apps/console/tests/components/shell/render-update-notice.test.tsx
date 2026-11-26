@@ -51,6 +51,23 @@ describe("sidebar update notice", () => {
 		assert.match(h, /href="\/pack\/machines\?update=sfo-01%3Ahubd%2Cworkerd"/);
 	});
 
+	it("shows the Mac app's own stage with the approved label, the percent and the plain error, and nothing when idle", () => {
+		const app = (state: string, extra: Record<string, unknown> = {}) => ({ target: "app", host: "this Mac", state, current: "0.2.0", latest: "0.2.1", progress: null, lastCheck: null, channel: "stable", auto: "on", ...extra }) as never;
+		const view = (a: unknown) => text(renderToStaticMarkup(<UpdateNoticeView rows={[]} app={a as never} dismissed={new Set()} onDismiss={() => {}} onInstall={() => {}} />));
+		assert.match(view(app("downloading", { progress: 42 })), /Downloading 42%/);
+		assert.match(view(app("ready", { progress: 100 })), /Ready, restart to update/);
+		assert.match(view(app("ready", { progress: 100 })), /Update now/);
+		assert.match(view(app("installing")), /Installing…/);
+		const failed = view(app("failed", { error: { code: "offline", message: "Couldn't reach the update server.", retryable: true } }));
+		assert.match(failed, /Update failed Couldn't reach the update server\./);
+		for (const s of ["idle", "updated", "available"]) assert.equal(view(app(s)), "");
+	});
+
+	it("shows a pack host that is installing with the installing label", () => {
+		const r = { ...row("hubd", "0.1.23"), updateState: { state: "installing", progress: null } };
+		assert.match(text(html([r as never])), /sfo-01: Installing…/);
+	});
+
 	it("stays hidden for a dismissed version and returns for a newer one", () => {
 		assert.equal(html([row("hubd", "0.1.23")], ["hubd@0.1.23"]), "");
 		assert.match(text(html([row("hubd", "0.1.24")], ["hubd@0.1.23"])), /hubd 0\.1\.24 is available/);

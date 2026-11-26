@@ -25,7 +25,7 @@ const plain = (html: string) => html.replaceAll("&#x27;", "'");
 
 type Call = { url: string; method: string; body: unknown };
 /** The scripted server. Change its fields between steps to change what the next poll or POST sees. */
-function script(init: { units?: typeof UNITS; last?: unknown; post?: number; retryAfter?: string; sub?: Record<string, unknown>; subStatus?: number; putStatus?: number; hold?: Promise<void>; updateDown?: boolean }) {
+function script(init: { units?: typeof UNITS; last?: unknown; post?: number; retryAfter?: string; sub?: Record<string, unknown>; subStatus?: number; putStatus?: number; hold?: Promise<void>; updateDown?: boolean; updateState?: unknown }) {
 	const s = {
 		units: init.units ?? UNITS,
 		last: init.last ?? null,
@@ -36,6 +36,7 @@ function script(init: { units?: typeof UNITS; last?: unknown; post?: number; ret
 		putStatus: init.putStatus ?? 200,
 		hold: init.hold,
 		updateDown: init.updateDown ?? false,
+		updateState: init.updateState as unknown,
 		calls: [] as Call[],
 	};
 	globalThis.fetch = (async (url: string, o?: RequestInit) => {
@@ -52,7 +53,7 @@ function script(init: { units?: typeof UNITS; last?: unknown; post?: number; ret
 		}
 		if (method === "POST") return new Response(s.post === 202 ? "{}" : JSON.stringify({ code: s.post === 409 ? "no_update" : "x" }), { status: s.post, headers: s.retryAfter ? { "Retry-After": s.retryAfter } : {} });
 		if (s.updateDown) throw new Error("connection refused");
-		return new Response(JSON.stringify({ units: s.units, last: s.last }), { status: 200 });
+		return new Response(JSON.stringify({ units: s.units, last: s.last, ...(s.updateState ? { updateState: s.updateState } : {}) }), { status: 200 });
 	}) as typeof fetch;
 	return s;
 }
@@ -101,6 +102,21 @@ const ask = async (m: Awaited<ReturnType<typeof mount>>) => {
 	await m.click("machine-update-button-confirm");
 };
 const later = (at: number) => new Date(at).toISOString();
+
+const hostState = (state: string, extra: Record<string, unknown> = {}) => ({ target: "pack", host: "sfo-01", component: "hubd", state, current: "0.1.14", latest: "0.1.15", progress: null, lastCheck: null, channel: "stable", auto: "on", ...extra });
+
+describe("Pack > Machines > host update stage (work-wolfpack-WIaZh5k)", () => {
+	it("shows Installing… while the host installs, and Update failed with the plain reason when it failed", async () => {
+		script({ updateState: hostState("installing") });
+		const a = await mount(own());
+		assert.match(a.q("machine-host-stage")!.textContent ?? "", /Installing…/);
+		await a.unmount();
+		script({ updateState: hostState("failed", { error: { code: "unhealthy", message: "The update installed but the service did not start healthy, so it was left as it is.", retryable: false } }) });
+		const b = await mount(own());
+		assert.match(b.q("machine-host-stage")!.textContent ?? "", /Update failed.*did not start healthy/);
+		await b.unmount();
+	});
+});
 
 describe("Pack > Machines > Update (own machine)", () => {
 	it("shows Update available with the target version and an Update button only on this console's own card", async () => {

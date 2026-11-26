@@ -74,7 +74,32 @@ function devStub(): AppBridge {
 			checkMain: async () => ({ ahead: "0.4.1-main.1", upToDate: false }),
 		},
 		checkForUpdates: async () => ({ ok: true }),
+		onUpdateStatus: () => () => {},
+		getUpdateState: async () => devUpdateStep(),
+		installUpdate: () => {},
 	};
+}
+
+/** Dev only, with `?singleMac=1`: `&appUpdate=checking|progress|ready|installing|failed` seeds the stand-in's updater step so every stage can be seen in a browser (kept for the tab like singleMac; `appUpdate=none` clears it). */
+function devUpdateStep(): (AppUpdaterEvent & { status?: string }) | null {
+	const key = "wolfpack.dev.appUpdate";
+	const q = new URLSearchParams(window.location.search).get("appUpdate");
+	if (q === "none") window.sessionStorage.removeItem(key);
+	else if (q) window.sessionStorage.setItem(key, q);
+	switch (window.sessionStorage.getItem(key)) {
+		case "checking":
+			return { type: "checking" };
+		case "progress":
+			return { type: "progress", percent: 42 };
+		case "ready":
+			return { type: "downloaded", version: "0.4.2", status: "downloaded" };
+		case "installing":
+			return { type: "installing" };
+		case "failed":
+			return { type: "error", message: "net::ERR_INTERNET_DISCONNECTED" };
+		default:
+			return null;
+	}
 }
 
 function readBridge(): AppBridge | null {

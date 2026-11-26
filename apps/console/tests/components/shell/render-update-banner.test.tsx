@@ -17,6 +17,7 @@ import * as ReactDOMClient from "react-dom/client";
 import { flushSync } from "react-dom";
 import { parseHTML } from "linkedom";
 import UpdateBanner from "../../../components/shell/update-banner.tsx";
+import { AppBridgeContext } from "../../../components/settings/app-bridge.ts";
 
 // linkedom as the DOM for the interactive pass (first createRoot test in
 // the repo — the banner's push→render→click flow needs real effects).
@@ -69,13 +70,30 @@ describe("update banner (Wave C)", () => {
 
 		await new Promise((r) => setTimeout(r, 0));
 		flushSync(() => pushed?.({ status: "downloaded", version: "0.3.1" }));
-		assert.ok(host.innerHTML.includes("0.3.1"), "the version renders");
+		assert.equal(host.querySelector("[data-testid='update-banner'] .text-sm")?.textContent, "Wolfpack 0.3.1 is ready, restart to update");
 		assert.ok(host.innerHTML.includes("Restart"), "the restart affordance renders");
 
 		const button = host.querySelector<HTMLButtonElement>("[data-testid='update-banner'] button");
 		assert.ok(button, "restart button exists");
 		button!.click();
 		assert.equal(installed, 1, "Restart asks the shell to quit-and-install");
+		root.unmount();
+		host.remove();
+	});
+
+	// work-wolfpack-WIaZh5k: a window opened after the download never gets the push; the app's seeded state is `ready`.
+	it("shows the restart banner from the app's seeded ready state when no downloaded push arrived", async () => {
+		let installed = 0;
+		const bridge = { onUpdateStatus: () => () => {}, getUpdateState: async () => ({ type: "downloaded", version: "0.3.2" }), installUpdate: () => void (installed += 1) };
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		const root = ReactDOMClient.createRoot(host);
+		flushSync(() => root.render(<AppBridgeContext.Provider value={bridge as never}><UpdateBanner /></AppBridgeContext.Provider>));
+		await new Promise((r) => setTimeout(r, 0));
+		await new Promise((r) => setTimeout(r, 0));
+		assert.ok(host.innerHTML.includes("0.3.2"), "the version renders");
+		host.querySelector<HTMLButtonElement>("[data-testid='update-banner'] button")!.click();
+		assert.equal(installed, 1);
 		root.unmount();
 		host.remove();
 	});

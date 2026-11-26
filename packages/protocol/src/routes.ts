@@ -61,6 +61,7 @@ import { HubSettingsSchema } from "./hub-settings.js";
 import { CommandRequestSchema, CommandResponseSchema } from "./command.js";
 import { InventoryEntrySchema, InventoryReportBodySchema, MachineKeyAckBodySchema } from "./inventory.js";
 import { PutWolfSettingsBodySchema, RestartResponseSchema, RevealBodySchema, RevealResponseSchema, WolfSettingsViewSchema } from "./wolf-settings.js";
+import { PrefBodySchema, PrefResponseSchema } from "./prefs.js";
 import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from "./prompts.js";
 import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
@@ -650,6 +651,13 @@ export const ROUTES = {
    */
   hubListDevices: { scope: "hub", method: "GET", path: "/v1/tokens", response: { kind: "json", schema: DeviceListSchema }, status: [200], error: err },
   hubRevokeDevice: { scope: "hub", method: "DELETE", path: "/v1/tokens/:id", response: { kind: "json", schema: RevokeDeviceResponseSchema }, status: [200], error: err },
+  /**
+   * Per-person preferences (work-wolfpack-H1OQNIh): one JSON value per (person, key), the person taken from the bearer token (today every token is the single
+   * owner identity, so all paired devices share it). GET answers `{value}` (`null` when nothing is stored). PUT `{value}` replaces it (atomic) and answers the stored value;
+   * 400 `invalid_request` for a bad key (letters, digits, `.`, `_`, `-`, up to 64) or a value over 32 KB serialized.
+   */
+  hubGetPref: { scope: "hub", method: "GET", path: "/v1/prefs/:key", response: { kind: "json", schema: PrefResponseSchema }, status: [200], error: err },
+  hubPutPref: { scope: "hub", method: "PUT", path: "/v1/prefs/:key", body: PrefBodySchema, response: { kind: "json", schema: PrefResponseSchema }, status: [200], error: err },
   hubMintPairingCode: { scope: "hub", method: "POST", path: "/v1/tokens/pairing-codes", body: MintPairingCodeRequestSchema, response: { kind: "json", schema: MintPairingCodeResponseSchema }, status: [200], error: err },
   hubPairPage: { scope: "hub", public: true, method: "GET", path: "/pair", response: { kind: "bytes" }, status: [200], error: err },
   /**

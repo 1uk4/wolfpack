@@ -82,6 +82,7 @@ import { CommandRequestSchema, INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES
 import { createInventory, type Inventory } from "./inventory.js";
 import { createCommandHub, type CommandHub } from "./commands.js";
 import { createMachineKeys, type MachineKeys } from "./machine-keys.js";
+import { createPrefsStore } from "./prefs.js";
 import { createRelay, type Relay } from "./relay.js";
 import { assertIfMatch, DOMAIN_RE, ifMatchOf, listWorkItems, readWorkRecordFor } from "./work-reads.js";
 import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
@@ -337,6 +338,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let curator: Curator | undefined;
   const inventory: Inventory = createInventory(opts.now);
   const machineKeys: MachineKeys = createMachineKeys(opts.dataDir);
+  const prefs = createPrefsStore(opts.dataDir);
   let health: HubHealth | undefined; // started inside the start try below, stopped there if startup fails
   let rebuild: RebuildService | undefined; // set with the curator below
   // Sweep autonomy: a from=current preview through the rebuild service (same path as the admin route), then a request for the owner. Never applies.
@@ -966,6 +968,18 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "hubInventory": {
           deviceCaller(identity);
           return send(res, 200, { entries: inventory.list(health!.self()), hubMachine: health!.self().machine });
+        }
+        case "hubGetPref": {
+          const who = deviceCaller(identity);
+          return send(res, 200, { value: await prefs.get(who.owner, params.key ?? "") });
+        }
+        case "hubPutPref": {
+          const who = deviceCaller(identity);
+          const body = await readBody(req);
+          if (body === null || typeof body !== "object" || !("value" in body)) throw new HubError("invalid_request", "body must be {value}");
+          const value = (body as { value: unknown }).value;
+          await prefs.put(who.owner, params.key ?? "", value);
+          return send(res, 200, { value });
         }
         case "hubMachineKeys": {
           deviceCaller(identity);

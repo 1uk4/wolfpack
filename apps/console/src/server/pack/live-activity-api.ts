@@ -3,7 +3,7 @@
  *   GET /api/activity/stream    SSE: the hub's /v1/events with the caller's own bearer, cut down to `pack.activity` and `resync`
  *                               frames (plus keepalive comments). Last-Event-ID is passed through to the hub.
  *   GET /api/activity/presence  the hub's /v1/activity/presence snapshot, as is.
- * No hub configured: 204 (the overlay stays empty and the graph works as before). Hub unreachable: 503. No bearer or a hub 401: 401 with the
+ * The caller's own bearer is forwarded (never the console's env token). No hub configured, or a hub answering 403/404: 204 (the overlay stays empty and the graph works as before). Hub unreachable: 503. No bearer or a hub 401: 401 with the
  * hub-auth header (the browser signs itself out, as for every hub-backed route).
  */
 import { bearerOf, HUB_AUTH_HEADER } from "../../core/ui/hub-auth.ts";
@@ -68,6 +68,8 @@ export function createLiveActivityApi(d: LiveActivityDeps = {}) {
 			return new Response(null, { status: 503, headers: NO_STORE });
 		}
 		if (r.status === 401) return unauthorized();
+		// 403 (a token kind that gets no activity) and 404 (an older hub) both mean "no live data": an empty overlay, no error.
+		if (r.status === 403 || r.status === 404) return new Response(null, { status: 204, headers: NO_STORE });
 		if (!r.ok) return new Response(null, { status: r.status === 409 ? 409 : 502, headers: NO_STORE });
 		return r;
 	}
@@ -77,7 +79,7 @@ export function createLiveActivityApi(d: LiveActivityDeps = {}) {
 			const headers: Record<string, string> = { Accept: "text/event-stream" };
 			const last = req.headers.get("last-event-id");
 			if (last) headers["Last-Event-ID"] = last;
-			const r = await call(req, "/v1/events", headers, req.signal);
+			const r = await call(req, "/v1/events?activity=1", headers, req.signal); // the hub sends pack.activity only on ?activity=1 and only to device/owner tokens
 			if (r.status !== 200 || !r.body) return r;
 			return new Response(r.body.pipeThrough(liveFrameTransform()), {
 				status: 200,

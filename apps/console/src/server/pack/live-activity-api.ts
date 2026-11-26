@@ -16,6 +16,7 @@ export function liveFrameFilter(block: string): string | null {
 	if (block.trim() === "") return null;
 	const lines = block.split("\n");
 	if (lines.every((l) => l.startsWith(":"))) return block; // keepalive
+	if (!block.includes('"pack.activity"') && !block.includes('"resync"')) return null; // cheap prefilter: skip JSON.parse for every other frame type
 	const data = lines.filter((l) => l.startsWith("data:")).map((l) => l.slice(5).replace(/^ /, "")).join("\n");
 	try {
 		const type = (JSON.parse(data) as { type?: unknown }).type;
@@ -86,6 +87,8 @@ export function createLiveActivityApi(d: LiveActivityDeps = {}) {
 		} finally {
 			if (timer) clearTimeout(timer);
 		}
+		// A hub answer we turn into something else must not leave its body (and socket) open.
+		if (!r.ok) void r.body?.cancel().catch(() => {});
 		if (r.status === 401) return unauthorized();
 		// 403 (a token kind that gets no activity) and 404 (an older hub) both mean "no live data": an empty overlay, no error.
 		if (r.status === 403 || r.status === 404) return new Response(null, { status: 204, headers: NO_STORE });

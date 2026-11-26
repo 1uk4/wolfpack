@@ -62,6 +62,17 @@ describe("command frames", () => {
     expect(f("wolves.restart", {})).toBe(true);
   });
 
+  it("accepts update.run only with an allowlisted component and a boolean clearFailed", () => {
+    const f = (args: unknown) => parseLinkFrame(JSON.stringify({ t: "cmd", id: "c-9", kind: "update.run", args })).ok;
+    expect(f({})).toBe(true);
+    expect(f({ component: "workerd", clearFailed: true })).toBe(true);
+    expect(f({ component: "rm -rf" })).toBe(false);
+    expect(f({ component: "../x" })).toBe(false);
+    expect(f({ component: "console;rm" })).toBe(false);
+    expect(f({ clearFailed: "yes" })).toBe(false);
+    expect(f({ component: "hubd", extra: 1 })).toBe(false);
+  });
+
   it("accepts the unknown_service and not_found result codes", () => {
     for (const code of ["unknown_service", "not_found"]) expect(parseLinkFrame(JSON.stringify({ t: "cmd.result", id: "c-2", ok: false, code })).ok).toBe(true);
   });

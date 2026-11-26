@@ -5,7 +5,8 @@ import { WorkerdServer, VERSION as WORKERD_VERSION } from "./proxy.js";
 import { createInventoryReporter, type InventoryReporter } from "./wolfd-probe.js";
 import { machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
 import { HubLink, type LinkStatus } from "./link.js";
-import { canRestartSelf, createCommandRunner, restartWolves, type KeyHandler, type WolfControl } from "./commands.js";
+import { canRestartSelf, createCommandRunner, execSystemctl, restartWolves, type KeyHandler, type WolfControl } from "./commands.js";
+import { autoUpdateStatusFile, readHostUpdateState } from "./host-update.js";
 import { createKeyStore, readKeyPresence } from "./key-store.js";
 import { migrateKeys, type MigrateOptions } from "./key-migrate.js";
 import { KeyChecker, type FetchLike } from "@wolfpack/protocol";
@@ -253,6 +254,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       },
       // Key presence (masks only, never values) so the Pack's Keys grid can show it.
       ...(opts.keyFile ? { keys: () => readKeyPresence(opts.keyFile!, opts.env ?? process.env) } : {}),
+      updateState: () => readHostUpdateState(autoUpdateStatusFile(opts.env ?? process.env), readMachineChannel() ?? null),
     });
     // The machine key is created on first start; the public half goes in every hello.
     const cfgDir = opts.configDir ?? workerdConfigDir();
@@ -294,6 +296,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       // Each supervised wolf's wolfd log is readable by the wolf's name (never by path: the hub only names a service).
       logSources: () => Object.fromEntries(supervisor.status().map((c) => [c.name, { file: c.logFile }])),
       ...(keys ? { keys, hostId: hubCfg.hostId } : {}),
+      // update.run: whenever workerd runs under systemd (no status file needed at start-up: the file only appears after the first run); polkit lets the workerd user start the update units, and a host without them answers update_failed.
+      ...(canRestartSelf() ? { update: { systemctl: execSystemctl } } : {}),
       ...(canRestartSelf() ? { restartSelf: { stop: () => shutdown(), exit: (code: number) => process.exit(code) } } : {}),
       // Link-only supervises no wolves (they run from their own units), so there is nothing to restart: wolves.restart is not advertised.
       ...(linkOnly

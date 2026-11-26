@@ -32,7 +32,8 @@
 import { bearerOf } from "../../core/ui/hub-auth.ts";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type PackHealth, type Restarter } from "./pack-health.ts";
 import { createReleaseReader, createRollbacker, createUpdater, type ReleaseReader, type Rollbacker, type UpdateUnit, type Updater } from "./pack-actions.ts";
-import { DEFAULT_MAIN_MANIFEST_URL, consoleVersion, createUpdatesHandler } from "./updates-api.ts";
+import { DEFAULT_MAIN_MANIFEST_URL, consoleVersion, createUpdatesHandler, worstHostState } from "./updates-api.ts";
+import type { UpdateState } from "@wolfpack/protocol/update-state";
 import { readInventory, type InventoryRead } from "./inventory.ts";
 import { DEFAULT_MANIFEST_URL, createManifestFetcher, type InventoryEntry } from "@wolfpack/protocol";
 import { createLagMonitor, machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
@@ -83,7 +84,7 @@ const UPDATE_STATE_TTL_MS = 2_000;
 
 export function createHealthApi(d: HealthApiDeps) {
 	const now = d.now ?? Date.now;
-	let updateCache: { at: number; pending: boolean; body: Promise<{ units: UpdateUnit[]; last: { result: string; exitStatus: number | null; at: string | null } | null }> } | undefined;
+	let updateCache: { at: number; pending: boolean; body: Promise<{ units: UpdateUnit[]; last: { result: string; exitStatus: number | null; at: string | null } | null; updateState?: UpdateState }> } | undefined;
 	let inFlight = 0;
 	const started: number[] = []; // start times of the live checks in the last minute
 
@@ -220,8 +221,9 @@ export function createHealthApi(d: HealthApiDeps) {
 		async update(req: Request): Promise<Response> {
 			const gate = await gateOf(req, "update");
 			if (gate instanceof Response) return gate;
-			const component = await req.json().then((b: { component?: unknown } | null) => b?.component, () => undefined); // no or non-JSON body = Update all
-			const out = await d.updater.update(gate, component);
+			const body = await req.json().then((b: { component?: unknown; clearFailed?: unknown } | null) => b, () => null); // no or non-JSON body = Update all
+			const component = body?.component;
+			const out = await d.updater.update(gate, component, { clearFailed: body?.clearFailed === true });
 			if (out.ok) return Response.json(out, { status: 202, headers: NO_STORE });
 			return failure(out, { invalid_request: 400, no_update: 409, up_to_date: 409, running: 409, failed: 502 }[out.code]);
 		},
@@ -234,12 +236,13 @@ export function createHealthApi(d: HealthApiDeps) {
 			// shared while in flight and its result kept for UPDATE_STATE_TTL_MS.
 			const t = now();
 			if (refresh || !updateCache || (!updateCache.pending && t - updateCache.at >= UPDATE_STATE_TTL_MS)) {
-				const entry: { at: number; pending: boolean; body: Promise<{ units: UpdateUnit[]; last: { result: string; exitStatus: number | null; at: string | null } | null }> } = {
+				const entry: { at: number; pending: boolean; body: Promise<{ units: UpdateUnit[]; last: { result: string; exitStatus: number | null; at: string | null } | null; updateState?: UpdateState }> } = {
 					at: t,
 					pending: true,
-					body: Promise.all([d.updater.available(refresh), d.updater.last()]).then(([units, last]) => ({
+					body: Promise.all([d.updater.available(refresh), d.updater.last(), d.updater.hostState(refresh)]).then(([units, last, updateState]) => ({
 						units: units.map((u) => ({ component: u.component, from: u.from, to: u.to })),
 						last: last ? { result: last.result, exitStatus: last.exitStatus, at: last.at } : null,
+						...(updateState ? { updateState } : {}),
 					})),
 				};
 				updateCache = entry;
@@ -259,9 +262,12 @@ type Holder = { [KEY]?: ReturnType<typeof createHealthApi>; [MONITOR]?: PackHeal
 /** The process-wide rollback-target reader: the monitor's snapshot `actions` and the rollbacker read the same one. */
 const releaseReader = (): ReleaseReader => ((globalThis as Holder)[RELEASES] ??= createReleaseReader());
 /** The components /api/updates says are behind the latest stable release (same reader as the sidebar notice). */
-const availableUpdates = (env: Record<string, string | undefined>) => {
-	const handler = createUpdatesHandler({ env });
+const availableUpdates = (handler: ReturnType<typeof createUpdatesHandler>) => {
 	return async (refresh?: boolean): Promise<UpdateUnit[]> => (await handler({ refresh })).components.flatMap((c) => (c.outdated === true && c.latest ? [{ component: c.component, from: c.running, to: c.latest }] : []));
+};
+/** The host updater's failed or installing state, from the same reader as /api/updates. */
+const hostUpdateState = (handler: ReturnType<typeof createUpdatesHandler>) => {
+	return async (refresh?: boolean): Promise<UpdateState | undefined> => worstHostState((await handler({ refresh })).components);
 };
 const SYSTEMD = process.platform === "linux";
 
@@ -307,11 +313,12 @@ export function healthApi(env: Record<string, string | undefined> = process.env)
 	const h = globalThis as Holder;
 	if (!h[KEY]) {
 		const health = packHealth(env);
+		const updates = createUpdatesHandler({ env }); // one handler: one manifest cache for both readers
 		h[KEY] = createHealthApi({
 			health,
 			restarter: createRestarter({ health, systemd: SYSTEMD }),
 			rollbacker: createRollbacker({ releases: releaseReader() }),
-			updater: createUpdater({ available: availableUpdates(env) }),
+			updater: createUpdater({ available: availableUpdates(updates), hostState: hostUpdateState(updates) }),
 			witness: sessionWitness(env),
 			checkToken: hubTokenCheck(hubTarget(env).wolvesUrl),
 			readInventory: inventoryReader(env),

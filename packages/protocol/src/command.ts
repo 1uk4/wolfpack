@@ -9,7 +9,9 @@
  */
 import { z } from "zod";
 
-export const COMMAND_KINDS = ["key.set", "key.remove", "wolves.restart", "workerd.restart", "logs.fetch"] as const;
+export const COMMAND_KINDS = ["key.set", "key.remove", "wolves.restart", "workerd.restart", "logs.fetch", "update.run"] as const;
+/** The components update.run may name (units wolfpack-auto-update-{now,retry}@<component>.service on the machine). */
+export const UPDATE_COMPONENTS = ["console", "hubd", "wolfd", "workerd"] as const;
 export const CommandKindSchema = z.enum(COMMAND_KINDS);
 export type CommandKind = z.infer<typeof CommandKindSchema>;
 
@@ -20,6 +22,8 @@ export const COMMAND_TIMEOUT_MS: Record<CommandKind, number> = {
   "wolves.restart": 15_000,
   "logs.fetch": 15_000,
   "workerd.restart": 5_000,
+  /** update.run answers once the update unit is started, not when it finishes. */
+  "update.run": 8_000,
 };
 
 export const COMMAND_LOGS_DEFAULT_LINES = 200;
@@ -33,12 +37,13 @@ export const CommandIdSchema = z.string().regex(/^c-[A-Za-z0-9-]{1,64}$/);
 export const CommandArgsSchemas = {
   "wolves.restart": z.object({ wolf: z.string().min(1).max(64).optional() }).strict(),
   "workerd.restart": z.object({}).strict(),
+  "update.run": z.object({ component: z.enum(UPDATE_COMPONENTS).optional(), clearFailed: z.boolean().optional() }).strict(),
   "logs.fetch": z.object({ service: z.string().regex(/^[a-z0-9][a-z0-9._@-]*$/).max(64), lines: z.number().int().min(1).max(COMMAND_LOGS_MAX_LINES) }).strict(),
   "key.set": z.object({ slot: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/) }).strict(),
   "key.remove": z.object({ slot: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/) }).strict(),
 } as const;
 
-const AnyArgs = z.union([CommandArgsSchemas["logs.fetch"], CommandArgsSchemas["key.set"], CommandArgsSchemas["wolves.restart"], CommandArgsSchemas["workerd.restart"]]);
+const AnyArgs = z.union([CommandArgsSchemas["logs.fetch"], CommandArgsSchemas["key.set"], CommandArgsSchemas["wolves.restart"], CommandArgsSchemas["workerd.restart"], CommandArgsSchemas["update.run"]]);
 
 const CmdBase = z.object({
     kind: CommandKindSchema,
@@ -64,6 +69,9 @@ export const CommandResultCodeSchema = z.enum([
   "replay",
   "store_failed",
   "check_unreachable",
+  "update_busy",
+  "update_failed",
+  "up_to_date",
 ]);
 export type CommandResultCode = z.infer<typeof CommandResultCodeSchema>;
 

@@ -20,13 +20,14 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DEFAULT_MANIFEST_URL, checkUpdates, createManifestFetcher, probeHealth, type ManifestResult, type UpdateRow } from "@wolfpack/protocol";
 import { stampedVersion, subscriptionFile } from "@wolfpack/protocol/health-lag";
+import { failedLine, mapHostStatus, plainError, STALE_AFTER_MS as HOST_STALE_AFTER_MS, type UpdateState } from "@wolfpack/protocol/update-state";
 import { readSubscription } from "./subscription-api.ts";
 
-export type UpdateState = "idle" | "updating" | "updated" | "failed" | "disabled";
+export type HostUnitState = "idle" | "updating" | "updated" | "failed" | "disabled";
 
 /** The host updater's view of one component (from its status file; scripts/auto-update.mjs). */
 export interface UpdateStatus {
-	state: UpdateState;
+	state: HostUnitState;
 	host: string;
 	/** When the updater last ran (ISO). */
 	lastCheck: string;
@@ -48,6 +49,8 @@ export interface UpdateComponent extends UpdateRow {
 	updateStep: string;
 	/** Present when the host's auto-update status file is readable. */
 	updateStatus?: UpdateStatus;
+	/** The same state in the shape shared with the Mac app (packages/protocol update-state.ts). Present with `updateStatus`. */
+	updateState?: UpdateState;
 }
 
 export interface UpdatesBody {
@@ -59,12 +62,14 @@ export interface UpdatesBody {
 	manifestError?: string;
 }
 
-const STEPS: Record<string, string> = {
-	console: "Deploy the console release to sfo-01 (deploy/console/RUNBOOK.md); on the Mac, pnpm runtime:update.",
-	hubd: "Deploy the hubd release to sfo-01 (deploy/hubd/RUNBOOK.md).",
-	workerd: "On the Mac: pnpm runtime:update, then pnpm stack restart.",
-	wolfd: "On the Mac: pnpm runtime:update, then pnpm stack restart (sfo-01 wolves: deploy the wolfd release).",
-};
+/** What the owner does next when the host updates nothing by itself: plain words, no shell command or repo path. */
+const MANUAL_STEP = "Use Update now in Pack > Machines.";
+
+/** The one component state a machine card shows: a failed one first, else one installing; undefined when the host reports neither. */
+export function worstHostState(components: { updateState?: UpdateState }[]): UpdateState | undefined {
+	const states = components.flatMap((c) => (c.updateState ? [c.updateState] : []));
+	return states.find((s) => s.state === "failed") ?? states.find((s) => s.state === "installing");
+}
 
 export const DEFAULT_MAIN_MANIFEST_URL = DEFAULT_MANIFEST_URL.replace("stable-manifest/stable.json", "main-manifest/main.json");
 
@@ -74,7 +79,7 @@ export const DEFAULT_AUTO_UPDATE_STATUS = "/var/lib/wolfpack-auto-update/status.
  * Two timer intervals (30 min plus up to 5 min randomised delay, deploy/auto-update/wolfpack-auto-update.timer). Same value as
  * STALE_AFTER_MS in scripts/auto-update.mjs, which the console does not import (that file ships to hosts on its own).
  */
-export const STALE_AFTER_MS = 2 * 35 * 60_000;
+export const STALE_AFTER_MS = HOST_STALE_AFTER_MS;
 
 type StatusUnit = { component?: string; state?: string; code?: string; message?: string; startedAt?: string; finishedAt?: string };
 type StatusFile = { host?: string; enabled?: boolean; lastCheck?: string; disabledReason?: string; units?: Record<string, StatusUnit> };
@@ -89,14 +94,14 @@ function readStatusFile(file: string): StatusFile | undefined {
 }
 
 /** Worst first: a component with several units (workerd, wolfd@*) shows the unit that needs a look. */
-const RANK: UpdateState[] = ["failed", "updating", "disabled", "updated", "idle"];
+const RANK: HostUnitState[] = ["failed", "updating", "disabled", "updated", "idle"];
 
 /** One component's status from the host file, or undefined when the file names no unit of it. */
 export function componentStatus(s: StatusFile, component: string, nowMs: number = Date.now()): UpdateStatus | undefined {
-	const units = Object.entries(s.units ?? {}).filter(([, u]) => u?.component === component && RANK.includes(u.state as UpdateState));
+	const units = Object.entries(s.units ?? {}).filter(([, u]) => u?.component === component && RANK.includes(u.state as HostUnitState));
 	if (!units.length) return undefined;
-	const [id, u] = units.sort(([, a], [, b]) => RANK.indexOf(a.state as UpdateState) - RANK.indexOf(b.state as UpdateState))[0]!;
-	const state = u.state as UpdateState;
+	const [id, u] = units.sort(([, a], [, b]) => RANK.indexOf(a.state as HostUnitState) - RANK.indexOf(b.state as HostUnitState))[0]!;
+	const state = u.state as HostUnitState;
 	const at = state === "updating" ? u.startedAt : state === "updated" || state === "failed" ? u.finishedAt : undefined;
 	const message = state === "disabled" ? s.disabledReason : u.message;
 	const checked = Date.parse(s.lastCheck ?? "");
@@ -117,16 +122,16 @@ export function componentStatus(s: StatusFile, component: string, nowMs: number 
 }
 
 function stepFor(component: string, st: UpdateStatus | undefined): string {
-	if (!st) return STEPS[component] ?? "";
+	if (!st) return MANUAL_STEP;
 	const where = `${st.unit ?? component} on ${st.host}`;
-	if (st.manual && st.state !== "failed" && st.state !== "updating") return `Manual updates on ${st.host}. ${STEPS[component] ?? ""}`.trim();
+	if (st.manual && st.state !== "failed" && st.state !== "updating") return `Manual updates on ${st.host}. ${MANUAL_STEP}`;
 	switch (st.state) {
 		case "failed":
-			return `Auto-update of ${where} failed (${st.code ?? "error"}); left as it is and not retried for this version. Fix the cause, then run the update again with --clear-failed.`;
+			return failedLine({ error: plainError("pack", { code: st.code, message: st.message }) });
 		case "updating":
 			return `Updating ${where} now.`;
 		case "disabled":
-			return `Auto-update is off on ${st.host}${st.message ? ` (${st.message})` : ""}. ${STEPS[component] ?? ""}`.trim();
+			return `Auto-updates are paused on ${st.host}. ${MANUAL_STEP}`;
 		default:
 			return `${st.host} updates itself on its next check (auto-update timer).`;
 	}
@@ -175,6 +180,7 @@ export function createUpdatesHandler(o: UpdatesOptions = {}): (q?: { refresh?: b
 	const statusFile = env.WOLFPACK_AUTO_UPDATE_STATUS?.trim() || DEFAULT_AUTO_UPDATE_STATUS;
 	return async (q) => {
 		const hostStatus = readStatusFile(statusFile);
+		const channel = readSubscription(subFile).channel;
 		const [m, hubd, workerd] = await Promise.all([
 			manifest(q),
 			serviceVersion(base(env.WOLFPACK_HUB_URL), "hubd", timeoutMs),
@@ -183,7 +189,8 @@ export function createUpdatesHandler(o: UpdatesOptions = {}): (q?: { refresh?: b
 		const rows = checkUpdates(m.manifest, { console: own, hubd, workerd, wolfd: undefined });
 		const components = rows.map((r) => {
 			const updateStatus = hostStatus && componentStatus(hostStatus, r.component, (o.now ?? Date.now)());
-			return { ...r, updateStep: stepFor(r.component, updateStatus), ...(updateStatus ? { updateStatus } : {}) };
+			const updateState = hostStatus && mapHostStatus(hostStatus, r.component, { now: (o.now ?? Date.now)(), channel });
+			return { ...r, updateStep: stepFor(r.component, updateStatus), ...(updateStatus ? { updateStatus } : {}), ...(updateState ? { updateState } : {}) };
 		});
 		return {
 			checkedAt: new Date().toISOString(),

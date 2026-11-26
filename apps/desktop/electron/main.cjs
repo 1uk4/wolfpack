@@ -42,6 +42,7 @@ const { consoleEnv } = require("./console-env.cjs");
 const { windowAllClosedAction, focusFirstWindow, createTray } = require("./tray.cjs");
 const { createAppSettings } = require("./app-settings.cjs");
 const { createUpdateChannel } = require("./update-channel.cjs");
+const { wireUpdater, shouldCheckOnFocus, guardedCheck, fromAppOrigin, canInstall } = require("./update-events.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/shell/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -453,7 +454,7 @@ function createWindow(url, landing = url) {
 			sandbox: true,
 			nodeIntegration: false,
 			preload: path.join(__dirname, "preload.cjs"),
-			additionalArguments: supervisor ? ["--wolfpack-single-mac"] : [], // app runtime: preload exposes singleMac (work-wolfpack-TdmbaV4)
+			additionalArguments: supervisor ? ["--wolfpack-single-mac"] : remoteTarget ? ["--wolfpack-remote"] : [], // app runtime: preload exposes singleMac (work-wolfpack-TdmbaV4); remote: the app's own update calls only (work-wolfpack-byIU7oz)
 		},
 		// Live-resize + first-paint flash (owner, 2026-09-17): during a resize
 		// the native window surface changes size before Chromium's compositor
@@ -591,7 +592,10 @@ const ZOOM_LADDER = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
  * the child server FIRST — deterministic ordering: the server lives
  * inside the .app bundle Squirrel is about to replace (extraResources),
  * and before-quit alone would race the swap. */
-const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // plus a check on window focus when the last one is over 1h old
+let updateEvents = null; // wireUpdater handle: the last step, for windows opened mid-download
+let lastUpdateCheckAt = null;
+const updateCheckGuard = { busy: false };
 let autoUpdater = null; // electron-updater's, packaged builds only
 let updateChannel = null; // stable/main switch for the app's own updater (update-channel.cjs); local mode only
 
@@ -611,8 +615,13 @@ function broadcastUpdateStatus(status) {
  */
 function checkForUpdates({ manual = false, inline = false } = {}) {
 	if (!autoUpdater) return Promise.resolve({ ok: false, error: "Updates are off in this build" });
-	return autoUpdater
-		.checkForUpdates()
+	// A check, a download or a staged update is already under way: do not start another.
+	const step = updateEvents?.last()?.type;
+	if (updateCheckGuard.busy || step === "checking" || step === "available" || step === "progress" || step === "downloaded") return Promise.resolve({ ok: true, note: "An update is already in progress." });
+	lastUpdateCheckAt = Date.now();
+	// Interval and focus checks are background: their failures (offline laptop) stay quiet in the sidebar.
+	updateEvents?.setSource(manual ? "user" : "background");
+	return guardedCheck(updateCheckGuard, () => autoUpdater.checkForUpdates())
 		.then((result) => {
 			// The download itself is silent (autoDownload); the banner fires on
 			// update-downloaded. Manual checks additionally answer directly.
@@ -632,13 +641,19 @@ function checkForUpdates({ manual = false, inline = false } = {}) {
 }
 
 function installUpdateNow() {
+	updateEvents?.record({ type: "installing", at: Date.now() });
 	// Kill the server BEFORE the quit-and-install (see block comment).
 	try {
 		killServer();
 	} catch {
 		/* already dead */
 	}
-	autoUpdater?.quitAndInstall();
+	try {
+		autoUpdater?.quitAndInstall();
+	} catch (err) {
+		log(`quitAndInstall failed: ${err?.message ?? err}`);
+		updateEvents?.record({ type: "error", message: "Could not restart to install the update. Try again." });
+	}
 }
 
 function setupAutoUpdater() {
@@ -670,11 +685,7 @@ function setupAutoUpdater() {
 		debug: (m) => {}, // too chatty for the persistent log
 		error: (m) => log(`updater error: ${m}`),
 	};
-	autoUpdater.on("update-downloaded", (info) => {
-		log(`update downloaded: ${info?.version} — banner shown`);
-		broadcastUpdateStatus({ status: "downloaded", version: info?.version ?? null });
-	});
-	autoUpdater.on("error", (err) => log(`updater error: ${err?.message ?? err}`));
+	updateEvents = wireUpdater(autoUpdater, broadcastUpdateStatus, log);
 }
 
 function zoomStep(win, dir) {
@@ -846,8 +857,20 @@ async function main() {
 	// interval fire after it below. setupAutoUpdater's contract: failures
 	// are log lines — this can never block boot.
 	setupAutoUpdater();
-	ipcMain.on("wolfpack:update-install", () => installUpdateNow());
-	ipcMain.handle("wolfpack:update-check", () => checkForUpdates({ manual: true, inline: true }));
+	// Every update IPC is for the console page itself (same origin the window loaded), never a foreign frame; install waits for a finished download.
+	const fromApp = (e) => fromAppOrigin(e, url);
+	ipcMain.on("wolfpack:update-install", (e) => {
+		if (fromApp(e) && canInstall(updateEvents?.last())) installUpdateNow();
+	});
+	ipcMain.handle("wolfpack:update-state", (e) => (fromApp(e) ? updateEvents?.last() ?? null : null));
+	ipcMain.handle("wolfpack:update-check", (e) => (fromApp(e) ? checkForUpdates({ manual: true, inline: true }) : { ok: false, error: "Not allowed" }));
+	// Remote mode: the console's "This app" block asks why the channel switch is unavailable (local mode registers the full app:* set below).
+	if (remoteTarget) {
+		ipcMain.handle("wolfpack:app:update-channel", (e) => {
+			if (!fromApp(e)) return { available: false, channel: "stable" };
+			return updateChannel?.state() ?? { available: false, channel: "stable", note: "Updates are off in this build." };
+		});
+	}
 	// Needs-you notifications: validation + delivery live in notify.cjs (tested without Electron).
 	const notifyNeedsYou = createNeedsYouNotifier({ Notification, appOrigin: new URL(url).origin, log });
 	ipcMain.on("wolfpack:notify", (event, n) => notifyNeedsYou(event, BrowserWindow.fromWebContents(event.sender), n));
@@ -938,5 +961,8 @@ async function main() {
 	if (autoUpdater) {
 		checkForUpdates();
 		setInterval(() => checkForUpdates(), UPDATE_CHECK_INTERVAL_MS);
+		app.on("browser-window-focus", () => {
+			if (shouldCheckOnFocus(lastUpdateCheckAt, Date.now())) checkForUpdates();
+		});
 	}
 }

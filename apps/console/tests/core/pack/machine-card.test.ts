@@ -1,7 +1,7 @@
 /** Seam: machineCard / restartPlan / restartSummary / logLines (src/core/pack/machine-card.ts): which rows, actions and wording a Machines card shows. */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { appCheckNote, appRestartLabel, logLines, machineCard, restartSummary, versionText } from "../../../src/core/pack/machine-card.ts";
+import { appCheckNote, appRestartLabel, logLines, machineCard, restartSummary, updateRunSummary, versionText } from "../../../src/core/pack/machine-card.ts";
 import type { HealthLink } from "../../../src/core/pack/pack-health-view.ts";
 import type { HostCard } from "../../../src/core/pack/pack-hosts.ts";
 
@@ -187,5 +187,21 @@ describe("logLines", () => {
 	it("returns the lines exactly as sent, or the failure in words", () => {
 		assert.deepEqual(logLines({ id: "c", ok: true, data: { lines: ["a  b", "token=abc"], truncated: false } }), { lines: ["a  b", "token=abc"], error: null });
 		assert.deepEqual(logLines({ id: "c", ok: false, code: "timeout", message: "no answer" }), { lines: [], error: "no answer" });
+	});
+});
+
+describe("machineCard remote update (work-wolfpack-NqEVJAU)", () => {
+	const failed = { target: "pack" as const, host: "sfo-01", component: "workerd", state: "failed" as const, current: "0.1.9", latest: "0.1.10", progress: null, lastCheck: null, channel: "stable" as const, auto: "on" as const, error: { code: "checksum", message: "The download did not match.", retryable: true } };
+	const row = { machine: "sfo-01", kind: "workerd" as const, id: "workerd", version: "0.1.9", channel: "stable" as const, ageS: 3, latest: "0.1.10", updateState: failed };
+	const remote = (commands: string[]) => card({ commands, inventory: [row], workerds: [{ link: link("workerd", "workerd"), wolves: [] }] });
+	it("carries the machine's own update state, whether it is behind, and whether it can run an update (update.run advertised)", () => {
+		assert.deepEqual(machineCard(remote(["logs.fetch", "update.run"]), null).update, { kind: "pack", availableText: "workerd 0.1.10 is available", canRun: true, behind: true, hostState: failed });
+		assert.deepEqual(machineCard(remote(["logs.fetch"]), null).update, { kind: "pack", availableText: "workerd 0.1.10 is available", behind: true, hostState: failed });
+	});
+	it("words the update.run answer: sent, unknown outcome, busy, offline", () => {
+		assert.equal(updateRunSummary({ id: "c", ok: true }), "Update started");
+		assert.equal(updateRunSummary({ id: "c", ok: false, code: "timeout" }), "Update sent; it may take a few minutes.");
+		assert.equal(updateRunSummary({ id: "c", ok: false, code: "update_busy", message: "an update is already running" }), "An update is already running on that machine");
+		assert.equal(updateRunSummary({ id: "c", ok: false, code: "not_sent_offline" }), "The machine is offline; nothing was sent");
 	});
 });

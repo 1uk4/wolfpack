@@ -195,7 +195,7 @@ export function ThisDeviceBody() {
 					<KeyboardSection />
 				</div>
 			</section>
-			{bridge && (
+			{bridge && !bridge.remote && (
 				<section data-testid="this-device-mac">
 					<h3 className="text-sm uppercase tracking-widest">Mac app</h3>
 					<div className="mt-3 flex flex-col gap-3">

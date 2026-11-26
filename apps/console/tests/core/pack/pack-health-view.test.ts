@@ -276,20 +276,20 @@ describe("update button", () => {
 		assert.equal(updateFinished({ result: "running", exitStatus: null, at: null }, before), null);
 		assert.equal(updateFinished({ result: "exit-code", exitStatus: 1, at: before }, before), null);
 		assert.deepEqual(updateFinished({ result: "success", exitStatus: 0, at }, before), { ok: true });
-		assert.deepEqual(updateFinished({ result: "exit-code", exitStatus: 1, at }, before), { ok: false, message: "Update failed (exit 1) — see Logs" });
-		assert.deepEqual(updateFinished({ result: "timeout", exitStatus: 0, at }, null), { ok: false, message: "Update failed (timed out) — see Logs" });
+		assert.deepEqual(updateFinished({ result: "exit-code", exitStatus: 1, at }, before), { ok: false, message: "Update failed: The update did not finish." });
+		assert.deepEqual(updateFinished({ result: "timeout", exitStatus: 0, at }, null), { ok: false, message: "Update failed: It took too long." });
 	});
 
 	it("names a switched-off host, a held lock and a missing script instead of a false 'Updated', and refuses 'Updated' while a component is still behind", () => {
 		const before = "2026-11-09T09:00:00.000Z";
 		const at = "2026-11-09T10:00:00.000Z";
 		const fin = (result: string, exitStatus: number) => updateFinished({ result, exitStatus, at }, before);
-		assert.deepEqual(fin("exit-code", 3), { ok: false, message: "Update failed (auto-update is switched off on the host (kill switch)) — see Logs" });
-		assert.deepEqual(fin("exit-code", 4), { ok: false, message: "Update failed (another update run holds the lock) — see Logs" });
-		assert.deepEqual(fin("exit-code", 203), { ok: false, message: "Update failed (update script missing on the host) — see Logs" });
-		assert.deepEqual(fin("exec", 203), { ok: false, message: "Update failed (update script missing on the host) — see Logs" });
+		assert.deepEqual(fin("exit-code", 3), { ok: false, message: "Update failed: Auto-update is switched off on this machine." });
+		assert.deepEqual(fin("exit-code", 4), { ok: false, message: "Update failed: Another update is already running." });
+		assert.deepEqual(fin("exit-code", 203), { ok: false, message: "Update failed: The update script is missing on this machine." });
+		assert.deepEqual(fin("exec", 203), { ok: false, message: "Update failed: The update script is missing on this machine." });
 		// A run that ended ok but left a component behind changed nothing for the owner.
-		assert.deepEqual(updateFinished({ result: "success", exitStatus: 0, at }, before, 1), { ok: false, message: "Nothing changed — see Logs" });
+		assert.deepEqual(updateFinished({ result: "success", exitStatus: 0, at }, before, 1), { ok: false, message: "Update failed: Nothing changed." });
 		// The run finished before the first poll after send: the baseline taken before the send still counts it.
 		assert.deepEqual(updateFinished({ result: "success", exitStatus: 0, at }, before, 0), { ok: true });
 	});
@@ -300,7 +300,7 @@ describe("update button", () => {
 		assert.deepEqual(updateOutcome(409, null, { code: "up_to_date" }), { kind: "error", message: "Already up to date" });
 		assert.deepEqual(updateOutcome(409, null, { code: "running" }), { kind: "error", message: "An update is already running" });
 		assert.deepEqual(updateOutcome(429, "240"), { kind: "wait", retryS: 240 });
-		assert.deepEqual(updateOutcome(502, null), { kind: "error", message: "systemctl refused the update (is the update unit and polkit rule installed?)" });
+		assert.deepEqual(updateOutcome(502, null), { kind: "error", message: "Update failed: This machine needs its update service reinstalled." });
 	});
 });
 

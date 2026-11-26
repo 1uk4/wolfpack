@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type CommandRunner, type HealthSnapshot, type LinkSnapshot } from "../../../src/server/pack/pack-health.ts";
 import { createSessionWitness, setSessionWitness } from "../../../src/server/thread/session-witness.ts";
 import { createReleaseReader, createRollbacker, createUpdater, type UpdateUnit } from "../../../src/server/pack/pack-actions.ts";
+import type { UpdateState } from "@wolfpack/protocol/update-state";
 import { createConsoleClient, makeRequestToken } from "../../../src/server/thread/console-client.ts";
 
 type Mode = "ok" | "hang" | "slow-lag" | "http500" | "http401" | "wrong-service" | "bad-body" | "legacy";
@@ -108,7 +109,8 @@ async function setup(o: { wolves?: () => unknown[]; optRoot?: string; systemd?: 
 	const rollbacker = createRollbacker({ releases, run, now: clock.now, log: (m) => logs.push(m) });
 	let pending: UpdateUnit[] = [];
 	const availableCalls = { n: 0 };
-	const updater = createUpdater({ available: async () => { availableCalls.n++; return pending; }, run, show: showRun, now: clock.now, log: (m) => logs.push(m) });
+	let hostState: UpdateState | undefined;
+	const updater = createUpdater({ available: async () => { availableCalls.n++; return pending; }, hostState: async () => hostState, run, show: showRun, now: clock.now, log: (m) => logs.push(m) });
 	const api = createHealthApi({ health, restarter, rollbacker, updater, witness, checkToken: hubTokenCheck(hubTarget(env).wolvesUrl, { timeoutMs: 300 }), now: clock.now });
 	const get = async () => (await (await api.get()).json()) as HealthSnapshot;
 	const tick = async (at: number) => { clock.set(at); return health.tick(); };
@@ -119,6 +121,7 @@ async function setup(o: { wolves?: () => unknown[]; optRoot?: string; systemd?: 
 		setOverflow: (v: boolean) => { overflow = v; },
 		setShow: (unit: string, out: string) => { showOut.set(unit, out); },
 		setPending: (u: UpdateUnit[]) => { pending = u; },
+		setHostState: (s: UpdateState | undefined) => { hostState = s; },
 		availableCalls,
 		updater,
 	};
@@ -754,6 +757,22 @@ describe("pack health: POST /api/health/update", () => {
 		assert.equal(s.runs.length, 1);
 	});
 
+	it("clearFailed starts the retry units (they run auto-update with --clear-failed): all components, or one through its template; anything but true starts the normal unit", async () => {
+		const s = await setup();
+		await s.tick(T0);
+		s.setPending(PENDING);
+		s.witness.verified("tok");
+		const post = (b: unknown) => s.api.update(new Request("http://c/api/health/update", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer tok" }, body: JSON.stringify(b) }));
+		assert.equal((await post({ clearFailed: true })).status, 202);
+		assert.equal((await post({ component: "hubd", clearFailed: true })).status, 202);
+		assert.equal((await post({ clearFailed: "yes" })).status, 202);
+		assert.deepEqual(s.runs, [
+			["systemctl", "--no-ask-password", "--no-block", "start", "wolfpack-auto-update-retry.service"],
+			["systemctl", "--no-ask-password", "--no-block", "start", "wolfpack-auto-update-retry@hubd.service"],
+			["systemctl", "--no-ask-password", "--no-block", "start", UPDATE_UNIT],
+		]);
+	});
+
 	it("refuses with 409 when nothing is behind, or while the unit is still activating, without starting it", async () => {
 		const s = await setup();
 		await s.tick(T0);
@@ -796,6 +815,16 @@ describe("pack health: POST /api/health/update", () => {
 		s.clock.set(T0 + 2_500);
 		await s.api.updateState();
 		assert.equal(s.availableCalls.n, 2);
+	});
+
+	it("GET carries the host's update state (failed or installing, plain words) beside the units, and omits it when the host reports none", async () => {
+		const s = await setup();
+		assert.equal("updateState" in ((await (await s.api.updateState()).json()) as object), false);
+		const failed = { target: "pack", host: "sfo-01", component: "hubd", state: "failed", current: "0.1.14", latest: "0.1.15", progress: null, lastCheck: null, channel: "stable", auto: "on", error: { code: "unhealthy", message: "The update installed but the service did not start healthy, so it was left as it is.", retryable: false } } as UpdateState;
+		s.setHostState(failed);
+		s.clock.set(T0 + 2_500);
+		const body = (await (await s.api.updateState()).json()) as { updateState?: UpdateState };
+		assert.deepEqual(body.updateState, failed);
 	});
 
 	it("a start systemctl refuses answers 502 and the next press can start it", async () => {

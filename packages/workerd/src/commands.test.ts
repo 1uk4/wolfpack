@@ -126,6 +126,59 @@ describe("logs.fetch", () => {
   });
 });
 
+describe("update.run", () => {
+  const upd = (args: unknown): LinkCmd => ({ t: "cmd", id: "c-7", kind: "update.run", args }) as LinkCmd;
+  /** A fake systemctl: records argv; `active` is the ActiveState it reports for every unit. */
+  const fakeCtl = (active = "inactive", startCode = 0) => {
+    const calls: string[][] = [];
+    return { calls, update: { systemctl: async (argv: string[]) => (calls.push(argv), argv[0] === "show" ? { code: 0, stdout: `${active}\n` } : { code: startCode, stdout: "" }) } };
+  };
+  const starts = (calls: string[][]) => calls.filter((a) => a.includes("start")).map((a) => a.at(-1));
+
+  it("starts the normal unit, the retry unit when clearFailed, and the per-component template, by fixed name", async () => {
+    const c = fakeCtl();
+    const r = createCommandRunner({ update: c.update });
+    expect(await r.handle(upd({}))).toMatchObject({ ok: true });
+    await r.handle(upd({ clearFailed: true }));
+    await r.handle(upd({ component: "workerd" }));
+    await r.handle(upd({ component: "hubd", clearFailed: true }));
+    expect(starts(c.calls)).toEqual(["wolfpack-auto-update-now.service", "wolfpack-auto-update-retry.service", "wolfpack-auto-update-now@workerd.service", "wolfpack-auto-update-retry@hubd.service"]);
+    expect(c.calls.find((a) => a.includes("start"))).toEqual(["--no-ask-password", "--no-block", "start", "wolfpack-auto-update-now.service"]);
+  });
+
+  it("refuses a component outside the allowlist without running systemctl", async () => {
+    const c = fakeCtl();
+    for (const component of ["../x", "console;rm"]) expect(await createCommandRunner({ update: c.update }).handle(upd({ component }))).toMatchObject({ ok: false, code: "internal" });
+    expect(c.calls).toEqual([]);
+  });
+
+  it("checks the three units' ActiveState together with exact systemctl argv, and a hung systemctl does not hold the command up", async () => {
+    const calls: string[][] = [];
+    const update = { showTimeoutMs: 30, systemctl: (argv: string[]) => (calls.push(argv), argv[0] === "show" ? new Promise<{ code: number; stdout: string }>(() => {}) : Promise.resolve({ code: 0, stdout: "" })) };
+    const t0 = Date.now();
+    expect(await createCommandRunner({ update }).handle(upd({ component: "hubd" }))).toMatchObject({ ok: true, data: { unit: "wolfpack-auto-update-now@hubd.service" } });
+    expect(Date.now() - t0).toBeLessThan(100); // three hung reads waited together, not one after another
+    expect(calls).toEqual([
+      ["show", "wolfpack-auto-update-now.service", "-p", "ActiveState", "--value"],
+      ["show", "wolfpack-auto-update-retry.service", "-p", "ActiveState", "--value"],
+      ["show", "wolfpack-auto-update-now@hubd.service", "-p", "ActiveState", "--value"],
+      ["--no-ask-password", "--no-block", "start", "wolfpack-auto-update-now@hubd.service"],
+    ]);
+  });
+
+  it("answers update_busy while an update unit is activating, and update_failed when systemctl fails", async () => {
+    const busy = fakeCtl("activating");
+    expect(await createCommandRunner({ update: busy.update }).handle(upd({}))).toMatchObject({ ok: false, code: "update_busy" });
+    expect(starts(busy.calls)).toEqual([]);
+    expect(await createCommandRunner({ update: fakeCtl("inactive", 1).update }).handle(upd({}))).toMatchObject({ ok: false, code: "update_failed", message: "systemctl exited 1" });
+  });
+
+  it("is advertised only when an updater is injected", () => {
+    expect(createCommandRunner().supported()).not.toContain("update.run");
+    expect(createCommandRunner({ update: fakeCtl().update }).supported()).toContain("update.run");
+  });
+});
+
 /** A fake supervisor: three wolves, hal is mid-reply, bob is stopped, cy fails to restart. */
 function fakeWolves(): WolfControl & { restarted: string[] } {
   const restarted: string[] = [];

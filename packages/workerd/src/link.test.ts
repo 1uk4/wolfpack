@@ -220,6 +220,28 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
     await until(() => l2.status().attempts >= 2, 5000, "welcome timeouts");
   });
 
+  it("an older hub that rejects the update.run kind in hello gets a second hello without it and the link comes online", async () => {
+    const old = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise((res) => old.once("listening", res));
+    cleanup.push(() => new Promise<void>((res) => (old.clients.forEach((c) => c.terminate()), old.close(() => res()))));
+    const hellos: string[][] = [];
+    old.on("connection", (sock) =>
+      sock.on("message", (data) => {
+        const f = JSON.parse(String(data)) as { t: string; commands?: string[] };
+        if (f.t !== "hello") return;
+        hellos.push(f.commands ?? []);
+        // The previous hub's strict CommandKindSchema enum: an unknown kind fails the whole hello parse.
+        if ((f.commands ?? []).includes("update.run")) sock.send(JSON.stringify({ t: "error", code: "bad_frame", message: "Invalid option" }));
+        else sock.send(JSON.stringify({ t: "welcome", v: 1, heartbeatMs: 5000, deadAfterMs: 20000 }));
+      }),
+    );
+    const link = new HubLink({ hubUrl: `http://127.0.0.1:${(old.address() as any).port}`, token: "x", hostId: "box", wolves: () => [], commands: () => ["logs.fetch", "update.run"], baseMs: 10, capMs: 20 });
+    cleanup.push(() => link.stop());
+    link.start();
+    await until(() => link.status().state === "online", 5000, "online against the older hub");
+    expect(hellos).toEqual([["logs.fetch", "update.run"], ["logs.fetch"]]);
+  });
+
   it("pair: trades a code for a worker token, stores hub.json 0600 with the host id", async () => {
     const r = await rig({ noHub: true });
     const dir = mkdtempSync(join(tmpdir(), "workerd-pair-"));

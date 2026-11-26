@@ -4,12 +4,21 @@
 // Installed to /etc/polkit-1/rules.d/ by deploy/console/setup.sh.
 // The console (apps/console/src/server/pack/pack-health.ts, pack-actions.ts) runs `systemctl --no-ask-password --no-block restart|start <unit>.service`
 // with no shell, and only for names it validated against the links it knows (restart) or the fixed list hubd|workerd|console (rollback).
+// Remote Update now (work-wolfpack-NqEVJAU): workerd runs the update.run command from another console's Machines panel, so the workerd user may START
+// the same update units (and nothing else: no restart, no rollback). workerd starts them with `systemctl --no-ask-password --no-block start <unit>`.
+polkit.addRule(function (action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "workerd" && action.lookup("verb") == "start") {
+    var u = action.lookup("unit");
+    if (u == "wolfpack-auto-update-now.service" || u == "wolfpack-auto-update-retry.service") return polkit.Result.YES;
+    if (/^wolfpack-auto-update-(now|retry)@(hubd|workerd|console|wolfd)\.service$/.test(u)) return polkit.Result.YES;
+  }
+});
 polkit.addRule(function (action, subject) {
   if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "console") {
     var unit = action.lookup("unit"), verb = action.lookup("verb");
     if (verb == "restart" && /^(hubd|workerd(-[a-z0-9]+)*|wolfd@[a-z0-9][a-z0-9-]*)\.service$/.test(unit)) return polkit.Result.YES;
-    if (verb == "start" && unit == "wolfpack-auto-update-now.service") return polkit.Result.YES;
-    if (verb == "start" && /^wolfpack-auto-update-now@(hubd|workerd|console|wolfd)\.service$/.test(unit)) return polkit.Result.YES;
+    if (verb == "start" && (unit == "wolfpack-auto-update-now.service" || unit == "wolfpack-auto-update-retry.service")) return polkit.Result.YES;
+    if (verb == "start" && /^wolfpack-auto-update-(now|retry)@(hubd|workerd|console|wolfd)\.service$/.test(unit)) return polkit.Result.YES;
     if (verb == "start" && /^wolfpack-rollback@(hubd|workerd|console)\.service$/.test(unit)) return polkit.Result.YES;
   }
 });

@@ -9,7 +9,8 @@
  * (the Mac card fills in from the hub in the sfo-01 view; sfo-01's from the hub in the Mac view), `hub-view-host-offline` has a host the
  * hub sees offline, and `hub-unreachable-last-seen` keeps the hub's last list while the hub is down. All ignored in a production build.
  */
-import type { HealthLink, HealthSnapshotView, HostInfo } from "@/src/core";
+import type { HealthLink, HealthSnapshotView, HostInfo, InventoryRowView } from "@/src/core";
+import type { UpdateState } from "@wolfpack/protocol/update-state";
 
 export const HEALTH_FIXTURES = ["ok", "hub-down", "frozen", "recovering", "restarting", "unknown-wolf", "back", "issues", "unreachable", "mac", "two-hosts-mac-view", "hub-view-host-offline", "hub-unreachable-last-seen", "workerd-down-unadvertised"] as const;
 export type HealthFixture = (typeof HEALTH_FIXTURES)[number];
@@ -70,7 +71,7 @@ const macFromHub = (now: number, over: Partial<HealthLink> = {}): HealthLink[] =
 	hubRow("wolfd@ada", "luka-air", now, { via: "hub-link@luka-air", ...over }),
 ];
 /** What a server's worker advertises (restart wolves and the background service) and what the Mac app advertises (wolves only). */
-const SERVER_COMMANDS = ["wolves.restart", "workerd.restart", "logs.fetch"];
+const SERVER_COMMANDS = ["wolves.restart", "workerd.restart", "logs.fetch", "update.run"];
 const MAC_COMMANDS = ["wolves.restart", "logs.fetch"];
 const SFO_HOSTS = (extra: HostInfo[] = []): HostInfo[] => [{ id: "sfo-01", label: "sfo-01", isThisConsole: true, platform: "linux", hubId: "sfo-01", commands: SERVER_COMMANDS }, { id: "luka-air", label: "Mac", isThisConsole: false, hubId: "luka-air", commands: MAC_COMMANDS }, ...extra];
 
@@ -174,6 +175,21 @@ export function fixtureLogs(service: string, now: number): { lines: string[]; tr
 			return `${t(n * 15_000)} sfo-01 ${unit}[812]: tick ${i} ok`;
 		}),
 	};
+}
+
+/**
+ * `?remoteUpdate=<state>` (work-wolfpack-NqEVJAU): canned hub inventory rows for sfo-01 so the REMOTE machine card's update states show in a browser.
+ * Use with `?healthFixture=two-hosts-mac-view&pack=machines` (sfo-01 is the other machine there and advertises update.run), and `&machineCmd=ok|timeout` to
+ * answer the Update / Retry send without calling the hub. States: failed (reason + Retry), behind (Update), installing (Installing…), quiet (nothing).
+ */
+export const REMOTE_UPDATE_STATES = ["failed", "behind", "installing", "quiet"] as const;
+export function fixtureRemoteInventory(search: string): { rows: InventoryRowView[]; hubMachine: string } | null {
+	if (process.env.NODE_ENV === "production") return null;
+	const state = new URLSearchParams(search).get("remoteUpdate");
+	if (!state || !(REMOTE_UPDATE_STATES as readonly string[]).includes(state)) return null;
+	const updateState = (s: "failed" | "updating"): UpdateState => ({ target: "pack", host: "sfo-01", component: "workerd", state: s === "failed" ? "failed" : "installing", current: "0.1.9", latest: "0.1.10", progress: null, lastCheck: null, channel: "stable", auto: "on", ...(s === "failed" ? { error: { code: "checksum", message: "The download did not match the release, so nothing was installed.", retryable: true } } : {}) });
+	const row: InventoryRowView = { machine: "sfo-01", kind: "workerd", id: "sfo-01-wolves", version: "0.1.9", channel: "stable", uptimeS: 3600, ageS: 4, latest: state === "quiet" ? null : "0.1.10", ...(state === "failed" ? { updateState: updateState("failed") } : state === "installing" ? { updateState: updateState("updating") } : {}) };
+	return { rows: [row], hubMachine: "sfo-01" };
 }
 
 /**

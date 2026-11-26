@@ -124,7 +124,7 @@ export * from "./pack/wolves-model.ts";
 export * from "./pack/wolf-prompt-scopes.ts";
 export * from "./pack/wolf-path.ts";
 export { buildGraphs, type FlowRow, type PromptGraph } from "./settings/prompt-flows.ts";
-export { updateWarnings, updateFinished, updateOffered, updateOutcome, updateQuestion } from "./pack/pack-health-view.ts";
+export { updateWarnings, updateFinished, updateOffered, updateOutcome, updateQuestion, rollbackOffered, rollbackOutcome, rollbackQuestion } from "./pack/pack-health-view.ts";
 export type { HealthActionsView, UpdateUnitView } from "./pack/pack-health-view.ts";
 // Named re-exports so components/ and app/ import through the barrel (import/no-restricted-paths).
 export { RELAY_ATTACHMENT_BYTES } from "./thread/attachment-budget.ts";

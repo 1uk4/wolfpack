@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { UPDATE_AUTO, UPDATE_CHANNELS, UPDATE_STAGES, UPDATE_TARGETS } from "./update-state.js";
 
 /**
  * Pack inventory (work-wolfpack-ZproKxi): every service on every machine reports its version to the hub, which lists them at
@@ -8,6 +9,22 @@ import { z } from "zod";
 export const INVENTORY_KINDS = ["console", "hubd", "workerd", "wolfd"] as const;
 export const InventoryKindSchema = z.enum(INVENTORY_KINDS);
 export type InventoryKind = z.infer<typeof InventoryKindSchema>;
+
+/** The host updater's state for a machine card (a workerd entry's UpdateState, update-state.ts; its enums come from the same constants so the two cannot drift). Strings are capped: it rides every report. */
+export const InventoryUpdateStateSchema = z.object({
+  target: z.enum(UPDATE_TARGETS),
+  host: z.string().max(128),
+  component: z.string().max(64).optional(),
+  unit: z.string().max(96).optional(),
+  state: z.enum(UPDATE_STAGES),
+  current: z.string().max(64).nullable(),
+  latest: z.string().max(64).nullable(),
+  progress: z.number().min(0).max(100).nullable(),
+  lastCheck: z.string().max(64).nullable(),
+  channel: z.enum(UPDATE_CHANNELS).nullable(),
+  auto: z.enum(UPDATE_AUTO),
+  error: z.object({ code: z.string().max(64), message: z.string().max(400), retryable: z.boolean(), quiet: z.boolean().optional() }).optional(),
+});
 
 export const InventoryEntrySchema = z.object({
   machine: z.string().min(1).max(128),
@@ -28,6 +45,8 @@ export const InventoryEntrySchema = z.object({
   transport: z.enum(["api", "subscription"]).optional(),
   /** A hubd entry only: how hubd's curator and sweeps reach Claude. "subscription" = CLAUDE_CODE_OAUTH_TOKEN is set, "api" = ANTHROPIC_API_KEY is set, "none" = neither. Derived by hubd; never the credential. */
   memoryTransport: z.enum(["subscription", "api", "none"]).optional(),
+  /** A workerd entry only: this machine's updater is failed or installing (scripts/auto-update.mjs status file). Absent = neither, or not reported (older workerd). */
+  updateState: InventoryUpdateStateSchema.optional(),
   /** Key presence per slot (workerd entries only, work-wolfpack-6EmU8pu). Never the value: only a mask. */
   keys: z
     .array(

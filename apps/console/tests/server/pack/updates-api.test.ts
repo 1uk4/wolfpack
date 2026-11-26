@@ -61,7 +61,8 @@ describe("GET /api/updates", () => {
 			assert.equal(body.outdated, true);
 			const w = body.components.find((c) => c.component === "workerd");
 			assert.equal(w?.notesUrl, "https://github.com/1uk4/wolfpack/releases/tag/workerd/v0.1.5");
-			assert.match(w?.updateStep ?? "", /runtime:update/);
+			// test-change: the step is plain words now, no shell command (work-wolfpack-s0Tnbth)
+			assert.equal(w?.updateStep, "Use Update now in Pack > Machines.");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -115,6 +116,9 @@ describe("GET /api/updates", () => {
 			assert.deepEqual(by.workerd, { state: "failed", host: "sfo-01", lastCheck: "2026-11-09T04:00:00.000Z", unit: "workerd-wolves", code: "unhealthy", message: "/healthz on 127.0.0.1:7143: ECONNREFUSED" });
 			assert.deepEqual(by.wolfd, { state: "updating", host: "sfo-01", lastCheck: "2026-11-09T04:00:00.000Z", unit: "wolfd@hal2", at: "2026-11-09T03:59:00.000Z" });
 			assert.deepEqual(by.console, { state: "idle", host: "sfo-01", lastCheck: "2026-11-09T04:00:00.000Z" });
+			const steps = Object.fromEntries((await get()).components.map((c) => [c.component, c.updateStep]));
+			assert.equal(steps.workerd, "Update failed: The update installed but the service did not start healthy, so it was left as it is.");
+			assert.equal(steps.wolfd, "Updating wolfd@hal2 on sfo-01 now.");
 
 			writeFileSync(statusFile, JSON.stringify({ ...status, enabled: true, result: "disabled", disabledReason: "kill switch: /var/lib/wolfpack-auto-update/auto-update.disabled exists", units: { ...status.units, console: unit("console", "0.1.18", "0.1.19", "disabled") } }));
 			const again = await createUpdatesHandler({ env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: statusFile }, consoleDir: dir, now })();
@@ -122,6 +126,9 @@ describe("GET /api/updates", () => {
 				again.components.find((c) => c.component === "console")?.updateStatus,
 				{ state: "disabled", host: "sfo-01", lastCheck: "2026-11-09T04:00:00.000Z", message: "kill switch: /var/lib/wolfpack-auto-update/auto-update.disabled exists" },
 			);
+			// No path, flag or shell command in any step the UI could show.
+			assert.equal(again.components.find((c) => c.component === "console")?.updateStep, "Auto-updates are paused on sfo-01. Use Update now in Pack > Machines.");
+			for (const c of [...(await get()).components, ...again.components]) assert.doesNotMatch(c.updateStep, /--clear-failed|runtime:update|RUNBOOK|deploy\/|\/var\//);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -185,6 +192,27 @@ describe("GET /api/updates", () => {
 			c = await row();
 			assert.equal(c.updateStatus?.manual, undefined);
 			assert.equal(c.updateStatus?.stale, true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("each component also carries the shared updateState: a failed unit has a plain error, an old check makes auto stale", async () => {
+		const manifestBase = await serve({ schema: 1, generatedAt: "2026-11-09T03:30:00Z", components: { console: entry("console", "0.1.19") } });
+		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
+		writeFileSync(join(dir, "VERSION"), "0.1.18\n");
+		const statusFile = join(dir, "status.json");
+		const write = (lastCheck: string, state: string, extra: object = {}) =>
+			writeFileSync(statusFile, JSON.stringify({ schema: 1, host: "sfo-01", enabled: true, lastCheck, result: "ok", units: { console: { component: "console", current: "0.1.18", target: "0.1.19", state, ...extra } } }));
+		const row = async () => (await createUpdatesHandler({ env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: statusFile }, consoleDir: dir, now: () => Date.parse("2026-11-09T12:00:00.000Z") })()).components[0]!;
+		try {
+			write("2026-11-09T11:55:00.000Z", "failed", { code: "checksum" });
+			assert.deepEqual((await row()).updateState, {
+				target: "pack", host: "sfo-01", component: "console", state: "failed", current: "0.1.18", latest: "0.1.19", progress: null, lastCheck: "2026-11-09T11:55:00.000Z", channel: "stable", auto: "on",
+				error: { code: "checksum", message: "The downloaded update did not match its checksum, so it was not installed. Try again later.", retryable: true },
+			});
+			write("2026-11-09T09:00:00.000Z", "idle");
+			assert.deepEqual([(await row()).updateState?.state, (await row()).updateState?.auto], ["stale", "stale"]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

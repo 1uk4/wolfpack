@@ -52,3 +52,4 @@ export { attachmentLimit } from "./thread/attachment-limit.ts";
 export { createSubscriptionHandler } from "./pack/subscription-api.ts";
 export { hubPublicUrl } from "./pack/hub-public-url.ts";
 export { createUpdatesHandler } from "./pack/updates-api.ts";
+export { createReleaseNotes } from "./pack/release-notes.ts";

@@ -1,0 +1,25 @@
+# Wolfpack Retry of a failed update (work-wolfpack-s0Tnbth): the console's Retry button (POST /api/health/update {clearFailed:true}) starts this. Same as wolfpack-auto-update-now.service plus --clear-failed, which lifts the held failure first. The kill switch still applies.
+[Unit]
+Description=Wolfpack update retry after failure (clears the held failure, then pulls the latest stable release)
+Documentation=file:///opt/wolfpack-auto-update/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+# Not installed yet / removed: the unit reports an assert failure (the console says "update script missing on the host"), not exit 203.
+AssertPathExists=/opt/wolfpack-auto-update/auto-update.mjs
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/wolfpack/auto-update.env
+ExecStart=@NODE@ /opt/wolfpack-auto-update/auto-update.mjs run --now --clear-failed
+StateDirectory=wolfpack-auto-update
+StateDirectoryMode=0755
+TimeoutStartSec=45min
+# Same hardening as wolfpack-auto-update.service (see the reasons there).
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0022
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes

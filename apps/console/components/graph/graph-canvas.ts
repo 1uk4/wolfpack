@@ -1154,7 +1154,25 @@ export class GraphCanvasRenderer {
 		this.overlay = o;
 		this.overlayBroken = false;
 		this.callbacks = { ...this.callbacks, onOverlayHover: cbs?.onOverlayHover, onOverlaySelect: cbs?.onOverlaySelect };
-		if (!o) this.setOverlayHover(null);
+		if (!o) {
+			this.setOverlayHover(null);
+			this.setReplacedNodes(new Set());
+		}
+		this.markDirty();
+	}
+
+	/** Node ids whose dot the overlay replaces with its own (a feature hub on its work node): the base skips their discs, keeps edges and labels. */
+	private replacedNodes: ReadonlySet<string> = new Set();
+	/** Only a CHANGED set rebuilds the geometry and so the cached base; the same set again is a no-op. */
+	setReplacedNodes(ids: ReadonlySet<string>): void {
+		const cur = this.replacedNodes;
+		if (ids.size === cur.size) {
+			let same = true;
+			for (const id of ids) if (!cur.has(id)) { same = false; break; }
+			if (same) return;
+		}
+		this.replacedNodes = new Set(ids);
+		this.geoVersion++;
 		this.markDirty();
 	}
 
@@ -1197,6 +1215,12 @@ export class GraphCanvasRenderer {
 			},
 			hasNode: (id) => this.nodeById.has(id),
 			nodeColor: (id) => this.nodeById.get(id)?.color,
+			nodeRadius: (id) => {
+				const n = this.nodeById.get(id);
+				return n ? this.radiusOf(n) : null;
+			},
+			nodeLabel: (id) => this.nodeById.get(id)?.label,
+			setReplacedNodes: (ids) => this.setReplacedNodes(ids),
 			extentRadius: () => this.extentRadiusOf(),
 			center: () => {
 				const b = this.worldBBox;
@@ -1282,7 +1306,9 @@ export class GraphCanvasRenderer {
 		if (e.button !== 0) return;
 		const pos = this.eventPos(e);
 		// An overlay thing under the press: remember it for the click, but do NOT take the press (pan and pinch stay d3-zoom's).
-		this.overlayDown = this.overlayHit(pos, e.pointerType);
+		// A hub that replaces a graph node is that node: the press goes to the node, as before the hub existed.
+		const oh = this.overlayHit(pos, e.pointerType);
+		this.overlayDown = oh?.item.nodeId ? null : oh;
 		const node = this.overlayDown ? null : this.pickAt(pos.x, pos.y);
 		if (node && this.sim) {
 			// Node press: pin the node (at ITS OWN position — the cursor
@@ -1706,7 +1732,7 @@ export class GraphCanvasRenderer {
 		// = the radius), so picking, edges and labels all see the same disc.
 		const groups = new Map<string, NodeGroup>();
 		for (const n of data.nodes) {
-			if (!isVisible(n.id)) continue;
+			if (!isVisible(n.id) || this.replacedNodes.has(n.id)) continue;
 			const r = this.radiusOf(n);
 			const ring = n.shape === "ring" ? Math.min(Math.max(n.ring ?? 0.25, 0.05), 1) * r : 0;
 			const routeDone = !!this.route?.nodes.has(n.id) && this.route.done.has(n.id);

@@ -92,4 +92,21 @@ describe("graph base layer cache", () => {
 		assert.ok(counts.stroke > strokes, "search visibility redraws the base");
 		r.destroy();
 	});
+
+	it("replaced node ids redraw the base once when the set changes, never when the same set is set again", async () => {
+		const { r } = await setup();
+		let strokes = counts.stroke;
+		r.setReplacedNodes(new Set(["a"]));
+		await pump();
+		assert.ok(counts.stroke > strokes, "a changed set redraws the base");
+		strokes = counts.stroke;
+		r.setReplacedNodes(new Set(["a"]));
+		r.requestRedraw();
+		await pump();
+		assert.equal(counts.stroke, strokes, "an equal set leaves the cached base alone");
+		r.setReplacedNodes(new Set());
+		await pump();
+		assert.ok(counts.stroke > strokes, "clearing the set redraws the base");
+		r.destroy();
+	});
 });

@@ -39,6 +39,11 @@ export interface OverlayHost {
 	center(): Pt;
 	/** Bounding radius (world) of all nodes about `center()`; the wolves roam over a fraction of it. Absent or null: no roam. Cached by the host. */
 	extentRadius?(): number | null;
+	/** Base-layer radius (world) and label of a node: a hub on it is drawn a little larger and its card names the work item. */
+	nodeRadius?(id: string): number | null;
+	nodeLabel?(id: string): string | undefined;
+	/** Tell the base layer which node dots the overlay replaces (hubs on their work nodes). Only called when the set changes. */
+	setReplacedNodes?(ids: ReadonlySet<string>): void;
 	colors: { node: string; edge: string; label: string; hoverText: string };
 	fontFamily: string;
 }
@@ -75,7 +80,8 @@ const SUB_TARGET_OFFSET = 14;
 const SUB_IDLE_ORBIT = 20;
 /** The feature hub's radius (reference px), its distance from its node, and from the domain node when it has no node of its own. */
 const HUB_R = 7.5;
-const HUB_OFFSET = 15;
+/** A hub on its work node is drawn at least this much bigger than the node's own dot. */
+const HUB_NODE_GROW = 1.4;
 const HUB_FALLBACK_OFFSET = 34;
 const FLOAT_HUB_PX = 1.6;
 /** The launch burst when a subagent leaves its hub (ms). */
@@ -177,6 +183,9 @@ export interface OverlayItem {
 	label: string;
 	/** Feature: running subagents it has launched. */
 	subCount?: number;
+	/** Feature: the graph node this hub IS (its work node) and that node's label; absent for a fallback hub near the domain. */
+	nodeId?: string;
+	nodeLabel?: string;
 }
 export interface OverlayHit { item: OverlayItem; ring: boolean; sx: number; sy: number }
 export interface OverlayCard {
@@ -411,6 +420,7 @@ export class LiveOverlay {
 	}
 
 	step(now: number, dtSec: number, host: OverlayHost, k: number): void {
+		this.syncReplaced(host);
 		if (!this.settings.enabled) return;
 		const s = this.state;
 		const { m } = scaleFor(k);
@@ -574,16 +584,52 @@ export class LiveOverlay {
 
 	/** Where a feature hub sits (world, no float): beside its work node, else beside its domain node, else near its wolf's home domain / the centre. */
 	private hubPos(t: LiveThread, host: OverlayHost, m: number, out: Pt): Pt {
-		const wid = t.feature!;
-		const dom = /^work-([a-z0-9]+)-/i.exec(wid)?.[1] ?? this.wolfMeta.get(t.wolf)?.dom;
-		const id = targetNodeId({ kind: "work-item", id: wid, domain: dom }, (n) => host.hasNode(n));
-		const p = (id ? host.nodePos(id) : null) ?? (this.wolfMeta.get(t.wolf)?.dom ? host.nodePos(`dom:${this.wolfMeta.get(t.wolf)!.dom}`) : null) ?? host.center();
-		const exact = id !== null && id.startsWith("work:");
+		const nodeId = this.hubNodeId(t, host);
+		const dom = this.wolfMeta.get(t.wolf)?.dom;
+		const domPos = dom ? host.nodePos("dom:" + dom) : null;
+		const p = (nodeId ? host.nodePos(nodeId) : null) ?? domPos ?? host.center();
+		if (nodeId) {
+			// The hub IS its work node: exactly its position.
+			out.x = p.x;
+			out.y = p.y;
+			return out;
+		}
 		const ang = (this.hashOf(t.id) % 360) * (Math.PI / 180);
-		const d = (exact ? HUB_OFFSET : HUB_FALLBACK_OFFSET) * m;
+		const d = HUB_FALLBACK_OFFSET * m;
 		out.x = p.x + Math.cos(ang) * d;
 		out.y = p.y + Math.sin(ang) * d;
 		return out;
+	}
+
+	/** The work node a feature hub replaces (its `work:<short>` node), or null when that node is not on the graph. */
+	private hubNodeId(t: LiveThread, host: OverlayHost): string | null {
+		const wid = t.feature!;
+		const dom = /^work-([a-z0-9]+)-/i.exec(wid)?.[1] ?? this.wolfMeta.get(t.wolf)?.dom;
+		const id = targetNodeId({ kind: "work-item", id: wid, domain: dom }, (n) => host.hasNode(n));
+		return id !== null && id.startsWith("work:") ? id : null;
+	}
+
+	private replaced = new Set<string>();
+	private replacedTmp = new Set<string>();
+	/** Tell the host which node dots the hubs replace; called only when that set differs from the last one told. */
+	private syncReplaced(host: OverlayHost): void {
+		if (!host.setReplacedNodes) return;
+		const next = this.replacedTmp;
+		next.clear();
+		if (this.settings.enabled) {
+			for (const id in this.state.threads) {
+				const t = this.state.threads[id]!;
+				if (t.feature === undefined) continue;
+				const nid = this.hubNodeId(t, host);
+				if (nid) next.add(nid);
+			}
+		}
+		const cur = this.replaced;
+		let same = next.size === cur.size;
+		if (same) for (const id of next) if (!cur.has(id)) { same = false; break; }
+		if (same) return;
+		this.replaced = new Set(next);
+		host.setReplacedNodes(this.replaced);
 	}
 
 	/** Where a subagent's tether holds it: its feature hub, else its wolf. Idle it waits just outside; `atHub` is the hub itself (launch and return). */
@@ -764,11 +810,14 @@ export class LiveOverlay {
 				if (!t.feature) continue;
 				const tkey = `${t.wolf}/${t.id}`;
 				const pos = this.hubPos(t, host, m, this.anchorTmp);
-				const hf = floatOffset(this.hashOf(tkey), now, FLOAT_HUB_PX * m, { reduced });
+				const nodeId = this.hubNodeId(t, host) ?? undefined;
+				// On its node the hub does not float (it is the node); a fallback hub keeps its very slight drift.
+				const hf = nodeId ? { dx: 0, dy: 0 } : floatOffset(this.hashOf(tkey), now, FLOAT_HUB_PX * m, { reduced });
+				const nodeR = nodeId ? (host.nodeRadius?.(nodeId) ?? 0) : 0;
 				let running = 0;
 				for (const a of subsByThread.get(tkey) ?? []) if (a.finishedAt === undefined) running++;
 				const working = t.active || running > 0;
-				const hub: OverlayItem = { kind: "feature", key: tkey, wolf: t.wolf, threadId: t.id, x: pos.x + hf.dx, y: pos.y + hf.dy, r: HUB_R * m, alpha: working ? 1 : 0.5, needsYou: t.needsYou, online: w.online, working, color, label: t.title ?? threadSlugOf(t.wolf, t.id), subCount: running };
+				const hub: OverlayItem = { kind: "feature", key: tkey, wolf: t.wolf, threadId: t.id, x: pos.x + hf.dx, y: pos.y + hf.dy, r: Math.max(HUB_R * m, nodeR * HUB_NODE_GROW), alpha: working ? 1 : 0.5, needsYou: t.needsYou, online: w.online, working, color, label: t.title ?? threadSlugOf(t.wolf, t.id), subCount: running, nodeId, nodeLabel: nodeId ? host.nodeLabel?.(nodeId) : undefined };
 				out.push(hub);
 				this.threadItems.set(tkey, hub);
 				this.featureItems.set(tkey, hub);
@@ -1075,6 +1124,7 @@ export class LiveOverlay {
 		if (it.kind === "feature") {
 			const t = s.threads[it.key];
 			const lines = [`Wolf: ${it.wolf}`, it.working ? "Working" : "Idle", `Subagents: ${it.subCount ?? 0}`];
+			if (it.nodeLabel) lines.unshift(`Work item: ${redact(it.nodeLabel, p)}`);
 			if (t?.needsYou) lines.push("Waiting for you");
 			return { title: redact(it.label, p), lines, action: { kind: t?.needsYou ? "answer" : "open-thread", label: t?.needsYou ? "Answer in chat" : "Open thread", wolf: it.wolf, threadId: it.threadId } };
 		}

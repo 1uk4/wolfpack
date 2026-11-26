@@ -61,11 +61,14 @@ describe("live map model v2", () => {
 		colors: { node: "#888888", edge: "#444444", label: "#ffffff", hoverText: "#ffffff" },
 		fontFamily: "sans-serif",
 	};
+	const replacedCalls: string[][] = [];
+	(host as { setReplacedNodes?: (ids: ReadonlySet<string>) => void }).setReplacedNodes = (ids) => void replacedCalls.push([...ids].sort());
 	const hadPath2D = g.Path2D;
 	let o: LiveOverlay;
 	beforeEach(() => {
 		mock.timers.enable({ apis: ["Date", "setInterval", "setTimeout"], now: T0 });
 		g.Path2D = class {};
+		replacedCalls.length = 0;
 		o = new LiveOverlay(() => {});
 		o.configure(LIVE_DEFAULTS);
 	});
@@ -99,6 +102,22 @@ describe("live map model v2", () => {
 		assert.ok(dist(hub, nodes.get("work:ELzLSkV")!) < 30, `hub ${hub.x},${hub.y} is beside work:ELzLSkV`);
 		assert.ok(dist(hub, of("wolf")) > 200, "and far from the wolf");
 		assert.equal(items().filter((i) => i.kind === "thread").length, 1, "only the home thread stays a dot");
+	});
+
+	it("a feature hub sits exactly on its work node, with no offset and no float, and replaces that node's dot only while the thread is open", () => {
+		const row = { wolf: "1uk4", id: FEATURE, title: "Live pack map" };
+		o.dispatch({ type: "threads", threads: [row], now: Date.now() });
+		run(0.1);
+		for (const t of [0, 1700, 4100]) {
+			mock.timers.tick(t);
+			const hub = items().find((i) => i.kind === "feature")!;
+			assert.deepEqual([hub.x, hub.y], [-250, 200]);
+		}
+		run(0.5);
+		assert.deepEqual(replacedCalls, [["work:ELzLSkV"]], "the node is replaced, announced once");
+		o.dispatch({ type: "threads", threads: [{ ...row, closed: true }], now: Date.now() });
+		run(0.1);
+		assert.deepEqual(replacedCalls, [["work:ELzLSkV"], []], "archived: the normal dot comes back");
 	});
 
 	it("a feature with no work node anchors beside its domain node", () => {

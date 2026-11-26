@@ -9,7 +9,7 @@ const T0 = 5_000_000_000_000;
 /** A 900-node graph fits at about this zoom, where the wolf icon is at its minimum size (compact: thread dots are hidden). */
 const K = 0.3;
 const frame = (event: unknown) => `data: ${JSON.stringify({ type: "pack.activity", at: "2026-11-26T00:00:00Z", event })}\n\n`;
-const actor = { kind: "thread", wolf: "1uk4", threadId: "1uk4/feature-work-wolfpack-ELzLSkV", title: "Live pack map on the graph…" };
+const actor = { kind: "thread", wolf: "1uk4", threadId: "1uk4/home", title: "Home" };
 const base = { v: 1, pack: "default", ttlMs: 300000, actor };
 
 interface Stroke { from: [number, number]; to: [number, number]; style: string; width: number; dash: boolean }
@@ -85,7 +85,7 @@ describe("live trails, end to end through the console path", () => {
 		hasNode: (id) => nodes.has(id),
 		nodeColor: (id) => nodes.get(id)?.color,
 		center: () => ({ x: 0, y: 0 }),
-		clusterRadius: () => 400,
+		extentRadius: () => 400,
 		colors: { node: "#888888", edge: "#444444", label: "#ffffff", hoverText: "#ffffff" },
 		fontFamily: "sans-serif",
 	};

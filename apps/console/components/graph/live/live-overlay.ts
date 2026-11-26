@@ -6,6 +6,8 @@
 import {
 	DEFAULT_LIVE_OPTIONS,
 	emptyLiveState,
+	featureOfThread,
+	workShortId,
 	HUB_WOLF,
 	homeDomainOf,
 	liveActive,
@@ -23,7 +25,7 @@ import {
 	type LiveTarget,
 } from "@/src/core";
 import { ownerThreadKey, targetNodeId, threadSlugOf } from "@/src/core";
-import { DEFAULT_PHYSICS, stepWolves, type WolfBody } from "@/src/core";
+import { stepSub, SUB_PHYSICS, tetherStrength, type SubBody } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba } from "./live-effects";
 import { floatOffset, nameHash, roamOffset } from "./live-float";
@@ -35,8 +37,8 @@ export interface OverlayHost {
 	hasNode(id: string): boolean;
 	nodeColor(id: string): string | undefined;
 	center(): Pt;
-	/** Extent (world radius) of a domain's node cluster; absent or null: the wolf does not roam. Cached by the host. */
-	clusterRadius?(domain: string): number | null;
+	/** Bounding radius (world) of all nodes about `center()`; the wolves roam over a fraction of it. Absent or null: no roam. Cached by the host. */
+	extentRadius?(): number | null;
 	colors: { node: string; edge: string; label: string; hoverText: string };
 	fontFamily: string;
 }
@@ -55,20 +57,29 @@ export function liveSettingsOf(settings: unknown): OverlaySettings {
 	};
 }
 
-/** The wolf icon's width in graph units before the clamps (nodeSize is 2 world units, a domain hub about 6x that, so the wolf reads as a hub plus its fan). */
-export const WOLF_WORLD_SIZE = 24;
-/** Screen-px clamps of the wolf icon: never bigger than the old constant 26, never smaller than 10 (still recognisable). */
-export const WOLF_MAX_PX = 26;
-export const WOLF_MIN_PX = 10;
-/** Subagents wear the same logo, about 42% of the wolf's. */
-const SUBAGENT_RATIO = 11 / 26;
+/** The main wolf is 1.4x the old icon: width in graph units before the clamps, and the screen-px clamps (it was 24 / 26 / 10). */
+export const WOLF_WORLD_SIZE = 34;
+export const WOLF_MAX_PX = 26 * 1.4;
+export const WOLF_MIN_PX = 14;
+/** Everything else (dots, hubs, subagents, offsets) is drawn in reference px for the old 26 px wolf and keeps that size: m divides the 1.4x out. */
+const WOLF_SCALE = 1.4;
+const REF_PX = 26;
+/** Subagents wear the same logo at their old size (11 px at the full-size wolf): about 30% of the 1.4x wolf. */
+const SUBAGENT_RATIO = 11 / 26 / 1.4;
 /** Dot radius, orbits and offsets are in reference px (drawn for a 26 px wolf); they keep that proportion at every zoom. */
 const THREAD_DOT_R = 3.2;
 const SAT_ORBIT = 25;
-const SUB_ORBIT = 12;
-const SUB_FREE_ORBIT = 24;
 const HOME_ORBIT = 36;
-const TUG_OFFSET = 16;
+/** A subagent lingers this far from the node it went to, and idles this far outside its hub (or wolf). */
+const SUB_TARGET_OFFSET = 14;
+const SUB_IDLE_ORBIT = 20;
+/** The feature hub's radius (reference px), its distance from its node, and from the domain node when it has no node of its own. */
+const HUB_R = 7.5;
+const HUB_OFFSET = 15;
+const HUB_FALLBACK_OFFSET = 34;
+const FLOAT_HUB_PX = 1.6;
+/** The launch burst when a subagent leaves its hub (ms). */
+const LAUNCH_MS = 900;
 const YOU_OFFSET = 22;
 const YOU_R = 6;
 const PULSE_R = 8;
@@ -86,15 +97,16 @@ const FLOAT_COMPACT_AMP = 0.3;
 const FAST_MS = 16;
 const FAST_MOBILE_MS = 30;
 const SLOW_MS = 100;
-/** Roam: the wolf wanders about this fraction of its domain cluster's radius, clamped in reference px (x scaleFor(k).m). */
-const ROAM_FRAC = 0.32;
-const ROAM_MIN_PX = 20;
-const ROAM_MAX_PX = 140;
+/** Roam: the wolf wanders freely over this fraction of the whole graph's extent (it belongs to no domain). */
+const ROAM_FRAC = 0.55;
 /** Roam clock speed: a working wolf roams at 1x, an idle one slower, an offline one nearly still (eased, so a change never jumps). */
 const ROAM_SPEED_WORKING = 1;
 const ROAM_SPEED_IDLE = 0.55;
 const ROAM_SPEED_OFFLINE = 0.08;
-type Body = WolfBody & { offline?: boolean; /** Roam clock (ms) and its eased speed. */ rt?: number; rs?: number };
+/** A wolf body: the roam position plus the roam clock (ms) and its eased speed. */
+interface Body { x: number; y: number; rt?: number; rs?: number }
+/** A subagent body: spring-damper physics, when it was first seen (browser ms), the target event it last answered, and its tug target's offset angle. */
+interface SubState extends SubBody { born: number; seen: number; lastPull: number; ang: number }
 const FLOAT_MS = 40;
 const FLOAT_MOBILE_MS = 60;
 
@@ -110,12 +122,15 @@ export interface OverlayScale {
 export function scaleFor(k: number): OverlayScale {
 	const raw = WOLF_WORLD_SIZE * k;
 	const wolfPx = Math.min(WOLF_MAX_PX, Math.max(WOLF_MIN_PX, raw));
-	return { wolfPx, m: wolfPx / WOLF_MAX_PX / k, compact: raw <= WOLF_MIN_PX };
+	return { wolfPx, m: wolfPx / (WOLF_SCALE * REF_PX) / k, compact: raw <= WOLF_MIN_PX };
 }
+let branchPath: Path2D | null = null;
+/** lucide git-branch, in its 24 x 24 box. */
+const branchGlyph = (): Path2D => (branchPath ??= new Path2D("M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"));
 let wolfHead: Path2D | null = null;
 const wolfHeadPath = (): Path2D => (wolfHead ??= new Path2D(WOLF_HEAD_PATH));
 
-export type OverlayKind = "wolf" | "thread" | "subagent" | "you";
+export type OverlayKind = "wolf" | "thread" | "feature" | "subagent" | "you";
 export interface OverlayItem {
 	kind: OverlayKind;
 	key: string;
@@ -132,6 +147,8 @@ export interface OverlayItem {
 	working?: boolean;
 	color: string;
 	label: string;
+	/** Feature: running subagents it has launched. */
+	subCount?: number;
 }
 export interface OverlayHit { item: OverlayItem; ring: boolean; sx: number; sy: number }
 export interface OverlayCard {
@@ -144,7 +161,6 @@ export interface AttachedRef { wolf: string; threadId: string }
 /** What the activity feed asks the overlay to ring: a graph node id, an event target (resolved like a trail), or a wolf's glyph. */
 export interface OverlayHighlight { nodeId?: string; target?: LiveTarget; wolf?: string }
 
-const TUG_STALE_MS = 3000;
 /** What the overlay is animating right now: fast (pulses, wolf motion, tugs, you-node, highlight), float (the idle drift) or slow (fades). */
 export type FrameNeed = "none" | "slow" | "float" | "fast";
 
@@ -156,8 +172,14 @@ export class LiveOverlay {
 	private bodies = new Map<string, Body>();
 	private roamTmp = { dx: 0, dy: 0 };
 	private workingSet = new Set<string>();
-	/** A target a wolf should drift to; dropped after TUG_STALE_MS if no frame consumed it (so it can never hold the frame loop). */
-	private pendingTugs = new Map<string, { target: LiveTarget; at: number }>();
+	/** Subagent bodies by key (spring-damper physics) and the list the frame steps; the items they draw as, by key. */
+	private subBodies = new Map<string, SubState>();
+	private subList: SubState[] = [];
+	private subItems = new Map<string, OverlayItem>();
+	/** Feature hubs by thread key and by short work id (the target of a wolf's own link). */
+	private featureItems = new Map<string, OverlayItem>();
+	private featureByWork = new Map<string, OverlayItem>();
+	private anchorTmp: Pt = { x: 0, y: 0 };
 	private need: FrameNeed = "none";
 	private wolfMeta = new Map<string, WolfMeta>();
 	private hashes = new Map<string, number>();
@@ -260,9 +282,6 @@ export class LiveOverlay {
 		const next = reduceLive(this.state, a, this.liveOpts());
 		if (next === this.state) return; // nothing changed: no frame
 		this.state = next;
-		if (a.type === "event" && a.event.target && a.event.actor.wolf && ["kb-read", "kb-write", "contribution", "shipped", "bound"].includes(a.event.verb)) {
-			this.pendingTugs.set(a.event.actor.wolf, { target: { kind: a.event.target.kind, id: a.event.target.id, domain: a.event.target.domain ?? a.event.domain }, at: Date.now() });
-		}
 		this.arm();
 		if (a.type !== "tick" || liveSignature(next) !== sigBefore) this.requestFrame();
 	}
@@ -305,9 +324,8 @@ export class LiveOverlay {
 		const s = this.state;
 		if (this.highlight || s.pulses.length > 0 || this.youMoving) return "fast";
 		const wall = Date.now();
-		for (const p of this.pendingTugs.values()) if (wall - p.at < TUG_STALE_MS) return "fast";
-		// Roam keeps every body moving, so only an unspent tug (the ease back into the roam) counts as fast motion.
-		for (const b of this.bodyList) if (b.tug && now - b.tug.at < 8000) return "fast";
+		// Subagents darting to a target, launching from a hub or reeling back are fast motion; the wolves' slow roam is not.
+		for (const b of this.subList) if (Math.abs(b.vx) + Math.abs(b.vy) > 0.4 || (b.tug && now - b.tug.at < 8000) || wall - b.born < LAUNCH_MS) return "fast";
 		for (const w in s.wolves) return "float"; // any wolf at all
 		const fade = this.settings.subagentFadeSec;
 		// Trails and fades keep frames coming only while they are still visibly fading.
@@ -355,67 +373,51 @@ export class LiveOverlay {
 		if (!this.settings.enabled) return;
 		const s = this.state;
 		const { m } = scaleFor(k);
+		const reduced = this.reduced;
 		const bodies = this.bodyList;
 		bodies.length = 0;
 		this.markWorking();
+		const center = host.center();
+		const extent = host.extentRadius?.() ?? 0;
 		for (const name in s.wolves) {
 			const w = s.wolves[name]!;
-			// Home domain and angle only change when the wolf's state object does.
+			// A wolf belongs to no domain: it floats over the whole graph. Its home angle (from the name hash) keeps several wolves apart at the centre.
 			let meta = this.wolfMeta.get(w.name);
 			if (!meta || meta.w !== w) {
 				meta = { w, dom: homeDomainOf(w, w.name), ang: (this.hashOf(w.name) % 360) * (Math.PI / 180) };
 				this.wolfMeta.set(w.name, meta);
 			}
-			const dom = meta.dom;
-			const homePt = (dom ? host.nodePos(`dom:${dom}`) : null) ?? host.center();
-			const ang = meta.ang;
-			const off = !w.online;
 			const h = this.hashOf(w.name);
 			let b = this.bodies.get(w.name);
-			const target = off ? ROAM_SPEED_OFFLINE : this.workingSet.has(w.name) ? ROAM_SPEED_WORKING : ROAM_SPEED_IDLE;
+			const target = !w.online ? ROAM_SPEED_OFFLINE : this.workingSet.has(w.name) ? ROAM_SPEED_WORKING : ROAM_SPEED_IDLE;
 			// The roam clock advances at an eased speed; the offset itself is a pure function of that clock (no drift to accumulate).
 			const rs = (b?.rs ?? target) + (target - (b?.rs ?? target)) * (1 - Math.exp(-dtSec * 2));
-			const rt = (b?.rt ?? (h % 60_000)) + Math.min(Math.max(dtSec, 0), 0.25) * 1000 * rs;
-			const cr = dom && host.clusterRadius ? host.clusterRadius(dom) : null;
-			const R = cr && cr > 0 ? Math.min(ROAM_MAX_PX * m, Math.max(ROAM_MIN_PX * m, cr * ROAM_FRAC)) : 0;
-			const ro = roamOffset(h, rt, R, this.reduced, this.roamTmp);
-			const hx = homePt.x + Math.cos(ang) * HOME_ORBIT * m + ro.dx;
-			const hy = homePt.y + Math.sin(ang) * HOME_ORBIT * m + ro.dy;
+			const rt = (b?.rt ?? (h % 90_000)) + Math.min(Math.max(dtSec, 0), 0.25) * 1000 * rs;
+			const ro = roamOffset(h, rt, extent * ROAM_FRAC, reduced, this.roamTmp);
 			if (!b) {
-				b = { x: hx, y: hy, vx: 0, vy: 0 };
+				b = { x: 0, y: 0 };
 				this.bodies.set(w.name, b);
 			}
 			b.rs = rs;
 			b.rt = rt;
-			const home = b.home ?? (b.home = { x: hx, y: hy });
-			home.x = hx;
-			home.y = hy;
-			if (off && !b.offline) b.tug = { x: home.x, y: home.y, at: now };
-			b.offline = off;
-			const tgt = this.pendingTugs.get(w.name)?.target;
-			if (tgt && !off) {
-				const id = targetNodeId(tgt, (n) => host.hasNode(n));
-				const p = id ? host.nodePos(id) : null;
-				if (p) b.tug = { x: p.x + TUG_OFFSET * m, y: p.y - TUG_OFFSET * m, at: now };
-			}
-			this.pendingTugs.delete(w.name);
+			b.x = center.x + Math.cos(meta.ang) * HOME_ORBIT * m + ro.dx;
+			b.y = center.y + Math.sin(meta.ang) * HOME_ORBIT * m + ro.dy;
 			bodies.push(b);
 		}
 		if (this.bodies.size > bodies.length) for (const name of [...this.bodies.keys()]) if (!s.wolves[name]) (this.bodies.delete(name), this.wolfMeta.delete(name));
-		if (this.reduced) {
-			for (const b of bodies) {
-				const t = b.tug ?? b.home;
-				if (t) [b.x, b.y, b.vx, b.vy] = [t.x, t.y, 0, 0];
-			}
-		} else {
-			stepWolves(bodies, now, dtSec, { ...DEFAULT_PHYSICS, repelRange: DEFAULT_PHYSICS.repelRange / Math.max(k, 0.2) ** 0.5, maxSpeed: DEFAULT_PHYSICS.maxSpeed / Math.max(k, 0.2) });
-		}
-		// Trails remember where the wolf WAS when the line began.
+		this.stepSubs(now, dtSec, host, k, m, reduced);
+		// Trails remember where their actor WAS when the line began: the wolf, a feature hub or a subagent (stepSubs records those).
 		for (const t of s.trails) {
-			if (this.trailFrom.has(t.id)) continue;
-			// A hub-side write (curator) starts at the domain hub node, drawn in the neutral node colour.
-			const b = t.wolf === HUB_WOLF ? (t.target.domain ? host.nodePos(`dom:${t.target.domain}`) : null) : this.bodies.get(t.wolf);
-			if (b) this.trailFrom.set(t.id, { x: b.x, y: b.y });
+			if (this.trailFrom.has(t.id) || t.subagentKey) continue;
+			let from: Pt | null | undefined;
+			if (t.featureKey) {
+				const th = s.threads[t.featureKey];
+				if (th) from = this.hubPos(th, host, m, this.anchorTmp);
+			} else {
+				// A hub-side write (curator) starts at the domain hub node, drawn in the neutral node colour.
+				from = t.wolf === HUB_WOLF ? (t.target.domain ? host.nodePos(`dom:${t.target.domain}`) : null) : this.bodies.get(t.wolf);
+			}
+			if (from) this.trailFrom.set(t.id, { x: from.x, y: from.y });
 		}
 		if (this.trailFrom.size > s.trails.length + 50) {
 			const live = new Set(s.trails.map((t) => t.id));
@@ -433,6 +435,93 @@ export class LiveOverlay {
 		} else {
 			this.you = null;
 			this.youMoving = false;
+		}
+	}
+
+	/** Where a feature hub sits (world, no float): beside its work node, else beside its domain node, else near its wolf's home domain / the centre. */
+	private hubPos(t: LiveThread, host: OverlayHost, m: number, out: Pt): Pt {
+		const wid = t.feature!;
+		const dom = /^work-([a-z0-9]+)-/i.exec(wid)?.[1] ?? this.wolfMeta.get(t.wolf)?.dom;
+		const id = targetNodeId({ kind: "work-item", id: wid, domain: dom }, (n) => host.hasNode(n));
+		const p = (id ? host.nodePos(id) : null) ?? (this.wolfMeta.get(t.wolf)?.dom ? host.nodePos(`dom:${this.wolfMeta.get(t.wolf)!.dom}`) : null) ?? host.center();
+		const exact = id !== null && id.startsWith("work:");
+		const ang = (this.hashOf(t.id) % 360) * (Math.PI / 180);
+		const d = (exact ? HUB_OFFSET : HUB_FALLBACK_OFFSET) * m;
+		out.x = p.x + Math.cos(ang) * d;
+		out.y = p.y + Math.sin(ang) * d;
+		return out;
+	}
+
+	/** Where a subagent's tether holds it: its feature hub, else its wolf. Idle it waits just outside; `atHub` is the hub itself (launch and return). */
+	private anchorOf(a: LiveSubagent, host: OverlayHost, m: number, atHub: boolean, out: Pt): Pt {
+		const t = a.parentThreadId ? this.state.threads[`${a.wolf}/${a.parentThreadId}`] : undefined;
+		const hub = t?.feature !== undefined;
+		if (t && hub) this.hubPos(t, host, m, out);
+		else {
+			const wb = this.bodies.get(a.wolf) ?? host.center();
+			out.x = wb.x;
+			out.y = wb.y;
+		}
+		if (!atHub || !hub) {
+			const ang = (this.hashOf(a.key) % 360) * (Math.PI / 180);
+			out.x += Math.cos(ang) * SUB_IDLE_ORBIT * m;
+			out.y += Math.sin(ang) * SUB_IDLE_ORBIT * m;
+		}
+		return out;
+	}
+
+	/**
+	 * Subagent bodies: born at their hub; a new target pulls them there hard (spring-damper), they linger, and with no target for ~10 s the
+	 * tether reels them back; a finished one flies home to its hub (and fades there). Reduced motion: snap to the target (or the hub).
+	 */
+	private stepSubs(now: number, dtSec: number, host: OverlayHost, k: number, m: number, reduced: boolean): void {
+		const s = this.state;
+		const list = this.subList;
+		list.length = 0;
+		const wall = Date.now();
+		const p = this.anchorTmp;
+		for (const key in s.subagents) {
+			const a = s.subagents[key]!;
+			let b = this.subBodies.get(key);
+			if (!b) {
+				this.anchorOf(a, host, m, true, p);
+				b = { x: p.x, y: p.y, vx: 0, vy: 0, born: wall, seen: 0, lastPull: now, ang: (this.hashOf(key + "t") % 360) * (Math.PI / 180) };
+				this.subBodies.set(key, b);
+			}
+			list.push(b);
+		}
+		if (this.subBodies.size > list.length) for (const key of [...this.subBodies.keys()]) if (!s.subagents[key]) this.subBodies.delete(key);
+		// A trail starts where its subagent WAS, before this frame's new target pulls it away.
+		for (const t of s.trails) {
+			if (!t.subagentKey || this.trailFrom.has(t.id)) continue;
+			const b = this.subBodies.get(t.subagentKey);
+			if (b) this.trailFrom.set(t.id, { x: b.x, y: b.y });
+		}
+		for (const key in s.subagents) {
+			const a = s.subagents[key]!;
+			const b = this.subBodies.get(key)!;
+			const fin = a.finishedAt !== undefined;
+			if (fin) b.tug = undefined;
+			else if (a.target && a.targetAt !== undefined && a.targetAt > b.seen) {
+				b.seen = a.targetAt;
+				const id = targetNodeId(a.target, (n) => host.hasNode(n));
+				const at = id ? host.nodePos(id) : null;
+				if (at) {
+					const tx = at.x + Math.cos(b.ang) * SUB_TARGET_OFFSET * m;
+					const ty = at.y + Math.sin(b.ang) * SUB_TARGET_OFFSET * m;
+					if (b.tug) [b.tug.x, b.tug.y, b.tug.at] = [tx, ty, now];
+					else b.tug = { x: tx, y: ty, at: now };
+					b.lastPull = now;
+				}
+			}
+			if (b.tug && now - b.tug.at > SUB_PHYSICS.idleMs) b.tug = undefined; // nothing new for ~10 s: the tether takes over
+			const anchor = this.anchorOf(a, host, m, fin, p);
+			if (reduced) {
+				const to = b.tug ?? anchor;
+				[b.x, b.y, b.vx, b.vy] = [to.x, to.y, 0, 0];
+			} else {
+				stepSub(b, now, dtSec, anchor.x, anchor.y, tetherStrength(SUB_PHYSICS, now - b.lastPull, fin), k);
+			}
 		}
 	}
 
@@ -507,8 +596,10 @@ export class LiveOverlay {
 		}
 		this.wolfItems.clear();
 		this.threadItems.clear();
+		this.featureItems.clear();
+		this.featureByWork.clear();
+		this.subItems.clear();
 		this.markWorking();
-		const placed = new Set<string>();
 		for (const name in s.wolves) {
 			const w = s.wolves[name]!;
 			const b = this.bodies.get(w.name);
@@ -522,40 +613,45 @@ export class LiveOverlay {
 			const wolfItem: OverlayItem = { kind: "wolf", key: w.name, wolf: w.name, x: wx, y: wy, r: sc.wolfPx / 2 / k, alpha: w.online ? 1 : 0.35, needsYou: w.needsYou, online: w.online, working: w.online && this.workingSet.has(w.name), color, label: w.name };
 			out.push(wolfItem);
 			this.wolfItems.set(w.name, wolfItem);
-			const mine = sc.compact ? [] : (threadsByWolf.get(w.name) ?? []).sort((a, c) => (a.t.id < c.t.id ? -1 : 1));
-			mine.forEach(({ t, alpha }, i) => {
-				const ang = -Math.PI / 2 + (i - (mine.length - 1) / 2) * 0.75 + 0.35;
+			const all = threadsByWolf.get(w.name) ?? [];
+			// Non-feature threads orbit the wolf as small dots (hidden when zoomed far out).
+			const dots = sc.compact ? [] : all.filter((x) => !x.t.feature).sort((a, c) => (a.t.id < c.t.id ? -1 : 1));
+			dots.forEach(({ t, alpha }, i) => {
+				const ang = -Math.PI / 2 + (i - (dots.length - 1) / 2) * 0.75 + 0.35;
 				const tx = wx + Math.cos(ang) * SAT_ORBIT * m;
 				const ty = wy + Math.sin(ang) * SAT_ORBIT * m;
 				const tkey = `${t.wolf}/${t.id}`;
 				const threadItem: OverlayItem = { kind: "thread", key: tkey, wolf: t.wolf, threadId: t.id, x: tx, y: ty, r: THREAD_DOT_R * m, alpha: (t.active ? 1 : 0.45) * alpha, needsYou: t.needsYou, online: w.online, working: t.active, color, label: t.title ?? threadSlugOf(t.wolf, t.id) };
 				out.push(threadItem);
 				this.threadItems.set(tkey, threadItem);
-				const subs = subsByThread.get(tkey) ?? [];
-				subs.forEach((a, j) => {
-					const al = subagentAlpha(a, now, fade);
-					if (al <= 0.02) return;
-					const h = this.hashOf(a.key);
-					// Subagents drift a little and wobble slowly around their thread.
-					const sf = floatOffset(h, now, FLOAT_SUB_PX * m, { reduced });
-					const wob = reduced ? 0 : 0.25 * Math.sin(now / 1400 + (h % 628) / 100);
-					const sa = ang + (j - (subs.length - 1) / 2) * 0.9 + wob;
-					out.push({ kind: "subagent", key: a.key, wolf: a.wolf, threadId: t.id, x: tx + Math.cos(sa) * SUB_ORBIT * m + sf.dx, y: ty + Math.sin(sa) * SUB_ORBIT * m + sf.dy, r: (sc.wolfPx * SUBAGENT_RATIO) / 2 / k, alpha: al, needsYou: false, online: w.online, color, label: a.title ?? a.name });
-					placed.add(a.key);
-				});
 			});
+			// A feature is a hub at its work node: a very slight float, working while its thread or any of its subagents is, dimmed when idle.
+			for (const { t } of all) {
+				if (!t.feature) continue;
+				const tkey = `${t.wolf}/${t.id}`;
+				const pos = this.hubPos(t, host, m, this.anchorTmp);
+				const hf = floatOffset(this.hashOf(tkey), now, FLOAT_HUB_PX * m, { reduced });
+				let running = 0;
+				for (const a of subsByThread.get(tkey) ?? []) if (a.finishedAt === undefined) running++;
+				const working = t.active || running > 0;
+				const hub: OverlayItem = { kind: "feature", key: tkey, wolf: t.wolf, threadId: t.id, x: pos.x + hf.dx, y: pos.y + hf.dy, r: HUB_R * m, alpha: working ? 1 : 0.5, needsYou: t.needsYou, online: w.online, working, color, label: t.title ?? threadSlugOf(t.wolf, t.id), subCount: running };
+				out.push(hub);
+				this.threadItems.set(tkey, hub);
+				this.featureItems.set(tkey, hub);
+				this.featureByWork.set(workShortId(t.feature), hub);
+			}
 		}
-		// Subagents whose parent thread is hidden or unknown hang off their wolf.
+		// Subagents roam the whole graph on their own physics bodies, with a small float on top.
 		for (const id in s.subagents) {
 			const a = s.subagents[id]!;
-			if (placed.has(a.key)) continue;
-			const wi = this.wolfItems.get(a.wolf);
 			const al = subagentAlpha(a, now, fade);
-			if (!wi || al <= 0.02 || sc.compact) continue;
-			const h = this.hashOf(a.key);
-			const sf = floatOffset(h, now, FLOAT_SUB_PX * m, { reduced });
-			const ang = (h % 360) * (Math.PI / 180) + (reduced ? 0 : 0.25 * Math.sin(now / 1400 + (h % 628) / 100));
-			out.push({ kind: "subagent", key: a.key, wolf: a.wolf, threadId: a.parentThreadId, x: wi.x + Math.cos(ang) * SUB_FREE_ORBIT * m + sf.dx, y: wi.y + Math.sin(ang) * SUB_FREE_ORBIT * m + sf.dy, r: (sc.wolfPx * SUBAGENT_RATIO) / 2 / k, alpha: al, needsYou: false, online: true, color: wi.color, label: a.title ?? a.name });
+			const b = this.subBodies.get(a.key);
+			if (!b || al <= 0.02) continue;
+			const wi = this.wolfItems.get(a.wolf);
+			const sf = floatOffset(this.hashOf(a.key), now, FLOAT_SUB_PX * m, { reduced });
+			const item: OverlayItem = { kind: "subagent", key: a.key, wolf: a.wolf, threadId: a.parentThreadId, x: b.x + sf.dx, y: b.y + sf.dy, r: (sc.wolfPx * SUBAGENT_RATIO) / 2 / k, alpha: al, needsYou: false, online: wi?.online ?? true, color: wi?.color ?? host.colors.node, label: a.title ?? a.name };
+			out.push(item);
+			this.subItems.set(a.key, item);
 		}
 		this.cachedItems = out;
 		if (this.you) out.push({ kind: "you", key: "you", wolf: "", x: this.you.x, y: this.you.y, r: YOU_R * m, alpha: 1, needsYou: false, online: true, color: host.colors.hoverText, label: "You" });
@@ -588,8 +684,7 @@ export class LiveOverlay {
 
 		// Trails: the path the wolf took to the thing it touched, fading over trailSec.
 		for (const t of s.trails) {
-			const id = targetNodeId(t.target, (n) => host.hasNode(n));
-			const to = id ? host.nodePos(id) : null;
+			const to = this.resolveTo(t.target, !t.subagentKey && !t.featureKey && t.wolf !== HUB_WOLF, host);
 			const from = this.trailFrom.get(t.id);
 			if (!to || !from) continue;
 			const age = 1 - trailAlpha(t, wall, this.settings.trailSec);
@@ -598,40 +693,52 @@ export class LiveOverlay {
 		}
 		// Pulses on the touched node.
 		for (const p of s.pulses) {
-			const id = targetNodeId(p.target, (n) => host.hasNode(n));
-			const at = id ? host.nodePos(id) : null;
+			const at = this.resolveTo(p.target, !p.subagentKey && !p.featureKey && p.wolf !== HUB_WOLF, host);
 			if (!at) continue;
 			const w = this.wolfItems.get(p.wolf);
 			EFFECTS.pulse!({ ctx, x: at.x, y: at.y, r: PULSE_R * m, k, t: Math.min(1, (wall - p.at) / DEFAULT_LIVE_OPTIONS.pulseMs), color: w?.color ?? host.colors.node, intensity: I, reduced });
 		}
-		// Links: wolf -> its thread dots, thread -> bound work item (faint), subagent -> parent.
+		// A subagent leaving its hub: a small burst there, for LAUNCH_MS.
+		if (!reduced) {
+			for (const id in s.subagents) {
+				const a = s.subagents[id]!;
+				const b = this.subBodies.get(a.key);
+				if (!b || wall - b.born >= LAUNCH_MS || a.finishedAt !== undefined) continue;
+				const hub = this.featureItems.get(`${a.wolf}/${a.parentThreadId}`) ?? this.wolfItems.get(a.wolf);
+				if (hub) EFFECTS.pulse!({ ctx, x: hub.x, y: hub.y, r: HUB_R * m * 0.9, k, t: (wall - b.born) / LAUNCH_MS, color: hub.color, intensity: I, reduced });
+			}
+		}
+		// Links: wolf -> its thread dots, thread -> bound work item (faint), and a hairline tether from each subagent to its hub (or wolf).
 		ctx.lineWidth = 1.2 / k;
+		const compactNow = scaleFor(k).compact;
 		for (const it of items) {
 			if (it.kind === "thread") {
 				const wolf = this.wolfItems.get(it.wolf);
 				if (wolf) this.line(ctx, wolf, it, rgba(it.color, 0.25 * it.alpha));
 				const t = s.threads[it.key];
 				if (t?.bound) {
-					const id = targetNodeId(t.bound, (n) => host.hasNode(n));
-					const p = id ? host.nodePos(id) : null;
+					const p = this.resolveTo(t.bound, true, host);
 					if (p) {
 						ctx.setLineDash([2 / k, 3 / k]);
 						this.line(ctx, it, p, rgba(it.color, 0.6 * it.alpha));
 						ctx.setLineDash([]);
 					}
 				}
-			} else if (it.kind === "subagent") {
-				const parent = this.threadItems.get(`${it.wolf}/${it.threadId}`) ?? this.wolfItems.get(it.wolf);
-				if (parent) this.line(ctx, parent, it, rgba(it.color, 0.2 * it.alpha));
+			} else if (it.kind === "subagent" && !compactNow) {
+				const parent = this.featureItems.get(`${it.wolf}/${it.threadId}`) ?? this.wolfItems.get(it.wolf);
+				if (parent) {
+					ctx.lineWidth = 0.8 / k;
+					this.line(ctx, parent, it, rgba(it.color, 0.1 * it.alpha));
+					ctx.lineWidth = 1.2 / k;
+				}
 			}
 		}
 		// Zoomed out the thread dots are hidden: the link to the bound work item leaves the wolf itself.
-		if (scaleFor(k).compact) {
+		if (compactNow) {
 			for (const id in s.threads) {
 				const t = s.threads[id]!;
 				const wolf = this.wolfItems.get(t.wolf);
-				const tid = t.bound ? targetNodeId(t.bound, (n) => host.hasNode(n)) : null;
-				const p = tid ? host.nodePos(tid) : null;
+				const p = t.bound && !t.feature ? this.resolveTo(t.bound, true, host) : null;
 				if (!wolf || !p || threadAlpha(s, t, wall, this.settings.subagentFadeSec) <= 0) continue;
 				ctx.setLineDash([2 / k, 3 / k]);
 				this.line(ctx, wolf, p, rgba(wolf.color, 0.6));
@@ -665,6 +772,25 @@ export class LiveOverlay {
 				ctx.fillStyle = rgba(it.color, 0.95);
 				ctx.fill(wolfHeadPath(), "evenodd");
 				ctx.restore();
+			} else if (it.kind === "feature") {
+				// A hub: a ring plate in the wolf's colour with the git-branch glyph; working adds the pulsing ring, idle stays dim.
+				ctx.beginPath();
+				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
+				ctx.fillStyle = rgba(it.color, it.working ? 0.3 : 0.18);
+				ctx.fill();
+				ctx.lineWidth = 1.2 / k;
+				ctx.strokeStyle = rgba(it.color, it.working ? 0.95 : 0.75);
+				ctx.stroke();
+				ctx.save();
+				const gs = (it.r * 1.25) / 24;
+				ctx.translate(it.x - it.r * 0.625, it.y - it.r * 0.625);
+				ctx.scale(gs, gs);
+				ctx.lineWidth = 2.4;
+				ctx.lineCap = "round";
+				ctx.strokeStyle = rgba(it.color, 0.95);
+				ctx.stroke(branchGlyph());
+				ctx.restore();
+				if (it.working) this.drawWorkingRing(ctx, it, k, now, reduced);
 			} else if (it.kind === "thread") {
 				ctx.beginPath();
 				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
@@ -694,7 +820,7 @@ export class LiveOverlay {
 				ctx.restore();
 			}
 			ctx.globalAlpha = 1;
-			if (it.needsYou && (it.kind === "wolf" || it.kind === "thread")) {
+			if (it.needsYou && (it.kind === "wolf" || it.kind === "thread" || it.kind === "feature")) {
 				EFFECTS.ring!({ ctx, x: it.x, y: it.y, r: it.r, k, t: 0, color: AMBER, intensity: I, reduced, time: now, alpha: it.alpha });
 			}
 		}
@@ -722,6 +848,16 @@ export class LiveOverlay {
 				ctx.stroke();
 			}
 		}
+	}
+
+	/** Where a trail, pulse or bound link lands: the target's node; a wolf's own link to a feature lands on that feature's hub instead. */
+	private resolveTo(target: LiveTarget, own: boolean, host: OverlayHost): Pt | null {
+		if (own && target.kind === "work-item") {
+			const f = this.featureByWork.get(workShortId(target.id));
+			if (f) return f;
+		}
+		const id = targetNodeId(target, (n) => host.hasNode(n));
+		return id ? host.nodePos(id) : null;
 	}
 
 	/** An active thread's soft pulsing ring and a short comet arc circling the dot; reduced motion: one static brighter ring. */
@@ -763,7 +899,7 @@ export class LiveOverlay {
 		if (!this.settings.enabled) return null;
 		let best: OverlayHit | null = null;
 		let bestD = Infinity;
-		const prio: Record<OverlayKind, number> = { subagent: 0, thread: 1, you: 2, wolf: 3 };
+		const prio: Record<OverlayKind, number> = { subagent: 0, thread: 1, feature: 1, you: 2, wolf: 3 };
 		for (const it of this.cachedItems) {
 			const px = it.x * tr.k + tr.x;
 			const py = it.y * tr.k + tr.y;
@@ -794,11 +930,19 @@ export class LiveOverlay {
 		if (it.kind === "wolf") {
 			const w = s.wolves[it.wolf];
 			const t = w?.activeThreadId ? s.threads[`${it.wolf}/${w.activeThreadId}`] : undefined;
-			const lines = [w?.online ? "Online" : "Offline"];
-			if (t) lines.push(`Thread: ${redact(t.title ?? threadSlugOf(t.wolf, t.id), p)}`);
-			if (t?.bound) lines.push(`Working on: ${redact(t.bound.title ?? t.bound.id, p)}`);
+			let features = 0;
+			let subs = 0;
+			for (const id in s.threads) if (s.threads[id]!.wolf === it.wolf && s.threads[id]!.feature !== undefined) features++;
+			for (const id in s.subagents) if (s.subagents[id]!.wolf === it.wolf && s.subagents[id]!.finishedAt === undefined) subs++;
+			const lines = [!w?.online ? "Offline" : it.working ? "Online · working" : "Online", `Open features: ${features}`, `Running subagents: ${subs}`];
 			if (w?.needsYou) lines.push("Waiting for you");
 			return { title: it.label, lines, action: t ? { kind: "open-thread", label: "Open thread", wolf: it.wolf, threadId: t.id } : undefined };
+		}
+		if (it.kind === "feature") {
+			const t = s.threads[it.key];
+			const lines = [`Wolf: ${it.wolf}`, it.working ? "Working" : "Idle", `Subagents: ${it.subCount ?? 0}`];
+			if (t?.needsYou) lines.push("Waiting for you");
+			return { title: redact(it.label, p), lines, action: { kind: t?.needsYou ? "answer" : "open-thread", label: t?.needsYou ? "Answer in chat" : "Open thread", wolf: it.wolf, threadId: it.threadId } };
 		}
 		if (it.kind === "thread") {
 			const t = s.threads[it.key];
@@ -809,7 +953,11 @@ export class LiveOverlay {
 		}
 		if (it.kind === "subagent") {
 			const parent = it.threadId ? s.threads[`${it.wolf}/${it.threadId}`] : undefined;
-			return { title: redact(it.label, p), lines: [`Subagent of ${it.wolf}`, ...(parent ? [`Parent: ${redact(parent.title ?? threadSlugOf(parent.wolf, parent.id), p)}`] : [])], action: it.threadId ? { kind: "open-thread", label: "Open parent thread", wolf: it.wolf, threadId: it.threadId } : undefined };
+			const target = s.subagents[it.key]?.target;
+			const lines = [`Subagent of ${it.wolf}`];
+			if (target) lines.push(`Target: ${redact(target.title ?? target.id, p)}`);
+			if (parent) lines.push(`Parent: ${redact(parent.title ?? threadSlugOf(parent.wolf, parent.id), p)}`);
+			return { title: redact(it.label, p), lines, action: it.threadId ? { kind: "open-thread", label: "Open parent thread", wolf: it.wolf, threadId: it.threadId } : undefined };
 		}
 		const v = s.owner?.viewing;
 		return { title: "You", lines: v ? [`Viewing: ${redact(v.title ?? v.id, p)}`] : this.attached ? ["In the floating chat"] : [] };

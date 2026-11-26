@@ -13,6 +13,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BellIcon, ExternalLinkIcon, XIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
+import { kbdEventForAction } from "@/src/core";
+import { talkToWolf } from "./live-talk";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
 import { acquireLiveFeed, getLiveSnapshot, onLiveAction, useLiveConnected } from "./live-store";
@@ -69,7 +71,13 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 					const t = o.needsYouThread(hit.item.wolf, hit.item.threadId);
 					if (t) return void answer(t.wolf, t.threadId);
 				}
-				if (!touch && (hit.item.kind === "thread" || hit.item.kind === "subagent") && hit.item.threadId) return void openThread(hit.item.wolf, hit.item.threadId);
+				// A click on a wolf's body is the handle for talking to it: point the floating chat at its home thread and focus it.
+				if (!touch && hit.item.kind === "wolf") {
+					const a = attachedRef.current;
+					const did = talkToWolf(hit.item.wolf, { threads: a?.threads, attach: a ? (r) => a.attach(r) : undefined, focusComposer: () => window.dispatchEvent(new CustomEvent(kbdEventForAction("focus-chat-bar"))), navigate: (h) => routerRef.current.push(h) });
+					if (did !== "none") return;
+				}
+				if (!touch && (hit.item.kind === "thread" || hit.item.kind === "feature" || hit.item.kind === "subagent") && hit.item.threadId) return void openThread(hit.item.wolf, hit.item.threadId);
 				setShown({ hit, card: o.cardFor(hit), pinned: true, width: width() });
 			},
 		});

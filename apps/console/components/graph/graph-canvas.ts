@@ -1170,21 +1170,20 @@ export class GraphCanvasRenderer {
 		this.schedule();
 	}
 
-	/** Domain cluster extent for the wolf's roam: the farthest node sharing the domain hub's colour. Cached per base graph (nodeById identity). */
-	private clusterRadii = new Map<string, number>();
-	private clusterRadiiFor: Map<string, CanvasNode> | null = null;
-	private clusterRadiusOf(dom: string): number | null {
-		if (this.clusterRadiiFor !== this.nodeById) {
-			this.clusterRadii.clear();
-			this.clusterRadiiFor = this.nodeById;
+	/** Bounding radius of all nodes about the graph's centre, for the wolves' free roam. Cached per base graph (nodeById identity). */
+	private extentFor: Map<string, CanvasNode> | null = null;
+	private extent = 0;
+	private extentRadiusOf(): number | null {
+		if (this.extentFor !== this.nodeById) {
+			const b = this.worldBBox;
+			const cx = b ? (b.minX + b.maxX) / 2 : 0;
+			const cy = b ? (b.minY + b.maxY) / 2 : 0;
+			let r = 0;
+			for (const n of this.nodeById.values()) r = Math.max(r, Math.hypot(n.x - cx, n.y - cy));
+			this.extent = r;
+			this.extentFor = this.nodeById;
 		}
-		const cached = this.clusterRadii.get(dom);
-		if (cached !== undefined) return cached > 0 ? cached : null;
-		const hub = this.nodeById.get(`dom:${dom}`);
-		let r = 0;
-		if (hub?.color) for (const n of this.nodeById.values()) if (n.color === hub.color) r = Math.max(r, Math.hypot(n.x - hub.x, n.y - hub.y));
-		this.clusterRadii.set(dom, r);
-		return r > 0 ? r : null;
+		return this.extent > 0 ? this.extent : null;
 	}
 
 	private overlayHostCache: OverlayHost | null = null;
@@ -1198,7 +1197,7 @@ export class GraphCanvasRenderer {
 			},
 			hasNode: (id) => this.nodeById.has(id),
 			nodeColor: (id) => this.nodeById.get(id)?.color,
-			clusterRadius: (dom) => this.clusterRadiusOf(dom),
+			extentRadius: () => this.extentRadiusOf(),
 			center: () => {
 				const b = this.worldBBox;
 				return b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 } : { x: 0, y: 0 };

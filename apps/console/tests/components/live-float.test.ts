@@ -78,18 +78,18 @@ describe("floating wolves in the overlay", () => {
 		assert.ok(Math.hypot(t1.x - t0.x, t1.y - t0.y) > 0.3, "it moved");
 		const xs: number[] = [];
 		for (let t = 0; t < 60_000; t += 500) xs.push(wolfAt(5_000_000_000_000 + t).x);
-		assert.ok(Math.max(...xs) - Math.min(...xs) <= 2 * 3.5 * (24 / 26) + 1e-9, "the drift stays inside the amplitude around the body");
+		assert.ok(Math.max(...xs) - Math.min(...xs) <= 2 * 3.5 * (34 / 36.4) + 1e-9, "the drift stays inside the amplitude around the body");
 		const items = o.items(host, 1, 5_000_000_002_000);
 		const dot = items.find((i) => i.kind === "thread")!;
 		const wolf = items.find((i) => i.kind === "wolf")!;
-		assert.ok(Math.abs(Math.hypot(dot.x - wolf.x, dot.y - wolf.y) - 25 * (24 / 26)) < 1e-6, "the dot orbits the floated wolf");
+		assert.ok(Math.abs(Math.hypot(dot.x - wolf.x, dot.y - wolf.y) - 25 * (34 / 36.4)) < 1e-6, "the dot orbits the floated wolf");
 		const hit = o.hitTest(wolf.x, wolf.y, { x: 0, y: 0, k: 1 }, 1);
 		assert.equal(hit?.item.kind, "wolf");
 		assert.ok(Math.hypot(hit!.sx - wolf.x, hit!.sy - wolf.y) < 1e-9, "the hit is reported at the floated position");
 	});
 
-	it("a wolf with a cluster roams: it wanders within bounds, hit-testing follows it, and reduced motion keeps it at its anchor", () => {
-		const rhost = { ...host, clusterRadius: () => 100 };
+	it("a wolf roams freely over the whole graph extent (not a domain): it wanders within bounds, hit-testing follows it, and reduced motion keeps it at the centre", () => {
+		const rhost = { ...host, extentRadius: () => 1000 };
 		const pos: { x: number; y: number }[] = [];
 		for (let t = 0; t <= 60_000; t += 40) {
 			o.step(t, 0.04, rhost, 1);
@@ -100,8 +100,9 @@ describe("floating wolves in the overlay", () => {
 		}
 		let far = 0;
 		for (const p of pos) far = Math.max(far, Math.hypot(p.x - pos[0]!.x, p.y - pos[0]!.y));
-		assert.ok(far > 0.8 * 32, `it wandered more than the idle bob alone (${far})`);
-		assert.ok(far < 2 * (32 + 3.5) * Math.SQRT2, `and stayed in its region (${far})`);
+		assert.ok(far > 150, `it wandered across the graph, far beyond a domain-sized roam (${far})`);
+		assert.ok(far < 2 * (550 + 36 + 4) * Math.SQRT2, `and stayed within 0.55 of the extent (${far})`);
+		for (const p of pos) assert.ok(Math.hypot(p.x, p.y) < 550 * Math.SQRT2 + 36 + 4, `inside the graph (${p.x},${p.y})`);
 		const w = wolfAt(60_000);
 		const hit = o.hitTest(w.x, w.y, { x: 0, y: 0, k: 1 }, 1);
 		assert.equal(hit?.item.kind, "wolf");

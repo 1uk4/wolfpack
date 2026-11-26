@@ -125,19 +125,21 @@ describe("live overlay fade clock", () => {
 			o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("tw", "sa") }), now: Date.now() });
 			o.step(1, 0.016, host, 2);
 			o.draw(rec, host, 2, 1);
-			// At k=2 the wolf is capped at 26 px and the subagent is 11 px, both the logo path (scale = px / k / 64).
-			assert.deepEqual(logo().map((f) => f.scale).sort((a, b) => b - a), [26 / 2 / 64, 11 / 2 / 64]);
-			assert.equal(logo().find((f) => f.scale === 26 / 2 / 64)?.alpha, 1);
+			// At k=2 the wolf is capped at 36.4 px (1.4x the old 26) and the subagent is 11 px, both the logo path (scale = px / k / 64).
+			const scales = logo().map((f) => f.scale).sort((a, b) => b - a);
+			assert.equal(scales.length, 2);
+			assert.ok(Math.abs(scales[0]! - 36.4 / 2 / 64) < 1e-9 && Math.abs(scales[1]! - 11 / 2 / 64) < 1e-9, `${scales}`);
+			assert.equal(logo().find((f) => Math.abs(f.scale - 36.4 / 2 / 64) < 1e-9)?.alpha, 1);
 			mock.timers.tick(3_600_000);
 			o.dispatch({ type: "tick", now: Date.now() });
 			fills.length = 0;
 			o.step(2, 0.016, host, 2);
 			o.draw(rec, host, 2, 2);
-			assert.equal(logo().find((f) => f.scale === 26 / 2 / 64)?.alpha, 0.35);
+			assert.equal(logo().find((f) => Math.abs(f.scale - 36.4 / 2 / 64) < 1e-9)?.alpha, 0.35);
 		}
 	});
 
-	it("icons scale with zoom between a 10 px floor and a 26 px cap, keep their proportions, and subagents and thread dots hide at the floor", () => {
+	it("icons scale with zoom between a 14 px floor and a 36.4 px cap (the wolf is 1.4x), keep their proportions, and thread dots hide at the floor while subagents stay as small marks", () => {
 		const fills: { d?: string; scale: number }[] = [];
 		let scale = 1;
 		const radii: number[] = [];
@@ -153,19 +155,21 @@ describe("live overlay fade clock", () => {
 			o.step(1, 0.016, host, k);
 			o.draw(rec, host, k, 1);
 			const px = fills.filter((f) => f.d?.startsWith("M8 2L24 18")).map((f) => f.scale * 64 * k).sort((a, b) => b - a);
-			return { px, dot: radii.find((r) => Math.abs(r * k - 3.2) < 5) };
+			const dotPx = 3.2 * Math.min(36.4, Math.max(14, 34 * k)) / 36.4;
+			return { px, dot: radii.find((r) => Math.abs(r * k - dotPx) < 1e-6) };
 		};
 		const near = (a: number | undefined, b: number) => assert.ok(a !== undefined && Math.abs(a - b) < 1e-6, `${a} vs ${b}`);
-		const big = frame(4); // 24 x 4 = 96 px, capped
-		near(big.px[0], 26);
+		const big = frame(4); // 34 x 4 px, capped
+		near(big.px[0], 36.4);
 		near(big.px[1], 11);
-		const mid = frame(0.8); // 24 x 0.8 = 19.2 px
-		near(mid.px[0], 19.2);
-		near(mid.px[1], 19.2 * 11 / 26);
-		near(mid.dot !== undefined ? mid.dot * 0.8 : undefined, 3.2 * 19.2 / 26);
-		const small = frame(0.1); // 24 x 0.1 = 2.4 px, floored at 10
-		assert.equal(small.px.length, 1);
-		near(small.px[0], 10);
+		const mid = frame(0.8); // 34 x 0.8 = 27.2 px
+		near(mid.px[0], 27.2);
+		near(mid.px[1], 27.2 * 11 / 26 / 1.4);
+		assert.ok(mid.dot !== undefined, "the thread dot keeps its reference proportion");
+		const small = frame(0.1); // 34 x 0.1 = 3.4 px, floored at 14: the dots hide, the subagent stays as a small mark
+		assert.equal(small.px.length, 2);
+		near(small.px[0], 14);
+		near(small.px[1], 14 * 11 / 26 / 1.4);
 		assert.equal(small.dot, undefined);
 	});
 

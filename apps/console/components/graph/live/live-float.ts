@@ -33,8 +33,8 @@ export function floatOffset(hash: number, tMs: number, amp: number, opts: { redu
 	return { dx: amp * ax, dy: amp * ay };
 }
 
-/** Roam periods in ms for the n-th sine of an axis: 20-60 s from the hash. */
-const roamPeriod = (h: number, n: number) => 20_000 + ((h >>> (n * 3 + 1)) % 4001) * 10;
+/** Roam periods in ms for the n-th sine of an axis: 40-90 s from the hash. */
+const roamPeriod = (h: number, n: number) => 40_000 + ((h >>> (n * 3 + 1)) % 5001) * 10;
 const roamPhase = (h: number, n: number) => (((h >>> (n * 4 + 2)) % 628) / 100) % TAU;
 
 /**

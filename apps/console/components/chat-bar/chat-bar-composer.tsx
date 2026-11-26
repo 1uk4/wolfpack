@@ -155,6 +155,7 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 				onStop={stop}
 				canSend={noteMode ? !session.action.disabled : canSendWith(text, attachments) || (dictation.active && !working)}
 				finishing={dictation.phase === "stopping"}
+				dictating={dictation.phase === "recording" || dictation.phase === "connecting"}
 				recording={recordingHere}
 				onEscape={dictation.active ? dictation.cancel : undefined}
 				enterSends={dictation.active}

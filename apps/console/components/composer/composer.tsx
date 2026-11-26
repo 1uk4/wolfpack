@@ -1,10 +1,20 @@
 "use client";
 
-import { ArrowUpIcon, CornerDownLeftIcon, ImageIcon, Loader2Icon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, CornerDownLeftIcon, ImageIcon, Loader2Icon, MicIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { endOnFocus, endOnOutsideMouseDown } from "@/components/composer/caret-end";
+import { Hint } from "@/components/ui/hint";
 import { RecordingMarker } from "@/components/composer/recording-marker";
 import { droppedFiles, pastedImages, PICKER_ACCEPT, type PendingAttachment } from "@/components/composer/attachments";
+
+/** What the main button is. The whole dictation span is inert for the wolf's turn: while the run records it is Stop dictation
+ *  (ends the run, the text stays); while its last words flush it is a disabled spinner. Otherwise Stop (square) only for a busy
+ *  turn with nothing to send; else Send. */
+function mainButtonMode(state: { dictating: boolean; finishing: boolean; busy: boolean; canSend: boolean }): "stop-dictation" | "finishing" | "stop-wolf" | "send" {
+	if (state.finishing) return "finishing";
+	if (state.dictating) return "stop-dictation";
+	return state.busy && !state.canSend ? "stop-wolf" : "send";
+}
 
 /**
  * The chat composer — content row ONLY (the persistent rounded shell lives in
@@ -14,6 +24,7 @@ import { droppedFiles, pastedImages, PICKER_ACCEPT, type PendingAttachment } fro
  * Corner-radius math (concentric with the shell): shell rounded-2xl (16px) −
  * row padding p-1.5 (6px) = button rounded-[10px] = 25% of the 40px button.
  */
+
 /** What one Enter press does, in precedence order: stop a busy stream,
  *  otherwise send the message. Pure so the static-render harness can pin
  *  the decision (key events can't be simulated in renderToStaticMarkup). */
@@ -63,6 +74,7 @@ export function Composer({
 	onStop,
 	canSend,
 	finishing,
+	dictating,
 	recording,
 	autoFocus,
 	inputRef,
@@ -97,6 +109,8 @@ export function Composer({
 	canSend: boolean;
 	/** A dictation run is flushing its last words (the mic is already off): the send button shows a spinner meanwhile. */
 	finishing?: boolean;
+	/** A dictation run is recording: the main button becomes Stop dictation (mic). onSend must then only finish the run. */
+	dictating?: boolean;
 	/** This field is where the live dictation lands: a marker sits at its inner right edge (spinner while the run stops). */
 	recording?: "live" | "stopping";
 	autoFocus?: boolean;
@@ -121,12 +135,58 @@ export function Composer({
 	/** Per-thread controls (model tier, auto-ship), shown beside the send button. */
 	controls?: React.ReactNode;
 }) {
-	const labelled = sendLabel !== undefined && (canSend || alwaysLabel === true);
+	const mode = mainButtonMode({ dictating: dictating === true, finishing: finishing === true, busy, canSend });
+	const labelled = (mode === "send" || mode === "stop-wolf") && sendLabel !== undefined && (canSend || alwaysLabel === true);
 	const act = (viaEnter = false) => {
+		// Dictation phases never reach onStop: recording only finishes the run, flushing does nothing.
+		if (mode === "finishing") return;
+		if (mode === "stop-dictation") return onSend();
 		const action = viaEnter && enterSends ? "send" : enterAction({ busy, canSend });
 		if (action === "stop") onStop();
 		else if (action === "send") onSend();
 	};
+	const buttonLabel =
+		mode === "finishing" ? "Finishing dictation" : mode === "stop-dictation" ? "Stop dictation" : labelled ? (sendAriaLabel ?? sendLabel ?? "Send") : mode === "stop-wolf" ? "Stop" : "Send";
+	const mainButton = (
+		<button
+			type="submit"
+			data-armed={armed ? "true" : undefined}
+			data-finishing={finishing ? "true" : undefined}
+			data-dictating={mode === "stop-dictation" ? "true" : undefined}
+			aria-label={buttonLabel}
+			disabled={mode === "finishing" || (mode === "send" && !canSend)}
+			className={cn(
+				"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors max-md:size-11 max-md:rounded-full",
+				labelled && "wp-send-label w-auto px-3 font-ui text-xs",
+				// Dictation modes win over the armed ("Send anyway?") look: while the mic is live the button must read as the mic.
+				mode === "finishing"
+					? "bg-(color:--thread-accent) text-(color:--thread-accent-foreground) opacity-70"
+					: mode === "stop-dictation"
+					? "bg-(color:--thread-accent) text-(color:--thread-accent-foreground) hover:opacity-90"
+					: armed
+					? "wp-send-armed bg-foreground text-background hover:opacity-90"
+					: mode === "stop-wolf"
+					? "bg-secondary text-foreground hover:bg-accent max-md:bg-(color:--thread-accent) max-md:text-(color:--thread-accent-foreground)"
+					: "bg-(color:--thread-accent) text-(color:--thread-accent-foreground) hover:opacity-90 disabled:opacity-40",
+			)}
+		>
+			{mode === "finishing" ? (
+				<Loader2Icon className="size-5 animate-spin" />
+			) : mode === "stop-dictation" ? (
+				// Live indicator: a soft pulse while the mic records (off under prefers-reduced-motion).
+				<MicIcon className="size-5 motion-safe:animate-pulse" />
+			) : labelled ? (
+				<span key={sendLabel} className="wp-swap-in whitespace-nowrap">{sendLabel}</span>
+			) : mode === "stop-wolf" ? (
+				<SquareIcon className="size-4 max-md:fill-current" />
+			) : (
+				<>
+					<CornerDownLeftIcon className="size-5 max-md:hidden" />
+					<ArrowUpIcon className="size-5 md:hidden" />
+				</>
+			)}
+		</button>
+	);
 	return (
 		<>
 		{chips}
@@ -219,42 +279,14 @@ export function Composer({
 					 (click = steer — steering must be clickable, not Enter-only);
 					 only an empty composer morphs it to Stop. ESC keeps its
 					 confirm-popup abort in every state, so stop is never
-					 unreachable. No tooltip — the ↵ glyph is the affordance
-					 (owner, subtlety round 2026-09-25). */}
+					 unreachable. */}
 				{armed && (
 					<button type="button" data-testid="ask-keep-answering" aria-label="Keep answering" title="Keep answering" onClick={armed.onCancel} className="wp-swap-in flex size-8 shrink-0 items-center justify-center self-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground max-md:size-11">
 						<XIcon className="size-4" />
 					</button>
 				)}
-				<button
-					type="submit"
-					data-armed={armed ? "true" : undefined}
-					data-finishing={finishing ? "true" : undefined}
-					aria-label={labelled ? (sendAriaLabel ?? sendLabel) : busy && !canSend ? "Stop" : "Send"}
-					disabled={!busy && !canSend}
-					className={cn(
-						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors max-md:size-11 max-md:rounded-full",
-						labelled && "wp-send-label w-auto px-3 font-ui text-xs",
-						armed
-							? "wp-send-armed bg-foreground text-background hover:opacity-90"
-							: busy && !canSend
-							? "bg-secondary text-foreground hover:bg-accent max-md:bg-(color:--thread-accent) max-md:text-(color:--thread-accent-foreground)"
-							: "bg-(color:--thread-accent) text-(color:--thread-accent-foreground) hover:opacity-90 disabled:opacity-40",
-					)}
-				>
-					{finishing ? (
-						<Loader2Icon className="size-5 animate-spin" aria-label="Finishing dictation" />
-					) : labelled ? (
-						<span key={sendLabel} className="wp-swap-in whitespace-nowrap">{sendLabel}</span>
-					) : busy && !canSend ? (
-						<SquareIcon className="size-4 max-md:fill-current" />
-					) : (
-						<>
-							<CornerDownLeftIcon className="size-5 max-md:hidden" />
-							<ArrowUpIcon className="size-5 md:hidden" />
-						</>
-					)}
-				</button>
+				{/* Always wrapped so a mode switch keeps the button mounted (focus stays). */}
+				<Hint label={buttonLabel}>{mainButton}</Hint>
 			</form>
 		</>
 	);

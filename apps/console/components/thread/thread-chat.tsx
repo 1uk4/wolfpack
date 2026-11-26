@@ -1021,6 +1021,7 @@ function ThreadChatInner({
 											// Send: deviation from chat.tsx, Stop stays available (the tail is sent once text exists).
 											canSend={noteMode ? !session.action.disabled : canSendWith(text, attachments) || (dictation.active && !busy)}
 											finishing={dictation.phase === "stopping"}
+											dictating={dictation.phase === "recording" || dictation.phase === "connecting"}
 											recording={recordingHere}
 											onEscape={dictation.active ? dictation.cancel : undefined}
 											// Enter while dictating finishes and steers the spoken text; the button stays Stop.

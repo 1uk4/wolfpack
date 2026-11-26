@@ -125,10 +125,10 @@ describe("live overlay fade clock", () => {
 			o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("tw", "sa") }), now: Date.now() });
 			o.step(1, 0.016, host, 2);
 			o.draw(rec, host, 2, 1);
-			// At k=2 the wolf is capped at 36.4 px (1.4x the old 26) and the subagent is 11 px, both the logo path (scale = px / k / 64).
+			// At k=2 the wolf is capped at 36.4 px (1.4x the old 26) and the subagent is 70% of it (25.48 px), both the logo path (scale = px / k / 64).
 			const scales = logo().map((f) => f.scale).sort((a, b) => b - a);
 			assert.equal(scales.length, 2);
-			assert.ok(Math.abs(scales[0]! - 36.4 / 2 / 64) < 1e-9 && Math.abs(scales[1]! - 11 / 2 / 64) < 1e-9, `${scales}`);
+			assert.ok(Math.abs(scales[0]! - 36.4 / 2 / 64) < 1e-9 && Math.abs(scales[1]! - 25.48 / 2 / 64) < 1e-9, `${scales}`);
 			assert.equal(logo().find((f) => Math.abs(f.scale - 36.4 / 2 / 64) < 1e-9)?.alpha, 1);
 			mock.timers.tick(3_600_000);
 			o.dispatch({ type: "tick", now: Date.now() });
@@ -161,15 +161,15 @@ describe("live overlay fade clock", () => {
 		const near = (a: number | undefined, b: number) => assert.ok(a !== undefined && Math.abs(a - b) < 1e-6, `${a} vs ${b}`);
 		const big = frame(4); // 34 x 4 px, capped
 		near(big.px[0], 36.4);
-		near(big.px[1], 11);
+		near(big.px[1], 25.48);
 		const mid = frame(0.8); // 34 x 0.8 = 27.2 px
 		near(mid.px[0], 27.2);
-		near(mid.px[1], 27.2 * 11 / 26 / 1.4);
+		near(mid.px[1], 27.2 * 0.7);
 		assert.ok(mid.dot !== undefined, "the thread dot keeps its reference proportion");
 		const small = frame(0.1); // 34 x 0.1 = 3.4 px, floored at 14: the dots hide, the subagent stays as a small mark
 		assert.equal(small.px.length, 2);
 		near(small.px[0], 14);
-		near(small.px[1], 14 * 11 / 26 / 1.4);
+		near(small.px[1], 14 * 0.7);
 		assert.equal(small.dot, undefined);
 	});
 

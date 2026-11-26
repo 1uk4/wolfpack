@@ -10,6 +10,14 @@ export interface SubBody {
 	vy: number;
 	/** The current pull (world) and when it was set (ms). */
 	tug?: { x: number; y: number; at: number };
+	/** Collision radius (world). Absent = a point, ignored by `separateSubs`. */
+	r?: number;
+	/** Parent key: bodies of different parents never collide (they live around different hubs), which also keeps the pair loop cheap. */
+	pk?: string;
+	/** Its parent hub (or wolf): position and collision radius (world). `hr` > 0 turns the hub repulsion on. */
+	hx?: number;
+	hy?: number;
+	hr?: number;
 }
 export interface SubPhysics {
 	/** Spring toward the target at age 0 (per s²) and its e-fold decay (ms). */
@@ -28,6 +36,58 @@ export interface SubPhysics {
 	maxSpeed: number;
 }
 export const SUB_PHYSICS: SubPhysics = { spring: 14, decayMs: 4500, tetherWorking: 0.12, tetherIdle: 1.4, tetherFinished: 6, idleMs: 10_000, rampMs: 3000, damping: 0.02, maxSpeed: 450 };
+
+/** Repulsion between sub-agent bodies and from their hub: overlap (world) turns into a velocity push at this rate (per s). */
+export const SUB_SEP_RATE = 14;
+/** Bodies keep this fraction of the smaller radius as clear air between them. */
+export const SUB_SEP_GAP = 0.4;
+
+/**
+ * Push overlapping bodies apart (pure, allocation-free): every pair closer than r1 + r2 + gap, and every body closer to its hub than
+ * hr + r + gap, gets a velocity impulse along the line between them proportional to the overlap. Exactly coincident bodies split on a
+ * fixed axis, so the result is deterministic. Pairs are O(n²) over the live sub-agents (a handful); bodies with different `pk` are skipped. Call before `stepSub` so the impulse is integrated with the rest.
+ */
+export function separateSubs(list: readonly SubBody[], dtSec: number, rate = SUB_SEP_RATE): void {
+	const dt = Math.min(Math.max(dtSec, 0), 0.05);
+	for (let i = 0; i < list.length; i++) {
+		const a = list[i]!;
+		if (a.r === undefined) continue;
+		for (let j = i + 1; j < list.length; j++) {
+			const b = list[j]!;
+			if (b.r === undefined || (a.pk !== undefined && b.pk !== undefined && a.pk !== b.pk)) continue;
+			let dx = b.x - a.x;
+			let dy = b.y - a.y;
+			let d = Math.hypot(dx, dy);
+			const min = a.r + b.r + SUB_SEP_GAP * Math.min(a.r, b.r);
+			if (d >= min) continue;
+			if (d < 1e-6) {
+				dx = 1;
+				dy = 0;
+				d = 1;
+			}
+			const push = ((min - d) * rate * dt) / d;
+			a.vx -= dx * push * 0.5;
+			a.vy -= dy * push * 0.5;
+			b.vx += dx * push * 0.5;
+			b.vy += dy * push * 0.5;
+		}
+		if (a.hr !== undefined && a.hr > 0 && a.hx !== undefined && a.hy !== undefined) {
+			let dx = a.x - a.hx;
+			let dy = a.y - a.hy;
+			let d = Math.hypot(dx, dy);
+			const min = a.hr + a.r + SUB_SEP_GAP * a.r;
+			if (d >= min) continue;
+			if (d < 1e-6) {
+				dx = 1;
+				dy = 0;
+				d = 1;
+			}
+			const push = ((min - d) * rate * dt) / d;
+			a.vx += dx * push;
+			a.vy += dy * push;
+		}
+	}
+}
 
 /** Tether stiffness for a body whose last pull was `idleFor` ms ago (or a finished one). */
 export function tetherStrength(p: SubPhysics, idleFor: number, finished: boolean): number {

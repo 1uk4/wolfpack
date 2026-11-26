@@ -25,7 +25,7 @@ import {
 	type LiveTarget,
 } from "@/src/core";
 import { ownerThreadKey, targetNodeId, threadKey, threadSlugOf } from "@/src/core";
-import { stepSub, SUB_PHYSICS, tetherStrength, type SubBody } from "@/src/core";
+import { separateSubs, stepSub, SUB_PHYSICS, tetherStrength, type SubBody } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba } from "./live-effects";
 import { floatOffset, nameHash, roamOffset } from "./live-float";
@@ -69,15 +69,25 @@ export const WOLF_MIN_PX = 14;
 /** Everything else (dots, hubs, subagents, offsets) is drawn in reference px for the old 26 px wolf and keeps that size: m divides the 1.4x out. */
 const WOLF_SCALE = 1.4;
 const REF_PX = 26;
-/** Subagents wear the same logo at their old size (11 px at the full-size wolf): about 30% of the 1.4x wolf. */
-const SUBAGENT_RATIO = 11 / 26 / 1.4;
+/** Subagents are their own bodies: the wolf-head icon at 70% of the wolf's width (clearly bigger than a dot, a little smaller than the wolf). */
+const SUBAGENT_RATIO = 0.7;
+/** The same radius in reference px (the wolf icon is WOLF_SCALE * REF_PX wide at its cap), used by the physics through m. */
+const SUB_R_REF = (WOLF_SCALE * REF_PX * SUBAGENT_RATIO) / 2;
+/** A subagent's rest distance from its hub's centre (reference px): hub ring (~7.5) + its own radius (~12.7) + clear air. The link spring's rest length. */
+const SUB_REST = 40;
+/** A sub-agent's collision radius around its hub is the hub's drawn radius times this (the ring and its glow), and this share of a wolf's max size around a wolf. */
+const HUB_CLEAR = 1.6;
+const WOLF_CLEAR = 0.3;
+/** The slot search per parent stops here (a parent with more live sub-agents than this reuses the last slot). */
+const MAX_SUB_SLOTS = 64;
+/** Successive subagents of one parent sit this far apart in angle (the golden angle: any count spreads evenly, never stacks). */
+const SUB_SLOT_ANGLE = 2.399963;
 /** Dot radius, orbits and offsets are in reference px (drawn for a 26 px wolf); they keep that proportion at every zoom. */
 const THREAD_DOT_R = 3.2;
 const SAT_ORBIT = 25;
 const HOME_ORBIT = 36;
 /** A subagent lingers this far from the node it went to, and idles this far outside its hub (or wolf). */
 const SUB_TARGET_OFFSET = 14;
-const SUB_IDLE_ORBIT = 20;
 /** The feature hub's radius (reference px), its distance from its node, and from the domain node when it has no node of its own. */
 const HUB_R = 7.5;
 /** A hub on its work node is drawn at least this much bigger than the node's own dot. */
@@ -143,7 +153,7 @@ interface Body {
 	rs?: number;
 }
 /** A subagent body: spring-damper physics, when it was first seen (browser ms), the target event it last answered, and its tug target's offset angle. */
-interface SubState extends SubBody { born: number; seen: number; lastPull: number; ang: number }
+interface SubState extends SubBody { born: number; seen: number; lastPull: number; ang: number; pk: string; idx: number }
 const FLOAT_MS = 40;
 const FLOAT_MOBILE_MS = 60;
 
@@ -224,6 +234,9 @@ export class LiveOverlay {
 	/** Subagent bodies by key (spring-damper physics) and the list the frame steps; the items they draw as, by key. */
 	private subBodies = new Map<string, SubState>();
 	private subList: SubState[] = [];
+	/** The parent position and collision radius `anchorOf` found last (scratch, no allocation per frame). */
+	private hubTmp: Pt = { x: 0, y: 0 };
+	private hubR = 0;
 	private subItems = new Map<string, OverlayItem>();
 	/** Feature hubs by thread key and by short work id (the target of a wolf's own link). */
 	private featureItems = new Map<string, OverlayItem>();
@@ -628,21 +641,35 @@ export class LiveOverlay {
 		host.setReplacedNodes(this.replaced);
 	}
 
-	/** Where a subagent's tether holds it: its feature hub, else its wolf. Idle it waits just outside; `atHub` is the hub itself (launch and return). */
-	private anchorOf(a: LiveSubagent, host: OverlayHost, m: number, atHub: boolean, out: Pt): Pt {
+	/** The parent key of a subagent: its feature thread, else its wolf. */
+	private parentKeyOf(a: LiveSubagent): string {
+		return a.parentThreadId ? threadKey(a.wolf, a.parentThreadId) : a.wolf;
+	}
+
+	/** A subagent's slot angle around its parent: a per-parent base plus its slot index times the golden angle. */
+	private slotAngle(pk: string, idx: number): number {
+		return (this.hashOf(pk) % 360) * (Math.PI / 180) + idx * SUB_SLOT_ANGLE;
+	}
+
+	/**
+	 * Where a subagent's link spring rests: SUB_REST out from its feature hub (else its wolf) on its own slot angle. The parent's position
+	 * goes to `hubTmp` and its collision radius to `hubR`.
+	 */
+	private anchorOf(a: LiveSubagent, host: OverlayHost, m: number, ang: number, out: Pt): Pt {
 		const t = a.parentThreadId ? this.state.threads[threadKey(a.wolf, a.parentThreadId)] : undefined;
-		const hub = t?.feature !== undefined;
-		if (t && hub) this.hubPos(t, host, m, out);
-		else {
+		if (t && t.feature !== undefined) {
+			this.hubPos(t, host, m, out);
+			this.hubR = HUB_R * m * HUB_CLEAR;
+		} else {
 			const wb = this.bodies.get(a.wolf) ?? host.center();
 			out.x = wb.x;
 			out.y = wb.y;
+			this.hubR = WOLF_MAX_PX * m * WOLF_CLEAR;
 		}
-		if (!atHub || !hub) {
-			const ang = (this.hashOf(a.key) % 360) * (Math.PI / 180);
-			out.x += Math.cos(ang) * SUB_IDLE_ORBIT * m;
-			out.y += Math.sin(ang) * SUB_IDLE_ORBIT * m;
-		}
+		this.hubTmp.x = out.x;
+		this.hubTmp.y = out.y;
+		out.x += Math.cos(ang) * SUB_REST * m;
+		out.y += Math.sin(ang) * SUB_REST * m;
 		return out;
 	}
 
@@ -660,8 +687,17 @@ export class LiveOverlay {
 			const a = s.subagents[key]!;
 			let b = this.subBodies.get(key);
 			if (!b) {
-				this.anchorOf(a, host, m, true, p);
-				b = { x: p.x, y: p.y, vx: 0, vy: 0, born: wall, seen: 0, lastPull: now, ang: (this.hashOf(key + "t") % 360) * (Math.PI / 180) };
+				// The lowest slot of this parent that no live sibling holds: distinct angles from the first frame.
+				const pk = this.parentKeyOf(a);
+				let idx = 0;
+				for (; idx < MAX_SUB_SLOTS; idx++) {
+					let used = false;
+					for (const o of this.subBodies.values()) if (o.pk === pk && o.idx === idx) used = true;
+					if (!used) break;
+				}
+				this.anchorOf(a, host, m, this.slotAngle(pk, idx), p);
+				// lastPull far in the past: with no target yet the link spring holds it at its rest length at full stiffness.
+				b = { x: p.x, y: p.y, vx: 0, vy: 0, born: wall, seen: 0, lastPull: now - SUB_PHYSICS.idleMs - SUB_PHYSICS.rampMs, ang: (this.hashOf(key + "t") % 360) * (Math.PI / 180), pk, idx };
 				this.subBodies.set(key, b);
 			}
 			list.push(b);
@@ -673,6 +709,7 @@ export class LiveOverlay {
 			const b = this.subBodies.get(t.subagentKey);
 			if (b) this.trailFrom.set(t.id, { x: b.x, y: b.y });
 		}
+		if (!reduced) separateSubs(list, dtSec); // mutual and hub repulsion, integrated by the steps below
 		for (const key in s.subagents) {
 			const a = s.subagents[key]!;
 			const b = this.subBodies.get(key)!;
@@ -691,7 +728,11 @@ export class LiveOverlay {
 				}
 			}
 			if (b.tug && now - b.tug.at > SUB_PHYSICS.idleMs) b.tug = undefined; // nothing new for ~10 s: the tether takes over
-			const anchor = this.anchorOf(a, host, m, fin, p);
+			const anchor = this.anchorOf(a, host, m, this.slotAngle(b.pk, b.idx), p);
+			b.r = SUB_R_REF * m;
+			b.hx = this.hubTmp.x;
+			b.hy = this.hubTmp.y;
+			b.hr = this.hubR;
 			if (reduced) {
 				const to = b.tug ?? anchor;
 				[b.x, b.y, b.vx, b.vy] = [to.x, to.y, 0, 0];
@@ -1003,8 +1044,8 @@ export class LiveOverlay {
 			} else if (it.kind === "subagent" && !compactNow) {
 				const parent = this.featureItems.get(threadKey(it.wolf, it.threadId ?? "")) ?? this.wolfItems.get(it.wolf);
 				if (parent) {
-					ctx.lineWidth = 0.8 / k;
-					this.line(ctx, parent, it, rgba(it.color, 0.1 * it.alpha));
+					ctx.lineWidth = 1 / k;
+					this.line(ctx, parent, it, rgba(it.color, 0.35 * it.alpha));
 					ctx.lineWidth = 1.2 / k;
 				}
 			}

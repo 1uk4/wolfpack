@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import type { ActivityEvent } from "@wolfpack/protocol";
 import { LiveOverlay, LIVE_DEFAULTS, type OverlayHost, type OverlayItem } from "../../components/graph/live/live-overlay.ts";
 import { talkToWolf } from "../../components/graph/live/live-talk.ts";
+import { separateSubs, stepSub, type SubBody } from "../../src/core/graph/live/live-sub-physics.ts";
 import { formatFeed } from "../../src/core/graph/live/feed.ts";
 
 /** Map model v2: features are hubs at their work node, subagents dart between targets and tether back, the wolf floats free. Real event shapes. */
@@ -181,11 +182,37 @@ describe("live map model v2", () => {
 		}
 	});
 
-	it("a spawned subagent starts at its hub, and the hub's own thread events leave the wolf out of it", () => {
+	it("a subagent is its own body beside its hub, never on the hub's ring, joined to it by a link, and gone once it has finished and faded", () => {
 		send("thread-active", feature);
 		send("subagent-spawned", subTap);
-		run(0.1);
-		assert.ok(dist(of("subagent"), of("feature")) < 8, "the subagent leaves from the hub");
+		run(5);
+		const hub = of("feature");
+		const sub = of("subagent");
+		assert.ok(dist(sub, hub) > hub.r + sub.r, `clear of the hub's ring (${dist(sub, hub)} vs ${hub.r + sub.r})`);
+		assert.ok(dist(sub, hub) < 80, "but still close to it");
+		assert.ok(sub.r > 10 && sub.r < 14, `about 70% of the wolf's icon (${sub.r})`);
+		const link = render().filter((s) => !s.dash && near(s.from, hub, 0.5) && near(s.to, sub, 0.5));
+		assert.equal(link.length, 1, "one link line from the hub to the subagent");
+		send("subagent-finished", subTap);
+		run(20);
+		assert.equal(items().filter((i) => i.kind === "subagent").length, 0, "removed after the fade");
+	});
+
+	it("several subagents of one hub spread apart around it", () => {
+		const subB = { ...subTap, threadId: "1uk4/sub-2", subagent: "scout2", title: "scout2" };
+		const subC = { ...subTap, threadId: "1uk4/sub-3", subagent: "scout3", title: "scout3" };
+		send("thread-active", feature);
+		send("subagent-spawned", subTap);
+		send("subagent-spawned", subB);
+		send("subagent-spawned", subC);
+		run(8);
+		const hub = of("feature");
+		const subs = items().filter((i) => i.kind === "subagent");
+		assert.equal(subs.length, 3);
+		for (let i = 0; i < subs.length; i++) {
+			assert.ok(dist(subs[i]!, hub) > hub.r + subs[i]!.r, "each is clear of the hub");
+			for (let j = i + 1; j < subs.length; j++) assert.ok(dist(subs[i]!, subs[j]!) > subs[i]!.r + subs[j]!.r, `bodies ${i} and ${j} do not overlap (${dist(subs[i]!, subs[j]!)})`);
+		}
 	});
 
 	it("a subagent's kb-read darts it toward the entry from where it was, joined to its spawn by its own thread id", () => {
@@ -227,7 +254,8 @@ describe("live map model v2", () => {
 		assert.ok(away > 300, `it is out at the entry (${away})`);
 		run(9); // 12 s since the target
 		run(8);
-		assert.ok(dist(of("subagent"), of("feature")) < 50, `it drifted home (${dist(of("subagent"), of("feature"))})`);
+		const home_ = dist(of("subagent"), of("feature"));
+		assert.ok(home_ > 20 && home_ < 60, `it drifted back to its rest ring beside the hub (${home_})`);
 	});
 
 	it("a finished subagent flies back to its hub and is still there fading", () => {
@@ -243,7 +271,7 @@ describe("live map model v2", () => {
 		assert.ok(sub.alpha > 0 && sub.alpha < 1, `fading (${sub.alpha})`);
 	});
 
-	it("the tether is a hairline at very low alpha", () => {
+	it("the link to the hub is a visible hairline", () => {
 		send("thread-active", feature);
 		send("subagent-spawned", subTap);
 		send("kb-read", subTap, ENT);
@@ -255,7 +283,7 @@ describe("live map model v2", () => {
 		const tether = rec.strokes.filter((s) => !s.dash && near(s.from, hub, 0.5) && near(s.to, sub, 0.5));
 		assert.equal(tether.length, 1);
 		const a = alphaOfStyle(tether[0]!.style);
-		assert.ok(a >= 0.08 && a <= 0.12, `tether alpha ${a}`);
+		assert.ok(a >= 0.25 && a <= 0.4, `link alpha ${a}`);
 		assert.ok(tether[0]!.width <= 1, `hairline ${tether[0]!.width}`);
 	});
 
@@ -400,5 +428,20 @@ describe("clicking a wolf talks to it", () => {
 		assert.equal(talkToWolf("1uk4", { threads, focusComposer: () => undefined, navigate: (h) => calls.push(h) }), "page");
 		assert.equal(calls.length, 1);
 		assert.ok(calls[0]!.includes("home"));
+	});
+});
+
+describe("subagent separation (pure)", () => {
+	it("two bodies stacked on one point, and a body on its hub, are pushed apart until clear of each other", () => {
+		const mk = (x: number, y: number): SubBody => ({ x, y, vx: 0, vy: 0, r: 10, hx: 0, hy: 0, hr: 8 });
+		const list = [mk(0, 0), mk(0, 0)];
+		for (let i = 0; i < 400; i++) {
+			separateSubs(list, 0.016);
+			for (const b of list) stepSub(b, i * 16, 0.016, b.x, b.y, 0);
+		}
+		const [a, b] = list as [SubBody, SubBody];
+		// worked literals: pair clearance r + r + 0.4r = 24, hub clearance hr + r + 0.4r = 8 + 10 + 4 = 22
+		assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= 23.5, `apart ${Math.hypot(a.x - b.x, a.y - b.y)}`);
+		for (const s of list) assert.ok(Math.hypot(s.x, s.y) >= 21.5, `clear of the hub ${Math.hypot(s.x, s.y)}`);
 	});
 });

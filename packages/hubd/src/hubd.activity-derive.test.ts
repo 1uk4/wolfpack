@@ -55,20 +55,59 @@ describe("derive actor trust", () => {
     return { seen, d: createActivityDeriver({ bus, presence: createPresenceStore(), pack: "p" }) };
   };
 
-  it("a kb-write is attributed to the token's wolf, not to the X-Wolf header", () => {
+  it("a kb-write is attributed to the token's wolf, not to the X-Wolf header", async () => {
     const { seen, d } = mk();
     d.run({ "x-wolf": "other" }, () => {
       d.setWorker(true, "wa");
       d.onKb(["kb-personal-aaaaaaa"], "personal");
     });
+    await new Promise((r) => setImmediate(r));
     expect(seen.map((e) => e.actor)).toEqual([{ kind: "wolf", wolf: "wa" }]);
   });
 
-  it("a work.staged event in the real WorkEvent shape publishes shipped (the destination stage is `to`)", () => {
+  it("a work.staged event in the real WorkEvent shape publishes shipped (the destination stage is `to`)", async () => {
     const { seen, d } = mk();
     const ev = parseWorkEvent({ type: "work.staged", id: "work-personal-Aaaaaaa", at: "2026-01-01 00:00", to: "shipped" })!;
     d.run({}, () => d.onLedger({ actor: { id: "owner", kind: "operator" }, events: [ev] }));
+    await new Promise((r) => setImmediate(r));
     expect(seen.map((e) => e.verb)).toEqual(["shipped"]);
+  });
+});
+
+describe("derive fan-out queue", () => {
+  const ledger = (n: number) =>
+    Array.from({ length: n }, (_, i) => parseWorkEvent({ type: "work.staged", id: `work-personal-A${String.fromCharCode(97 + Math.floor(i / 26))}${String.fromCharCode(97 + (i % 26))}aaaa`, at: "2026-01-01 00:00", to: "shipped" })!);
+  const mk = () => {
+    const bus = createMemoryBus();
+    const seen: ActivityEvent[] = [];
+    bus.subscribe("p", (e) => seen.push(e));
+    return { seen, d: createActivityDeriver({ bus, presence: createPresenceStore(), pack: "p" }) };
+  };
+  const drain = () => new Promise((r) => setTimeout(r, 30));
+
+  it("the ledger hook returns before any subscriber is written to, and delivery keeps the append order", async () => {
+    const { seen, d } = mk();
+    d.run({}, () => d.onLedger({ actor: { id: "owner", kind: "operator" }, events: ledger(5) }));
+    expect(seen).toHaveLength(0);
+    await drain();
+    expect(seen.map((e) => e.target!.id)).toEqual(ledger(5).map((e) => e.id));
+  });
+
+  it("derives at most 20 events from one ledger batch, and drains a big backlog in chunks of 50", async () => {
+    const { seen, d } = mk();
+    for (let i = 0; i < 6; i++) d.run({}, () => d.onLedger({ actor: { id: "owner", kind: "operator" }, events: ledger(100) }));
+    await drain();
+    expect(seen).toHaveLength(120);
+    const bus = createMemoryBus();
+    let during = 0;
+    const marks: number[] = [];
+    bus.subscribe("p", () => { during++; });
+    const d2 = createActivityDeriver({ bus, presence: createPresenceStore(), pack: "p" });
+    for (let i = 0; i < 6; i++) d2.run({}, () => d2.onLedger({ actor: { id: "owner", kind: "operator" }, events: ledger(20) }));
+    setImmediate(() => marks.push(during));
+    await drain();
+    expect(marks[0]).toBeLessThanOrEqual(100);
+    expect(during).toBe(120);
   });
 });
 

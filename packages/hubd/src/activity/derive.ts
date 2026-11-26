@@ -16,6 +16,8 @@ import type { PresenceStore } from "./presence.js";
 export const THREAD_HEADER = "x-wolfpack-thread-id";
 export const SUBAGENT_HEADER = "x-wolfpack-subagent";
 const TTL_MS = 30_000;
+const DRAIN_CHUNK = 50;
+const LEDGER_BATCH_CAP = 20;
 
 export interface RequestActivityCtx {
   threadId?: string;
@@ -50,6 +52,18 @@ export interface ActivityDeriverOptions {
 export function createActivityDeriver(o: ActivityDeriverOptions) {
   const als = new AsyncLocalStorage<RequestActivityCtx>();
   const now = o.now ?? Date.now;
+  // Fan-out is off the write path: events queue FIFO and are published in chunks on later event-loop turns, so a big ledger batch
+  // never writes to every SSE stream inside the Work API request.
+  const queue: ActivityEvent[] = [];
+  let draining = false;
+  const drain = (): void => {
+    draining = false;
+    for (const ev of queue.splice(0, DRAIN_CHUNK)) o.bus.publish(ev);
+    if (queue.length) {
+      draining = true;
+      setImmediate(drain);
+    }
+  };
 
   const emit = (actor: ActivityActor, verb: ActivityVerb, target: ActivityEvent["target"], domain?: string): void => {
     const ev: ActivityEvent = {
@@ -61,7 +75,11 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
     } catch {
       /* best effort */
     }
-    o.bus.publish(ev);
+    queue.push(ev);
+    if (!draining) {
+      draining = true;
+      setImmediate(drain);
+    }
   };
 
   const actorOf = (kind: "wolf" | "owner", wolf: string | undefined, ctx: RequestActivityCtx | undefined): ActivityActor | undefined => {
@@ -95,10 +113,12 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
         const actor = actorOf(batch.actor.kind === "operator" ? "owner" : "wolf", batch.actor.id, ctx);
         if (!actor) return;
         const seen = new Set<string>();
+        let derived = 0;
         for (const e of batch.events) {
           if (typeof e.id !== "string" || typeof e.type !== "string" || e.type === "work.deleted") continue;
           const verb: ActivityVerb = e.type === "work.staged" && (e.to === "shipped" || e.to === "live") ? "shipped" : "contribution";
           if (seen.has(verb + e.id)) continue;
+          if (derived++ >= LEDGER_BATCH_CAP) break;
           seen.add(verb + e.id);
           const domain = typeof e.domain === "string" ? e.domain : o.domainOf?.(e.id);
           const title = typeof e.title === "string" ? sanitizeActivityTitle(e.title) : "";

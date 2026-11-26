@@ -174,7 +174,7 @@ function ServiceRow({ s, log, note, busy, onRestart, onRefresh }: { s: MachineSe
 }
 
 type Sub = { channel: "stable" | "main"; mode: "off" | "button" | "auto" | "unknown"; exists?: boolean };
-type UpdateState = { units: UpdateUnitView[]; last: { result: string; exitStatus: number | null; at: string | null } | null };
+type HealthUpdateState = { units: UpdateUnitView[]; last: { result: string; exitStatus: number | null; at: string | null } | null };
 type Ui = { phase: "idle" } | { phase: "confirm" } | { phase: "sending" } | { phase: "issued"; at: number } | { phase: "wait"; until: number } | { phase: "error"; message: string };
 
 /**
@@ -187,7 +187,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 	const singleMac = useSingleMac();
 	const call: typeof fetch = (u, i) => (api ?? fetch)(u, i);
 	const label = card.label;
-	const [state, setState] = useState<UpdateState | null>(null);
+	const [state, setState] = useState<HealthUpdateState | null>(null);
 	const [sub, setSub] = useState<Sub | null>(null);
 	const [offline, setOffline] = useState(false);
 	const [ui, setUi] = useState<Ui>({ phase: "idle" });
@@ -214,7 +214,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 			// ?refresh=1: the server re-reads the release manifest instead of using its cache.
 			const r = await call(refresh ? "/api/health/update?refresh=1" : "/api/health/update", { cache: "no-store" });
 			if (!r.ok) throw new Error(String(r.status));
-			const b = (await r.json()) as Partial<UpdateState>;
+			const b = (await r.json()) as Partial<HealthUpdateState>;
 			const next = { units: Array.isArray(b.units) ? b.units : [], last: b.last ?? null };
 			if (alive()) {
 				setState(next);

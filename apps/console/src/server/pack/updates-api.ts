@@ -20,13 +20,14 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DEFAULT_MANIFEST_URL, checkUpdates, createManifestFetcher, probeHealth, type ManifestResult, type UpdateRow } from "@wolfpack/protocol";
 import { stampedVersion, subscriptionFile } from "@wolfpack/protocol/health-lag";
+import { mapHostStatus, STALE_AFTER_MS as HOST_STALE_AFTER_MS, type UpdateState } from "@wolfpack/protocol/update-state";
 import { readSubscription } from "./subscription-api.ts";
 
-export type UpdateState = "idle" | "updating" | "updated" | "failed" | "disabled";
+export type HostUnitState = "idle" | "updating" | "updated" | "failed" | "disabled";
 
 /** The host updater's view of one component (from its status file; scripts/auto-update.mjs). */
 export interface UpdateStatus {
-	state: UpdateState;
+	state: HostUnitState;
 	host: string;
 	/** When the updater last ran (ISO). */
 	lastCheck: string;
@@ -48,6 +49,8 @@ export interface UpdateComponent extends UpdateRow {
 	updateStep: string;
 	/** Present when the host's auto-update status file is readable. */
 	updateStatus?: UpdateStatus;
+	/** The same state in the shape shared with the Mac app (packages/protocol update-state.ts). Present with `updateStatus`. */
+	updateState?: UpdateState;
 }
 
 export interface UpdatesBody {
@@ -74,7 +77,7 @@ export const DEFAULT_AUTO_UPDATE_STATUS = "/var/lib/wolfpack-auto-update/status.
  * Two timer intervals (30 min plus up to 5 min randomised delay, deploy/auto-update/wolfpack-auto-update.timer). Same value as
  * STALE_AFTER_MS in scripts/auto-update.mjs, which the console does not import (that file ships to hosts on its own).
  */
-export const STALE_AFTER_MS = 2 * 35 * 60_000;
+export const STALE_AFTER_MS = HOST_STALE_AFTER_MS;
 
 type StatusUnit = { component?: string; state?: string; code?: string; message?: string; startedAt?: string; finishedAt?: string };
 type StatusFile = { host?: string; enabled?: boolean; lastCheck?: string; disabledReason?: string; units?: Record<string, StatusUnit> };
@@ -89,14 +92,14 @@ function readStatusFile(file: string): StatusFile | undefined {
 }
 
 /** Worst first: a component with several units (workerd, wolfd@*) shows the unit that needs a look. */
-const RANK: UpdateState[] = ["failed", "updating", "disabled", "updated", "idle"];
+const RANK: HostUnitState[] = ["failed", "updating", "disabled", "updated", "idle"];
 
 /** One component's status from the host file, or undefined when the file names no unit of it. */
 export function componentStatus(s: StatusFile, component: string, nowMs: number = Date.now()): UpdateStatus | undefined {
-	const units = Object.entries(s.units ?? {}).filter(([, u]) => u?.component === component && RANK.includes(u.state as UpdateState));
+	const units = Object.entries(s.units ?? {}).filter(([, u]) => u?.component === component && RANK.includes(u.state as HostUnitState));
 	if (!units.length) return undefined;
-	const [id, u] = units.sort(([, a], [, b]) => RANK.indexOf(a.state as UpdateState) - RANK.indexOf(b.state as UpdateState))[0]!;
-	const state = u.state as UpdateState;
+	const [id, u] = units.sort(([, a], [, b]) => RANK.indexOf(a.state as HostUnitState) - RANK.indexOf(b.state as HostUnitState))[0]!;
+	const state = u.state as HostUnitState;
 	const at = state === "updating" ? u.startedAt : state === "updated" || state === "failed" ? u.finishedAt : undefined;
 	const message = state === "disabled" ? s.disabledReason : u.message;
 	const checked = Date.parse(s.lastCheck ?? "");
@@ -183,7 +186,8 @@ export function createUpdatesHandler(o: UpdatesOptions = {}): (q?: { refresh?: b
 		const rows = checkUpdates(m.manifest, { console: own, hubd, workerd, wolfd: undefined });
 		const components = rows.map((r) => {
 			const updateStatus = hostStatus && componentStatus(hostStatus, r.component, (o.now ?? Date.now)());
-			return { ...r, updateStep: stepFor(r.component, updateStatus), ...(updateStatus ? { updateStatus } : {}) };
+			const updateState = hostStatus && mapHostStatus(hostStatus, r.component, { now: (o.now ?? Date.now)(), channel: readSubscription(subFile).channel });
+			return { ...r, updateStep: stepFor(r.component, updateStatus), ...(updateStatus ? { updateStatus } : {}), ...(updateState ? { updateState } : {}) };
 		});
 		return {
 			checkedAt: new Date().toISOString(),

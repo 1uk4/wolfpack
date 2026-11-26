@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
+import { plainError } from "../../../packages/protocol/src/update-state.js";
 
 const require = createRequire(import.meta.url);
 const { updateCheckMessage } = require("./update-message.cjs") as { updateCheckMessage: (err: unknown, version: string) => string };
@@ -24,5 +25,12 @@ describe("updateCheckMessage", () => {
 		expect(updateCheckMessage(new Error("Signature check failed\nHeaders: {...}"), "0.4.0")).toBe("Signature check failed");
 		expect(updateCheckMessage("plain string", "0.4.0")).toBe("plain string");
 		expect(updateCheckMessage(undefined, "0.4.0")).toBe("Couldn't check for updates.");
+	});
+
+	// The CJS shell cannot import @wolfpack/protocol, so it keeps its own copy of these two sentences (work-wolfpack-nPeLT7s).
+	it("says the same plain sentences as the shared plainError for a missing feed and for offline", () => {
+		for (const raw of ["HttpError: 404 Headers: {}", "getaddrinfo ENOTFOUND github.com"]) {
+			expect(updateCheckMessage(new Error(raw), "0.4.0")).toBe(plainError("app", { message: raw }, { version: "0.4.0" }).message);
+		}
 	});
 });

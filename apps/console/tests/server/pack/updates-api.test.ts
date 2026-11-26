@@ -190,6 +190,27 @@ describe("GET /api/updates", () => {
 		}
 	});
 
+	it("each component also carries the shared updateState: a failed unit has a plain error, an old check makes auto stale", async () => {
+		const manifestBase = await serve({ schema: 1, generatedAt: "2026-11-09T03:30:00Z", components: { console: entry("console", "0.1.19") } });
+		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
+		writeFileSync(join(dir, "VERSION"), "0.1.18\n");
+		const statusFile = join(dir, "status.json");
+		const write = (lastCheck: string, state: string, extra: object = {}) =>
+			writeFileSync(statusFile, JSON.stringify({ schema: 1, host: "sfo-01", enabled: true, lastCheck, result: "ok", units: { console: { component: "console", current: "0.1.18", target: "0.1.19", state, ...extra } } }));
+		const row = async () => (await createUpdatesHandler({ env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: statusFile }, consoleDir: dir, now: () => Date.parse("2026-11-09T12:00:00.000Z") })()).components[0]!;
+		try {
+			write("2026-11-09T11:55:00.000Z", "failed", { code: "checksum" });
+			assert.deepEqual((await row()).updateState, {
+				target: "pack", host: "sfo-01", component: "console", state: "failed", current: "0.1.18", latest: "0.1.19", progress: null, lastCheck: "2026-11-09T11:55:00.000Z", channel: "stable", auto: "on",
+				error: { code: "checksum", message: "The downloaded update did not match its checksum, so it was not installed. Try again later.", retryable: true },
+			});
+			write("2026-11-09T09:00:00.000Z", "idle");
+			assert.deepEqual([(await row()).updateState?.state, (await row()).updateState?.auto], ["stale", "stale"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("refresh re-reads the manifest at once; without it the cached manifest is served", async () => {
 		let hits = 0;
 		const s = createServer((_req, res) => {

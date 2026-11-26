@@ -27,6 +27,16 @@ describe("ActivityTap", () => {
     expect(emitted.map((e) => e.verb)).toEqual(["thread-active", "thread-active", "thread-active", "thread-idle"]);
   });
 
+  it("a thread busy in one long tool call keeps heartbeating: 65 s with no other events gives two heartbeats", () => {
+    const { tap, emitted } = setup();
+    tap.onWolfEvent({ type: "thread-status", threadId: "t1", status: "busy" });
+    tap.onToolStart("t1", "bash", { command: "sleep 100" });
+    tap.onWolfEvent({ type: "thread-status", threadId: "t1", status: "busy" }); // a repeated busy must not reset or double the timer
+    emitted.length = 0;
+    vi.advanceTimersByTime(65_000);
+    expect(emitted.map((e) => e.verb)).toEqual(["thread-active", "thread-active"]);
+  });
+
   it("a removed (closed) thread stops its heartbeat and forgets its bound item", () => {
     const { tap, emitted } = setup();
     tap.onWolfEvent({ type: "thread-status", threadId: "t1", status: "busy" });

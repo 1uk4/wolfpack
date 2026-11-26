@@ -48,10 +48,12 @@ export type GroupBy = "domain" | "section";
 /** The optional graph layers (query params of the librarian's graph route).
  *  Open work and the KB itself are always on. */
 export interface GraphLayerToggles {
+	/** The Board switch: show the work-item nodes (features, tasks...) and their edges. Applied client-side (filterWorkLayer). Default on. */
+	work: boolean;
 	archivedWork: boolean;
 	denTopics: boolean;
 }
-export const DEFAULT_GRAPH_LAYERS: GraphLayerToggles = { archivedWork: false, denTopics: false };
+export const DEFAULT_GRAPH_LAYERS: GraphLayerToggles = { work: true, archivedWork: false, denTopics: false };
 
 export interface GraphRenderSettings {
 	/** Semantic stamp for the size-unit pivot (2026-09-15): "world" =
@@ -84,6 +86,61 @@ export interface GraphRenderSettings {
 	/** Live-sim physics + hierarchy-depth anchoring. Server-persisted
 	 *  since 2026-09-13 (user request) — was session-only dev state. */
 	physics: PhysicsTuning;
+	/** The live pack overlay (wolves, threads, pulses; work-wolfpack-H1OQNIh adds the fields, the overlay task reads them). */
+	live: LiveSettings;
+	/** Private view: blur or hide every personal title and detail on the graph page; the visuals stay. Default off. */
+	privateView: boolean;
+}
+
+/** Live overlay settings. Only `enabled` has UI so far; the rest are stored with defaults for the overlay task. */
+export interface LiveSettings {
+	/** The overlay on/off (the panel's Live toggle). */
+	enabled: boolean;
+	/** Seconds a subagent satellite stays after it goes quiet (0-300). */
+	subagentFadeSec: number;
+	/** Seconds a trail stays visible (0-300). */
+	trailSec: number;
+	/** Animation intensity, 1 (calm) to 5 (lively). */
+	intensity: number;
+}
+export const DEFAULT_LIVE_SETTINGS: LiveSettings = { enabled: true, subagentFadeSec: 15, trailSec: 15, intensity: 1 };
+
+/** Upper end of the fade and trail sliders, seconds. */
+export const LIVE_SEC_MAX = 300;
+const LIVE_SEC_KNEE = 60;
+const LIVE_POS_KNEE = 75;
+
+/** Slider position 0-100 -> seconds. Two linear legs so 0-60 s gets 75% of the travel; whole seconds up to 60 s, steps of 5 s above. */
+export function liveSecondsFromPosition(position: number): number {
+	const p = clamp(Number.isFinite(position) ? position : 0, 0, 100);
+	if (p <= LIVE_POS_KNEE) return Math.round((p / LIVE_POS_KNEE) * LIVE_SEC_KNEE);
+	return Math.min(LIVE_SEC_MAX, LIVE_SEC_KNEE + Math.round((((p - LIVE_POS_KNEE) / (100 - LIVE_POS_KNEE)) * (LIVE_SEC_MAX - LIVE_SEC_KNEE)) / 5) * 5);
+}
+
+/** Seconds -> slider position 0-100 (inverse of liveSecondsFromPosition, clamped). */
+export function liveSecondsToPosition(sec: number): number {
+	const v = clamp(Number.isFinite(sec) ? sec : 0, 0, LIVE_SEC_MAX);
+	if (v <= LIVE_SEC_KNEE) return (v / LIVE_SEC_KNEE) * LIVE_POS_KNEE;
+	return LIVE_POS_KNEE + ((v - LIVE_SEC_KNEE) / (LIVE_SEC_MAX - LIVE_SEC_KNEE)) * (100 - LIVE_POS_KNEE);
+}
+
+/** "15s", "2m", "1.5m". */
+export function formatLiveSeconds(sec: number): string {
+	const v = Math.round(sec);
+	return v < 60 ? `${v}s` : `${+(v / 60).toFixed(1)}m`;
+}
+
+/** Clamp/validate the live section; old files lack it and get the defaults. */
+export function sanitizeLiveSettings(input: Partial<LiveSettings> | null | undefined): LiveSettings {
+	const d = DEFAULT_LIVE_SETTINGS;
+	const num = (v: unknown, fallback: number, min: number, max: number): number =>
+		typeof v === "number" && Number.isFinite(v) ? Math.min(Math.max(v, min), max) : fallback;
+	return {
+		enabled: typeof input?.enabled === "boolean" ? input.enabled : d.enabled,
+		subagentFadeSec: num(input?.subagentFadeSec, d.subagentFadeSec, 0, LIVE_SEC_MAX),
+		trailSec: num(input?.trailSec, d.trailSec, 0, LIVE_SEC_MAX),
+		intensity: Math.round(num(input?.intensity, d.intensity, 1, 5)),
+	};
 }
 
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
@@ -111,6 +168,7 @@ export function sanitizeRenderSettings(raw: unknown): GraphRenderSettings {
 		sizeUnits: "world",
 		groupBy: r.groupBy === "section" ? "section" : "domain",
 		layers: {
+			work: flag(layers.work, DEFAULT_GRAPH_LAYERS.work),
 			archivedWork: flag(layers.archivedWork, DEFAULT_GRAPH_LAYERS.archivedWork),
 			denTopics: flag(layers.denTopics, DEFAULT_GRAPH_LAYERS.denTopics),
 		},
@@ -133,6 +191,8 @@ export function sanitizeRenderSettings(raw: unknown): GraphRenderSettings {
 			? { ...sanitizeRegionTuning(r.regions), dilation: DEFAULT_REGION_TUNING.dilation }
 			: sanitizeRegionTuning(r.regions),
 		physics: sanitizePhysicsTuning(r.physics),
+		live: sanitizeLiveSettings(r.live),
+		privateView: r.privateView === true,
 	};
 }
 
@@ -295,6 +355,8 @@ export const DEFAULT_RENDER_SETTINGS: GraphRenderSettings = {
 	clusterLabelSize: 14,
 	regions: DEFAULT_REGION_TUNING,
 	physics: DEFAULT_PHYSICS_TUNING,
+	live: DEFAULT_LIVE_SETTINGS,
+	privateView: false,
 };
 
 // ─── The slider ladders (2026-09-17) ─────────────────────────────────────────

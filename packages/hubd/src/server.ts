@@ -66,6 +66,11 @@ import {
 } from "./work-writes.js";
 import { actorOf, createTokenStore, type AuthIdentity } from "./auth.js";
 import { createEventBus } from "./events.js";
+import { createMemoryBus, guardBus, type ActivityBus } from "./activity/bus.js";
+import { createPresenceStore } from "./activity/presence.js";
+import { createActivityStats } from "./activity/stats.js";
+import { createActivityDeriver } from "./activity/derive.js";
+import { ACTIVITY_BODY_LIMIT, createActivityIngest } from "./activity/ingest.js";
 import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
 import { createKbRevisions, type KbRetention } from "./kb-revisions.js";
 import { loadWorkState } from "@wolfpack/kb/client";
@@ -79,6 +84,7 @@ import { CommandRequestSchema, INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES
 import { createInventory, type Inventory } from "./inventory.js";
 import { createCommandHub, type CommandHub } from "./commands.js";
 import { createMachineKeys, type MachineKeys } from "./machine-keys.js";
+import { createPrefsStore } from "./prefs.js";
 import { createRelay, type Relay } from "./relay.js";
 import { assertIfMatch, DOMAIN_RE, ifMatchOf, listWorkItems, readWorkRecordFor } from "./work-reads.js";
 import { handleWorkProxy, isWorkProxyPath } from "./work-proxy.js";
@@ -131,6 +137,13 @@ export interface HubOptions {
   eventBufferSize?: number;
   /** Max concurrent GET /v1/events streams; beyond it a new one is refused with 409 `busy` (retryable). Default 128. */
   maxEventStreams?: number;
+  /** The pack this hub serves. Activity events are stamped with it and only streams of this pack receive them. Default "default" (one pack per hub today). */
+  packId?: string;
+  /** Activity bus adapter (default in-memory; a Redis Streams adapter slots in here). A failing adapter never affects the Work API or KB. */
+  activityBus?: ActivityBus;
+  /** Per-token activity ingest rate limit: sustained events/s (default 20) and burst (default 100). */
+  activityRatePerSec?: number;
+  activityBurst?: number;
   /** @internal TEST-ONLY: failure injection inside KB commits. */
   kbFaults?: KbCommitFaults;
   /** How often hubd scans the KB domain folders for direct writes (Dewey's), ms. Default 3000; 0 disables the timer (tests call scanKb). */
@@ -327,6 +340,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let curator: Curator | undefined;
   const inventory: Inventory = createInventory(opts.now);
   const machineKeys: MachineKeys = createMachineKeys(opts.dataDir);
+  const prefs = createPrefsStore(opts.dataDir);
   let health: HubHealth | undefined; // started inside the start try below, stopped there if startup fails
   let rebuild: RebuildService | undefined; // set with the curator below
   // Sweep autonomy: a from=current preview through the rebuild service (same path as the admin route), then a request for the owner. Never applies.
@@ -373,6 +387,13 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     },
   });
   const domainCache = new Map<string, string>(); // work item id -> domain
+  // Live pack map. One pack per hub today: `packOf` is the single place that maps a caller to its pack (multi-pack = change it here).
+  const packId = opts.packId ?? "default";
+  const packOf = (_identity: AuthIdentity): string => packId;
+  const activityBus = guardBus(opts.activityBus ?? createMemoryBus()); // every user of the bus (ingest, SSE attach) goes through the guard
+  const presence = createPresenceStore({ now: opts.now });
+  const activityStats = createActivityStats();
+  const derive = createActivityDeriver({ bus: activityBus, presence, pack: packId, now: opts.now, domainOf: (id) => domainCache.get(id), stats: activityStats });
   const bus = createEventBus({
     bufferSize: opts.eventBufferSize,
     maxStreams: opts.maxEventStreams,
@@ -403,6 +424,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       for (const e of events) if (e.type === "work.deleted") domainCache.delete(e.id); // after emit: the event still reports its domain
     }
   });
+  writer.onAppended((b) => derive.onLedger(b)); // activity events: after the write landed, never throws
   writer.onAppendFailed(() => bus.broadcastResync());
   const readBody = (req: IncomingMessage) => readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
   const writeWork = writer.write;
@@ -426,6 +448,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let stopWatcher: () => void = () => {};
   let tokensFlush: () => void = () => {};
   let authenticateFn!: (req: IncomingMessage) => AuthIdentity | null;
+  let activityIngestFn!: ReturnType<typeof createActivityIngest>["ingest"];
   let link!: Link;
   let linkContrib!: LinkContributions;
   const inboxRoot = opts.inboxRoot ?? contributionsRoot(opts.dataDir);
@@ -446,7 +469,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   try {
     let packSummary: PackSummary | undefined; // built once the link exists (below)
     health = createHubHealth(() => packSummary?.hosts() ?? []);
-    kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => bus.emitKbChanged(ids, domain), faults: opts.kbFaults, onCommitted: (out) => revisions.record(out) });
+    kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => { bus.emitKbChanged(ids, domain); derive.onKb(ids, domain); }, faults: opts.kbFaults, onCommitted: (out) => revisions.record(out) });
     // Startup scan after KB recovery, before listening: records edits made while the hub was down (and the first-ever baseline).
     await kbWriter.exclusive(() => revisions.init());
     // Failed-redeem limiter, in memory, keyed by the socket peer address (behind a reverse proxy every client shares the proxy's
@@ -513,6 +536,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     stopWatcher = () => {
       clearInterval(watcher);
       clearInterval(sweeper);
+      presence.stop();
     };
     tokensFlush = () => tokens.flush();
     /** The shared check for dispatch AND the coming HTTP `upgrade` path. */
@@ -543,6 +567,17 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         return undefined;
       }
     };
+    const activityIngest = createActivityIngest({
+      bus: activityBus,
+      presence,
+      stats: activityStats,
+      pack: packId,
+      wolfOnHost: (wolf, hostId) => hostOf(wolf) === hostId,
+      now: opts.now,
+      ratePerSec: opts.activityRatePerSec,
+      burst: opts.activityBurst,
+    });
+    activityIngestFn = activityIngest.ingest;
     linkContrib = createLinkContributions({
       domainsOf,
       dataDir: opts.dataDir,
@@ -732,6 +767,18 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         if (!id) throw new HubError("unauthorized", "missing or invalid bearer token");
         tokenId = id.tokenId;
         identity = id;
+        let wolfId: string | undefined;
+        if (id.kind === "worker") {
+          // The wolf the TOKEN resolves to (X-Wolf is only a hint, validated against the host's active wolves); never the raw header.
+          try {
+            const named = req.headers["x-wolf"];
+            const a = assertedActor(req);
+            if (a) wolfId = wolfActorFor(a, (Array.isArray(named) ? named[0] : named)?.trim() || undefined).id;
+          } catch {
+            wolfId = undefined; // unresolved: no wolf attribution
+          }
+        }
+        derive.setWorker(id.kind === "worker", wolfId);
       }
       if (m === undefined) throw new HubError("not_found", `no route ${url.pathname}`);
       if (m === "method") throw new HubError("invalid_request", `method ${req.method} not allowed`);
@@ -940,6 +987,18 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           deviceCaller(identity);
           return send(res, 200, { entries: inventory.list(health!.self()), hubMachine: health!.self().machine });
         }
+        case "hubGetPref": {
+          const who = deviceCaller(identity);
+          return send(res, 200, { value: await prefs.get(who.owner, params.key ?? "") });
+        }
+        case "hubPutPref": {
+          const who = deviceCaller(identity);
+          const body = await readBody(req);
+          if (body === null || typeof body !== "object" || !("value" in body)) throw new HubError("invalid_request", "body must be {value}");
+          const value = (body as { value: unknown }).value;
+          await prefs.put(who.owner, params.key ?? "", value);
+          return send(res, 200, { value });
+        }
         case "hubMachineKeys": {
           deviceCaller(identity);
           return send(res, 200, { keys: machineKeys.all() });
@@ -1045,7 +1104,11 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "hubEvents": {
           const hdr = req.headers["last-event-id"];
           const cursor = (Array.isArray(hdr) ? hdr[0] : hdr)?.trim() || url.searchParams.get("from")?.trim() || undefined;
-          bus.attach(res, cursor);
+          // Activity frames: opt-in (?activity=1) AND a console/browser (device or owner) token. Worker tokens never get them.
+          // TODO(multi-person): devices belong to the owner, who sees every domain; when a device can belong to another person,
+          // filter frames per domain with domainsOf(identity).
+          const wantsActivity = url.searchParams.get("activity") === "1" && !!identity && (identity.kind === "console" || identity.kind === "browser");
+          bus.attach(res, cursor, wantsActivity ? { pack: packOf(identity!), bus: activityBus } : undefined);
           if (tokenId) {
             // Revoked between auth and attach, or later (the watcher): close this stream.
             if (!tokens.ids().includes(tokenId)) return void res.destroy();
@@ -1055,6 +1118,27 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
             res.once("close", () => set!.delete(res));
           }
           return;
+        }
+        case "hubActivityIngest": {
+          const body = await readJson(req, { maxBytes: ACTIVITY_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
+          if (!identity?.tokenId) throw new Error("invariant: an authenticated identity always carries its token id"); // a logged 500, never a shared bucket
+          const who = { tokenId: identity.tokenId, hostId: identity.hostId, worker: identity.kind === "worker" };
+          return send(res, 202, activityIngestFn(who, body));
+        }
+        case "hubActivityStats": {
+          deviceCaller(identity); // device or owner tokens only (403 for a worker token)
+          return send(res, 200, activityStats.snapshot(packOf(identity!), (opts.now ?? Date.now)()));
+        }
+        case "hubActivityPresence": {
+          deviceCaller(identity); // device or owner tokens only (403 for a worker token)
+          let snap;
+          try {
+            snap = presence.snapshot(packOf(identity!));
+          } catch (e) {
+            console.error("hubd: presence snapshot failed:", (e as Error).message);
+            snap = { v: 1, pack: packOf(identity!), at: (opts.now ?? Date.now)(), wolves: [], threads: [], subagents: [], owner: [] };
+          }
+          return send(res, 200, snap);
         }
         case "hubGraduateWork": {
           const actor = writeActor(req);
@@ -1127,7 +1211,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     }
 
     server = createServer((req, res) => {
-      dispatch(req, res).catch((e: unknown) => {
+      derive.run(req.headers, () => dispatch(req, res)).catch((e: unknown) => {
         if (!(e instanceof HubError)) console.error(`hubd: ${req.method} ${req.url} failed:`, e); // detail stays server-side
         const err = e instanceof HubError ? e : new HubError("engine_error", "internal hub error");
         const env: ErrorEnvelope = { code: err.code, message: err.message, retryable: retryable(err.code), ...(err.details ? { details: err.details } : {}) };

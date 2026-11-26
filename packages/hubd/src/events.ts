@@ -7,7 +7,8 @@
  */
 import { randomBytes } from "node:crypto";
 import type { ServerResponse } from "node:http";
-import type { HubEvent } from "@wolfpack/protocol";
+import { PACK_ACTIVITY_EVENT_TYPE, type ActivityEvent, type HubEvent } from "@wolfpack/protocol";
+import type { ActivityBus } from "./activity/bus.js";
 import { HubError } from "./errors.js";
 import type { LedgerEvent } from "./work-writes.js";
 
@@ -15,6 +16,14 @@ export const DEFAULT_EVENT_BUFFER = 1000;
 export const DEFAULT_MAX_EVENT_STREAMS = 128;
 const KEEPALIVE_MS = 20_000;
 const MAX_WRITABLE = 1_000_000;
+/** An activity subscriber with more than this many bytes queued is too slow: it gets `resync` and is closed (about 500 frames). */
+export const ACTIVITY_MAX_BACKLOG_BYTES = 128 * 1024;
+
+/** Where a stream's `pack.activity` frames come from: the caller's pack on the activity bus. */
+export interface ActivityFeed {
+  pack: string;
+  bus: ActivityBus;
+}
 
 /** An event before the bus mints its id and timestamp. */
 export type HubEventDraft = { [K in HubEvent["type"]]: Omit<Extract<HubEvent, { type: K }>, "id" | "at"> }[Exclude<HubEvent["type"], "resync">];
@@ -39,6 +48,9 @@ export function createEventBus(opts: EventBusOptions = {}) {
   const buffer: HubEvent[] = [];
   const subs = new Set<Sub>();
   let closed = false;
+  /** SSE frames built once per event and written to every stream; weak so nothing outlives the event. */
+  const frames = new WeakMap<object, string>();
+  const hubFrames = new WeakMap<object, string>();
   /** Highest seq at the last lost ledger diff: a cursor at or below it (same boot) may have missed events, so it must resync. */
   let gapSeq = -1;
 
@@ -95,7 +107,7 @@ export function createEventBus(opts: EventBusOptions = {}) {
      * Attach an SSE response. `cursor`: raw Last-Event-ID / ?from= value (undefined = live only). Throws `busy` (409, retryable;
      * the protocol has no 429) before writing anything when the stream cap is reached.
      */
-    attach(res: ServerResponse, cursor: string | undefined): void {
+    attach(res: ServerResponse, cursor: string | undefined, activity?: ActivityFeed): void {
       if (closed) throw new HubError("busy", "hub is shutting down; retry against the restarted hub");
       if (subs.size >= maxStreams) throw new HubError("busy", `too many open event streams (limit ${maxStreams}); retry later`);
       let from: number | "stale" | undefined;
@@ -107,7 +119,12 @@ export function createEventBus(opts: EventBusOptions = {}) {
       const send = (ev: HubEvent) => {
         if (res.destroyed || res.writableEnded) return;
         if (res.writableLength > MAX_WRITABLE) return void res.destroy(); // a client that stopped reading
-        res.write(`id: ${boot}:${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
+        let frame = hubFrames.get(ev);
+        if (frame === undefined) {
+          frame = `id: ${boot}:${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`;
+          hubFrames.set(ev, frame);
+        }
+        res.write(frame);
       };
       if (from !== undefined) {
         const cur = from;
@@ -119,10 +136,36 @@ export function createEventBus(opts: EventBusOptions = {}) {
       // Subscribed in the same tick as the replay was written: no event falls between.
       subs.add(sub);
       res.write(": connected\n\n");
+      let unsubActivity: () => void = () => {};
+      if (activity) {
+        // Activity is lossy and unsequenced: no `id:` line (the Last-Event-ID cursor is untouched) and no replay; a client that
+        // missed frames refetches the presence snapshot. A backed-up stream is told to resync and closed, never buffered.
+        unsubActivity = activity.bus.subscribe(activity.pack, (ev: ActivityEvent) => {
+          if (res.destroyed || res.writableEnded) return;
+          if (res.writableLength > ACTIVITY_MAX_BACKLOG_BYTES) {
+            subs.delete(sub);
+            unsubActivity();
+            try {
+              res.end(`id: ${boot}:${seq}\ndata: ${JSON.stringify(resyncEvent())}\n\n`);
+            } catch {
+              res.destroy();
+            }
+            return;
+          }
+          // One serialization per event, shared by every stream (the bus hands every subscriber the same object).
+          let frame = frames.get(ev);
+          if (frame === undefined) {
+            frame = `data: ${JSON.stringify({ type: PACK_ACTIVITY_EVENT_TYPE, at: new Date().toISOString(), event: ev })}\n\n`;
+            frames.set(ev, frame);
+          }
+          res.write(frame);
+        });
+      }
       const ka = setInterval(() => (res.destroyed || res.writableEnded ? gone() : res.write(": ka\n\n")), KEEPALIVE_MS);
       ka.unref();
       function gone() {
         clearInterval(ka);
+        unsubActivity();
         subs.delete(sub);
       }
       res.once("close", gone);

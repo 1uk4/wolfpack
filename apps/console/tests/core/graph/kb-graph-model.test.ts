@@ -18,6 +18,7 @@ import {
 	factoryShade,
 	kbShade,
 	hexToHsl,
+	filterWorkLayer,
 	focusRemedy,
 	focusStep,
 	groupClusters,
@@ -369,7 +370,7 @@ describe("parseFocusParam", () => {
 
 describe("focusRemedy", () => {
 	const view = (o: Partial<{ archivedWork: boolean; denTopics: boolean; domain: string | null }> = {}) => ({
-		layers: { archivedWork: o.archivedWork ?? false, denTopics: o.denTopics ?? false },
+		layers: { work: true, archivedWork: o.archivedWork ?? false, denTopics: o.denTopics ?? false },
 		domain: o.domain ?? null,
 	});
 	it("work ids ask for archived work, den ids for den topics, a filter for all domains", () => {
@@ -387,7 +388,7 @@ describe("focusRemedy", () => {
 
 describe("focusStep (the /?focus= flow)", () => {
 	const g = fixture();
-	const view = { layers: { archivedWork: false, denTopics: false }, domain: null as string | null };
+	const view = { layers: { work: true, archivedWork: false, denTopics: false }, domain: null as string | null };
 	const base = { focusId: "work:w9", graph: g, settled: true, view };
 
 	it("no param → idle", () => assert.deepEqual(focusStep({ ...base, focusId: null }), { kind: "idle" }));
@@ -447,5 +448,22 @@ describe("factory sub-halo", () => {
 		assert.deepEqual([...cs[0]!.members].sort(), ["fac:wolfpack", "work:w1", "work:w2", "work:w3"]);
 		assert.equal(cs[0]!.color, factoryShade(domainHue("wolfpack")));
 		assert.deepEqual(toCanvasData(g, { groupBy: "domain" }).subClusters.map((c) => c.id), ["fac:wolfpack"]);
+	});
+});
+
+describe("filterWorkLayer (the Board switch)", () => {
+	it("with work off drops every work node and every edge touching one, keeping the rest", () => {
+		const g = fixture();
+		const out = filterWorkLayer(g, { work: false });
+		assert.equal(out.nodes.some((n) => n.kind === "work"), false);
+		assert.equal(out.nodes.length, g.nodes.filter((n) => n.kind !== "work").length);
+		assert.equal(out.edges.some((e) => e.source.startsWith("work:") || e.target.startsWith("work:")), false);
+		assert.ok(out.edges.some((e) => e.source === "dom:wolfpack" && e.target === "fac:wolfpack"));
+		assert.ok(out.nodes.some((n) => n.id === "ent:e1"));
+	});
+
+	it("with work on returns the graph untouched", () => {
+		const g = fixture();
+		assert.equal(filterWorkLayer(g, { work: true }), g);
 	});
 });

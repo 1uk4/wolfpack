@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Engine } from "@wolfpack/engine";
 import { LlmInfraError } from "@wolfpack/engine";
+import { runInTurnContext } from "./turn-context.js";
 import { stripSources, parseRecordLines, formatSources } from "./record-sources.js";
 import {
   consolidateWorkRecords,
@@ -411,6 +412,22 @@ describe("the Record follows the item", () => {
     const fetchImpl = (async () => new Response(JSON.stringify({ error: "item is archived; its Record is closed", code: "record_closed" }), { status: 409 })) as unknown as typeof fetch;
     const store = new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa");
     await expect(store.setRecord("t", "### Findings\n\n- x")).rejects.toMatchObject({ status: 409, code: "record_closed" });
+  });
+
+  it("the HTTP store sends the thread and subagent headers only inside a turn context", async () => {
+    const sent: Record<string, string>[] = [];
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => {
+      sent.push(init?.headers as Record<string, string>);
+      return new Response(JSON.stringify({ item: { id: "t" }, body: null }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const store = new HttpWorkRecordStore("http://h/v1/workapi", "tok", fetchImpl, "wa");
+    await store.get("t");
+    await runInTurnContext({ threadId: "th-1", subagent: "scout" }, () => store.get("t"));
+    await runInTurnContext({ threadId: "th-2" }, () => store.get("t"));
+    expect(sent[0]).not.toHaveProperty("x-wolfpack-thread-id");
+    expect(sent[1]).toMatchObject({ "X-Wolf": "wa", "x-wolfpack-thread-id": "th-1", "x-wolfpack-subagent": "scout" });
+    expect(sent[2]).toMatchObject({ "x-wolfpack-thread-id": "th-2" });
+    expect(sent[2]).not.toHaveProperty("x-wolfpack-subagent");
   });
 
   it("a task that cannot be read falls back to the feature stored on the observation", async () => {

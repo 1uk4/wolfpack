@@ -626,6 +626,13 @@ export function parseFocusParam(search: string | { get(name: string): string | n
 	return id.length <= MAX_NODE_ID && NODE_ID_PATTERN.test(id) ? id : null;
 }
 
+/** The Board layer: with `work` off, drop every work-item node and every edge touching one. Pure; returns the same graph when work is on. */
+export function filterWorkLayer<G extends Pick<KbGraph, "nodes" | "edges">>(graph: G, layers: { work: boolean }): G {
+	if (layers.work) return graph;
+	const gone = new Set(graph.nodes.filter((n) => n.kind === "work").map((n) => n.id));
+	return { ...graph, nodes: graph.nodes.filter((n) => !gone.has(n.id)), edges: graph.edges.filter((e) => !gone.has(e.source) && !gone.has(e.target)) };
+}
+
 /** What a `/?focus=` target needs that the current view lacks. */
 export interface FocusRemedy {
 	archivedWork?: true;

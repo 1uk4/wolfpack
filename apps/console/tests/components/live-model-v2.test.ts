@@ -1,0 +1,493 @@
+import assert from "node:assert/strict";
+import { afterEach, beforeEach, describe, it, mock } from "node:test";
+import type { ActivityEvent } from "@wolfpack/protocol";
+import { LiveOverlay, LIVE_DEFAULTS, type OverlayHost, type OverlayItem } from "../../components/graph/live/live-overlay.ts";
+import { talkToWolf } from "../../components/graph/live/live-talk.ts";
+import { separateSubs, stepSub, type SubBody } from "../../src/core/graph/live/live-sub-physics.ts";
+import { formatFeed } from "../../src/core/graph/live/feed.ts";
+
+/** Map model v2: features are hubs at their work node, subagents dart between targets and tether back, the wolf floats free. Real event shapes. */
+const g = globalThis as unknown as Record<string, unknown>;
+const T0 = 5_000_000_000_000;
+const FEATURE = "1uk4/feature-work-wolfpack-ELzLSkV";
+const feature = { kind: "thread", wolf: "1uk4", threadId: FEATURE, title: "Live pack map" };
+const home = { kind: "thread", wolf: "1uk4", threadId: "1uk4/home" };
+/** wolfd's own subagent event (title as name, parent known) and the hub-derived one (agent name, no parent). */
+const subTap = { kind: "subagent", wolf: "1uk4", threadId: "1uk4/sub-1", subagent: "scout", parentThreadId: FEATURE, title: "scout" };
+const subDerived = { kind: "subagent", wolf: "1uk4", threadId: "1uk4/sub-1", subagent: "explorer" };
+const ENT = { kind: "kb-entry", id: "kb-wolfpack-KNMBskd", domain: "wolfpack", title: "Crawl Pipeline" };
+const WORK = { kind: "work-item", id: "work-wolfpack-ELzLSkV", domain: "wolfpack", title: "Live map" };
+let n = 0;
+const ev = (verb: string, actor: unknown, target?: unknown): ActivityEvent => ({ v: 1, id: `m${++n}`, pack: "default", ts: T0, ttlMs: 3_600_000, actor, verb, ...(target ? { target } : {}) }) as unknown as ActivityEvent;
+
+interface Stroke { from: [number, number]; to: [number, number]; style: string; width: number; dash: boolean }
+function recorder() {
+	const strokes: Stroke[] = [];
+	let path: [number, number][] = [];
+	let dash = false;
+	const st: Record<string, unknown> = { lineWidth: 1, strokeStyle: "", fillStyle: "", globalAlpha: 1 };
+	const grad = { addColorStop: () => undefined };
+	const ctx = new Proxy(st, {
+		get: (t, p: string) => {
+			if (p in t) return t[p];
+			switch (p) {
+				case "beginPath": return () => { path = []; };
+				case "moveTo": case "lineTo": case "arc": return (x: number, y: number) => path.push([x, y]);
+				case "setLineDash": return (d: number[]) => { dash = d.length > 0; };
+				case "stroke": return () => { if (path.length === 2) strokes.push({ from: path[0]!, to: path[1]!, style: String(st.strokeStyle), width: Number(st.lineWidth), dash }); };
+				case "createRadialGradient": case "createLinearGradient": return () => grad;
+				case "measureText": return () => ({ width: 1 });
+				default: return () => undefined;
+			}
+		},
+		set: (t, p: string, v) => { t[p] = v; return true; },
+	}) as unknown as CanvasRenderingContext2D;
+	return { ctx, strokes };
+}
+const alphaOfStyle = (s: string) => Number(/,([\d.]+)\)$/.exec(s)?.[1] ?? 0);
+const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
+const near = (p: [number, number], q: { x: number; y: number }, tol: number) => Math.hypot(p[0] - q.x, p[1] - q.y) <= tol;
+
+describe("live map model v2", () => {
+	const nodes = new Map<string, { x: number; y: number; color: string }>([
+		["dom:wolfpack", { x: 0, y: 0, color: "#4488ff" }],
+		["ent:kb-wolfpack-KNMBskd", { x: 300, y: 120, color: "#4488ff" }],
+		["work:ELzLSkV", { x: -250, y: 200, color: "#ff8844" }],
+	]);
+	const host: OverlayHost = {
+		nodePos: (id) => nodes.get(id) ?? null,
+		hasNode: (id) => nodes.has(id),
+		nodeColor: (id) => nodes.get(id)?.color,
+		center: () => ({ x: 0, y: 0 }),
+		colors: { node: "#888888", edge: "#444444", label: "#ffffff", hoverText: "#ffffff" },
+		fontFamily: "sans-serif",
+	};
+	const replacedCalls: string[][] = [];
+	(host as { setReplacedNodes?: (ids: ReadonlySet<string>) => void }).setReplacedNodes = (ids) => void replacedCalls.push([...ids].sort());
+	const hadPath2D = g.Path2D;
+	let o: LiveOverlay;
+	beforeEach(() => {
+		mock.timers.enable({ apis: ["Date", "setInterval", "setTimeout"], now: T0 });
+		g.Path2D = class {};
+		replacedCalls.length = 0;
+		o = new LiveOverlay(() => {});
+		o.configure(LIVE_DEFAULTS);
+	});
+	afterEach(() => {
+		o.stop();
+		mock.timers.reset();
+		g.Path2D = hadPath2D;
+		delete g.window;
+	});
+	const send = (verb: string, actor: unknown, target?: unknown, to: LiveOverlay = o) => to.dispatch({ type: "event", event: ev(verb, actor, target), now: Date.now() });
+	/** Run the renderer's step loop for `sec` seconds of (mock) time at 20 steps per second. */
+	const run = (sec: number, host_: OverlayHost = host, to: LiveOverlay = o) => {
+		for (let i = 0; i < sec * 20; i++) {
+			mock.timers.tick(50);
+			to.step(Date.now(), 0.05, host_, 1);
+		}
+	};
+	const items = (to: LiveOverlay = o) => to.items(host, 1, Date.now());
+	const of = (kind: string, to: LiveOverlay = o): OverlayItem => items(to).find((i) => i.kind === kind)!;
+	const render = (to: LiveOverlay = o) => {
+		const rec = recorder();
+		to.draw(rec.ctx, host, 1, Date.now());
+		return rec.strokes;
+	};
+
+	it("a feature thread is a hub at its work-item node, not on its wolf", () => {
+		send("thread-active", feature);
+		send("thread-active", home);
+		run(0.1);
+		const hub = of("feature");
+		assert.ok(dist(hub, nodes.get("work:ELzLSkV")!) < 30, `hub ${hub.x},${hub.y} is beside work:ELzLSkV`);
+		assert.ok(dist(hub, of("wolf")) > 100, "and clear of the wolf, which only settles partway toward it");
+		assert.equal(items().filter((i) => i.kind === "thread").length, 1, "only the home thread stays a dot");
+	});
+
+	it("a feature hub sits exactly on its work node, with no offset and no float, and replaces that node's dot only while the thread is open", () => {
+		const row = { wolf: "1uk4", id: FEATURE, title: "Live pack map" };
+		o.dispatch({ type: "threads", threads: [row], now: Date.now() });
+		run(0.1);
+		for (const t of [0, 1700, 4100]) {
+			mock.timers.tick(t);
+			const hub = items().find((i) => i.kind === "feature")!;
+			assert.deepEqual([hub.x, hub.y], [-250, 200]);
+		}
+		run(0.5);
+		assert.deepEqual(replacedCalls, [["work:ELzLSkV"]], "the node is replaced, announced once");
+		o.dispatch({ type: "threads", threads: [{ ...row, closed: true }], now: Date.now() });
+		run(0.1);
+		assert.deepEqual(replacedCalls, [["work:ELzLSkV"], []], "archived: the normal dot comes back");
+	});
+
+	it("the you badge sits above the composer in screen space and never moves with pan or zoom; without a composer it takes the bottom-centre fallback", () => {
+		send("thread-active", feature);
+		run(0.1);
+		items();
+		const size = { w: 800, h: 600 };
+		o.setComposerRect({ x: 100, y: 500, w: 400, h: 60 });
+		const a = o.screenGeometry(host, { x: 0, y: 0, k: 1 }, size)!.badge;
+		assert.equal(a.x, 300, "horizontally centred on the composer");
+		assert.ok(a.y < 500 - a.r && a.y > 500 - 40, `just above its top edge (${a.y})`);
+		const b = o.screenGeometry(host, { x: -300, y: 120, k: 2.5 }, size)!.badge;
+		assert.deepEqual([b.x, b.y], [a.x, a.y]);
+		const arcs: number[][] = [];
+		const ctx = new Proxy({}, { get: (_t, p) => (p === "arc" ? (x: number, y: number, r: number) => arcs.push([x, y, r]) : () => undefined), set: () => true }) as unknown as CanvasRenderingContext2D;
+		o.drawScreen(ctx, host, { x: -300, y: 120, k: 2.5 }, size, 0);
+		assert.deepEqual(arcs[0]!.slice(0, 2), [a.x, a.y], "the badge is drawn there");
+		o.setComposerRect(null);
+		const f = o.screenGeometry(host, { x: 0, y: 0, k: 1 }, size)!.badge;
+		assert.equal(f.x, 400);
+		assert.ok(f.y > 500 && f.y < 600 - f.r, `bottom-centre with a margin (${f.y})`);
+	});
+
+	it("the you badge's chat link ends at the feature hub for a feature thread and at the wolf for a home thread", () => {
+		send("thread-active", feature);
+		send("thread-active", home);
+		run(0.1);
+		const tr = { x: 400, y: 100, k: 1 };
+		const size = { w: 800, h: 600 };
+		const at = (id: string) => ({ x: items().find((i) => i.key === id)!.x + tr.x, y: items().find((i) => i.key === id)!.y + tr.y });
+		o.setAttached({ wolf: "1uk4", threadId: FEATURE });
+		items();
+		const hub = o.screenGeometry(host, tr, size)!.links.find((l) => l.kind === "chat")!;
+		assert.deepEqual([hub.x, hub.y], [-250 + tr.x, 200 + tr.y]);
+		o.setAttached({ wolf: "1uk4", threadId: "1uk4/home" });
+		const wolf = o.screenGeometry(host, tr, size)!.links.find((l) => l.kind === "chat")!;
+		assert.deepEqual([wolf.x, wolf.y], [at("1uk4").x, at("1uk4").y]);
+	});
+
+	it("a chat target off the canvas ends its link at the canvas edge with an arrow", () => {
+		send("thread-active", feature);
+		run(0.1);
+		items();
+		o.setAttached({ wolf: "1uk4", threadId: FEATURE });
+		const size = { w: 800, h: 600 };
+		const on = o.screenGeometry(host, { x: 400, y: 100, k: 1 }, size)!.links[0]!;
+		assert.equal(on.arrow, false);
+		const off = o.screenGeometry(host, { x: 5000, y: 100, k: 1 }, size)!.links[0]!;
+		assert.equal(off.arrow, true);
+		assert.ok(off.x >= 0 && off.x <= 800 && off.y >= 0 && off.y <= 600, `clipped to the canvas (${off.x},${off.y})`);
+	});
+
+	it("a feature with no work node anchors beside its domain node", () => {
+		nodes.delete("work:ELzLSkV");
+		try {
+			send("thread-active", feature);
+			run(0.1);
+			assert.ok(dist(of("feature"), nodes.get("dom:wolfpack")!) < 50);
+		} finally {
+			nodes.set("work:ELzLSkV", { x: -250, y: 200, color: "#ff8844" });
+		}
+	});
+
+	it("a subagent is its own body beside its hub, never on the hub's ring, joined to it by a link, and gone once it has finished and faded", () => {
+		send("thread-active", feature);
+		send("subagent-spawned", subTap);
+		run(5);
+		const hub = of("feature");
+		const sub = of("subagent");
+		assert.ok(dist(sub, hub) > hub.r + sub.r, `clear of the hub's ring (${dist(sub, hub)} vs ${hub.r + sub.r})`);
+		assert.ok(dist(sub, hub) < 80, "but still close to it");
+		assert.ok(sub.r > 10 && sub.r < 14, `about 70% of the wolf's icon (${sub.r})`);
+		const link = render().filter((s) => !s.dash && near(s.from, hub, 0.5) && near(s.to, sub, 0.5));
+		assert.equal(link.length, 1, "one link line from the hub to the subagent");
+		send("subagent-finished", subTap);
+		run(20);
+		assert.equal(items().filter((i) => i.kind === "subagent").length, 0, "removed after the fade");
+	});
+
+	it("several subagents of one hub spread apart around it", () => {
+		const subB = { ...subTap, threadId: "1uk4/sub-2", subagent: "scout2", title: "scout2" };
+		const subC = { ...subTap, threadId: "1uk4/sub-3", subagent: "scout3", title: "scout3" };
+		send("thread-active", feature);
+		send("subagent-spawned", subTap);
+		send("subagent-spawned", subB);
+		send("subagent-spawned", subC);
+		run(8);
+		const hub = of("feature");
+		const subs = items().filter((i) => i.kind === "subagent");
+		assert.equal(subs.length, 3);
+		for (let i = 0; i < subs.length; i++) {
+			assert.ok(dist(subs[i]!, hub) > hub.r + subs[i]!.r, "each is clear of the hub");
+			for (let j = i + 1; j < subs.length; j++) assert.ok(dist(subs[i]!, subs[j]!) > subs[i]!.r + subs[j]!.r, `bodies ${i} and ${j} do not overlap (${dist(subs[i]!, subs[j]!)})`);
+		}
+	});
+
+	it("a subagent's kb-read darts it toward the entry from where it was, joined to its spawn by its own thread id", () => {
+		send("thread-active", feature);
+		send("subagent-spawned", subTap);
+		run(0.1);
+		const p0 = { x: of("subagent").x, y: of("subagent").y };
+		const target = nodes.get("ent:kb-wolfpack-KNMBskd")!;
+		send("kb-read", subDerived, ENT); // the hub-derived shape: another name, no parent
+		assert.equal(items().filter((i) => i.kind === "subagent").length, 1, "still one subagent");
+		run(1.5);
+		const mid = of("subagent");
+		assert.ok(dist(mid, target) < dist(p0, target) * 0.4, `moved toward the entry (${dist(p0, target)} -> ${dist(mid, target)})`);
+		const trail = render().filter((s) => !s.dash && near(s.to, target, 0.5));
+		assert.equal(trail.length, 1, "one trail ends on the entry");
+		assert.ok(near(trail[0]!.from, p0, 6), "and starts where the subagent was");
+		assert.ok(alphaOfStyle(trail[0]!.style) >= 0.5);
+	});
+
+	it("a subagent hops from one target to the next", () => {
+		send("thread-active", feature);
+		send("subagent-spawned", subTap);
+		send("kb-read", subTap, ENT);
+		run(3);
+		const first = of("subagent");
+		send("bound", subTap, WORK);
+		run(3);
+		const second = of("subagent");
+		assert.ok(dist(second, nodes.get("work:ELzLSkV")!) < dist(first, nodes.get("work:ELzLSkV")!) * 0.4);
+		assert.equal(of("feature").working, true);
+	});
+
+	it("with no target for more than 10 s the tether reels a subagent back to its hub", () => {
+		send("thread-active", feature);
+		send("subagent-spawned", subTap);
+		send("kb-read", subTap, ENT);
+		run(3);
+		const away = dist(of("subagent"), of("feature"));
+		assert.ok(away > 300, `it is out at the entry (${away})`);
+		run(9); // 12 s since the target
+		run(8);
+		const home_ = dist(of("subagent"), of("feature"));
+		assert.ok(home_ > 20 && home_ < 60, `it drifted back to its rest ring beside the hub (${home_})`);
+	});
+
+	it("a finished subagent flies back to its hub and is still there fading", () => {
+		send("thread-active", feature);
+		send("subagent-spawned", subTap);
+		send("kb-read", subTap, ENT);
+		run(3);
+		const out = dist(of("subagent"), of("feature"));
+		send("subagent-finished", subTap);
+		run(3);
+		const sub = of("subagent");
+		assert.ok(dist(sub, of("feature")) < out * 0.3, `back toward the hub (${out} -> ${dist(sub, of("feature"))})`);
+		assert.ok(sub.alpha > 0 && sub.alpha < 1, `fading (${sub.alpha})`);
+	});
+
+	it("the link to the hub is a visible hairline", () => {
+		send("thread-active", feature);
+		send("subagent-spawned", subTap);
+		send("kb-read", subTap, ENT);
+		run(2);
+		const hub = of("feature");
+		const sub = of("subagent");
+		const rec = recorder();
+		o.draw(rec.ctx, host, 1, Date.now());
+		const tether = rec.strokes.filter((s) => !s.dash && near(s.from, hub, 0.5) && near(s.to, sub, 0.5));
+		assert.equal(tether.length, 1);
+		const a = alphaOfStyle(tether[0]!.style);
+		assert.ok(a >= 0.25 && a <= 0.4, `link alpha ${a}`);
+		assert.ok(tether[0]!.width <= 1, `hairline ${tether[0]!.width}`);
+	});
+
+	it("an idle feature stays on the map, dimmed", () => {
+		send("thread-active", feature);
+		send("thread-idle", feature);
+		mock.timers.tick(20 * 60_000);
+		o.dispatch({ type: "tick", now: Date.now() });
+		run(0.1);
+		const hub = of("feature");
+		assert.equal(hub.working, false);
+		assert.ok(hub.alpha > 0 && hub.alpha < 1, `dimmed (${hub.alpha})`);
+	});
+
+	it("an open feature thread in the thread roster is a dimmed hub with no presence; archiving or dropping it removes the hub", () => {
+		const row = { wolf: "1uk4", id: FEATURE, title: "Live pack map" };
+		o.dispatch({ type: "threads", threads: [row], now: Date.now() });
+		run(0.1);
+		const hub = of("feature");
+		assert.equal(hub.working, false);
+		assert.ok(hub.alpha > 0 && hub.alpha < 1, `dimmed (${hub.alpha})`);
+		assert.ok(near([hub.x, hub.y], nodes.get("work:ELzLSkV")!, 120), "at its work node");
+		mock.timers.tick(3 * 3_600_000); // no presence, hours later: the roster still holds it
+		o.dispatch({ type: "tick", now: Date.now() });
+		run(0.1);
+		assert.ok(items().some((i) => i.kind === "feature"));
+		send("thread-active", feature); // a live event upgrades it
+		run(0.1);
+		assert.equal(of("feature").working, true);
+		o.dispatch({ type: "threads", threads: [], now: Date.now() });
+		run(0.1);
+		assert.equal(items().some((i) => i.kind === "feature"), false, "dropped from the roster");
+	});
+
+	it("an archived feature thread in the roster gets no hub", () => {
+		o.dispatch({ type: "threads", threads: [{ wolf: "1uk4", id: FEATURE, title: "Live pack map", closed: true }], now: Date.now() });
+		run(0.1);
+		assert.equal(items().some((i) => i.kind === "feature"), false);
+	});
+
+	it("the wolf floats free: its feature hub settles it about halfway toward the work, never onto it", () => {
+		const big: OverlayHost = { ...host, extentRadius: () => 600 };
+		const b = new LiveOverlay(() => {});
+		b.configure(LIVE_DEFAULTS);
+		send("thread-active", home);
+		send("thread-active", home, undefined, b);
+		send("thread-active", feature);
+		send("subagent-spawned", subTap);
+		send("kb-read", subTap, ENT);
+		send("kb-read", feature, ENT);
+		for (let i = 0; i < 80; i++) {
+			mock.timers.tick(50);
+			o.step(Date.now(), 0.05, big, 1);
+			b.step(Date.now(), 0.05, big, 1);
+		}
+		const wolfA = items().find((i) => i.kind === "wolf")!;
+		const wolfB = b.items(host, 1, Date.now()).find((i) => i.kind === "wolf")!;
+		const moved = dist(wolfA, wolfB);
+		const d = dist(wolfB, nodes.get("work:ELzLSkV")!);
+		assert.ok(Math.abs(moved - 0.5 * d) < 0.02 * d, `one hub pulls the wolf half of the way to the work: moved ${moved} of ${d}`);
+		b.stop();
+	});
+
+	it("a wolf with feature hubs settles: against the same wolf without hubs (same idle roam), the offset stops changing within 60 frames", () => {
+		const big: OverlayHost = { ...host, extentRadius: () => 600 };
+		const b = new LiveOverlay(() => {});
+		b.configure(LIVE_DEFAULTS);
+		send("thread-active", home);
+		send("thread-active", home, undefined, b);
+		send("thread-active", feature);
+		const off: { x: number; y: number }[] = [];
+		for (let i = 0; i < 60; i++) {
+			mock.timers.tick(50);
+			o.step(Date.now(), 0.05, big, 1);
+			b.step(Date.now(), 0.05, big, 1);
+			const a = items().find((it) => it.kind === "wolf")!;
+			const c = b.items(host, 1, Date.now()).find((it) => it.kind === "wolf")!;
+			off.push({ x: a.x - c.x, y: a.y - c.y });
+		}
+		assert.ok(Math.hypot(off[59]!.x, off[59]!.y) > 100, "the hubs do pull it away from its ring slot");
+		assert.ok(dist(off[58]!, off[59]!) < 0.5, `still settling: ${dist(off[58]!, off[59]!)} per frame`);
+		b.stop();
+	});
+
+	it("a home-thread bind to a feature draws a wolf-to-feature link; the feature's own action starts at its hub", () => {
+		send("thread-active", feature);
+		send("thread-active", home);
+		run(0.1);
+		send("bound", home, WORK);
+		send("kb-read", feature, ENT);
+		run(0.1);
+		const hub = of("feature");
+		const wolf = of("wolf");
+		const strokes = render();
+		const link = strokes.filter((s) => !s.dash && near(s.to, hub, 0.5) && near(s.from, wolf, 6));
+		assert.equal(link.length, 1, "a link from the wolf to the hub");
+		const own = strokes.filter((s) => !s.dash && near(s.to, nodes.get("ent:kb-wolfpack-KNMBskd")!, 0.5));
+		assert.equal(own.length, 1);
+		assert.ok(near(own[0]!.from, hub, 6), "the feature thread's trail leaves from the hub, not the wolf");
+	});
+
+	it("a work-touch draws a trail from the actor's body to that work item's node; a work item not on the map draws nothing, not even to its domain", () => {
+		nodes.set("work:Zz9", { x: 200, y: -150, color: "#ff8844" });
+		send("thread-active", feature);
+		send("thread-active", home);
+		send("subagent-spawned", subTap);
+		run(0.1);
+		const hub = of("feature");
+		const sub = of("subagent");
+		const toZ = () => render().filter((s) => near(s.to, nodes.get("work:Zz9")!, 0.5));
+		assert.equal(toZ().length, 0);
+		send("work-touch", subTap, { kind: "work-item", id: "work-wolfpack-Zz9", domain: "wolfpack" });
+		send("work-touch", feature, { kind: "work-item", id: "work-wolfpack-Zz9", domain: "wolfpack" });
+		run(0.05);
+		const strokes = toZ();
+		assert.ok(strokes.some((s) => near(s.from, hub, 6)), "a trail leaves the feature hub");
+		assert.ok(strokes.some((s) => near(s.from, of("subagent"), 40) || near(s.from, sub, 40)), "a trail leaves the sub-agent");
+		mock.timers.tick(60_000);
+		send("work-touch", subTap, { kind: "work-item", id: "work-wolfpack-Nope", domain: "wolfpack" });
+		run(0.05);
+		const toDomain = render().filter((s) => near(s.to, nodes.get("dom:wolfpack")!, 0.5));
+		assert.equal(toDomain.length, 0, "no fallback to the domain node");
+		nodes.delete("work:Zz9");
+	});
+
+	it("reduced motion: no float or roam, subagents snap to their target", () => {
+		g.window = { matchMedia: () => ({ matches: true }), innerWidth: 1280 };
+		const still = new LiveOverlay(() => {});
+		still.configure(LIVE_DEFAULTS);
+		send("thread-active", feature, undefined, still);
+		send("subagent-spawned", subTap, undefined, still);
+		send("kb-read", subTap, ENT, still);
+		const big: OverlayHost = { ...host, extentRadius: () => 600 };
+		still.step(T0, 0.016, big, 1);
+		const w0 = still.items(host, 1, T0).find((i) => i.kind === "wolf")!;
+		const sub = still.items(host, 1, T0).find((i) => i.kind === "subagent")!;
+		const d = dist(sub, nodes.get("ent:kb-wolfpack-KNMBskd")!);
+		assert.ok(d > 10 && d < 16, `snapped beside the entry (${d})`);
+		still.step(T0 + 30_000, 0.016, big, 1);
+		const w1 = still.items(host, 1, T0 + 17_000).find((i) => i.kind === "wolf")!;
+		assert.ok(dist(w0, w1) < 1e-9, "the wolf neither roams nor floats");
+		assert.equal(still.needsFrames(0), false);
+		still.stop();
+	});
+
+	it("cards: a subagent shows its target, a feature its wolf, state and subagent count; private view hides titles", () => {
+		send("thread-active", feature);
+		send("subagent-spawned", subTap);
+		send("kb-read", subTap, ENT);
+		run(1);
+		const its = items();
+		const sub = its.find((i) => i.kind === "subagent")!;
+		const hubItem = its.find((i) => i.kind === "feature")!;
+		const hit = (it: OverlayItem) => o.hitTest(it.x, it.y, { x: 0, y: 0, k: 1 }, 0.5)!;
+		assert.ok(o.cardFor(hit(sub)).lines.includes("Target: Crawl Pipeline"));
+		const hubCard = o.cardFor(hit(hubItem));
+		assert.equal(hubCard.title, "Live pack map");
+		assert.deepEqual(hubCard.lines, ["Wolf: 1uk4", "Working", "Subagents: 1"]);
+		o.setPrivate(true);
+		assert.ok(!JSON.stringify([o.cardFor(hit(sub)), o.cardFor(hit(hubItem))]).includes("Crawl Pipeline"));
+		assert.ok(!o.cardFor(hit(hubItem)).title.includes("Live pack map"));
+	});
+
+	it("feed lines name the actor by feature title or subagent name, and private view hides the title", () => {
+		const fe = (verb: string, actor: Record<string, unknown>, target?: Record<string, unknown>) => ({ id: `f${++n}`, at: T0, ts: T0, verb, actor, target }) as never;
+		const lines = formatFeed([fe("kb-read", feature, { kind: "kb-entry", id: "kb-wolfpack-A", title: "Alpha" }), fe("kb-read", subTap, { kind: "kb-entry", id: "kb-wolfpack-B", title: "Beta" })], {});
+		assert.equal(lines[0]!.text, "1uk4 · Live pack map read Alpha");
+		assert.equal(lines[1]!.text, "1uk4 · scout read Beta");
+		assert.equal(formatFeed([fe("kb-read", feature, { kind: "kb-entry", id: "kb-wolfpack-A", title: "Alpha" })], { private: true })[0]!.text, "1uk4 · feature read");
+	});
+});
+
+describe("clicking a wolf talks to it", () => {
+	beforeEach(() => mock.timers.enable({ apis: ["setTimeout"] }));
+	afterEach(() => mock.timers.reset());
+	const threads = { "1uk4": [{ id: "1uk4/feature-x", title: "x", kind: "feature" }, { id: "1uk4/home", title: "1uk4", kind: "home" }] };
+
+	it("points the floating chat at the wolf's home thread and focuses it", () => {
+		const calls: string[] = [];
+		const did = talkToWolf("1uk4", { threads, attach: (r) => calls.push(`attach ${r.wolf} ${r.threadId}`), focusComposer: () => calls.push("focus"), navigate: (h) => calls.push(`go ${h}`) });
+		assert.equal(did, "composer");
+		mock.timers.tick(1);
+		assert.deepEqual(calls, ["attach 1uk4 1uk4/home", "focus"]);
+	});
+
+	it("opens the home thread's page when there is no floating chat", () => {
+		const calls: string[] = [];
+		assert.equal(talkToWolf("1uk4", { threads, focusComposer: () => undefined, navigate: (h) => calls.push(h) }), "page");
+		assert.equal(calls.length, 1);
+		assert.ok(calls[0]!.includes("home"));
+	});
+});
+
+describe("subagent separation (pure)", () => {
+	it("two bodies stacked on one point, and a body on its hub, are pushed apart until clear of each other", () => {
+		const mk = (x: number, y: number): SubBody => ({ x, y, vx: 0, vy: 0, r: 10, hx: 0, hy: 0, hr: 8 });
+		const list = [mk(0, 0), mk(0, 0)];
+		for (let i = 0; i < 400; i++) {
+			separateSubs(list, 0.016);
+			for (const b of list) stepSub(b, i * 16, 0.016, b.x, b.y, 0);
+		}
+		const [a, b] = list as [SubBody, SubBody];
+		// worked literals: pair clearance r + r + 0.4r = 24, hub clearance hr + r + 0.4r = 8 + 10 + 4 = 22
+		assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= 23.5, `apart ${Math.hypot(a.x - b.x, a.y - b.y)}`);
+		for (const s of list) assert.ok(Math.hypot(s.x, s.y) >= 21.5, `clear of the hub ${Math.hypot(s.x, s.y)}`);
+	});
+});

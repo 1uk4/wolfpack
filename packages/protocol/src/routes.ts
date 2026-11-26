@@ -53,6 +53,7 @@ import {
   GraduationResultSchema,
   KbActivityResponseSchema,
 } from "./schemas.js";
+import { ActivityBatchSchema, ActivityIngestResponseSchema, ActivityStatsSchema, PresenceSnapshotSchema } from "./activity.js";
 import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffRequestSchema, KbManifestDiffResponseSchema } from "./kb-sync.js";
 
 import * as R from "./registry.js";
@@ -60,6 +61,7 @@ import { HubSettingsSchema } from "./hub-settings.js";
 import { CommandRequestSchema, CommandResponseSchema } from "./command.js";
 import { InventoryEntrySchema, InventoryReportBodySchema, MachineKeyAckBodySchema } from "./inventory.js";
 import { PutWolfSettingsBodySchema, RestartResponseSchema, RevealBodySchema, RevealResponseSchema, WolfSettingsViewSchema } from "./wolf-settings.js";
+import { PrefBodySchema, PrefResponseSchema } from "./prefs.js";
 import { ListPromptsResponseSchema, PromptViewSchema, PutPromptBodySchema } from "./prompts.js";
 import { DeviceListSchema, MintPairingCodeRequestSchema, MintPairingCodeResponseSchema, PairRequestSchema, PairResponseSchema, RevokeDeviceResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
@@ -649,6 +651,13 @@ export const ROUTES = {
    */
   hubListDevices: { scope: "hub", method: "GET", path: "/v1/tokens", response: { kind: "json", schema: DeviceListSchema }, status: [200], error: err },
   hubRevokeDevice: { scope: "hub", method: "DELETE", path: "/v1/tokens/:id", response: { kind: "json", schema: RevokeDeviceResponseSchema }, status: [200], error: err },
+  /**
+   * Per-person preferences (work-wolfpack-H1OQNIh): one JSON value per (person, key), the person taken from the bearer token (today every token is the single
+   * owner identity, so all paired devices share it). GET answers `{value}` (`null` when nothing is stored). PUT `{value}` replaces it (atomic) and answers the stored value;
+   * 400 `invalid_request` for a bad key (letters, digits, `.`, `_`, `-`, up to 64) or a value over 32 KB serialized.
+   */
+  hubGetPref: { scope: "hub", method: "GET", path: "/v1/prefs/:key", response: { kind: "json", schema: PrefResponseSchema }, status: [200], error: err },
+  hubPutPref: { scope: "hub", method: "PUT", path: "/v1/prefs/:key", body: PrefBodySchema, response: { kind: "json", schema: PrefResponseSchema }, status: [200], error: err },
   hubMintPairingCode: { scope: "hub", method: "POST", path: "/v1/tokens/pairing-codes", body: MintPairingCodeRequestSchema, response: { kind: "json", schema: MintPairingCodeResponseSchema }, status: [200], error: err },
   hubPairPage: { scope: "hub", public: true, method: "GET", path: "/pair", response: { kind: "bytes" }, status: [200], error: err },
   /**
@@ -658,6 +667,16 @@ export const ROUTES = {
    * Keepalive comments; never ends with `[DONE]`.
    */
   hubEvents: { scope: "hub", method: "GET", path: "/v1/events", response: { kind: "sse", event: HubEventSchema }, status: [200], error: err },
+  /**
+   * Live pack map ingest. Body `{v:1, events:[ActivityEvent]}` (64 KB max). Wolf (worker) tokens publish wolf/thread/subagent events AS A WOLF REGISTERED ON THEIR HOST;
+   * console/browser tokens publish `owner` events only. The hub overwrites `pack`; invalid, spoofed and over-rate-limit events are dropped, never an error.
+   * 202 `{accepted, dropped}`. Fan-out: `pack.activity` frames on hubEvents (no `id:` line; see PackActivityFrameSchema).
+   */
+  hubActivityIngest: { scope: "hub", method: "POST", path: "/v1/activity", body: ActivityBatchSchema, response: { kind: "json", schema: ActivityIngestResponseSchema }, status: [202], error: err },
+  /** Current presence of the caller's pack (wolves, threads, subagents, owner), expired entries removed. */
+  hubActivityPresence: { scope: "hub", method: "GET", path: "/v1/activity/presence", response: { kind: "json", schema: PresenceSnapshotSchema }, status: [200], error: err },
+  /** In-memory activity counters per wolf (accepted, rejected by reason, rate-limited, derived-published, queue-dropped). Owner and device tokens only (403 for a worker token). */
+  hubActivityStats: { scope: "hub", method: "GET", path: "/v1/activity/stats", response: { kind: "json", schema: ActivityStatsSchema }, status: [200], error: err },
   /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a
    * preview with a confirmation token. Answers at once with the job `{jobId, kind, state: "running", startedAt}`; a start

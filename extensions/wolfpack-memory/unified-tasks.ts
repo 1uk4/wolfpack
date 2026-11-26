@@ -80,7 +80,7 @@ import {
 } from "./conversation-binding.js";
 import { HttpConsoleClient } from "@wolfpack/client";
 import { WolfIdSchema } from "@wolfpack/kb/client";
-import { hubTargetFromEnv, redactUrl } from "@wolfpack/memory";
+import { hubTargetFromEnv, redactUrl, turnActorHeaders } from "@wolfpack/memory";
 import { WorkClient, WorkQueuedError, handoffText, overrideNote, GRADUATION_TIMEOUT_MS, WORK_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
 import { createGraduation } from "./graduation.js";
 import { registerGraduationActions, unregisterGraduationActions } from "./memory-actions.js";
@@ -328,7 +328,7 @@ export default function createTasksExtension(
     try {
       res = await fetch(`${target.baseUrl.replace(/\/$/, "")}/v1/work/${encodeURIComponent(id)}/requests`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${target.token}`, "Content-Type": "application/json", "X-Wolf": wolfName },
+        headers: { Authorization: `Bearer ${target.token}`, "Content-Type": "application/json", "X-Wolf": wolfName, ...turnActorHeaders() },
         body: JSON.stringify({ ...body, wolf: wolfName }),
         signal: AbortSignal.timeout(WORK_TIMEOUT_MS * 5),
       });

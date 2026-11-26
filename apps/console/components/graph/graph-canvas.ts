@@ -56,8 +56,10 @@ import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "@/src/core";
 import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, ROUTE_DONE_COLOR } from "@/src/core";
+import { redactLines } from "@/src/core";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
+import type { LiveOverlay, OverlayHighlight, OverlayHit, OverlayHost } from "./live/live-overlay";
 import {
 	CHARGE_STRENGTH,
 	CLUSTER_PULL_STRENGTH,
@@ -170,6 +172,10 @@ export interface RendererCallbacks {
 	/** The live sim settled after a drag: commit the new rest state
 	 *  (the caller PUTs it to the positions store). */
 	onCommit: (positions: Record<string, Position>) => void;
+	/** Live overlay: the pointer is over a wolf / thread / subagent (null = left it). */
+	onOverlayHover?: (hit: OverlayHit | null) => void;
+	/** Live overlay: a click or tap (not a drag) landed on one. */
+	onOverlaySelect?: (hit: OverlayHit, pointerType: string) => void;
 }
 
 // ─── Constants (ported verbatim from the sigma view) ────────────────────────
@@ -296,7 +302,16 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
  *  the jagged close-up look), there is no border to lag behind, and a
  *  live-physics frame pays one tiny blit instead of 32 clusters × 4
  *  offset polygons re-rasterized at DPR 2 (the old GPU coil-whine). */
-const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
+const LABEL_MIN_SCREEN_PX = 6; // labels smaller than this on screen are skipped
+const LABEL_CULL_MARGIN = 150; // screen px around the viewport that still draws labels
+const SIM_FIELDS = new Set(["x", "y", "vx", "vy", "fx", "fy", "index"]); // mutated by the sim; not content
+const TOUCH_MAX_DPR = 2; // coarse-pointer (touch) devices render at most 2x
+
+/** devicePixelRatio, capped at 2 on touch devices (a 3x phone canvas costs 2.25x the fill for no visible gain). */
+function effectiveDpr(): number {
+	const raw = window.devicePixelRatio || 1;
+	return raw > TOUCH_MAX_DPR && window.matchMedia?.("(pointer: coarse)").matches ? TOUCH_MAX_DPR : raw;
+}
 
 
 
@@ -515,15 +530,37 @@ function drawNameLines(
 	world: WorldSizes,
 	radius: number,
 	color: string,
+	privateView = false,
+	k = 1,
+	batched = false,
 ): void {
 	context.fillStyle = color;
 	context.textAlign = "center";
 	context.textBaseline = "top";
 	const firstTop = y + radius + world.labelGap;
-	for (let i = 0; i < lines.length; i++) {
-		context.fillText(lines[i]!, x, firstTop + i * world.labelSize * LABEL_LINE_HEIGHT);
+	// Private view: the same footprint as soft blurred dots, no readable text.
+	// Batched (the node-label pass): the caller set the blur once for the whole batch, only the glow colour follows the label.
+	if (privateView) {
+		if (batched) context.shadowColor = color;
+		else blurLabels(context, color, world.labelSize * 0.45, k);
 	}
+	const shown = redactLines(lines, privateView);
+	for (let i = 0; i < shown.length; i++) {
+		context.fillText(shown[i]!, x, firstTop + i * world.labelSize * LABEL_LINE_HEIGHT);
+	}
+	if (privateView && !batched) context.shadowBlur = 0;
 }
+
+/** Private view: a soft glow under the redacted label (shadowBlur works in every canvas, unlike ctx.filter on Safari). `blurWorld` is in
+ *  world units; shadowBlur ignores the transform, so it is scaled by the current zoom. Callers reset it. */
+function blurLabels(context: CanvasRenderingContext2D, color: string, blurWorld: number, k: number): void {
+	context.shadowColor = color;
+	context.shadowBlur = blurWorld * k * (devicePixelRatioOf());
+}
+
+/** The canvas' device-pixel factor on the base transform (the camera transform's scale is dpr * k). */
+let blurDpr = 1;
+const devicePixelRatioOf = (): number => blurDpr;
 
 /** One batch of nodes that share a look: drawn with a single fill (disc)
  *  or stroke (ring). */
@@ -628,6 +665,15 @@ export class GraphCanvasRenderer {
 
 	private frameId: number | null = null;
 	private dirty = true;
+	/** Only the overlay changed (requestRedraw): the cached base layers can be reused. `dirty` (markDirty) means the base is stale. */
+	private overlayDirty = false;
+	/** The previous tick ran a base animation (hover fade, zoom glide, sim, pulses): the next draw is a full one so the settle frame lands. */
+	private lastBaseAnim = false;
+	/** The last tick animated only the overlay: the next ticks may wait out its frame floor. */
+	private overlayOnlyAnim = false;
+	/** Layers 1-7b rendered once per base change (offscreen, device pixels); overlay frames blit it instead of redrawing ~2k nodes. */
+	private baseLayer: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
+	private baseKey = "";
 	/** True while tick() runs: markDirty inside the loop (d3's zoom event
 	 *  fires from advanceZoom) must NOT schedule — the loop schedules
 	 *  itself below. Un-guarded, each glide frame leaked an extra queued
@@ -659,6 +705,12 @@ export class GraphCanvasRenderer {
 
 	private resizeObserver: ResizeObserver;
 	private downPos: Pt | null = null;
+	/** The live overlay (wolves, satellites, pulses): drawn above the nodes inside THIS loop; null = nothing changes. */
+	private destroyed = false;
+	private overlay: LiveOverlay | null = null;
+	private overlayHoverKey: string | null = null;
+	private overlayDown: OverlayHit | null = null;
+	private lastDrawAt = 0;
 
 	// ── Cached world geometry ─────────────────────────────────────────────
 	// Everything above is drawn per frame; everything below is derived from
@@ -685,11 +737,16 @@ export class GraphCanvasRenderer {
 	private regionMeta: { id: string; label: string | null; lines: string[] | null; cx: number; cy: number; color: string }[] = [];
 	private regionTuning: RegionTuning = DEFAULT_REGION_TUNING;
 	private physicsTuning: PhysicsTuning = DEFAULT_PHYSICS_TUNING;
+	/** Value key of the tuning the sim was built with. */
+	private physicsKey = JSON.stringify(DEFAULT_PHYSICS_TUNING);
 	/** Gravity center for the live sim (graph bbox centroid at setData). */
 	private simCenter: Pt = { x: 0, y: 0 };
 	private regionBuiltVersion = -1;
-	private frameCount = 0; // draw counter for the live-sim splat throttle
 	private labelLines = new Map<string, string[]>();
+	private hasBlocked = false;
+	/** Content signature (no positions or sim state) of the data last applied. */
+	private dataKey = "";
+	private labelKey: { data: unknown; visible: unknown; font: string; maxW: number } | null = null;
 	private worldLabelFont = "";
 	private world: WorldSizes = { nodeR: 0, labelSize: 0, labelGap: 0 };
 
@@ -779,7 +836,8 @@ export class GraphCanvasRenderer {
 			// store (which clears the canvas), and during live window resizes
 			// rAF is starved by relayout — a deferred draw would leave the
 			// canvas blank for the whole drag (the resize-blanking bug).
-			this.draw();
+			this.guardOverlay((o) => o.onResize(), undefined);
+			this.draw(true);
 		});
 		this.resizeObserver.observe(canvas);
 		this.syncSize();
@@ -788,11 +846,21 @@ export class GraphCanvasRenderer {
 	// ── Public API ──
 
 	setData(data: CanvasData): void {
+		// A refetch that changed nothing (same ids, styles, links, and every node where the renderer has it) must not rebuild the sim.
+		const dataKey = JSON.stringify(data, (key, v) => (SIM_FIELDS.has(key) ? undefined : v));
+		if (this.data && dataKey === this.dataKey && data.nodes.every((n) => {
+			const cur = this.nodeById.get(n.id);
+			return !!cur && cur.x === n.x && cur.y === n.y;
+		})) {
+			return;
+		}
+		this.dataKey = dataKey;
 		// A rest state waiting out its debounce belongs to the OLD nodes:
 		// commit it before they are replaced.
 		this.flushCommit();
 		this.data = data;
 		this.nodeById = new Map(data.nodes.map((n) => [n.id, n]));
+		this.hasBlocked = data.nodes.some((n) => n.blocked);
 		this.refreshVisible();
 		let minX = Infinity;
 		let minY = Infinity;
@@ -872,7 +940,14 @@ export class GraphCanvasRenderer {
 	 *  the new feel"). A mid-settle change re-anneals, which is the
 	 *  honest response to new physics. */
 	setPhysicsTuning(input: Partial<PhysicsTuning>): void {
-		this.physicsTuning = sanitizePhysicsTuning(input);
+		const next = sanitizePhysicsTuning(input);
+		// Compare by value: the settings object is swapped (defaults, then the
+		// loaded copy) with equal contents on every mount; only a real change
+		// rebuilds and re-anneals the layout.
+		const key = JSON.stringify(next);
+		if (key === this.physicsKey) return;
+		this.physicsKey = key;
+		this.physicsTuning = next;
 		this.buildSim();
 		// Reheat: a tuning change re-anneals the layout from its current
 		// state, so mode toggles (off/vertical/radial) visibly RE-FORM the
@@ -1039,7 +1114,10 @@ export class GraphCanvasRenderer {
 	}
 
 	destroy(): void {
+		this.destroyed = true;
 		if (this.frameId !== null) cancelAnimationFrame(this.frameId);
+		this.overlay = null;
+		this.baseLayer = null;
 		this.flushCommit();
 		this.sim = null;
 		this.simActive = false;
@@ -1054,6 +1132,117 @@ export class GraphCanvasRenderer {
 		this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
 		this.canvas.removeEventListener("contextmenu", this.onContextMenu);
 		this.canvas.style.cursor = "";
+	}
+
+	/** Set once the overlay threw: it is skipped for the rest of the session so the graph itself keeps rendering. */
+	private overlayBroken = false;
+	/** Run an overlay call; an exception disables the overlay (logged once) and yields `fallback`. */
+	private guardOverlay<T>(fn: (o: LiveOverlay) => T, fallback: T): T {
+		const o = this.overlay;
+		if (!o || this.overlayBroken) return fallback;
+		try {
+			return fn(o);
+		} catch (err) {
+			this.overlayBroken = true;
+			console.error("live overlay disabled after an error", err);
+			return fallback;
+		}
+	}
+
+	/** Attach (or detach with null) the live overlay. The caller owns its lifetime; the renderer only draws and hit-tests it. */
+	setOverlay(o: LiveOverlay | null, cbs?: Pick<RendererCallbacks, "onOverlayHover" | "onOverlaySelect">): void {
+		this.overlay = o;
+		this.overlayBroken = false;
+		this.callbacks = { ...this.callbacks, onOverlayHover: cbs?.onOverlayHover, onOverlaySelect: cbs?.onOverlaySelect };
+		if (!o) {
+			this.setOverlayHover(null);
+			this.setReplacedNodes(new Set());
+		}
+		this.markDirty();
+	}
+
+	/** Node ids whose dot the overlay replaces with its own (a feature hub on its work node): the base skips their discs, keeps edges and labels. */
+	private replacedNodes: ReadonlySet<string> = new Set();
+	/** Only a CHANGED set rebuilds the geometry and so the cached base; the same set again is a no-op. */
+	setReplacedNodes(ids: ReadonlySet<string>): void {
+		const cur = this.replacedNodes;
+		if (ids.size === cur.size) {
+			let same = true;
+			for (const id of ids) if (!cur.has(id)) { same = false; break; }
+			if (same) return;
+		}
+		this.replacedNodes = new Set(ids);
+		this.geoVersion++;
+		this.markDirty();
+	}
+
+	/** Ring a node / target / wolf on the overlay (the activity feed's hover); null clears it. */
+	setOverlayHighlight(h: OverlayHighlight | null): void {
+		this.overlay?.setHighlight(h);
+	}
+
+	/** Request a redraw (the overlay calls this when its state changes). */
+	requestRedraw(): void {
+		if (this.destroyed) return;
+		this.overlayDirty = true;
+		this.schedule();
+	}
+
+	/** Bounding radius of all nodes about the graph's centre, for the wolves' free roam. Cached per base graph (nodeById identity). */
+	private extentFor: Map<string, CanvasNode> | null = null;
+	private extent = 0;
+	private extentRadiusOf(): number | null {
+		if (this.extentFor !== this.nodeById) {
+			const b = this.worldBBox;
+			const cx = b ? (b.minX + b.maxX) / 2 : 0;
+			const cy = b ? (b.minY + b.maxY) / 2 : 0;
+			let r = 0;
+			for (const n of this.nodeById.values()) r = Math.max(r, Math.hypot(n.x - cx, n.y - cy));
+			this.extent = r;
+			this.extentFor = this.nodeById;
+		}
+		return this.extent > 0 ? this.extent : null;
+	}
+
+	private overlayHostCache: OverlayHost | null = null;
+	private overlayHost(): OverlayHost {
+		const data = this.data;
+		if (this.overlayHostCache && this.overlayHostCache.colors === data?.colors) return this.overlayHostCache;
+		const host: OverlayHost = {
+			nodePos: (id) => {
+				const n = this.nodeById.get(id);
+				return n ? { x: n.x, y: n.y } : null;
+			},
+			hasNode: (id) => this.nodeById.has(id),
+			nodeColor: (id) => this.nodeById.get(id)?.color,
+			nodeRadius: (id) => {
+				const n = this.nodeById.get(id);
+				return n ? this.radiusOf(n) : null;
+			},
+			nodeLabel: (id) => this.nodeById.get(id)?.label,
+			setReplacedNodes: (ids) => this.setReplacedNodes(ids),
+			extentRadius: () => this.extentRadiusOf(),
+			center: () => {
+				const b = this.worldBBox;
+				return b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 } : { x: 0, y: 0 };
+			},
+			colors: data?.colors ?? { node: "#888888", edge: "#888888", label: "#888888", hoverText: "#ffffff" },
+			fontFamily: data?.fontFamily ?? "sans-serif",
+		};
+		this.overlayHostCache = host;
+		return host;
+	}
+
+	/** The overlay thing under the pointer; touch gets a bigger pick pad. */
+	private overlayHit(pos: Pt, pointerType: string): OverlayHit | null {
+		return this.guardOverlay((o) => o.hitTest(pos.x, pos.y, this.transform, pointerType === "touch" ? 18 : 8), null);
+	}
+
+	private setOverlayHover(hit: OverlayHit | null): void {
+		const key = hit ? hit.item.kind + ":" + hit.item.key : null;
+		if (key === this.overlayHoverKey) return;
+		this.overlayHoverKey = key;
+		this.callbacks.onOverlayHover?.(hit);
 	}
 
 	// ── Event handlers (state mutation only — never draw) ──
@@ -1095,6 +1284,15 @@ export class GraphCanvasRenderer {
 			}
 			return;
 		}
+		if (e.pointerType !== "touch") {
+			const oh = this.overlayHit(pos, e.pointerType);
+			this.setOverlayHover(oh);
+			if (oh) {
+				if (this.hoverId) this.setHover(null);
+				this.canvas.style.cursor = "pointer";
+				return;
+			}
+		}
 		const node = this.pickAt(pos.x, pos.y);
 		if ((node?.id ?? null) !== this.hoverId) this.setHover(node?.id ?? null);
 		this.canvas.style.cursor = node ? "pointer" : "";
@@ -1107,7 +1305,11 @@ export class GraphCanvasRenderer {
 		// used to open under the menu).
 		if (e.button !== 0) return;
 		const pos = this.eventPos(e);
-		const node = this.pickAt(pos.x, pos.y);
+		// An overlay thing under the press: remember it for the click, but do NOT take the press (pan and pinch stay d3-zoom's).
+		// A hub that replaces a graph node is that node: the press goes to the node, as before the hub existed.
+		const oh = this.overlayHit(pos, e.pointerType);
+		this.overlayDown = oh?.item.nodeId ? null : oh;
+		const node = this.overlayDown ? null : this.pickAt(pos.x, pos.y);
 		if (node && this.sim) {
 			// Node press: pin the node (at ITS OWN position — the cursor
 			// may be inside the pick pad, off-center). preventDefault kills
@@ -1169,7 +1371,13 @@ export class GraphCanvasRenderer {
 		const pos = this.eventPos(e);
 		const moved = Math.hypot(pos.x - this.downPos.x, pos.y - this.downPos.y);
 		this.downPos = null;
+		const od = this.overlayDown;
+		this.overlayDown = null;
 		if (moved > CLICK_SLOP) return; // that was a drag (pan), not a click
+		if (od) {
+			this.callbacks.onOverlaySelect?.(od, e.pointerType);
+			return;
+		}
 		const node = this.pickAt(pos.x, pos.y);
 		if (node) this.callbacks.onSelect(node.id, pos);
 		else this.callbacks.onStageClick();
@@ -1188,6 +1396,7 @@ export class GraphCanvasRenderer {
 	private onPointerLeave = () => {
 		if (this.dragId) return; // pointer capture keeps the drag alive
 		this.downPos = null;
+		this.setOverlayHover(null);
 		this.setHover(null);
 	};
 
@@ -1204,14 +1413,20 @@ export class GraphCanvasRenderer {
 		// Picking measures from each disc's edge: radius on screen is the
 		// world radius × the camera zoom; the halo pad stays a constant
 		// screen pad.
-		const projected: { id: string; x: number; y: number; r: number }[] = [];
+		// World-space scan, no per-move allocation: screen distance = world distance × k.
+		const wx = (px - tx) / k;
+		const wy = (py - ty) / k;
+		let best: CanvasNode | null = null;
+		let bestD = PICKING_PAD;
 		for (const n of this.data.nodes) {
 			if (this.visible && !this.visible.has(n.id)) continue;
-			projected.push({ id: n.id, x: n.x * k + tx, y: n.y * k + ty, r: this.radiusOf(n) * k });
+			const d = Math.max((Math.hypot(n.x - wx, n.y - wy) - this.radiusOf(n)) * k, 0);
+			if (d < bestD) {
+				bestD = d;
+				best = n;
+			}
 		}
-		const hit = pickNearest(projected, px, py, PICKING_PAD);
-		if (!hit) return null;
-		return this.nodeById.get(hit.id) ?? null;
+		return best;
 	}
 
 	/** A node's disc radius in world units (nodeSize × its multiplier). */
@@ -1235,7 +1450,12 @@ export class GraphCanvasRenderer {
 	}
 
 	private markDirty(): void {
+		if (this.destroyed) return; // a late setOverlay(null) or overlay redraw after destroy must not start a frame loop
 		this.dirty = true;
+		this.schedule();
+	}
+
+	private schedule(): void {
 		if (this.frameId === null && !this.inTick) {
 			this.frameId = requestAnimationFrame(() => {
 				this.frameId = null;
@@ -1245,22 +1465,48 @@ export class GraphCanvasRenderer {
 	}
 
 	private tick(): void {
+		// Only the overlay is animating and nothing else asked for a frame: wait out its frame floor without stepping or drawing
+		// (a 120 Hz screen must not run the overlay at 120 fps). lastTickAt stays put, so the next step's dt covers the wait.
+		if (this.overlayOnlyAnim && !this.dirty && !this.overlayDirty && !this.lastBaseAnim) {
+			const floor = this.guardOverlay((o) => o.minFrameMs, 0);
+			if (floor > 0 && performance.now() - this.lastDrawAt < floor) {
+				this.frameId = requestAnimationFrame(() => {
+					this.frameId = null;
+					this.tick();
+				});
+				return;
+			}
+		}
 		this.inTick = true;
 		try {
 			const now = performance.now();
 			// Clamp the dt: a long idle gap must not teleport the ease forward.
 			const dt = Math.min(Math.max(now - this.lastTickAt, 8), 100);
+			const wasDirty = this.dirty;
 			this.lastTickAt = now;
 			const hoverAnim = this.advanceHover();
 			const zoomAnim = this.advanceZoom(dt);
 			const simAnim = this.advanceSim();
-			this.draw();
+			// Live overlay: its own small physics (reads node positions, never moves them) and its own animation need.
+			if (this.geometryReady) this.guardOverlay((o) => o.step(now, dt / 1000, this.overlayHost(), this.transform.k), undefined);
+			const overlayAnim = this.guardOverlay((o) => o.needsFrames(now), false);
+			let pulseAnim = false;
+			for (const p of this.pulses.values()) if (!p.reduce) pulseAnim = true;
+			const baseAnim = hoverAnim || zoomAnim || simAnim || pulseAnim;
+			const forceBase = baseAnim || this.lastBaseAnim;
+			this.lastBaseAnim = baseAnim;
+			// When ONLY the overlay animates, frames are overlay-only (cached base) and capped at the overlay's frame floor.
+			const onlyOverlay = overlayAnim && !forceBase && !wasDirty;
+			const minFrameMs = this.guardOverlay((o) => o.minFrameMs, 0);
+			if (!(onlyOverlay && now - this.lastDrawAt < minFrameMs)) {
+				this.draw(forceBase);
+				this.lastDrawAt = now;
+			}
 			// Keep frames coming ONLY while an animation is in motion (hover
 			// fade, zoom glide, or live physics); an idle graph schedules no
 			// rAF at all.
-			let pulseAnim = false;
-			for (const p of this.pulses.values()) if (!p.reduce) pulseAnim = true;
-			this.animating = hoverAnim || zoomAnim || simAnim || pulseAnim;
+			this.animating = baseAnim || overlayAnim;
+			this.overlayOnlyAnim = overlayAnim && !baseAnim;
 		} finally {
 			this.inTick = false;
 		}
@@ -1355,7 +1601,7 @@ export class GraphCanvasRenderer {
 	private syncSize(): void {
 		const w = this.canvas.clientWidth;
 		const h = this.canvas.clientHeight;
-		const dpr = window.devicePixelRatio || 1;
+		const dpr = effectiveDpr();
 		const bw = Math.max(1, Math.round(w * dpr));
 		const bh = Math.max(1, Math.round(h * dpr));
 		if (this.canvas.width !== bw || this.canvas.height !== bh) {
@@ -1372,9 +1618,11 @@ export class GraphCanvasRenderer {
 		if (!data) return;
 		const visible = this.visible;
 		const route = this.route;
+		// Nothing to draw: no route, no blocked nodes, no dependency edges.
+		if (!route && !this.hasBlocked && !(data.depEdges?.length)) return;
 		ctx.save();
 		// Blocked rings (always on) and the route's node halos.
-		for (const n of data.nodes) {
+		for (const n of route || this.hasBlocked ? data.nodes : []) {
 			if (visible && !visible.has(n.id)) continue;
 			const r = this.radiusOf(n);
 			if (n.blocked) {
@@ -1417,8 +1665,7 @@ export class GraphCanvasRenderer {
 			}
 		}
 		// Arrows.
-		const positions = new Map<string, { x: number; y: number }>();
-		for (const n of data.nodes) positions.set(n.id, n);
+		const positions = this.nodeById; // id → node, already indexed
 		const { x: tx, y: ty } = this.transform;
 		const list = buildDepDrawList({
 			edges: data.depEdges ?? [],
@@ -1485,7 +1732,7 @@ export class GraphCanvasRenderer {
 		// = the radius), so picking, edges and labels all see the same disc.
 		const groups = new Map<string, NodeGroup>();
 		for (const n of data.nodes) {
-			if (!isVisible(n.id)) continue;
+			if (!isVisible(n.id) || this.replacedNodes.has(n.id)) continue;
 			const r = this.radiusOf(n);
 			const ring = n.shape === "ring" ? Math.min(Math.max(n.ring ?? 0.25, 0.05), 1) * r : 0;
 			const routeDone = !!this.route?.nodes.has(n.id) && this.route.done.has(n.id);
@@ -1526,15 +1773,21 @@ export class GraphCanvasRenderer {
 		// Label wrapping: measureText once per node per geometry build,
 		// never per frame. Wrap width keeps the bigger-label/bigger-wrap
 		// behavior from the sigma era.
-		this.labelLines = new Map();
-		const ctx = this.ctx;
-		const prevFont = ctx.font;
-		ctx.font = this.worldLabelFont;
+		// Wrapped lines depend on data, visibility, font and wrap width, never
+		// on position, so live-sim frames reuse them.
 		const maxW = LABEL_MAX_WIDTH * (settings.labelSize / LABEL_SIZE);
-		for (const n of data.nodes) {
-			if (isVisible(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
+		const lk = this.labelKey;
+		if (!lk || lk.data !== data || lk.visible !== visible || lk.font !== this.worldLabelFont || lk.maxW !== maxW) {
+			this.labelKey = { data, visible, font: this.worldLabelFont, maxW };
+			this.labelLines = new Map();
+			const ctx = this.ctx;
+			const prevFont = ctx.font;
+			ctx.font = this.worldLabelFont;
+			for (const n of data.nodes) {
+				if (isVisible(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
+			}
+			ctx.font = prevFont;
 		}
-		ctx.font = prevFont;
 	}
 
 	/** (Re)create the live sim from data.nodes at their current
@@ -1871,29 +2124,49 @@ export class GraphCanvasRenderer {
 		this.regionRect = { minX, minY, w: spanX, h: spanY };
 	}
 
+	/** The offscreen base layer at the main canvas' pixel size, or null when it cannot be had (the base then draws straight to the canvas). */
+	private ensureBaseLayer(w: number, h: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null {
+		try {
+			if (!this.baseLayer) {
+				const canvas = document.createElement("canvas");
+				const ctx = canvas.getContext("2d");
+				if (!ctx) return null;
+				this.baseLayer = { canvas, ctx };
+			}
+			const l = this.baseLayer;
+			if (l.canvas.width !== w || l.canvas.height !== h) {
+				l.canvas.width = w;
+				l.canvas.height = h; // also clears
+				this.baseKey = "";
+			}
+			return l;
+		} catch {
+			return null;
+		}
+	}
+
 	/** THE draw function: every layer, one frame, one camera. All drawing
 	 *  happens in WORLD coordinates under the camera transform; nothing is
 	 *  recomputed per frame except layer styling. */
-	private draw(): void {
+	private draw(forceBase = false): void {
+		const baseStale = this.dirty || forceBase;
 		this.dirty = false;
+		this.overlayDirty = false;
 		const data = this.data;
 		const settings = this.settings;
 		if (!data || !settings) return;
 		const w = this.canvas.clientWidth;
 		const h = this.canvas.clientHeight;
-		const dpr = window.devicePixelRatio || 1;
+		const dpr = effectiveDpr();
 		const ctx = this.ctx;
+		blurDpr = dpr;
 
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		ctx.clearRect(0, 0, w, h);
 
-		this.frameCount++;
 		// Regions: rebuild on stale geometry at rest; during the live sim,
 		// every REGION_EVERY-th frame (others blit the last bitmap).
-		if (
-			this.regionBuiltVersion !== this.geoVersion &&
-			(!this.simActive || this.frameCount % REGION_EVERY === 0)
-		) {
+		if (this.regionBuiltVersion !== this.geoVersion && !this.simActive) {
 			this.buildRegions();
 			this.regionBuiltVersion = this.geoVersion;
 		}
@@ -1907,6 +2180,23 @@ export class GraphCanvasRenderer {
 		const ratio = zoomRatioOf(this.kFit, k);
 		const nodeAlpha = labelAlpha(ratio, settings.labelZoom);
 		const regionAlpha = 1 - nodeAlpha;
+
+		// Layers 1-7b go to an offscreen cache and are reused while only the overlay changes. Besides the dirty flags, a key of everything
+		// the base reads that can change without markDirty guards against a stale picture; a live sim or a hover fade never reuses it.
+		const pxW = this.canvas.width;
+		const pxH = this.canvas.height;
+		const key = `${tx}|${ty}|${k}|${dpr}|${pxW}|${pxH}|${this.geoVersion}|${this.regionBuiltVersion}|${this.hoverNode?.id ?? ""}|${this.hoverFade}|${this.pulses.size}`;
+		const layer = this.ensureBaseLayer(pxW, pxH);
+		const reuse = !!layer && !baseStale && !this.simActive && key === this.baseKey;
+		if (!reuse) {
+			const mainCtx = ctx;
+			{
+			const ctx = layer ? layer.ctx : mainCtx;
+			if (layer) {
+				ctx.setTransform(1, 0, 0, 1, 0, 0);
+				ctx.clearRect(0, 0, pxW, pxH);
+				ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * tx, dpr * ty);
+			}
 
 		// 1. Cluster regions: one tiny world-space bitmap blit. The upscale
 		//    blur is the region softness; adjacent cluster tints blend
@@ -1957,17 +2247,24 @@ export class GraphCanvasRenderer {
 		// 6. Node labels — one global gate (per-node gate multiplier: big
 		// nodes label later), faded together. World-scaled with the graph
 		// (they grow as you zoom in, Obsidian-style).
-		if (nodeAlpha > 0.01) {
+		// Labels off screen (plus a margin for their width) or too small to read are skipped.
+		if (nodeAlpha > 0.01 && this.world.labelSize * k >= LABEL_MIN_SCREEN_PX) {
+			const { x: ltx, y: lty } = this.transform;
+			const minX = (-LABEL_CULL_MARGIN - ltx) / k;
+			const maxX = (w + LABEL_CULL_MARGIN - ltx) / k;
+			const minY = (-LABEL_CULL_MARGIN - lty) / k;
+			const maxY = (h + LABEL_CULL_MARGIN - lty) / k;
 			ctx.save();
 			ctx.font = this.worldLabelFont;
+			if (settings.privateView) blurLabels(ctx, data.colors.label, this.world.labelSize * 0.45, k); // once for the whole batch
 			for (const [id, lines] of this.labelLines) {
 				const n = this.nodeById.get(id);
-				if (!n) continue;
+				if (!n || n.x < minX || n.x > maxX || n.y < minY || n.y > maxY) continue;
 				const routeDone = !!this.route?.nodes.has(id) && this.route.done.has(id);
 				const a = labelAlpha(ratio, settings.labelZoom * (n.labelGate ?? 1)) * (routeDone ? DEP_STYLE.routeDoneNodeAlpha : (n.dim ? DIM_LABEL_ALPHA : 1) * this.restDim(id));
 				if (a <= 0.01) continue;
 				ctx.globalAlpha = a;
-				drawNameLines(ctx, n.x, n.y, lines, this.world, this.radiusOf(n), routeDone ? ROUTE_DONE_COLOR : data.colors.label);
+				drawNameLines(ctx, n.x, n.y, lines, this.world, this.radiusOf(n), routeDone ? ROUTE_DONE_COLOR : data.colors.label, settings.privateView, k, true);
 			}
 			ctx.restore();
 		}
@@ -1995,7 +2292,7 @@ export class GraphCanvasRenderer {
 				ctx.save();
 				ctx.globalAlpha = this.hoverFade;
 				ctx.font = this.worldLabelFont;
-				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, nodeR, data.colors.hoverText);
+				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, nodeR, data.colors.hoverText, settings.privateView, k);
 				ctx.restore();
 			}
 		}
@@ -2028,6 +2325,22 @@ export class GraphCanvasRenderer {
 			}
 		}
 
+			}
+			this.baseKey = layer ? key : "";
+		}
+		if (layer) {
+			ctx.setTransform(1, 0, 0, 1, 0, 0);
+			ctx.drawImage(layer.canvas, 0, 0);
+			ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * tx, dpr * ty);
+		}
+
+		// 7c. Live overlay: wolves, satellites, trails, pulses, rings (same camera; nothing when it has no data).
+		this.guardOverlay((o) => o.draw(ctx, this.overlayHost(), k, performance.now()), undefined);
+		// 7d. The overlay's screen-space pass (the you badge): device scale only, no camera.
+		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+		this.guardOverlay((o) => o.drawScreen?.(ctx, this.overlayHost(), this.transform, { w, h }, performance.now()), undefined);
+		ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * tx, dpr * ty);
+
 		// 8. Cluster region labels — THE TOPMOST layer (user 2026-09-16:
 		// node labels and hover names drew over them before; region labels
 		// must never be occluded by content). Inverse-gated on THE zoom
@@ -2051,9 +2364,12 @@ export class GraphCanvasRenderer {
 				if (!rm.lines) continue;
 				ctx.fillStyle = rgbaFromHex(rm.color, 0.9);
 				const firstOffset = (-(rm.lines.length - 1) / 2) * lineH;
-				for (let i = 0; i < rm.lines.length; i++) {
-					ctx.fillText(rm.lines[i]!, rm.cx, rm.cy + firstOffset + i * lineH);
+				const shownLines = redactLines(rm.lines, settings.privateView);
+				if (settings.privateView) blurLabels(ctx, rgbaFromHex(rm.color, 0.9), (settings.clusterLabelSize * 0.45) / k, k);
+				for (let i = 0; i < shownLines.length; i++) {
+					ctx.fillText(shownLines[i]!, rm.cx, rm.cy + firstOffset + i * lineH);
 				}
+				ctx.shadowBlur = 0;
 			}
 			ctx.restore();
 		}

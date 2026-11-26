@@ -44,6 +44,7 @@ import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { fetchKbEntry, fetchWolves, fetchWorkRecord } from "@/components/kb/kb-client";
 import { EntryBody } from "@/components/kb/entry-reader";
 import { Field, KIND_LABEL, LinkList } from "./graph-card.tsx";
+import { redactCard } from "@/src/core";
 import { createGraduateClient, type GraduateClient } from "../kb/graduate-client";
 import { GraduateButton } from "../work/graduate-button";
 import { useGraduated } from "../kb/graduation-signal";
@@ -224,7 +225,8 @@ function WorkSections({ data, onSelectNode }: { data: Extract<PaneData, { kind: 
 }
 
 export function GraphPane({
-	card,
+	card: realCard,
+	privateView = false,
 	routeNav,
 	onClose,
 	onFocus,
@@ -235,6 +237,8 @@ export function GraphPane({
 }: {
 	/** The node whose details show (the route cursor's node while a route is selected). */
 	card: NodeCard;
+	/** Private view: titles, summary, links, page body and thread buttons are hidden; kind, stage and counts stay. */
+	privateView?: boolean;
 	routeNav?: RouteNavModel | null;
 	onClose: () => void;
 	onFocus: (ids: string[]) => void;
@@ -250,7 +254,8 @@ export function GraphPane({
 	const openView = useOpenView();
 	const [width, setWidth] = usePaneWidth();
 	const graduateClient = useMemo(() => graduate ?? createGraduateClient(), [graduate]);
-	const data = usePaneData(card);
+	const card = useMemo(() => redactCard(realCard, privateView), [realCard, privateView]);
+	const data = usePaneData(realCard);
 	const [threadError, setThreadError] = useState<string | null>(null);
 	const [threadBusy, setThreadBusy] = useState(false);
 
@@ -391,7 +396,7 @@ export function GraphPane({
 								Open page
 							</Link>
 						)}
-						{threadButtons.map((b) => (
+						{!privateView && threadButtons.map((b) => (
 							<button key={b.wolf} type="button" data-testid="pane-open-thread" data-wolf={b.wolf} data-thread-state={b.state} disabled={threadBusy} onClick={() => void openThread(b)} className={`${BTN} disabled:opacity-40`}>
 								{threadButtonLabel(b, threadButtons.length > 1)}
 							</button>
@@ -403,7 +408,7 @@ export function GraphPane({
 						)}
 					</div>
 				)}
-				{card.kind === "work" && (
+				{card.kind === "work" && !privateView && (
 					<div className="mt-3 empty:hidden">
 						{graduateState_.show && graduateState_.ready && <GraduateButton key={card.id} itemId={card.id.slice("work:".length)} title={card.title} assignee={card.assignee} via="graph" client={graduateClient} testid="pane-graduate" />}
 						{graduateState_.show && !graduateState_.ready && (
@@ -424,18 +429,23 @@ export function GraphPane({
 				{card.parent && <LinkList title="Part of" links={[card.parent]} onSelectNode={onSelectNode} />}
 				<LinkList title="Depends on" links={card.dependencies} onSelectNode={onSelectNode} />
 
-				{data.kind === "loading" && (
+				{privateView && (
+					<p className={`${SECTION} text-xs text-muted-foreground`} data-testid="pane-private">
+						Hidden in private view.
+					</p>
+				)}
+				{!privateView && data.kind === "loading" && (
 					<p className={`${SECTION} text-xs text-muted-foreground`} data-testid="pane-loading">
 						Loading…
 					</p>
 				)}
-				{data.kind === "error" && (
+				{!privateView && data.kind === "error" && (
 					<p className={`${SECTION} text-xs text-muted-foreground`} role="status" data-testid="pane-error">
 						{data.message}
 					</p>
 				)}
-				{data.kind === "work" && <WorkSections data={data} onSelectNode={onSelectNode} />}
-				{data.kind === "entry" && (
+				{!privateView && data.kind === "work" && <WorkSections data={data} onSelectNode={onSelectNode} />}
+				{!privateView && data.kind === "entry" && (
 					<div className={`${SECTION} text-sm`} data-section="entry">
 						<EntryBody entry={data.entry} />
 					</div>

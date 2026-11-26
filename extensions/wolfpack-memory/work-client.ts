@@ -6,7 +6,7 @@
  */
 
 import type { WorkItem, CreateWorkInput, WorkQuery } from "@wolfpack/kb/client";
-import { WorkConflictError, type RollupClient } from "@wolfpack/memory";
+import { WorkConflictError, turnActorHeaders, type RollupClient } from "@wolfpack/memory";
 import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
@@ -218,6 +218,7 @@ export class WorkClient {
           "X-API-Key": this.token,
           ...(this.wolf ? { "X-Wolf": this.wolf } : {}),
           ...(body ? { "Content-Type": "application/json" } : {}),
+          ...turnActorHeaders(),
           ...(key ? { "Idempotency-Key": key } : {}),
           ...extraHeaders,
         },

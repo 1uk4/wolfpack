@@ -111,7 +111,7 @@ describe("sanitizeRenderSettings", () => {
 		const valid = {
 			sizeUnits: "world",
 			groupBy: "section",
-			layers: { archivedWork: true, denTopics: true },
+			layers: { work: false, archivedWork: true, denTopics: true },
 			domain: "wolfpack",
 			nodeSize: 4,
 			edgeWidth: 2,
@@ -121,6 +121,8 @@ describe("sanitizeRenderSettings", () => {
 			clusterLabelSize: 20,
 			regions: DEFAULT_REGION_TUNING,
 			physics: DEFAULT_PHYSICS_TUNING,
+			live: { enabled: false, subagentFadeSec: 30, trailSec: 20, intensity: 3 },
+			privateView: true,
 		};
 		assert.deepEqual(sanitizeRenderSettings(valid), valid); // every value a ladder member
 	});
@@ -223,7 +225,7 @@ describe("sanitizeRenderSettings", () => {
 describe("KB-graph view settings", () => {
 	test("defaults: group by domain, KB + open work only, no domain filter, depth anchor off", () => {
 		assert.equal(DEFAULT_RENDER_SETTINGS.groupBy, "domain");
-		assert.deepEqual(DEFAULT_RENDER_SETTINGS.layers, { archivedWork: false, denTopics: false });
+		assert.deepEqual(DEFAULT_RENDER_SETTINGS.layers, { work: true, archivedWork: false, denTopics: false });
 		assert.equal(DEFAULT_RENDER_SETTINGS.domain, null);
 		assert.equal(DEFAULT_RENDER_SETTINGS.physics.depthMode, "off");
 	});
@@ -236,7 +238,8 @@ describe("KB-graph view settings", () => {
 
 	test("layers: booleans only, missing keys keep their default", () => {
 		const s = sanitizeRenderSettings({ layers: { archivedWork: true, wikilinks: "yes", extra: true } });
-		assert.deepEqual(s.layers, { archivedWork: true, denTopics: false });
+		assert.deepEqual(s.layers, { work: true, archivedWork: true, denTopics: false }); // old files lack work: it defaults on
+		assert.equal(sanitizeRenderSettings({ layers: { work: false } }).layers.work, false);
 		assert.deepEqual(sanitizeRenderSettings({ layers: "all" }).layers, DEFAULT_RENDER_SETTINGS.layers);
 	});
 

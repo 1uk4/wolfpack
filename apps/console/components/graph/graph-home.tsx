@@ -35,6 +35,7 @@ import {
 import { fetchWolves } from "../kb/kb-client";
 import { useMemoryEvents } from "../memory/memory-events";
 import { PageViewer } from "../viewer/page-viewer";
+import { filterWorkLayer } from "@/src/core";
 import { GraphView, type GraphViewController } from "./graph-view";
 import { useGraphSettings } from "./use-graph-settings";
 import { useKbGraph } from "./use-kb-graph";
@@ -184,12 +185,15 @@ function GraphHomeInner() {
 		settled: kb.status === "ready" && !kb.isStale,
 		view: {
 			layers: {
+				work: settings.layers.work,
 				archivedWork: settings.layers.archivedWork || !!forced.archivedWork,
 						denTopics: settings.layers.denTopics || !!forced.denTopics,
 			},
 			domain: forced.allDomains ? null : settings.domain,
 		},
 	});
+	// The Board switch: hide work-item nodes and their edges client-side (the fetch and the focus flow still see the full graph).
+	const shownGraph = useMemo(() => (graph ? filterWorkLayer(graph, settings.layers) : graph), [graph, settings.layers]);
 	const remedy = step.kind === "widen" ? step.remedy : null;
 	const missing = step.kind === "missing";
 	useEffect(() => {
@@ -218,11 +222,11 @@ function GraphHomeInner() {
 				</button>
 			</Placeholder>
 		);
-	else if (graph === null || !loaded) body = <Placeholder title="Loading the knowledge graph…" />;
+	else if (graph === null || shownGraph === null || !loaded) body = <Placeholder title="Loading the knowledge graph…" />;
 	else
 		body = (
 			<GraphView
-				graph={graph}
+				graph={shownGraph}
 				settings={settings}
 				changeSettings={changeSettings}
 				focusId={present ? focusParam : null}

@@ -1,5 +1,6 @@
 /** The hub needs to know which wolf of a multi-wolf host is writing: every request carries X-Wolf, and a move reports the hub's handoff. */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runInTurnContext } from "@wolfpack/memory";
 import { WorkClient, overrideNote } from "./work-client.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -10,6 +11,21 @@ describe("overrideNote", () => {
     expect(overrideNote("hal", "hal", "1uk4")).toBe(""); // loose item, got what was asked
     expect(overrideNote("1uk4", "hal", "1uk4", "hal")).toBe(""); // the hub's \"now assigned to\" already said it
     expect(overrideNote("sam", "hal", "1uk4", "hal")).toBe("; the feature's assignee hal applies, not sam");
+  });
+});
+
+describe("WorkClient turn context", () => {
+  it("a write made inside a turn carries the thread and subagent headers; outside a turn it carries none", async () => {
+    const seen: Record<string, string>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: { headers: Record<string, string> }) => {
+      seen.push(init.headers);
+      return new Response(JSON.stringify({ item: { id: "work-d-abcd" } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    const c = new WorkClient("http://hub/v1/workapi", "tok", undefined, undefined, "hal");
+    await c.get("work-d-abcd");
+    await runInTurnContext({ threadId: "th-7", subagent: "scout" }, () => c.moveReport("work-d-abcd", "work-d-feat"));
+    expect(seen[0]).not.toHaveProperty("x-wolfpack-thread-id");
+    expect(seen[1]).toMatchObject({ "X-Wolf": "hal", "x-wolfpack-thread-id": "th-7", "x-wolfpack-subagent": "scout" });
   });
 });
 

@@ -51,6 +51,7 @@ import type { SweepManager, SweepWorkerConfig } from "../sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { patchProcessEnv, startSandbox, type RunningSandbox, type StartWorkServer } from "./sandbox.js";
 import { hubEventsTargetFrom } from "./hub-approvals.js";
+import { ActivityPublisher } from "./activity-publisher.js";
 import { hubKbFromEnv, startHubKb, type RunningHubKb } from "./hub-kb.js";
 import { prepareSocketPath } from "./socket.js";
 import { createUsageIngester, type UsageIngestCall } from "./usage-ingest.js";
@@ -370,6 +371,7 @@ async function startConfigured(
       },
       work: { endpoint: env.WORK_ENDPOINT, token: env.WORK_TOKEN },
       ...hubEventsOpt(env),
+      ...activityOpt(env, config.identity.name, config.file, log),
       onError: (e) => log(`server error: ${String(e)}`),
     });
     await server.attach();
@@ -452,6 +454,23 @@ function librarianSweepFor(config: WolfConfig, env: NodeJS.ProcessEnv, table: Mo
 }
 
 /** Is the memory extension among what was installed (configured, or injected by a test)? */
+/** wolf.yaml `activity: { publish: false }` turns activity publishing off (default on). */
+export function readActivityPublish(file: string): boolean {
+  try {
+    const doc = parseYaml(readFileSync(file, "utf8")) as { activity?: { publish?: unknown } } | null;
+    return doc?.activity?.publish !== false;
+  } catch {
+    return true;
+  }
+}
+
+/** The activity publisher (live pack map), when this wolf reaches a hub and publishing is not turned off. */
+function activityOpt(env: NodeJS.ProcessEnv, wolf: string, file: string, log: (l: string) => void): { activity: ActivityPublisher } | Record<string, never> {
+  const target = hubEventsTargetFrom(env, { endpoint: env.WORK_ENDPOINT, token: env.WORK_TOKEN });
+  if (!target || !readActivityPublish(file)) return {};
+  return { activity: new ActivityPublisher({ target, wolf, log }) };
+}
+
 /** The hub event stream wolfd follows for approved graduations, when this wolf reaches a hub. */
 function hubEventsOpt(env: NodeJS.ProcessEnv): { hubEvents: NonNullable<ReturnType<typeof hubEventsTargetFrom>> } | Record<string, never> {
   const target = hubEventsTargetFrom(env, { endpoint: env.WORK_ENDPOINT, token: env.WORK_TOKEN });

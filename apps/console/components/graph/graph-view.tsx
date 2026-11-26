@@ -46,6 +46,9 @@ import {
 	type Position,
 } from "@/src/core";
 import { GraphCanvasRenderer } from "./graph-canvas.ts";
+import { LiveGraphLayer } from "./live/live-layer";
+import { ActivityFeed } from "./live/activity-feed";
+import { LiveErrorBoundary } from "./live/live-error-boundary";
 import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
 import { useWorkReader } from "../work/work-reader.tsx";
@@ -192,6 +195,8 @@ export function GraphView({
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 	const rendererRef = useRef<GraphCanvasRenderer | null>(null);
+	/** The same renderer as state, so the live layer (a child) attaches once it exists. */
+	const [liveRenderer, setLiveRenderer] = useState<GraphCanvasRenderer | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
 	const graphRef = useRef(graph);
 	graphRef.current = graph;
@@ -199,6 +204,9 @@ export function GraphView({
 	const reader = useWorkReader();
 	const openWorkRef = useRef(reader.open);
 	openWorkRef.current = reader.open;
+	// Private view: a node click shows the redacted card, never the reader or viewer with the real page.
+	const privateRef = useRef(settings.privateView);
+	privateRef.current = settings.privateView;
 	const openView = useOpenView();
 	const openViewRef = useRef(openView);
 	openViewRef.current = openView;
@@ -292,7 +300,8 @@ export function GraphView({
 			{
 				onSelect: (nodeId) => {
 					const act = nodeClickAction(nodeId);
-					if (act.kind === "open-work") openWorkRef.current(act.id); // the reader only: no selection, route or camera change
+					if (privateRef.current) setSelected({ id: nodeId });
+					else if (act.kind === "open-work") openWorkRef.current(act.id); // the reader only: no selection, route or camera change
 					else if (!openNodeInViewer(nodeId, openViewRef.current)) setSelected({ id: nodeId });
 				},
 				onStageClick: () => setSelected(null),
@@ -308,8 +317,10 @@ export function GraphView({
 			initialCamera,
 		);
 		rendererRef.current = renderer;
+		setLiveRenderer(renderer);
 		return () => {
 			rendererRef.current = null;
+			setLiveRenderer(null);
 			// Flush a pending camera write so an unmount <250ms after a move
 			// still persists the user's last standpoint.
 			if (cameraTimer && lastCamera) {
@@ -529,6 +540,10 @@ export function GraphView({
 						{/* THE single canvas: every layer (regions, edges, nodes, both
 						    label systems, hover) draws into it, once per frame. */}
 						<canvas ref={canvasRef} className="block h-full w-full touch-none" />
+						<LiveErrorBoundary>
+							<LiveGraphLayer renderer={liveRenderer} settings={settings} />
+							<ActivityFeed renderer={liveRenderer} settings={settings} />
+						</LiveErrorBoundary>
 					</div>
 				)}
 
@@ -556,6 +571,7 @@ export function GraphView({
 			{selected && card && !isEmpty && (
 				<GraphPane
 					card={card}
+					privateView={settings.privateView}
 					routeNav={routeNav}
 					onClose={() => setSelected(null)}
 					onFocus={(ids) => focusNodes(ids, card.id)}

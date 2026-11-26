@@ -74,6 +74,8 @@ import { PROMPTS, PROMPT_MAX_BYTES, PromptWriteError, hasOriginalIdentity, overr
 import type { PromptBlock } from "./context.js";
 import { readOnlyCatalog, type ToolInfo } from "./prompt-catalog.js";
 import { GraduationJobs } from "./graduation-jobs.js";
+import { ActivityTap } from "./activity-tap.js";
+import type { ActivityPublisher } from "./activity-publisher.js";
 import { watchApprovals, type ApprovedRequest, type HubEventsTarget } from "./hub-approvals.js";
 import { GitInfo } from "./workspace-info.js";
 import { readFrameFile, statFrame } from "./frames.js";
@@ -115,6 +117,8 @@ export interface WolfServerOptions {
   work?: { endpoint?: string; token?: string };
   /** The hub's event stream: an approved graduation request closes the feature thread live. Unset: closing waits for closedReasonOf. */
   hubEvents?: HubEventsTarget;
+  /** Live pack map: publishes activity events to the hub (fire and forget). Unset: nothing is published. */
+  activity?: ActivityPublisher;
   // ---- header git tree ----
   /** The wolf.yaml this wolfd runs from: the /settings routes read and edit it. Unset: they answer 404. */
   configFile?: string;
@@ -199,8 +203,12 @@ export class WolfServer {
   private readonly gitInfo: GitInfo;
   // ---- /header git tree ----
 
+  private readonly activityTap: ActivityTap | undefined;
+
   constructor(private readonly opts: WolfServerOptions) {
     this.name = opts.name;
+    this.activityTap = opts.activity ? new ActivityTap(opts.activity, (id) => this.threads.get(id)?.threadSummary()) : undefined;
+    this.activityTap?.startWolfBeat(opts.name);
     this.host = opts.host ?? "local";
     this.settleMs = opts.settleTimeoutMs ?? 5000;
     if (opts.den) this.memoryBus = memoryEventsFor(opts.den, opts.name);
@@ -339,6 +347,8 @@ export class WolfServer {
   async close(): Promise<void> {
     this.closing = true;
     this.stopApprovalWatch?.();
+    this.activityTap?.stop(); // queues wolf-offline
+    void this.opts.activity?.stop().catch(() => {});
     this.lag?.stop();
     this.http.closeAllConnections();
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
@@ -351,6 +361,7 @@ export class WolfServer {
   // ------------------------------------------------------------ threads
 
   private emitWolf(draft: WolfEventDraft): void {
+    this.activityTap?.onWolfEvent(draft as { type: string });
     const full = { ...draft, id: ++this.wolfSeq, wolf: this.name, at: new Date().toISOString() } as WolfEvent;
     this.wolfBuffer.push(full);
     if (this.wolfBuffer.length > WOLF_EVENT_BUFFER) this.wolfBuffer.shift();
@@ -365,6 +376,7 @@ export class WolfServer {
       ...(this.opts.stallTimeoutMs !== undefined ? { stallTimeoutMs: this.opts.stallTimeoutMs } : {}),
       closing: () => this.closing,
       emitWolf: (d) => this.emitWolf(d),
+      ...(this.activityTap ? { toolStarted: (id: string, name: string, args: unknown) => this.activityTap?.onToolStart(id, name, args) } : {}),
       ancestorsOf: (id) => this.relatives(id, "up"),
       descendantsOf: (id) => this.relatives(id, "down"),
       onError: (e) => this.opts.onError?.(e),

@@ -57,6 +57,7 @@ import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zo
 import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "@/src/core";
 import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, ROUTE_DONE_COLOR } from "@/src/core";
 import { redactLines } from "@/src/core";
+import { recentreCamera, recentreOffset } from "@/src/core";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import type { LiveOverlay, OverlayHighlight, OverlayHit, OverlayHost } from "./live/live-overlay";
@@ -420,6 +421,38 @@ export function labelAlpha(
 	return clamp01(1 - (ratio - labelZoom) / span);
 }
 
+/**
+ * Does a camera (screen = world * k + translate) show the world bbox in a
+ * w×h viewport? A stored camera that doesn't (the layout moved, or it was
+ * saved against a drifted one) leaves a blank graph, so the caller re-fits
+ * instead of trusting it. A sliver at the edge doesn't count: the viewport
+ * centre must lie in the padded bbox, or the overlap must cover about 10% of
+ * the viewport, or the whole bbox must be on screen (a lone node).
+ */
+export function cameraFramesWorld(
+	camera: { x: number; y: number; k: number },
+	bbox: { minX: number; maxX: number; minY: number; maxY: number },
+	w: number,
+	h: number,
+): boolean {
+	const { x, y, k } = camera;
+	if (!Number.isFinite(k) || !(k > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return false;
+	if (!(w > 0) || !(h > 0)) return false;
+	const left = -x / k;
+	const right = (w - x) / k;
+	const top = -y / k;
+	const bottom = (h - y) / k;
+	const pad = Math.max(0.1 * Math.max(bbox.maxX - bbox.minX, bbox.maxY - bbox.minY), 24 / k);
+	const cx = (left + right) / 2;
+	const cy = (top + bottom) / 2;
+	if (cx >= bbox.minX - pad && cx <= bbox.maxX + pad && cy >= bbox.minY - pad && cy <= bbox.maxY + pad) return true;
+	const ow = Math.min(right, bbox.maxX) - Math.max(left, bbox.minX);
+	const oh = Math.min(bottom, bbox.maxY) - Math.max(top, bbox.minY);
+	if (ow < 0 || oh < 0) return false;
+	if (ow * oh >= 0.1 * (right - left) * (bottom - top)) return true;
+	return bbox.minX >= left && bbox.maxX <= right && bbox.minY >= top && bbox.maxY <= bottom;
+}
+
 /** The camera transform that frames `bbox` in a w×h viewport with padding. */
 export function fitTransform(
 	bbox: { minX: number; maxX: number; minY: number; maxY: number },
@@ -627,6 +660,10 @@ export class GraphCanvasRenderer {
 	private transform: ZoomTransform = zoomIdentity;
 	/** Set once the first fit happens; the camera then survives setData. */
 	private hasFit = false;
+	/** The restored camera while the user hasn't touched it: re-checked
+	 *  against the world bbox on every setData (staged loads), dropped once the
+	 *  user moves the camera or a fit replaces it. */
+	private restoredCamera: { x: number; y: number; k: number } | null = null;
 	/** Last-synced CSS size — the resize anchor computes the world point
 	 *  under the PRE-resize viewport center from these (ResizeObserver
 	 *  callbacks already see the NEW size in clientWidth/Height). */
@@ -739,8 +776,6 @@ export class GraphCanvasRenderer {
 	private physicsTuning: PhysicsTuning = DEFAULT_PHYSICS_TUNING;
 	/** Value key of the tuning the sim was built with. */
 	private physicsKey = JSON.stringify(DEFAULT_PHYSICS_TUNING);
-	/** Gravity center for the live sim (graph bbox centroid at setData). */
-	private simCenter: Pt = { x: 0, y: 0 };
 	private regionBuiltVersion = -1;
 	private labelLines = new Map<string, string[]>();
 	private hasBlocked = false;
@@ -803,6 +838,7 @@ export class GraphCanvasRenderer {
 			typeof initialCamera.y === "number" && Number.isFinite(initialCamera.y)
 		) {
 			this.hasFit = true;
+			this.restoredCamera = { x: initialCamera.x, y: initialCamera.y, k: initialCamera.k }; // validated against the world once data and size are known
 			select(canvas).call(
 				this.zoomBehavior.transform,
 				zoomIdentity.translate(initialCamera.x, initialCamera.y).scale(initialCamera.k),
@@ -819,6 +855,7 @@ export class GraphCanvasRenderer {
 			const wx = (prevW / 2 - tx) / k;
 			const wy = (prevH / 2 - ty) / k;
 			this.syncSize();
+			this.validateRestoredCamera();
 			if (!this.hasFit) this.fit(); // first real size → fit once
 			else {
 				this.refreshFitZoom(); // the gate's "1×" is viewport-bound
@@ -858,6 +895,7 @@ export class GraphCanvasRenderer {
 		// A rest state waiting out its debounce belongs to the OLD nodes:
 		// commit it before they are replaced.
 		this.flushCommit();
+		if (!this.data) this.recentreOnFirstLoad(data);
 		this.data = data;
 		this.nodeById = new Map(data.nodes.map((n) => [n.id, n]));
 		this.hasBlocked = data.nodes.some((n) => n.blocked);
@@ -873,6 +911,7 @@ export class GraphCanvasRenderer {
 			if (n.y > maxY) maxY = n.y;
 		}
 		this.worldBBox = { minX, maxX, minY, maxY };
+		this.validateRestoredCamera();
 		if (!this.hasFit && data.nodes.length > 0) this.fit();
 		// The camera may be user-restored (constructor initialCamera) — the
 		// gate's "1×" reference still needs the fresh bbox's fit zoom.
@@ -883,7 +922,6 @@ export class GraphCanvasRenderer {
 		this.simActive = false;
 		this.dragId = null;
 		this.simMoved = false;
-		this.simCenter = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
 		// Fresh nodes, fresh sim: re-apply the selected route's link set.
 		this.straighten = null;
 		this.buildSim();
@@ -1025,6 +1063,56 @@ export class GraphCanvasRenderer {
 		this.refreshVisible();
 		this.geoVersion++; // member visibility changes hulls + paths
 		this.markDirty();
+	}
+
+	/** The first data of a renderer: a layout sitting off the origin is
+	 *  translated to it (recentre.ts), the camera shifted by the same world
+	 *  offset so the screen is unchanged, and the new positions committed once.
+	 *  The origin gravity and depth anchor then have nothing to pull, so the
+	 *  first drag or reheat does not slide the whole graph. Later data is left
+	 *  alone: the camera is world-relative and was already settled. */
+	private recentreOnFirstLoad(data: CanvasData): void {
+		const off = recentreOffset(data.nodes);
+		if (!off) return;
+		for (const n of data.nodes) {
+			n.x -= off.x;
+			n.y -= off.y;
+		}
+		if (this.hasFit) {
+			const cam = recentreCamera(this.transform, off);
+			select(this.canvas).call(this.zoomBehavior.transform, zoomIdentity.translate(cam.x, cam.y).scale(cam.k));
+			if (this.restoredCamera) {
+				const t = this.transform;
+				this.restoredCamera = { x: t.x, y: t.y, k: t.k };
+			}
+		}
+		const positions: Record<string, Position> = {};
+		for (const n of data.nodes) positions[n.id] = { x: n.x, y: n.y };
+		this.callbacks.onCommit(positions);
+	}
+
+	/** A restored camera the user hasn't touched must frame the world; if it
+	 *  doesn't, drop it so the graph is fitted instead. Checked on EVERY bbox
+	 *  change while the camera is untouched (cameraFramesWorld is the gate), so
+	 *  a staged load is judged on the data that finally arrives. The restored
+	 *  camera stays armed until a laid-out check happens (the w/h < 10 guard
+	 *  below returns before the check), then until the user moves it. */
+	private validateRestoredCamera(): void {
+		const rc = this.restoredCamera;
+		if (!rc || !this.worldBBox || !this.data || this.data.nodes.length === 0) return;
+		const t = this.transform;
+		if (t.x !== rc.x || t.y !== rc.y || t.k !== rc.k) {
+			this.restoredCamera = null; // the user moved it: theirs now
+			return;
+		}
+		const w = this.canvas.clientWidth;
+		const h = this.canvas.clientHeight;
+		if (w < 10 || h < 10) return; // not laid out yet; the next setData/resize checks
+		const b = this.worldBBox;
+		if (!cameraFramesWorld(rc, b, w, h)) {
+			this.restoredCamera = null;
+			this.hasFit = false;
+		}
 	}
 
 	/** Frame the whole graph (padding included). Keeps the camera on later
@@ -1803,7 +1891,11 @@ export class GraphCanvasRenderer {
 		const t = this.physicsTuning;
 		const springs = this.straighten?.depSprings ?? data.depSprings ?? [];
 		this.sim = createGraphSimulation(data.nodes, this.straighten?.simEdges ?? data.edges, {
-			gravity: { x: this.simCenter.x, y: this.simCenter.y, strength: t.gravity },
+			// Origin, like the server layout and the depth anchor: a bbox-centred
+			// pull would keep a drifted layout where it is. The sim only runs on
+			// drag/reheat, never on load, so a settled layout is not moved or
+			// re-committed by this.
+			gravity: { x: 0, y: 0, strength: t.gravity },
 			alphaDecay: LIVE_ALPHA_DECAY,
 			velocityDecay: t.velocityDecay,
 			chargeStrength: t.chargeStrength,
@@ -1822,7 +1914,7 @@ export class GraphCanvasRenderer {
 							strength: t.depthStrength,
 							spacing: t.depthSpacing,
 							baseRadius: t.depthBaseRadius,
-							center: this.simCenter,
+							center: { x: 0, y: 0 },
 						},
 		});
 		if (this.route?.layout && this.straighten) this.sim.force("routeLine", routeLineForce(this.route.layout));

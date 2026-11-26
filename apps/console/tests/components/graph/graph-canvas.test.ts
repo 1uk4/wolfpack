@@ -15,6 +15,7 @@ import {
 	boxBlurRound,
 	createCommitScheduler,
 	edgeGeometry,
+	cameraFramesWorld,
 	fitTransform,
 	labelAlpha,
 	pickNearest,
@@ -113,6 +114,30 @@ describe("fitTransform", () => {
 	test("never returns a non-positive scale for degenerate bboxes", () => {
 		const t = fitTransform({ minX: 5, maxX: 5, minY: 5, maxY: 5 }, 100, 100, 10);
 		assert.ok(t.k > 0 && Number.isFinite(t.k));
+	});
+});
+
+describe("cameraFramesWorld (a stored camera that shows nothing must not be trusted)", () => {
+	const bbox = { minX: -900, maxX: 900, minY: -900, maxY: 900 };
+	test("a camera looking at the world frames it; one looking far away does not", () => {
+		// k=0.2 in a 400x800 viewport sees world x in [-1000, 1000] for x=200.
+		assert.equal(cameraFramesWorld({ k: 0.2, x: 200, y: 400 }, bbox, 400, 800), true);
+		// Same zoom, panned so the viewport covers world x in [20000, 22000]: blank.
+		assert.equal(cameraFramesWorld({ k: 0.2, x: -4000, y: 400 }, bbox, 400, 800), false);
+	});
+	test("a sliver of the bbox at the viewport edge does not count", () => {
+		// Viewport covers world x in [890, 2890] (k=0.2, x=-178): 10 units of a 1800-wide bbox.
+		assert.equal(cameraFramesWorld({ k: 0.2, x: -178, y: 400 }, bbox, 400, 800), false);
+	});
+	test("a non-positive or non-finite zoom frames nothing", () => {
+		assert.equal(cameraFramesWorld({ k: 0, x: 200, y: 400 }, bbox, 400, 800), false);
+		assert.equal(cameraFramesWorld({ k: -1, x: 200, y: 400 }, bbox, 400, 800), false);
+		assert.equal(cameraFramesWorld({ k: Number.NaN, x: 200, y: 400 }, bbox, 400, 800), false);
+	});
+	test("a zero-size bbox (one node) is framed only when it is on screen", () => {
+		const point = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+		assert.equal(cameraFramesWorld({ k: 1, x: 100, y: 100 }, point, 400, 800), true); // in a corner
+		assert.equal(cameraFramesWorld({ k: 1, x: -500, y: 100 }, point, 400, 800), false);
 	});
 });
 

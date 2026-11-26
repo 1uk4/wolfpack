@@ -240,8 +240,10 @@ describe("hierarchy depth anchoring (domain → section → entry → work)", ()
 			},
 		);
 		const old = next.get("old")!;
-		// The baseline defaults to the anchor centroid: (300+290)/2 = 295.
-		assert.ok(Math.abs(old.y - 295) < 20, `old node snaps to the baseline (y=${old.y.toFixed(1)})`);
+		// The baseline defaults to the ORIGIN (one centre with the gravity), not the
+		// anchors' centroid (295): a depth baseline that follows the data would keep a
+		// drifted layout where it is.
+		assert.ok(Math.abs(old.y) < 20, `old node snaps to the origin baseline (y=${old.y.toFixed(1)})`);
 		assert.ok(old.x > 150, `x memory preserved (x=${old.x.toFixed(1)})`);
 		const child = next.get("child")!;
 		assert.ok(child.y > old.y + 40, `child sits a level below (child=${child.y.toFixed(1)}, old=${old.y.toFixed(1)})`);

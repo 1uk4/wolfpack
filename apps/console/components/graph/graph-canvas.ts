@@ -304,7 +304,13 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
  *  offset polygons re-rasterized at DPR 2 (the old GPU coil-whine). */
 const LABEL_MIN_SCREEN_PX = 6; // labels smaller than this on screen are skipped
 const LABEL_CULL_MARGIN = 150; // screen px around the viewport that still draws labels
-const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
+const TOUCH_MAX_DPR = 2; // coarse-pointer (touch) devices render at most 2x
+
+/** devicePixelRatio, capped at 2 on touch devices (a 3x phone canvas costs 2.25x the fill for no visible gain). */
+function effectiveDpr(): number {
+	const raw = window.devicePixelRatio || 1;
+	return raw > TOUCH_MAX_DPR && window.matchMedia?.("(pointer: coarse)").matches ? TOUCH_MAX_DPR : raw;
+}
 
 
 
@@ -735,8 +741,8 @@ export class GraphCanvasRenderer {
 	/** Gravity center for the live sim (graph bbox centroid at setData). */
 	private simCenter: Pt = { x: 0, y: 0 };
 	private regionBuiltVersion = -1;
-	private frameCount = 0; // draw counter for the live-sim splat throttle
 	private labelLines = new Map<string, string[]>();
+	private hasBlocked = false;
 	private labelKey: { data: unknown; visible: unknown; font: string; maxW: number } | null = null;
 	private worldLabelFont = "";
 	private world: WorldSizes = { nodeR: 0, labelSize: 0, labelGap: 0 };
@@ -842,6 +848,7 @@ export class GraphCanvasRenderer {
 		this.flushCommit();
 		this.data = data;
 		this.nodeById = new Map(data.nodes.map((n) => [n.id, n]));
+		this.hasBlocked = data.nodes.some((n) => n.blocked);
 		this.refreshVisible();
 		let minX = Infinity;
 		let minY = Infinity;
@@ -1351,14 +1358,20 @@ export class GraphCanvasRenderer {
 		// Picking measures from each disc's edge: radius on screen is the
 		// world radius × the camera zoom; the halo pad stays a constant
 		// screen pad.
-		const projected: { id: string; x: number; y: number; r: number }[] = [];
+		// World-space scan, no per-move allocation: screen distance = world distance × k.
+		const wx = (px - tx) / k;
+		const wy = (py - ty) / k;
+		let best: CanvasNode | null = null;
+		let bestD = PICKING_PAD;
 		for (const n of this.data.nodes) {
 			if (this.visible && !this.visible.has(n.id)) continue;
-			projected.push({ id: n.id, x: n.x * k + tx, y: n.y * k + ty, r: this.radiusOf(n) * k });
+			const d = Math.max((Math.hypot(n.x - wx, n.y - wy) - this.radiusOf(n)) * k, 0);
+			if (d < bestD) {
+				bestD = d;
+				best = n;
+			}
 		}
-		const hit = pickNearest(projected, px, py, PICKING_PAD);
-		if (!hit) return null;
-		return this.nodeById.get(hit.id) ?? null;
+		return best;
 	}
 
 	/** A node's disc radius in world units (nodeSize × its multiplier). */
@@ -1533,7 +1546,7 @@ export class GraphCanvasRenderer {
 	private syncSize(): void {
 		const w = this.canvas.clientWidth;
 		const h = this.canvas.clientHeight;
-		const dpr = window.devicePixelRatio || 1;
+		const dpr = effectiveDpr();
 		const bw = Math.max(1, Math.round(w * dpr));
 		const bh = Math.max(1, Math.round(h * dpr));
 		if (this.canvas.width !== bw || this.canvas.height !== bh) {
@@ -1550,9 +1563,11 @@ export class GraphCanvasRenderer {
 		if (!data) return;
 		const visible = this.visible;
 		const route = this.route;
+		// Nothing to draw: no route, no blocked nodes, no dependency edges.
+		if (!route && !this.hasBlocked && !(data.depEdges?.length)) return;
 		ctx.save();
 		// Blocked rings (always on) and the route's node halos.
-		for (const n of data.nodes) {
+		for (const n of route || this.hasBlocked ? data.nodes : []) {
 			if (visible && !visible.has(n.id)) continue;
 			const r = this.radiusOf(n);
 			if (n.blocked) {
@@ -1595,8 +1610,7 @@ export class GraphCanvasRenderer {
 			}
 		}
 		// Arrows.
-		const positions = new Map<string, { x: number; y: number }>();
-		for (const n of data.nodes) positions.set(n.id, n);
+		const positions = this.nodeById; // id → node, already indexed
 		const { x: tx, y: ty } = this.transform;
 		const list = buildDepDrawList({
 			edges: data.depEdges ?? [],
@@ -2088,20 +2102,16 @@ export class GraphCanvasRenderer {
 		if (!data || !settings) return;
 		const w = this.canvas.clientWidth;
 		const h = this.canvas.clientHeight;
-		const dpr = window.devicePixelRatio || 1;
+		const dpr = effectiveDpr();
 		const ctx = this.ctx;
 		blurDpr = dpr;
 
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		ctx.clearRect(0, 0, w, h);
 
-		this.frameCount++;
 		// Regions: rebuild on stale geometry at rest; during the live sim,
 		// every REGION_EVERY-th frame (others blit the last bitmap).
-		if (
-			this.regionBuiltVersion !== this.geoVersion &&
-			(!this.simActive || this.frameCount % REGION_EVERY === 0)
-		) {
+		if (this.regionBuiltVersion !== this.geoVersion && !this.simActive) {
 			this.buildRegions();
 			this.regionBuiltVersion = this.geoVersion;
 		}

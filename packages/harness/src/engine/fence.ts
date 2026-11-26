@@ -62,9 +62,8 @@ const inside = (root: string, p: string): boolean => {
 };
 
 /** Fence a worktree: calls running in it (or below it) may only write inside it. `offLimits` are the paths bash may not name. */
-/** The third argument is a write rule (the frames dir: .html only, at most 2 MB) or options with read roots and/or a rule. */
-export function fenceRoot(root: string, offLimits: string[] = [], opts: WriteRule | { readRoots?: string[]; rule?: WriteRule } = {}): void {
-  const o = typeof opts === "function" ? { rule: opts } : opts;
+/** The third argument is options: read roots and/or a write rule (the frames dir: .html only, at most 2 MB). */
+export function fenceRoot(root: string, offLimits: string[] = [], o: { readRoots?: string[]; rule?: WriteRule } = {}): void {
   fenced.set(real(root), { lexical: resolve(root), offLimits, ...(o.readRoots ? { readRoots: o.readRoots.map(real) } : {}), ...(o.rule ? { rule: o.rule } : {}) });
 }
 

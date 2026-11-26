@@ -59,6 +59,20 @@ describe("live overlay reducer", () => {
 		assert.deepEqual(visibleThreads(s), []);
 	});
 
+	it("a subagent's thread-active heartbeat creates or refreshes it, attached to its parent thread; only subagent-finished ends it", () => {
+		const beat = { kind: "subagent", wolf: "hal", threadId: "hal/sub-1", subagent: "w1", parentThreadId: "t1" };
+		const snapshot = { v: 1, at: 1000, wolves: [], threads: [], subagents: [{ event: ev("thread-active", { actor: beat }), expiresAt: 61_000 }], owner: [] } as unknown as PresenceSnapshot;
+		let s = reduceLive(emptyLiveState(), { type: "snapshot", snapshot, now: 5000 });
+		assert.deepEqual(Object.values(s.subagents).map((a) => [a.name, a.parentThreadId, a.finishedAt]), [["w1", "t1", undefined]]);
+		assert.deepEqual(Object.keys(s.threads), []); // the sub's own thread id is not a thread on the map
+		const live = feed(emptyLiveState(), ev("thread-active", { actor: beat }), 0);
+		assert.deepEqual(Object.values(live.subagents).map((a) => a.parentThreadId), ["t1"]);
+		s = feed(s, ev("thread-active", { actor: beat }), 30_000);
+		assert.equal(Object.values(s.subagents)[0]!.expiresAt, 90_000);
+		s = feed(s, ev("subagent-finished", { actor: beat }), 31_000);
+		assert.equal(Object.values(s.subagents)[0]!.finishedAt, 31_000);
+	});
+
 	it("keeps a finished subagent for the fade window, then drops it", () => {
 		let s = feed(emptyLiveState(), ev("subagent-spawned", { actor: sub }), 0);
 		s = feed(s, ev("subagent-finished", { actor: sub }), 1000);

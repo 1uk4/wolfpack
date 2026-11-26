@@ -105,7 +105,7 @@ describe("live overlay fade clock", () => {
 		o.step(mono, 0.016, host, 1);
 		o.draw(ctx, host, 1, mono);
 		const a = alphaOf(o, "thread");
-		assert.ok(a !== undefined && Math.abs(a - 0.55 * 0.5) < 0.02, `thread alpha ${a}`);
+		assert.ok(a !== undefined && Math.abs(a - 0.45 * 0.5) < 0.02, `thread alpha ${a}`);
 	});
 
 	it("draws each wolf as the wolf-head logo path, dimmed when offline", () => {

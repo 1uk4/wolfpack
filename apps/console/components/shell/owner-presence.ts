@@ -115,7 +115,8 @@ export function targetFromPath(pathname: string): PresenceTarget | null {
 			return s;
 		}
 	});
-	if (seg[0] === "wolf" && seg[2] === "thread" && seg[3]) return { kind: "thread", id: seg[3] };
+	// The protocol target has no wolf field: a thread id travels as `<wolf>/<slug>` so two wolves with the same slug stay apart.
+	if (seg[0] === "wolf" && seg[1] && seg[2] === "thread" && seg[3]) return { kind: "thread", id: `${seg[1]}/${seg[3]}` };
 	if (seg[0] === "work" && seg[1]) return { kind: "work-item", id: seg[1] };
 	if (seg[0] === "kb" && seg[1] === "entry" && seg[2]) return { kind: "kb-entry", id: seg[2] };
 	if (seg[0] === "kb" && seg[1] === "work" && seg[2]) return { kind: "work-item", id: seg[2] };

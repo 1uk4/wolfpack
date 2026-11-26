@@ -21,6 +21,25 @@ const NO_CONTENT = () => new Response(null, { status: 204, headers: { "Cache-Con
 const MAX_BODY_BYTES = 4096;
 const KINDS: ReadonlySet<string> = new Set(["thread", "work-item", "kb-entry"]);
 
+/** The body as text, or null when it exceeds `max` bytes (a chunked body can lie about, or omit, its length). Stops reading at the cap. */
+async function readCapped(req: Request, max: number): Promise<string | null> {
+	if (!req.body) return "";
+	const reader = req.body.getReader();
+	const parts: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		total += value.byteLength;
+		if (total > max) {
+			await reader.cancel().catch(() => {});
+			return null;
+		}
+		parts.push(value);
+	}
+	return new TextDecoder().decode(Buffer.concat(parts));
+}
+
 export function createPresenceApi(d: PresenceApiDeps = {}) {
 	const env = d.env ?? process.env;
 	const doFetch = d.fetch ?? fetch;
@@ -32,7 +51,9 @@ export function createPresenceApi(d: PresenceApiDeps = {}) {
 				if (!base || !token) return NO_CONTENT();
 				// A real presence body is ~200 bytes: refuse a big one on its declared length, without reading it.
 				if (Number(req.headers.get("content-length")) > MAX_BODY_BYTES) return NO_CONTENT();
-				const b = (await req.json()) as Record<string, unknown>;
+				const text = await readCapped(req, MAX_BODY_BYTES);
+				if (text === null) return NO_CONTENT();
+				const b = JSON.parse(text) as Record<string, unknown>;
 				const str = (v: unknown, max = 200) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : undefined);
 				const kind = str(b.kind);
 				const id = str(b.id);

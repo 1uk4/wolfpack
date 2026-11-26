@@ -25,12 +25,17 @@ export function threadSlugOf(wolf: string, id: string): string {
 	return id.startsWith(`${wolf}/`) ? id.slice(wolf.length + 1) : id;
 }
 
-/** The key (in `state.threads`) of the thread the owner is viewing, or null. The owner event carries the URL slug; threads carry wolfd ids. */
+/**
+ * The key (in `state.threads`) of the thread the owner is viewing, or null.
+ * The protocol's target has no wolf field, so the console encodes a thread target's id as `<wolf>/<slug>` (see targetFromPath).
+ * A bare slug (an older console) matches only when exactly one wolf has a thread with that slug; two would be ambiguous.
+ */
 export function ownerThreadKey(s: LiveState): string | null {
 	const v = s.owner?.viewing;
 	if (!v || v.kind !== "thread") return null;
-	for (const [key, t] of Object.entries(s.threads)) {
-		if (t.id === v.id || threadSlugOf(t.wolf, t.id) === threadSlugOf(t.wolf, v.id)) return key;
-	}
-	return null;
+	const cut = v.id.indexOf("/");
+	const wolf = cut > 0 ? v.id.slice(0, cut) : undefined;
+	const slug = cut > 0 ? v.id.slice(cut + 1) : v.id;
+	const hits = Object.entries(s.threads).filter(([, t]) => (wolf === undefined || t.wolf === wolf) && threadSlugOf(t.wolf, t.id) === threadSlugOf(t.wolf, slug));
+	return hits.length === 1 ? hits[0]![0] : null;
 }

@@ -78,7 +78,7 @@ describe("owner presence controller", () => {
 	});
 
 	it("maps pages and viewer views to targets", () => {
-		assert.deepEqual(targetFromPath("/wolf/hal/thread/t-1"), { kind: "thread", id: "t-1" });
+		assert.deepEqual(targetFromPath("/wolf/hal/thread/t-1"), { kind: "thread", id: "hal/t-1" });
 		assert.deepEqual(targetFromPath("/work/work-wolfpack-X"), { kind: "work-item", id: "work-wolfpack-X" });
 		assert.deepEqual(targetFromPath("/kb/entry/kb-wolfpack-Y"), { kind: "kb-entry", id: "kb-wolfpack-Y" });
 		assert.equal(targetFromPath("/graph"), null);

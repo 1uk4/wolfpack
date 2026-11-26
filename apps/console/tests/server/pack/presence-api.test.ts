@@ -46,6 +46,22 @@ describe("owner presence API", () => {
 		assert.equal(big.bodyUsed, false);
 	});
 
+	it("refuses a chunked body over 4 KB that declares no length", async () => {
+		let n = 0;
+		const fetchStub = (async () => (n++, new Response(null, { status: 202 }))) as unknown as typeof fetch;
+		const text = JSON.stringify({ kind: "thread", id: "hal/t", pad: "x".repeat(6000) });
+		const stream = new ReadableStream<Uint8Array>({
+			start(c) {
+				c.enqueue(new TextEncoder().encode(text.slice(0, 3000)));
+				c.enqueue(new TextEncoder().encode(text.slice(3000)));
+				c.close();
+			},
+		});
+		const chunked = new Request("http://c/api/activity/presence", { method: "POST", headers: { authorization: "Bearer t" }, body: stream, duplex: "half" } as RequestInit);
+		assert.equal((await createPresenceApi({ env, fetch: fetchStub }).publish(chunked)).status, 204);
+		assert.equal(n, 0);
+	});
+
 	it("swallows a hub error and a hub that never answers (short timeout)", async () => {
 		const boom = (async () => Response.json({ error: "x" }, { status: 500 })) as unknown as typeof fetch;
 		assert.equal((await createPresenceApi({ env, fetch: boom }).publish(req({ kind: "thread", id: "t" }))).status, 204);

@@ -7,7 +7,7 @@
  * Last-Event-ID: the cursor of the last frame that carried an `id:` (resync) is sent on reconnect; pack.activity frames have none.
  */
 import type { ActivityEvent, PresenceSnapshot } from "@wolfpack/protocol";
-import type { LiveAction } from "@/src/core/graph/live/live-state";
+import type { LiveAction } from "@/src/core";
 
 export interface SseFrame { id?: string; data: string }
 

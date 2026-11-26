@@ -9,7 +9,7 @@
  */
 import { useEffect, useSyncExternalStore } from "react";
 import type { ActivityEvent } from "@wolfpack/protocol";
-import { emptyLiveState, liveActive, liveSignature, reduceLive, type LiveAction, type LiveState } from "@/src/core/graph/live/live-state";
+import { emptyLiveState, liveActive, liveSignature, reduceLive, type LiveAction, type LiveState } from "@/src/core";
 import { startLiveFeed } from "./live-client";
 
 export interface RecentEvent { id: string; at: number; ts: number; verb: string; actor: ActivityEvent["actor"]; target?: ActivityEvent["target"] }

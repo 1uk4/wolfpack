@@ -17,11 +17,11 @@ import {
 	type LiveOptions,
 	type LiveState,
 	type LiveTarget,
-} from "@/src/core/graph/live/live-state";
-import { ownerThreadKey, targetNodeId, threadSlugOf } from "@/src/core/graph/live/live-targets";
-import { DEFAULT_PHYSICS, stepWolves, wolvesMoving, type WolfBody } from "@/src/core/graph/live/live-physics";
+} from "@/src/core";
+import { ownerThreadKey, targetNodeId, threadSlugOf } from "@/src/core";
+import { DEFAULT_PHYSICS, stepWolves, wolvesMoving, type WolfBody } from "@/src/core";
 import { AMBER, EFFECTS, rgba } from "./live-effects";
-import { redact } from "@/src/core/graph/privacy";
+import { redact } from "@/src/core";
 
 export interface Pt { x: number; y: number }
 export interface OverlayHost {

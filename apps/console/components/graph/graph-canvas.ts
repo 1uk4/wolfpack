@@ -56,7 +56,7 @@ import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "@/src/core";
 import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, ROUTE_DONE_COLOR } from "@/src/core";
-import { redactLines } from "@/src/core/graph/privacy.ts";
+import { redactLines } from "@/src/core";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import type { LiveOverlay, OverlayHighlight, OverlayHit, OverlayHost } from "./live/live-overlay";

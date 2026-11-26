@@ -16,7 +16,7 @@ import { ActivityIcon, ChevronDownIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { feedCountReducer, formatFeed, relativeTime, type FeedLine } from "@/src/core/graph/live/feed";
+import { feedCountReducer, formatFeed, relativeTime, type FeedLine } from "@/src/core";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
 import { liveSettingsOf, type OverlayHighlight } from "./live-overlay";
 import { useLiveActivity } from "./live-store";

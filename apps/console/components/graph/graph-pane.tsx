@@ -44,7 +44,7 @@ import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { fetchKbEntry, fetchWolves, fetchWorkRecord } from "@/components/kb/kb-client";
 import { EntryBody } from "@/components/kb/entry-reader";
 import { Field, KIND_LABEL, LinkList } from "./graph-card.tsx";
-import { redactCard } from "@/src/core/graph/privacy.ts";
+import { redactCard } from "@/src/core";
 import { createGraduateClient, type GraduateClient } from "../kb/graduate-client";
 import { GraduateButton } from "../work/graduate-button";
 import { useGraduated } from "../kb/graduation-signal";

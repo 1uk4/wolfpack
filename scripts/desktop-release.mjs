@@ -4,7 +4,9 @@
 //   node scripts/desktop-release.mjs notes <version> <sha>         -> prints the release notes markdown
 // Nothing is committed: the workflow stamps the version into apps/desktop/package.json on the runner only.
 // Needs full history and all tags (`fetch-depth: 0`). --releases <file> lists release tag names, one per line
-// (`gh release list --json tagName -q '.[].tagName'`): a DRAFT release creates no git tag, so it must count too.
+// (`gh release list --json tagName,isDraft,targetCommitish`, JSON): a DRAFT release creates no git tag, so it must count too,
+// and a draft aimed at the commit being released is reused by a rerun.
+// The `notes` command reads only component tags reachable from the given sha.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -27,7 +29,7 @@ export function highestVersion(names, prefix) {
 
 /**
  * Next desktop version: +1 patch over the highest desktop/vX.Y.Z (tags and releases), never below package.json's X.Y.Z.
- * Rerun safety: when a desktop tag already points at the commit being released, that version is reused.
+ * Rerun safety: when a desktop tag or a draft release (`headTags`, names) already belongs to the commit being released, that version is reused.
  */
 export function nextDesktopVersion({ names, pkgVersion, headTags = [] }) {
 	const atHead = highestVersion(headTags, "desktop");
@@ -63,13 +65,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 	const [cmd, ...rest] = process.argv.slice(2);
 	if (cmd === "version") {
 		const i = rest.indexOf("--releases");
-		const releases = i >= 0 ? lines(readFileSync(rest[i + 1], "utf8")) : [];
+		const releases = i >= 0 ? JSON.parse(readFileSync(rest[i + 1], "utf8")) : [];
 		const pkg = JSON.parse(readFileSync(path.join(root, "apps/desktop/package.json"), "utf8"));
 		const head = git("rev-parse", "HEAD");
+		const draftsHere = releases.filter((r) => r.isDraft && r.targetCommitish === head).map((r) => r.tagName);
 		console.log(nextDesktopVersion({
-			names: [...lines(git("tag", "--list", "desktop/v*")), ...releases],
+			names: [...lines(git("tag", "--list", "desktop/v*")), ...releases.map((r) => r.tagName)],
 			pkgVersion: pkg.version,
-			headTags: lines(git("tag", "--points-at", head)).filter((t) => t.startsWith("desktop/")),
+			headTags: [...lines(git("tag", "--points-at", head)), ...draftsHere].filter((t) => t.startsWith("desktop/")),
 		}));
 	} else if (cmd === "notes") {
 		const [version, sha] = rest;

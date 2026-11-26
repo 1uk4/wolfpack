@@ -86,8 +86,11 @@ const HUB_FALLBACK_OFFSET = 34;
 const FLOAT_HUB_PX = 1.6;
 /** The launch burst when a subagent leaves its hub (ms). */
 const LAUNCH_MS = 900;
-const YOU_OFFSET = 22;
-const YOU_R = 6;
+/** The you badge (screen px): radius, gap above the composer's top edge, and its margin off the canvas bottom when there is no composer. */
+const YOU_BADGE_R = 13;
+const YOU_GAP = 10;
+const YOU_FALLBACK_MARGIN = 28;
+const YOU_ACCENT = "#7aa2ff";
 const PULSE_R = 8;
 const HL_R = 9;
 const HL_PAD = 4;
@@ -161,6 +164,12 @@ export function scaleFor(k: number): OverlayScale {
 let branchPath: Path2D | null = null;
 /** lucide git-branch, in its 24 x 24 box. */
 const branchGlyph = (): Path2D => (branchPath ??= new Path2D("M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"));
+let userPath: Path2D | null = null;
+/** lucide user, in its 24 x 24 box. */
+const userGlyph = (): Path2D => (userPath ??= new Path2D("M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z"));
+/** The you badge (screen px) and its links, as the renderer and tests see them. `x,y` is where a link ends (the target, or the canvas edge when `arrow`). */
+export interface YouLink { kind: "chat" | "view"; x: number; y: number; arrow: boolean; angle: number }
+export interface YouGeometry { badge: { x: number; y: number; r: number }; links: YouLink[] }
 let wolfHead: Path2D | null = null;
 const wolfHeadPath = (): Path2D => (wolfHead ??= new Path2D(WOLF_HEAD_PATH));
 
@@ -228,7 +237,8 @@ export class LiveOverlay {
 	private wolfItems = new Map<string, OverlayItem>();
 	private threadItems = new Map<string, OverlayItem>();
 	private trailFrom = new Map<string, Pt>();
-	private you: Pt | null = null;
+	private composer: { x: number; y: number; w: number; h: number } | null = null;
+	private badge: { x: number; y: number; r: number } | null = null;
 	private attached: AttachedRef | null = null;
 	private highlight: OverlayHighlight | null = null;
 	private settings: OverlaySettings = LIVE_DEFAULTS;
@@ -362,7 +372,7 @@ export class LiveOverlay {
 	/** fast > float > slow. No spreads or Object.values here: this runs on every rAF. The idle float holds the loop (at its own, lower, rate) while any wolf is shown; it also carries the needs-you ring's breathing. */
 	private classifyNeed(now: number): FrameNeed {
 		const s = this.state;
-		if (this.highlight || s.pulses.length > 0 || this.youMoving) return "fast";
+		if (this.highlight || s.pulses.length > 0) return "fast";
 		const wall = Date.now();
 		// Subagents darting to a target, launching from a hub or reeling back are fast motion; the wolves' slow roam is not.
 		for (const b of this.subList) if (Math.abs(b.vx) + Math.abs(b.vy) > 0.4 || (b.tug && now - b.tug.at < 8000) || wall - b.born < LAUNCH_MS) return "fast";
@@ -382,7 +392,6 @@ export class LiveOverlay {
 		}
 		return "none";
 	}
-	private youMoving = false;
 
 	/** Spread the wolves evenly on the anchor ring in name order; a no-op while the set of wolves is unchanged. */
 	private layoutRing(wolves: Record<string, LiveWolf>): void {
@@ -567,19 +576,6 @@ export class LiveOverlay {
 			const live = new Set(s.trails.map((t) => t.id));
 			for (const id of this.trailFrom.keys()) if (!live.has(id)) this.trailFrom.delete(id);
 		}
-		// The "you" node eases toward what you are looking at.
-		const want = this.youTarget(host, k);
-		if (want) {
-			if (!this.you || this.reduced) this.you = { ...want };
-			else {
-				const f = 1 - Math.exp(-dtSec * 6);
-				this.you = { x: this.you.x + (want.x - this.you.x) * f, y: this.you.y + (want.y - this.you.y) * f };
-			}
-			this.youMoving = !this.reduced && Math.hypot(want.x - this.you.x, want.y - this.you.y) * k > 0.5;
-		} else {
-			this.you = null;
-			this.youMoving = false;
-		}
 	}
 
 	/** Where a feature hub sits (world, no float): beside its work node, else beside its domain node, else near its wolf's home domain / the centre. */
@@ -705,16 +701,9 @@ export class LiveOverlay {
 		}
 	}
 
-	/** Where the you-node wants to sit: next to what you are viewing, else next to the floating chat's thread. */
-	private youTarget(host: OverlayHost, k: number): Pt | null {
-		const link = this.youLinks(host)[0];
-		const off = YOU_OFFSET * scaleFor(k).m;
-		return link ? { x: link.x - off, y: link.y - off } : null;
-	}
-
-	/** Points the you-node is linked to: the viewed thread / item first, then the floating chat's attached thread. */
-	private youLinks(host: OverlayHost): Pt[] {
-		const out: Pt[] = [];
+	/** World points the you badge links to: the viewed thread / item (secondary) and the floating chat's attached thread (primary). */
+	private youLinks(host: OverlayHost): { chat: Pt | null; view: Pt | null } {
+		const out: { chat: Pt | null; view: Pt | null } = { chat: null, view: null };
 		const s = this.state;
 		const v = s.owner?.viewing;
 		if (v) {
@@ -722,28 +711,133 @@ export class LiveOverlay {
 				const key = ownerThreadKey(s);
 				const t = key ? s.threads[key] : null;
 				const it = t ? (this.threadItems.get(`${t.wolf}/${t.id}`) ?? this.wolfItems.get(t.wolf)) : null; // zoomed out the thread dot is hidden: link the wolf
-				if (it) out.push({ x: it.x, y: it.y });
+				if (it) out.view = { x: it.x, y: it.y };
 			} else {
 				const id = targetNodeId(v, (n) => host.hasNode(n));
 				const p = id ? host.nodePos(id) : null;
-				if (p) out.push(p);
+				if (p) out.view = p;
 			}
 		}
+		// The chat's target: a feature thread's hub, otherwise the wolf's body (home and other threads).
 		if (this.attached) {
 			const a = this.attached;
-			let it: OverlayItem | undefined;
 			const slug = threadSlugOf(a.wolf, a.threadId);
-			for (const i of this.threadItems.values()) {
+			let it: OverlayItem | undefined;
+			for (const i of this.featureItems.values()) {
 				if (i.wolf === a.wolf && threadSlugOf(a.wolf, i.threadId ?? "") === slug) {
 					it = i;
 					break;
 				}
 			}
-			const wb = this.wolfItems.get(a.wolf);
-			const p = it ?? wb;
-			if (p) out.push({ x: p.x, y: p.y });
+			const p = it ?? this.wolfItems.get(a.wolf);
+			if (p) out.chat = { x: p.x, y: p.y };
 		}
 		return out;
+	}
+
+	/** The floating chat's rect in the graph's own screen coordinates (live-layer measures it once per change); null = no composer. */
+	setComposerRect(r: { x: number; y: number; w: number; h: number } | null): void {
+		const c = this.composer;
+		if (c === r || (c && r && c.x === r.x && c.y === r.y && c.w === r.w && c.h === r.h)) return;
+		this.composer = r ? { ...r } : null;
+		this.requestFrame();
+	}
+
+	/**
+	 * The you badge and its links in SCREEN px (independent of the camera): the badge sits just above the composer's top edge, centred on it,
+	 * else bottom-centre of the canvas. A link ends at its target's screen position, or at the canvas edge with `arrow` when that is off screen.
+	 * Reads the item indexes of the last frame's `items()`.
+	 */
+	screenGeometry(host: OverlayHost, tr: { x: number; y: number; k: number }, size: { w: number; h: number }): YouGeometry | null {
+		if (!this.settings.enabled || Object.keys(this.state.wolves).length === 0) return null;
+		const c = this.composer;
+		const r = YOU_BADGE_R;
+		const badge = c ? { x: c.x + c.w / 2, y: c.y - YOU_GAP - r, r } : { x: size.w / 2, y: size.h - YOU_FALLBACK_MARGIN - r, r };
+		this.badge = badge;
+		const world = this.youLinks(host);
+		const links: YouLink[] = [];
+		for (const [kind, p] of [["chat", world.chat], ["view", world.view]] as const) {
+			if (!p) continue;
+			const tx = p.x * tr.k + tr.x;
+			const ty = p.y * tr.k + tr.y;
+			const pad = 6;
+			if (tx >= pad && tx <= size.w - pad && ty >= pad && ty <= size.h - pad) {
+				links.push({ kind, x: tx, y: ty, arrow: false, angle: Math.atan2(ty - badge.y, tx - badge.x) });
+				continue;
+			}
+			const dx = tx - badge.x;
+			const dy = ty - badge.y;
+			let t = 1;
+			if (dx > 0) t = Math.min(t, (size.w - pad - badge.x) / dx);
+			else if (dx < 0) t = Math.min(t, (pad - badge.x) / dx);
+			if (dy > 0) t = Math.min(t, (size.h - pad - badge.y) / dy);
+			else if (dy < 0) t = Math.min(t, (pad - badge.y) / dy);
+			links.push({ kind, x: badge.x + dx * t, y: badge.y + dy * t, arrow: true, angle: Math.atan2(dy, dx) });
+		}
+		return { badge, links };
+	}
+
+	/** Screen-space pass (renderer calls it after `draw`, with the context at device scale): the you badge and its soft dashed links. */
+	drawScreen(ctx: CanvasRenderingContext2D, host: OverlayHost, tr: { x: number; y: number; k: number }, size: { w: number; h: number }, now: number): void {
+		const g = this.screenGeometry(host, tr, size);
+		if (!g) return;
+		const reduced = this.reduced;
+		ctx.save();
+		try {
+			const { badge } = g;
+			ctx.lineCap = "round";
+			for (const l of g.links) {
+				const sx = badge.x;
+				const sy = badge.y - badge.r;
+				const dx = l.x - sx;
+				const dy = l.y - sy;
+				const len = Math.hypot(dx, dy) || 1;
+				// A soft bend: the control point sits off the midpoint, perpendicular to the line.
+				const cx = sx + dx / 2 - (dy / len) * len * 0.15;
+				const cy = sy + dy / 2 + (dx / len) * len * 0.15;
+				const a = l.kind === "chat" ? 0.6 : 0.35;
+				ctx.strokeStyle = rgba(YOU_ACCENT, a);
+				ctx.lineWidth = 1.4;
+				ctx.setLineDash([5, 5]);
+				ctx.lineDashOffset = reduced ? 0 : -(now / 60) % 10; // a slow crawl toward the target; still under reduced motion
+				ctx.beginPath();
+				ctx.moveTo(sx, sy);
+				ctx.quadraticCurveTo(cx, cy, l.x, l.y);
+				ctx.stroke();
+				ctx.setLineDash([]);
+				if (l.arrow) {
+					// Pointing along the way out: the angle of the end of the curve.
+					const ang = Math.atan2(l.y - cy, l.x - cx);
+					const h = 7;
+					ctx.beginPath();
+					ctx.moveTo(l.x, l.y);
+					ctx.lineTo(l.x - Math.cos(ang - 0.45) * h, l.y - Math.sin(ang - 0.45) * h);
+					ctx.moveTo(l.x, l.y);
+					ctx.lineTo(l.x - Math.cos(ang + 0.45) * h, l.y - Math.sin(ang + 0.45) * h);
+					ctx.strokeStyle = rgba(YOU_ACCENT, Math.min(0.9, a + 0.25));
+					ctx.stroke();
+				}
+			}
+			// The badge: a round plate with a soft glow and the lucide user glyph.
+			ctx.shadowColor = rgba(YOU_ACCENT, 0.55);
+			ctx.shadowBlur = 10;
+			ctx.beginPath();
+			ctx.arc(badge.x, badge.y, badge.r, 0, Math.PI * 2);
+			ctx.fillStyle = rgba(YOU_ACCENT, 0.2);
+			ctx.fill();
+			ctx.shadowBlur = 0;
+			ctx.lineWidth = 1.3;
+			ctx.strokeStyle = rgba(YOU_ACCENT, 0.85);
+			ctx.stroke();
+			const gs = (badge.r * 1.1) / 24;
+			ctx.translate(badge.x - 12 * gs, badge.y - 12 * gs);
+			ctx.scale(gs, gs);
+			ctx.lineWidth = 2;
+			ctx.strokeStyle = rgba(YOU_ACCENT, 0.95);
+			ctx.stroke(userGlyph());
+		} finally {
+			ctx.restore();
+		}
 	}
 
 	private cachedItems: OverlayItem[] = [];
@@ -837,7 +931,6 @@ export class LiveOverlay {
 			this.subItems.set(a.key, item);
 		}
 		this.cachedItems = out;
-		if (this.you) out.push({ kind: "you", key: "you", wolf: "", x: this.you.x, y: this.you.y, r: YOU_R * m, alpha: 1, needsYou: false, online: true, color: host.colors.hoverText, label: "You" });
 		return out;
 	}
 
@@ -928,15 +1021,6 @@ export class LiveOverlay {
 				ctx.setLineDash([]);
 			}
 		}
-		// The you-node's dashed links.
-		const last = items[items.length - 1];
-		const you = last?.kind === "you" ? last : undefined;
-		if (you) {
-			const links = this.youLinks(host);
-			ctx.setLineDash([3 / k, 3 / k]);
-			links.forEach((p, i) => this.line(ctx, you, p, rgba(host.colors.hoverText, i === 0 ? 0.75 : 0.4)));
-			ctx.setLineDash([]);
-		}
 		// Glyphs.
 		for (const it of items) {
 			ctx.globalAlpha = it.alpha;
@@ -986,20 +1070,6 @@ export class LiveOverlay {
 				ctx.scale((it.r * 2) / WOLF_HEAD_BOX, (it.r * 2) / WOLF_HEAD_BOX);
 				ctx.fillStyle = rgba(it.color, 0.9);
 				ctx.fill(wolfHeadPath(), "evenodd");
-				ctx.restore();
-			} else {
-				// You: a small rounded diamond, distinct from the round wolves.
-				ctx.save();
-				ctx.translate(it.x, it.y);
-				ctx.rotate(Math.PI / 4);
-				const h = it.r * 0.8;
-				ctx.beginPath();
-				ctx.rect(-h, -h, h * 2, h * 2);
-				ctx.fillStyle = rgba(host.colors.hoverText, 0.15);
-				ctx.fill();
-				ctx.lineWidth = 1.5 / k;
-				ctx.strokeStyle = rgba(host.colors.hoverText, 0.9);
-				ctx.stroke();
 				ctx.restore();
 			}
 			ctx.globalAlpha = 1;
@@ -1080,6 +1150,11 @@ export class LiveOverlay {
 	/** The overlay thing under a screen point, or null. `slop` is the screen-px pick pad (bigger for touch). */
 	hitTest(sx: number, sy: number, tr: { x: number; y: number; k: number }, slop: number): OverlayHit | null {
 		if (!this.settings.enabled) return null;
+		const bd = this.badge;
+		if (bd && Math.hypot(sx - bd.x, sy - bd.y) - bd.r <= slop) {
+			const item: OverlayItem = { kind: "you", key: "you", wolf: "", x: bd.x, y: bd.y, r: bd.r, alpha: 1, needsYou: false, online: true, color: YOU_ACCENT, label: "You" };
+			return { item, ring: false, sx: bd.x, sy: bd.y };
+		}
 		let best: OverlayHit | null = null;
 		let bestD = Infinity;
 		const prio: Record<OverlayKind, number> = { subagent: 0, thread: 1, feature: 1, you: 2, wolf: 3 };
@@ -1144,6 +1219,15 @@ export class LiveOverlay {
 			return { title: redact(it.label, p), lines, action: it.threadId ? { kind: "open-thread", label: "Open parent thread", wolf: it.wolf, threadId: it.threadId } : undefined };
 		}
 		const v = s.owner?.viewing;
-		return { title: "You", lines: v ? [`Viewing: ${redact(v.title ?? v.id, p)}`] : this.attached ? ["In the floating chat"] : [] };
+		const lines: string[] = [];
+		const a = this.attached;
+		if (a) {
+			const slug = threadSlugOf(a.wolf, a.threadId);
+			let title: string | undefined;
+			for (const i of this.featureItems.values()) if (i.wolf === a.wolf && threadSlugOf(a.wolf, i.threadId ?? "") === slug) title = redact(i.label, p);
+			lines.push(`Chatting with ${title ?? a.wolf}`);
+		}
+		if (v) lines.push(`Viewing: ${redact(v.title ?? v.id, p)}`);
+		return { title: "You", lines };
 	}
 }

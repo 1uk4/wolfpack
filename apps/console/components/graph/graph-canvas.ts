@@ -2336,6 +2336,10 @@ export class GraphCanvasRenderer {
 
 		// 7c. Live overlay: wolves, satellites, trails, pulses, rings (same camera; nothing when it has no data).
 		this.guardOverlay((o) => o.draw(ctx, this.overlayHost(), k, performance.now()), undefined);
+		// 7d. The overlay's screen-space pass (the you badge): device scale only, no camera.
+		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+		this.guardOverlay((o) => o.drawScreen?.(ctx, this.overlayHost(), this.transform, { w, h }, performance.now()), undefined);
+		ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * tx, dpr * ty);
 
 		// 8. Cluster region labels — THE TOPMOST layer (user 2026-09-16:
 		// node labels and hover names drew over them before; region labels

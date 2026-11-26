@@ -135,11 +135,48 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 		overlayRef.current?.dispatch({ type: "threads", threads: rows, now: Date.now() });
 	}, [renderer, live.enabled, connected, featureKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-	// The you-node also links to the floating chat's attached thread.
+	// The you badge links to the floating chat's attached thread (the chat's target).
 	const att = attachedApi?.attached ?? null;
 	useEffect(() => {
 		overlayRef.current?.setAttached(att ? { wolf: att.wolf, threadId: att.threadId } : null);
 	}, [renderer, att?.wolf, att?.threadId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// The floating chat's rect (the you badge sits above it): measured on resize / scroll / size change / bar toggles, never per frame.
+	// Absent or hidden (collapsed, phone with it closed): null, and the badge falls back to bottom-centre of the canvas.
+	const minimized = attachedApi?.minimized ?? false;
+	useEffect(() => {
+		const wrap = wrapRef.current;
+		if (!renderer || !wrap) return;
+		let bar: Element | null = null;
+		let ro: ResizeObserver | null = null;
+		const measure = () => {
+			const el = document.querySelector('[data-testid="chat-bar"]');
+			if (el !== bar) {
+				ro?.disconnect();
+				bar = el;
+				if (el && typeof ResizeObserver !== "undefined") {
+					ro ??= new ResizeObserver(() => measure());
+					ro.observe(el);
+				}
+			}
+			const w = wrap.getBoundingClientRect();
+			const r = el?.getBoundingClientRect();
+			if (!r || r.width === 0 || r.height === 0) return void overlayRef.current?.setComposerRect(null);
+			overlayRef.current?.setComposerRect({ x: r.left - w.left, y: r.top - w.top, w: r.width, h: r.height });
+		};
+		ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => measure()) : null;
+		ro?.observe(wrap);
+		measure();
+		const raf = requestAnimationFrame(measure); // the bar re-renders after an attach / minimize: measure again once it has
+		window.addEventListener("resize", measure);
+		window.addEventListener("scroll", measure, true);
+		return () => {
+			cancelAnimationFrame(raf);
+			ro?.disconnect();
+			window.removeEventListener("resize", measure);
+			window.removeEventListener("scroll", measure, true);
+		};
+	}, [renderer, att?.wolf, att?.threadId, minimized]);
 
 	// A pinned card closes on any press outside it.
 	useEffect(() => {
@@ -163,7 +200,7 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 				<div
 					ref={cardRef}
 					className={`absolute w-56 rounded-[11px] border border-border/50 bg-background/70 p-2.5 text-xs shadow-lg backdrop-blur-md ${shown.pinned ? "pointer-events-auto" : ""}`}
-					style={{ left: flip ? undefined : shown.hit.sx + 14, right: flip ? shown.width - shown.hit.sx + 14 : undefined, top: Math.max(8, shown.hit.sy - 14) }}
+					style={{ left: flip ? undefined : shown.hit.sx + 14, right: flip ? shown.width - shown.hit.sx + 14 : undefined, top: shown.hit.item.kind === "you" ? Math.max(8, shown.hit.sy - 96) : Math.max(8, shown.hit.sy - 14) }}
 				>
 					<div className="flex items-start justify-between gap-2">
 						<div className="min-w-0 truncate text-[13px] font-medium text-foreground">{shown.card.title}</div>

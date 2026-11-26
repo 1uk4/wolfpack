@@ -120,6 +120,56 @@ describe("live map model v2", () => {
 		assert.deepEqual(replacedCalls, [["work:ELzLSkV"], []], "archived: the normal dot comes back");
 	});
 
+	it("the you badge sits above the composer in screen space and never moves with pan or zoom; without a composer it takes the bottom-centre fallback", () => {
+		send("thread-active", feature);
+		run(0.1);
+		items();
+		const size = { w: 800, h: 600 };
+		o.setComposerRect({ x: 100, y: 500, w: 400, h: 60 });
+		const a = o.screenGeometry(host, { x: 0, y: 0, k: 1 }, size)!.badge;
+		assert.equal(a.x, 300, "horizontally centred on the composer");
+		assert.ok(a.y < 500 - a.r && a.y > 500 - 40, `just above its top edge (${a.y})`);
+		const b = o.screenGeometry(host, { x: -300, y: 120, k: 2.5 }, size)!.badge;
+		assert.deepEqual([b.x, b.y], [a.x, a.y]);
+		const arcs: number[][] = [];
+		const ctx = new Proxy({}, { get: (_t, p) => (p === "arc" ? (x: number, y: number, r: number) => arcs.push([x, y, r]) : () => undefined), set: () => true }) as unknown as CanvasRenderingContext2D;
+		o.drawScreen(ctx, host, { x: -300, y: 120, k: 2.5 }, size, 0);
+		assert.deepEqual(arcs[0]!.slice(0, 2), [a.x, a.y], "the badge is drawn there");
+		o.setComposerRect(null);
+		const f = o.screenGeometry(host, { x: 0, y: 0, k: 1 }, size)!.badge;
+		assert.equal(f.x, 400);
+		assert.ok(f.y > 500 && f.y < 600 - f.r, `bottom-centre with a margin (${f.y})`);
+	});
+
+	it("the you badge's chat link ends at the feature hub for a feature thread and at the wolf for a home thread", () => {
+		send("thread-active", feature);
+		send("thread-active", home);
+		run(0.1);
+		const tr = { x: 400, y: 100, k: 1 };
+		const size = { w: 800, h: 600 };
+		const at = (id: string) => ({ x: items().find((i) => i.key === id)!.x + tr.x, y: items().find((i) => i.key === id)!.y + tr.y });
+		o.setAttached({ wolf: "1uk4", threadId: FEATURE });
+		items();
+		const hub = o.screenGeometry(host, tr, size)!.links.find((l) => l.kind === "chat")!;
+		assert.deepEqual([hub.x, hub.y], [-250 + tr.x, 200 + tr.y]);
+		o.setAttached({ wolf: "1uk4", threadId: "1uk4/home" });
+		const wolf = o.screenGeometry(host, tr, size)!.links.find((l) => l.kind === "chat")!;
+		assert.deepEqual([wolf.x, wolf.y], [at("1uk4").x, at("1uk4").y]);
+	});
+
+	it("a chat target off the canvas ends its link at the canvas edge with an arrow", () => {
+		send("thread-active", feature);
+		run(0.1);
+		items();
+		o.setAttached({ wolf: "1uk4", threadId: FEATURE });
+		const size = { w: 800, h: 600 };
+		const on = o.screenGeometry(host, { x: 400, y: 100, k: 1 }, size)!.links[0]!;
+		assert.equal(on.arrow, false);
+		const off = o.screenGeometry(host, { x: 5000, y: 100, k: 1 }, size)!.links[0]!;
+		assert.equal(off.arrow, true);
+		assert.ok(off.x >= 0 && off.x <= 800 && off.y >= 0 && off.y <= 600, `clipped to the canvas (${off.x},${off.y})`);
+	});
+
 	it("a feature with no work node anchors beside its domain node", () => {
 		nodes.delete("work:ELzLSkV");
 		try {

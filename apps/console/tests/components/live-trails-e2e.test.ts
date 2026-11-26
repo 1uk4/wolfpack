@@ -97,7 +97,7 @@ describe("live trails, end to end through the console path", () => {
 		o.draw(rec.ctx, host, k, wall);
 	};
 
-	it("draws a visible trail and arrival pulse from the wolf to the read KB entry, and the thread and you links", async () => {
+	it("draws a visible trail and arrival pulse from the wolf to the read KB entry, and the thread link, with the you badge linked to the viewed entry", async () => {
 		await flush();
 		push(frame({ ...base, id: "a1", ts: T0, verb: "thread-active" }));
 		push(frame({ ...base, id: "a2", ts: T0, verb: "bound", target: { kind: "work-item", id: "work-wolfpack-ELzLSkV", domain: "wolfpack", title: "Live map" } }));
@@ -121,8 +121,9 @@ describe("live trails, end to end through the console path", () => {
 		assert.equal(link.length, 1, "bound thread links to its work node");
 		assert.ok(alphaOfStyle(link[0]!.style) >= 0.4, `thread link alpha ${link[0]!.style}`);
 
-		const youLink = rec.strokes.filter((s) => s.dash && Math.hypot(s.to[0] - target.x, s.to[1] - target.y) < 0.5);
-		assert.equal(youLink.length, 1, "you-node links to the viewed entry");
-		assert.ok(alphaOfStyle(youLink[0]!.style) >= 0.6, `you link alpha ${youLink[0]!.style}`);
+		// The you badge lives in screen space: its secondary link ends at the viewed entry's screen position.
+		const geo = o.screenGeometry(host, { x: 0, y: 0, k: K }, { w: 4000, h: 4000 })!;
+		const view = geo.links.find((l) => l.kind === "view")!;
+		assert.deepEqual([view.x, view.y], [target.x * K, target.y * K], "you badge links to the viewed entry");
 	});
 });

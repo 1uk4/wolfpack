@@ -83,7 +83,7 @@ export function startLiveFeed(opts: LiveFeedOptions): () => void {
 	}
 	function backoff(idx: number): void {
 		attempt = idx + 1;
-		schedule(BACKOFF_MS[Math.min(idx, BACKOFF_MS.length - 1)]);
+		schedule(BACKOFF_MS[Math.min(idx, BACKOFF_MS.length - 1)] ?? 60_000);
 	}
 
 	async function run(): Promise<void> {

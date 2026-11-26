@@ -9,7 +9,7 @@
  */
 import { useEffect, useSyncExternalStore } from "react";
 import type { ActivityEvent } from "@wolfpack/protocol";
-import { emptyLiveState, liveActive, liveSignature, reduceLive, type LiveAction, type LiveState } from "@/src/core";
+import { emptyLiveState, liveActive, liveSignature, reduceLive, seedFeedFromSnapshot, type LiveAction, type LiveState } from "@/src/core";
 import { startLiveFeed } from "./live-client";
 
 export interface RecentEvent { id: string; at: number; ts: number; verb: string; actor: ActivityEvent["actor"]; target?: ActivityEvent["target"] }
@@ -49,6 +49,12 @@ function dispatch(a: LiveAction): void {
 	if (a.type === "event") {
 		const e = a.event;
 		recent = [...recent, { id: e.id, at: a.now, ts: e.ts, verb: e.verb, actor: e.actor, target: e.target }].slice(-RECENT_MAX);
+	}
+	if (a.type === "snapshot") {
+		// Seed the feed with who is busy right now (a quiet pack still shows what is going on); stream frames already in the ring win.
+		const have = new Set(recent.map((r) => r.id));
+		const seeded = seedFeedFromSnapshot(a.snapshot, a.now).filter((e) => !have.has(e.id));
+		recent = [...seeded, ...recent].slice(-RECENT_MAX);
 	}
 	if (a.type === "tick") {
 		const s = liveSignature(state);

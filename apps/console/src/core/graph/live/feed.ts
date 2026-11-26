@@ -1,8 +1,10 @@
 /**
  * ACTIVITY FEED FORMATTER (pure, no DOM): turns the live event ring into short feed lines, e.g. "1uk4 · scout read Crawl Pipeline".
- * Noise is dropped (thread-active heartbeats, thread-idle) and a consecutive duplicate (same actor + verb + target) within 30 s is merged
+ * A thread starting (thread-active while it was not active) and going idle are lines; heartbeats of an active thread are dropped. A consecutive duplicate (same actor + verb + target) within 30 s is merged
  * into one line carrying the latest time. Also: relative time, a stable wolf colour and the collapsed "N new" counter reducer.
  */
+import type { ActivityEvent, PresenceSnapshot } from "@wolfpack/protocol";
+
 export interface FeedEvent {
 	id: string;
 	/** Arrival time (ms). */
@@ -59,13 +61,20 @@ export function nodeIdOf(t: { kind: string; id: string } | undefined): string | 
 	return undefined;
 }
 
-const sameKey = (e: FeedEvent) => `${e.actor.wolf ?? ""}|${e.actor.subagent ?? ""}|${e.verb}|${e.target?.kind ?? ""}:${e.target?.id ?? ""}`;
+const sameKey = (e: FeedEvent) => `${e.actor.wolf ?? ""}|${e.actor.subagent ?? ""}|${e.verb}|${e.verb.startsWith("thread-") ? (e.actor.threadId ?? "") : ""}|${e.target?.kind ?? ""}:${e.target?.id ?? ""}`;
 
 export function formatFeed(events: readonly FeedEvent[], opts: { private?: boolean }): FeedLine[] {
 	const out: FeedLine[] = [];
 	let lastKey = "";
+	const activeThreads = new Set<string>();
 	for (const e of events) {
-		if (e.verb === "thread-idle" || e.verb === "thread-active") continue;
+		if (e.verb === "thread-idle" || e.verb === "thread-active") {
+			const tk = `${e.actor.wolf ?? ""}/${e.actor.threadId ?? ""}`;
+			const was = activeThreads.has(tk);
+			if (e.verb === "thread-active") activeThreads.add(tk);
+			else activeThreads.delete(tk);
+			if (was === (e.verb === "thread-active") || !e.actor.wolf) continue; // a heartbeat, or an idle for a thread never seen active
+		}
 		const you = e.verb === "owner-viewing";
 		const wolf = you ? "you" : e.actor.wolf;
 		if (!wolf) continue;
@@ -78,7 +87,11 @@ export function formatFeed(events: readonly FeedEvent[], opts: { private?: boole
 		const sa = e.actor.subagent;
 		let phrase: string;
 		let name = "";
-		if (e.verb === "subagent-spawned") phrase = `started ${sa ?? "subagent"}`;
+		if (e.verb === "thread-active") {
+			phrase = "started working";
+			if (!opts.private && e.actor.title) name = e.actor.title;
+		} else if (e.verb === "thread-idle") phrase = "idle";
+		else if (e.verb === "subagent-spawned") phrase = `started ${sa ?? "subagent"}`;
 		else if (e.verb === "subagent-finished") phrase = `${sa ?? "subagent"} finished`;
 		else {
 			const p = PHRASE[e.verb];
@@ -101,6 +114,26 @@ export function formatFeed(events: readonly FeedEvent[], opts: { private?: boole
 		lastKey = k;
 	}
 	return out;
+}
+
+/**
+ * Feed events for the presence snapshot (active threads and running subagents), oldest first, newest last, at most `max`.
+ * Arrival times are back-dated by the event's age on the hub clock.
+ */
+export function seedFeedFromSnapshot(snap: PresenceSnapshot, now: number, max = 50): (FeedEvent & Pick<ActivityEvent, "actor" | "target">)[] {
+	const out: (FeedEvent & Pick<ActivityEvent, "actor" | "target">)[] = [];
+	for (const entry of [...snap.threads, ...snap.subagents]) {
+		const e = entry.event;
+		if (e.verb !== "thread-active" && e.verb !== "subagent-spawned") continue;
+		out.push({ id: e.id, at: Math.min(now, now - (snap.at - e.ts)), ts: e.ts, verb: e.verb, actor: e.actor, target: e.target });
+	}
+	return out.sort((a, b) => a.at - b.at).slice(-max);
+}
+
+/** The collapsed pill: "Quiet" with nothing to show, "Activity" otherwise, with how many arrived since collapsing. */
+export function feedPillLabel(newCount: number, lineCount: number): string {
+	if (newCount > 0) return `Activity · ${newCount} new`;
+	return lineCount === 0 ? "Quiet" : "Activity";
 }
 
 /** "now", "12s", "3m", "1h". */

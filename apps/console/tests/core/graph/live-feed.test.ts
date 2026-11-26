@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { feedCountReducer, formatFeed, relativeTime, type FeedEvent } from "../../../src/core/graph/live/feed.ts";
+import type { PresenceSnapshot } from "@wolfpack/protocol";
+import { feedCountReducer, feedPillLabel, formatFeed, relativeTime, seedFeedFromSnapshot, type FeedEvent } from "../../../src/core/graph/live/feed.ts";
 
 let n = 0;
 const ev = (verb: string, o: Partial<FeedEvent> = {}): FeedEvent => ({ id: `e${++n}`, at: 1000, ts: 0, verb, actor: { kind: "thread", wolf: "1uk4", threadId: "t1" }, ...o });
@@ -41,8 +42,33 @@ describe("activity feed formatter", () => {
 		assert.deepEqual(texts([ev("owner-viewing", { actor: { kind: "owner" }, target: kb })], true), ["you · viewing"]);
 	});
 
-	it("drops thread-active heartbeats and thread-idle", () => {
-		assert.deepEqual(texts([ev("thread-active"), ev("thread-idle")]), []);
+	it("shows a thread starting and going idle, but not the heartbeats of a thread already active", () => {
+		const a = (title?: string) => ev("thread-active", { actor: { kind: "thread", wolf: "1uk4", threadId: "t1", title } });
+		assert.deepEqual(texts([a("Fix the bug"), a("Fix the bug"), a("Fix the bug"), ev("thread-idle")]), ["1uk4 · started working Fix the bug", "1uk4 · idle"]);
+		assert.deepEqual(texts([a("Fix the bug"), ev("thread-idle"), a("Fix the bug")]).length, 3); // started again after idle
+		assert.deepEqual(texts([a("Fix the bug")], true), ["1uk4 · started working"]); // private view drops the title
+	});
+
+	it("seeds the feed from a presence snapshot: active threads and running subagents, newest last, at most 50", () => {
+		const entry = (id: string, verb: string, ts: number, actor: Record<string, unknown>) => ({ expiresAt: 99_999, event: { v: 1, id, pack: "p", ts, ttlMs: 1000, actor, verb } });
+		const snap = {
+			v: 1, pack: "p", at: 10_000, owner: [],
+			wolves: [entry("w1", "thread-active", 9000, { kind: "thread", wolf: "hal" })],
+			threads: [entry("a", "thread-active", 9_500, { kind: "thread", wolf: "hal", threadId: "t9", title: "Plan" })],
+			subagents: [entry("b", "subagent-spawned", 9_000, { kind: "subagent", wolf: "hal", subagent: "scout", parentThreadId: "t9" })],
+		} as unknown as PresenceSnapshot;
+		const seeded = seedFeedFromSnapshot(snap, 50_000);
+		assert.deepEqual(seeded.map((e) => e.id), ["b", "a"]);
+		assert.deepEqual(texts(seeded), ["hal · started scout", "hal · started working Plan"]);
+		const many = { ...snap, threads: Array.from({ length: 80 }, (_, i) => entry(`m${i}`, "thread-active", 1000 + i, { kind: "thread", wolf: "hal", threadId: `x${i}` })), subagents: [] } as unknown as PresenceSnapshot;
+		assert.deepEqual(seedFeedFromSnapshot(many, 0).map((e) => e.id).slice(-1), ["m79"]);
+		assert.equal(seedFeedFromSnapshot(many, 0).length, 50);
+	});
+
+	it("the collapsed pill always has a label: Quiet with no lines, Activity otherwise, with the new count", () => {
+		assert.equal(feedPillLabel(0, 0), "Quiet");
+		assert.equal(feedPillLabel(0, 3), "Activity");
+		assert.equal(feedPillLabel(2, 3), "Activity · 2 new");
 	});
 
 	it("merges a consecutive duplicate within 30 s, keeps it apart after", () => {

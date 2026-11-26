@@ -16,7 +16,7 @@ import { ActivityIcon, ChevronDownIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { feedCountReducer, formatFeed, relativeTime, type FeedLine } from "@/src/core";
+import { feedCountReducer, feedPillLabel, formatFeed, relativeTime, type FeedLine } from "@/src/core";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
 import { liveSettingsOf, type OverlayHighlight } from "./live-overlay";
 import { useLiveActivity } from "./live-store";
@@ -45,7 +45,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	const priv = (settings as { privateView?: boolean } | null)?.privateView === true;
 	const router = useRouter();
 	const attachApi = useAttachedThread();
-	const { recent } = useLiveActivity({ enabled: live.enabled });
+	const { recent, connected } = useLiveActivity({ enabled: live.enabled });
 	const [count, dispatch] = useReducer(feedCountReducer, { collapsed: false, count: 0 });
 	const [ready, setReady] = useState(false);
 	const [now, setNow] = useState(() => Date.now());
@@ -139,10 +139,11 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 		else router.push(threadHref(l.thread.wolf, l.thread.threadId));
 	};
 
-	if (!live.enabled || !ready || lines.length === 0) return null;
+	// Once the hub has answered, always show at least the collapsed pill ("Quiet" when nothing is going on).
+	if (!live.enabled || !ready || !connected) return null;
 	const motion = reducedMotion() ? "" : "transition-[opacity,transform] duration-200 ease-[cubic-bezier(.34,1.56,.64,1)]";
 
-	if (count.collapsed) {
+	if (count.collapsed || lines.length === 0) {
 		return (
 			<div className="pointer-events-none absolute bottom-3 left-3 z-[6]">
 				<button
@@ -152,7 +153,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 					className={`pointer-events-auto inline-flex items-center gap-1.5 rounded-[10px] border border-border/50 bg-background/70 px-2.5 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur-md hover:text-foreground ${motion}`}
 				>
 					<ActivityIcon className="size-3.5" />
-					<span>{count.count > 0 ? `Activity · ${count.count} new` : "Activity"}</span>
+					<span>{feedPillLabel(count.count, lines.length)}</span>
 				</button>
 			</div>
 		);

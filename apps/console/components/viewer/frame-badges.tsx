@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { EyeIcon, MessageSquareIcon, XIcon } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
 import { viewKey } from "./view-descriptor";
@@ -12,10 +13,10 @@ import { setVizMode } from "./viz-mode";
  * visualization mode; × hides the badge for the thread. While the mode is on (`vizOn`) the row starts with a chat icon that leaves it.
  * `onNavigate` is for callers that are not on the thread page (the floating bar): it gets the thread-page href with the frame open.
  */
-export function FrameBadges({ wolf, threadId, vizOn, onNavigate }: { wolf: string; threadId: string; vizOn: boolean; onNavigate?: (view: string) => void }) {
+export function FrameBadges({ wolf, threadId, vizOn, onNavigate, lead, bar = false }: { wolf: string; threadId: string; vizOn: boolean; onNavigate?: (view: string) => void; lead?: ReactNode; bar?: boolean }) {
 	const badges = useFrameBadges(wolf, threadId);
 	const viewer = useViewer(wolf, threadId);
-	if (badges.length === 0 && !vizOn) return null;
+	if (badges.length === 0 && !vizOn && !lead) return null;
 	const top = viewer.stack[viewer.stack.length - 1];
 	const shown = viewer.open && top?.kind === "frame" ? top : null;
 	return (
@@ -23,8 +24,9 @@ export function FrameBadges({ wolf, threadId, vizOn, onNavigate }: { wolf: strin
 			data-testid="frame-badges"
 			role="toolbar"
 			aria-label="Frames"
-			className="pointer-events-auto flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto overflow-y-hidden px-1 pb-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+			className={`pointer-events-auto flex min-w-0 flex-nowrap items-center gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${bar ? "px-3 py-1 [mask-image:linear-gradient(to_right,transparent,#000_12px,#000_calc(100%-12px),transparent)]" : "px-1 pb-1.5"}`}
 		>
+			{lead}
 			{vizOn && (
 				<Hint label="Show the transcript again">
 					<button
@@ -61,7 +63,7 @@ export function FrameBadges({ wolf, threadId, vizOn, onNavigate }: { wolf: strin
 								}}
 								className="flex max-w-[12rem] items-center gap-1 py-1 pl-2 pr-1 hover:text-foreground max-md:min-h-11"
 							>
-								<EyeIcon className="size-3.5 shrink-0" />
+								<EyeIcon className="size-3 shrink-0 text-muted-foreground" />
 								<span className="truncate">{b.label}</span>
 							</button>
 						</Hint>

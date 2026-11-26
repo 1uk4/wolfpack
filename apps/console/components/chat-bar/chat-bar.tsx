@@ -503,6 +503,10 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	const vizActive = useVizActive();
 	const vizOn = !!vizActive && vizActive.wolf === target.wolf && vizActive.threadId === target.threadId;
 	const badge = BAR_EXTRAS.badge && !vizOn && (waiting.length > 0 || approvals.length > 0) ? <NeedsYouBadge waiting={waiting} all={all} approvals={approvals} /> : null;
+	// Every badge of the bar (frame chips, needs-you, approvals) rides one scrolling row inside the bar's surface, between the card slot and the header.
+	const chipRow = (
+		<FrameBadges bar wolf={target.wolf} threadId={target.threadId} vizOn={vizOn} lead={badge} onNavigate={onThreadPage ? undefined : (view) => router.push(`${threadHref(target.wolf, target.threadId)}?view=${encodeURIComponent(view)}`)} />
+	);
 	const chip = (
 		<button
 			ref={chipRef}
@@ -587,9 +591,10 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						<ChevronUpIcon className="size-4 shrink-0 text-muted-foreground" />
 					</button>
 				)}
+				{!minimized && !sheet && chipRow}
 				<div className="relative flex items-center gap-1 px-1.5">
 					{chip}
-					{badge}
+					{(sheet || minimized) && badge}
 					{working && !minimized && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
 					{minimized && <CompactMeter dictation={dictation} />}
 					{minimized ? (
@@ -610,7 +615,6 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						</div>
 					)}
 				</div>
-				{!minimized && !sheet && <div className="pt-1"><FrameBadges wolf={target.wolf} threadId={target.threadId} vizOn={vizOn} onNavigate={onThreadPage ? undefined : (view) => router.push(`${threadHref(target.wolf, target.threadId)}?view=${encodeURIComponent(view)}`)} /></div>}
 				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
 				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
@@ -644,11 +648,10 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 				{sheetCard}
 				{hasSurface && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
 			</div>
-			<FrameBadges wolf={target.wolf} threadId={target.threadId} vizOn={vizOn} onNavigate={onThreadPage ? undefined : (view) => router.push(`${threadHref(target.wolf, target.threadId)}?view=${encodeURIComponent(view)}`)} />
 			<div className={cn("relative rounded-2xl border bg-card shadow-lg", askCard && session.expanded ? "rounded-t-none border-t-0" : "focus-within:ring-1 focus-within:ring-(color:--thread-accent)")} style={composing ? undefined : { borderColor: color }}>
+				{chipRow}
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}
-					{badge}
 					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
 					{dockBtn("ml-auto rounded-md p-1 text-muted-foreground hover:bg-accent")}
 					<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="rounded-md p-1 text-muted-foreground hover:bg-accent">
@@ -743,7 +746,7 @@ export function NeedsYouBadge({ waiting, all, approvals }: { waiting: (BarThread
 	const color = useThreadColor(first ? { id: first.id, ...(first.kind ? { kind: first.kind } : {}), ...(first.parentThreadId ? { parentThreadId: first.parentThreadId } : {}) } : { id: "" }, all, first ? api.wolves.find((w) => w.name === first.wolf)?.color : undefined).hex;
 	const total = waiting.length + approvals.length;
 	return (
-		<span className="flex min-w-0 items-center gap-1">
+		<span className="flex shrink-0 items-center gap-1">
 			<button
 				type="button"
 				data-testid="chat-bar-needs-you"
@@ -751,13 +754,13 @@ export function NeedsYouBadge({ waiting, all, approvals }: { waiting: (BarThread
 				title={first ? `${total} waiting for you · oldest: ${first.title}` : `${total} waiting for you · ${approvals[0]!.label}`}
 				aria-label={first ? `${total} waiting for you. Attach the bar to ${first.title}` : `${total} waiting for you. Open ${approvals[0]!.label}`}
 				onClick={() => (first ? api.attach({ wolf: first.wolf, threadId: first.id }) : router.push(approvals[0]!.href))}
-				className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 font-ui text-[11px] text-amber-400 hover:bg-amber-500/25"
+				className="flex shrink-0 items-center gap-1 rounded-full border border-amber-500/40 bg-card px-2.5 py-1 font-ui text-xs text-amber-400 hover:bg-accent max-md:min-h-11"
 			>
 				<span className="size-1.5 rounded-full" style={{ backgroundColor: color }} />
 				{total}
 			</button>
 			{approvals.slice(0, 2).map((a) => (
-				<button key={a.requestId} type="button" data-testid="chat-bar-approval" title={a.label} onClick={() => router.push(a.href)} className="min-w-0 max-w-[30vw] truncate rounded-full bg-amber-500/10 px-2 py-0.5 font-ui text-[11px] text-amber-400 hover:bg-amber-500/25">
+				<button key={a.requestId} type="button" data-testid="chat-bar-approval" title={a.label} onClick={() => router.push(a.href)} className="max-w-[12rem] shrink-0 truncate rounded-full border border-amber-500/40 bg-card px-2.5 py-1 font-ui text-xs text-amber-400 hover:bg-accent max-md:min-h-11">
 					{a.label}
 				</button>
 			))}

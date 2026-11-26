@@ -168,7 +168,7 @@ describe("frame badges", () => {
 		assert.equal(q('[data-testid="viz-toggle"]'), null, "the header eye is hidden for a frame");
 		const bar = q('[data-testid="chat-bar"]')!;
 		assert.equal(bar.querySelector('[data-testid="frame-badges-chat"]')?.parentElement, bar.querySelector('[data-testid="frame-badges"]'));
-		assert.equal(bar.querySelector('[data-testid="frame-badges"]')!.nextElementSibling?.querySelector("textarea") !== null, true, "the row is right above the bar's input");
+		assert.equal(bar.querySelector('[data-testid="frame-badges"]')!.nextElementSibling?.contains(bar.querySelector('[data-testid="chat-bar-chip"]')), true, "the row is right above the bar's header, inside its surface");
 		await click(bar.querySelector('[data-testid="frame-badges-chat"]')!);
 		await settle(60);
 		assert.equal(mainHidden(), false);

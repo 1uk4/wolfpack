@@ -955,7 +955,7 @@ Above everything, **correctness**: the picture must not assert anything false. A
 
 ## 2. Tools and the frame file
 
-You read with `read`, `grep`, `find`, `ls`. You write with `write` and `edit`, and only into the wolf's frames dir, which is your working directory (the write fence refuses paths outside it). Never write anywhere else; do not use bash.
+You read with `read`, `grep`, `find`, `ls`. You write with `write` and `edit`, and only into the wolf's frames dir, which is your working directory (the write fence refuses paths outside it). Never write anywhere else; do not use bash. Your reads are fenced too: you can read only the repo you work in, the KB and the frames dir, and a read of anything else (the wolf's config, keys, `~/.wolfpack`, `~/.ssh`) is refused. Never put secrets or configuration contents into a frame.
 
 Produce ONE self-contained HTML file in your working directory:
 - Inline all CSS and JS. No external scripts, stylesheets, fonts, iframes or fetches: the page runs sandboxed with no network, and anything external simply fails.

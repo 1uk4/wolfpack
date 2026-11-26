@@ -10,7 +10,7 @@
  *   - `private` shows only "<wolf> · <verb>" (the private view sets `settings.privateView`).
  * The relative times re-render on a 15 s timer, never per frame.
  */
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ActivityIcon, ChevronDownIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
@@ -70,10 +70,12 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 		}
 		if (last === seen.current) return;
 		const at = recent.findIndex((e) => e.id === seen.current);
-		const fresh = formatFeed(at < 0 ? recent : recent.slice(at + 1), { private: priv }).length;
+		const prev = seen.current;
 		seen.current = last;
+		if (!count.collapsed) return; // the count only matters while collapsed: no second formatFeed pass otherwise
+		const fresh = formatFeed(prev === null || at < 0 ? recent : recent.slice(at + 1), { private: priv }).length;
 		if (fresh > 0) dispatch({ type: "new", n: fresh });
-	}, [recent, priv]);
+	}, [recent, priv, count.collapsed]);
 
 	useEffect(() => {
 		const t = setInterval(() => setNow(Date.now()), 15_000);
@@ -139,6 +141,10 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 		else router.push(threadHref(l.thread.wolf, l.thread.threadId));
 	};
 
+	// Row handlers go through a ref so memoised rows keep a stable prop and skip re-rendering on every feed update.
+	const handlersRef = useRef({ enter, leave, open, pointer: (t: string) => void (lastPointer.current = t) });
+	handlersRef.current = { enter, leave, open, pointer: (t: string) => void (lastPointer.current = t) };
+
 	// Once the hub has answered, always show at least the collapsed pill ("Quiet" when nothing is going on).
 	if (!live.enabled || !ready || !connected) return null;
 	const motion = reducedMotion() ? "" : "transition-[opacity,transform] duration-200 ease-[cubic-bezier(.34,1.56,.64,1)]";
@@ -180,34 +186,38 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 					{shown.map((l, i) => {
 						const fromEnd = shown.length - 1 - i;
 						const fade = fromEnd >= VISIBLE ? 0.35 : 1 - Math.max(0, fromEnd - 3) * 0.14;
-						const clickable = !!l.thread;
-						return (
-							<div
-								key={l.key}
-								role={clickable ? "button" : undefined}
-								tabIndex={clickable ? 0 : undefined}
-								onPointerDown={(e) => {
-									lastPointer.current = e.pointerType;
-								}}
-								onMouseEnter={() => enter(l)}
-								onClick={() => {
-									enter(l);
-									open(l);
-								}}
-								onKeyDown={(e) => {
-									if (e.key === "Enter") open(l);
-								}}
-								style={{ opacity: active === l.key ? 1 : fade }}
-								className={`flex items-center gap-2 rounded-md px-1.5 py-[3px] text-[12px] leading-4 ${clickable ? "cursor-pointer" : ""} ${active === l.key ? "bg-muted/60" : ""} ${motion}`}
-							>
-								<span className="size-1.5 shrink-0 rounded-full" style={{ background: l.tone === "amber" ? "#f59e0b" : l.color }} />
-								<span className={`min-w-0 flex-1 truncate ${l.tone === "amber" ? "text-amber-500" : "text-foreground"}`}>{l.text}</span>
-								<span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">{relativeTime(now, l.time)}</span>
-							</div>
-						);
+						return <FeedRow key={l.key} l={l} opacity={active === l.key ? 1 : fade} on={active === l.key} rel={relativeTime(now, l.time)} motion={motion} handlers={handlersRef} />;
 					})}
 				</div>
 			</div>
 		</div>
 	);
 }
+
+interface RowHandlers { enter(l: FeedLine): void; leave(): void; open(l: FeedLine): void; pointer(type: string): void }
+
+/** One feed line, memoised by its key and primitive props: a new event re-renders only the rows that changed. */
+const FeedRow = memo(function FeedRow({ l, opacity, on, rel, motion, handlers }: { l: FeedLine; opacity: number; on: boolean; rel: string; motion: string; handlers: { current: RowHandlers } }) {
+	const clickable = !!l.thread;
+	return (
+		<div
+			role={clickable ? "button" : undefined}
+			tabIndex={clickable ? 0 : undefined}
+			onPointerDown={(e) => handlers.current.pointer(e.pointerType)}
+			onMouseEnter={() => handlers.current.enter(l)}
+			onClick={() => {
+				handlers.current.enter(l);
+				handlers.current.open(l);
+			}}
+			onKeyDown={(e) => {
+				if (e.key === "Enter") handlers.current.open(l);
+			}}
+			style={{ opacity }}
+			className={`flex items-center gap-2 rounded-md px-1.5 py-[3px] text-[12px] leading-4 ${clickable ? "cursor-pointer" : ""} ${on ? "bg-muted/60" : ""} ${motion}`}
+		>
+			<span className="size-1.5 shrink-0 rounded-full" style={{ background: l.tone === "amber" ? "#f59e0b" : l.color }} />
+			<span className={`min-w-0 flex-1 truncate ${l.tone === "amber" ? "text-amber-500" : "text-foreground"}`}>{l.text}</span>
+			<span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">{rel}</span>
+		</div>
+	);
+}, (a, b) => a.l.key === b.l.key && a.l.text === b.l.text && a.l.time === b.l.time && a.l.tone === b.l.tone && a.opacity === b.opacity && a.on === b.on && a.rel === b.rel && a.motion === b.motion);

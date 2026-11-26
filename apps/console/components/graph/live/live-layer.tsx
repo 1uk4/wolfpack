@@ -15,7 +15,7 @@ import { BellIcon, ExternalLinkIcon, XIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
-import { acquireLiveFeed, getLiveSnapshot, onLiveAction, useLiveActivity } from "./live-store";
+import { acquireLiveFeed, getLiveSnapshot, onLiveAction, useLiveConnected } from "./live-store";
 import { LiveOverlay, liveSettingsOf, type OverlayCard, type OverlayHit } from "./live-overlay";
 
 interface Shown { hit: OverlayHit; card: OverlayCard; pinned: boolean; width: number }
@@ -108,7 +108,7 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 	}, [renderer, live.enabled]);
 
 	// Every pack wolf, offline ones dimmed at home: only once the hub has answered, so with no hub the graph is exactly as before.
-	const { connected } = useLiveActivity({ enabled: false });
+	const connected = useLiveConnected();
 	const names = (attachedApi?.wolves ?? []).map((w) => w.name).join("\u0000");
 	useEffect(() => {
 		if (!renderer || !live.enabled || !names || !connected) return;

@@ -27,7 +27,25 @@ let stopFeed: (() => void) | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
 let sig = "";
 
-const emit = () => subs.forEach((f) => f());
+/** Subscribers hear about changes at most once per EMIT_MS (leading edge immediate, then one trailing call): a burst of activity
+ *  events re-renders React once per window, not once per event. The snapshot itself is always current. */
+export const EMIT_MS = 150;
+let emitTimer: ReturnType<typeof setTimeout> | null = null;
+let emitPending = false;
+let lastEmitAt = -Infinity;
+const flushEmit = () => {
+	if (emitTimer) clearTimeout(emitTimer);
+	emitTimer = null;
+	if (!emitPending) return;
+	emitPending = false;
+	lastEmitAt = Date.now();
+	subs.forEach((f) => f());
+};
+const emit = (now = false) => {
+	emitPending = true;
+	if (now || Date.now() - lastEmitAt >= EMIT_MS) return flushEmit();
+	if (!emitTimer) emitTimer = setTimeout(flushEmit, Math.max(0, lastEmitAt + EMIT_MS - Date.now()));
+};
 
 /** The clock runs only while something can expire; with no live data there is no timer. */
 function armTimer(): void {
@@ -68,8 +86,9 @@ function dispatch(a: LiveAction): void {
 		if (s === sig) return; // nothing visible changed: no re-render
 		sig = s;
 	}
-	snapshot = { state, recent, connected: snapshot.connected || a.type !== "tick" };
-	emit();
+	const wasConnected = snapshot.connected;
+	snapshot = { state, recent, connected: wasConnected || a.type !== "tick" };
+	emit(!wasConnected && snapshot.connected); // the hub answering is shown at once
 	armTimer();
 }
 
@@ -90,7 +109,7 @@ export function acquireLiveFeed(): () => void {
 		timer = null;
 		snapshot = EMPTY;
 		sig = "";
-		emit();
+		emit(true);
 	};
 }
 
@@ -103,10 +122,17 @@ export function onLiveAction(fn: (a: LiveAction) => void): () => void {
 	return () => void listeners.delete(fn);
 }
 
-const subscribe = (f: () => void) => {
+/** Subscribe to (coalesced) snapshot changes. */
+export const subscribeLive = (f: () => void): (() => void) => {
 	subs.add(f);
 	return () => void subs.delete(f);
 };
+const subscribe = subscribeLive;
+
+/** Only whether the hub has answered: a consumer that needs nothing else re-renders on that flip alone. */
+export function useLiveConnected(): boolean {
+	return useSyncExternalStore(subscribe, () => snapshot.connected, () => false);
+}
 
 /** The shared live state and recent-event ring. Opens the stream while mounted (shared with the graph overlay). */
 export function useLiveActivity(opts: { enabled?: boolean } = {}): LiveActivitySnapshot {

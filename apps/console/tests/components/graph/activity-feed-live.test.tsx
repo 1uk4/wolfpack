@@ -66,7 +66,7 @@ describe("ActivityFeed with live frames", () => {
 			try {
 				await act(async () => {
 				push(frame({ v: 1, id: "a1", pack: "default", ts: Date.now(), ttlMs: 120000, actor: { kind: "thread", wolf: "1uk4", threadId: T, title: "Live map" }, verb: "thread-active" }));
-				await sleep(50);
+				await sleep(250); // the store tells React at most every 150 ms
 				});
 			} catch (e) {
 				errors.push(e);

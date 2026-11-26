@@ -121,18 +121,50 @@ describe("live overlay fade clock", () => {
 		{
 			o.dispatch({ type: "event", event: ev("thread-active", { actor: th("tw") }), now: Date.now() });
 			o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("tw", "sa") }), now: Date.now() });
-			o.step(1, 0.016, host, 1);
-			o.draw(rec, host, 1, 1);
-			// Wolf 26 px and subagent 11 px wide, both the logo path (scale = px / 64).
-			assert.deepEqual(logo().map((f) => f.scale).sort((a, b) => b - a), [26 / 64, 11 / 64]);
-			assert.equal(logo().find((f) => f.scale === 26 / 64)?.alpha, 1);
+			o.step(1, 0.016, host, 2);
+			o.draw(rec, host, 2, 1);
+			// At k=2 the wolf is capped at 26 px and the subagent is 11 px, both the logo path (scale = px / k / 64).
+			assert.deepEqual(logo().map((f) => f.scale).sort((a, b) => b - a), [26 / 2 / 64, 11 / 2 / 64]);
+			assert.equal(logo().find((f) => f.scale === 26 / 2 / 64)?.alpha, 1);
 			mock.timers.tick(3_600_000);
 			o.dispatch({ type: "tick", now: Date.now() });
 			fills.length = 0;
-			o.step(2, 0.016, host, 1);
-			o.draw(rec, host, 1, 2);
-			assert.equal(logo().find((f) => f.scale === 26 / 64)?.alpha, 0.35);
+			o.step(2, 0.016, host, 2);
+			o.draw(rec, host, 2, 2);
+			assert.equal(logo().find((f) => f.scale === 26 / 2 / 64)?.alpha, 0.35);
 		}
+	});
+
+	it("icons scale with zoom between a 10 px floor and a 26 px cap, keep their proportions, and subagents and thread dots hide at the floor", () => {
+		const fills: { d?: string; scale: number }[] = [];
+		let scale = 1;
+		const radii: number[] = [];
+		const rec = new Proxy({}, {
+			get: (_t, p) => (p === "measureText" ? () => ({ width: 1 }) : p === "createRadialGradient" || p === "createLinearGradient" ? () => grad : p === "scale" ? (sx: number) => (scale = sx) : p === "arc" ? (_x: number, _y: number, r: number) => radii.push(r) : p === "fill" ? (path?: { d?: string }) => fills.push({ d: path?.d, scale }) : () => undefined),
+			set: () => true,
+		}) as unknown as CanvasRenderingContext2D;
+		o.dispatch({ type: "event", event: ev("thread-active", { actor: th("tz") }), now: Date.now() });
+		o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("tz", "sz") }), now: Date.now() });
+		const frame = (k: number) => {
+			fills.length = 0;
+			radii.length = 0;
+			o.step(1, 0.016, host, k);
+			o.draw(rec, host, k, 1);
+			const px = fills.filter((f) => f.d?.startsWith("M8 2L24 18")).map((f) => f.scale * 64 * k).sort((a, b) => b - a);
+			return { px, dot: radii.find((r) => Math.abs(r * k - 3.2) < 5) };
+		};
+		const near = (a: number | undefined, b: number) => assert.ok(a !== undefined && Math.abs(a - b) < 1e-6, `${a} vs ${b}`);
+		const big = frame(4); // 24 x 4 = 96 px, capped
+		near(big.px[0], 26);
+		near(big.px[1], 11);
+		const mid = frame(0.8); // 24 x 0.8 = 19.2 px
+		near(mid.px[0], 19.2);
+		near(mid.px[1], 19.2 * 11 / 26);
+		near(mid.dot !== undefined ? mid.dot * 0.8 : undefined, 3.2 * 19.2 / 26);
+		const small = frame(0.1); // 24 x 0.1 = 2.4 px, floored at 10
+		assert.equal(small.px.length, 1);
+		near(small.px[0], 10);
+		assert.equal(small.dot, undefined);
 	});
 
 	it("a finished subagent is half faded 7.5 s after it finished when the renderer passes its monotonic clock to draw", () => {

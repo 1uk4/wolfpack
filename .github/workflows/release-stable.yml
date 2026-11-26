@@ -47,6 +47,15 @@ jobs:
     with:
       tag: ${{ matrix.tag }}
 
+  # Desktop app (work-wolfpack-GMydeGn): every merge into stable also releases the signed Mac app, next patch version computed on the
+  # runner (nothing committed). Runs once the tag job has pushed the component tags (the notes list their versions), independent of the
+  # component builds. A failure here leaves the component releases untouched; rerun the job. Secrets come from the desktop-release environment.
+  desktop:
+    needs: tag
+    uses: ./.github/workflows/desktop.yml
+    permissions:
+      contents: write
+
   # Update notices: after the builds (even if one failed), publish the latest PUBLISHED release per component as stable.json on the
   # fixed `stable-manifest` release: https://github.com/<repo>/releases/download/stable-manifest/stable.json (no auth on a public
   # repo; read by @wolfpack/protocol createManifestFetcher). Logic: scripts/stable-manifest.mjs (unit-tested); this job is glue.

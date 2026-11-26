@@ -355,7 +355,14 @@ describe("ChatBar on a phone", () => {
 		assert.equal(reserve(), "");
 	});
 
-	it("hides the dock on the attached thread's own page and on other thread pages (their composer is at the bottom); the desktop pill hides there too but shows on other pages", async () => {
+	it("the dock hides on the attached thread's own page (the page composer is the chat); on another thread's page it floats with a thumb-sized swap pill and reserves its height for the page; the desktop pill does the same; other pages keep it", async () => {
+		const over = () => document.documentElement.style.getPropertyValue("--chat-bar-over");
+		// The pad is measured from the viewport bottom up to the bar's top (or the pill's, which floats 40px above the bar): an 800px viewport, a 90px bar.
+		(window as any).innerHeight = 800;
+		const barTop = () => (phone ? 710 : 698); // the dock sits flush; the desktop pill floats 12px up
+		(HTMLElement.prototype as any).getBoundingClientRect = function (this: HTMLElement) {
+			return this.getAttribute("data-testid") === "chat-bar-swap-wrap" ? { top: barTop() - 40, height: 30 } : { top: barTop(), height: 90 };
+		};
 		startPath = "/wolf/w/thread/a";
 		await mount(A, undefined, false);
 		assert.equal(q('[data-testid="chat-bar"]'), null, "own page");
@@ -363,20 +370,59 @@ describe("ChatBar on a phone", () => {
 		root = null;
 		document.body.innerHTML = "";
 		startPath = "/wolf/w/thread/b";
-		await mount(A, undefined, false);
-		assert.equal(q('[data-testid="chat-bar"]'), null, "another thread page");
+		await mount(A);
+		assert.equal(bar().getAttribute("data-layout"), "dock", "another thread page: the dock floats");
+		assert.match(q('[data-testid="chat-bar-swap"]')!.className, /min-h-11/, "swap pill is thumb-sized");
+		assert.equal(over(), "130px", "the page pads its bottom by the dock's height and the pill above it");
 		await act(async () => root?.unmount());
 		root = null;
 		document.body.innerHTML = "";
 		phone = false;
-		await mount(A, undefined, false);
-		assert.equal(q('[data-testid="chat-bar"]'), null, "desktop: another thread page shows a strip row instead");
+		await mount(A);
+		assert.ok(q('[data-testid="chat-bar-swap"]'), "desktop: the pill floats over another thread page too");
+		assert.equal(over(), "142px", "pill: the bar's height, its 12px float and the swap pill above it");
 		await act(async () => root?.unmount());
 		root = null;
 		document.body.innerHTML = "";
 		startPath = "/kb";
 		await mount();
 		assert.equal(bar().getAttribute("data-state"), "open", "desktop pill on a page with no composer");
+		assert.equal(over(), "");
+	});
+
+	it("the page pad under the keyboard is clamped to 60% of the viewport, re-measured on a visualViewport resize (one frame), and removed in the sheet state and on unmount", async () => {
+		const over = () => document.documentElement.style.getPropertyValue("--chat-bar-over");
+		const all: Record<string, (() => void)[]> = {}; // several effects listen: keep every one
+		const fire = (n: string) => act(async () => {
+			all[n]?.forEach((cb) => cb());
+			await new Promise((r) => setTimeout(r, 10)); // the coalesced frame (a 0ms timer here)
+		});
+		let top = 710;
+		(window as any).innerHeight = 800;
+		(window as any).visualViewport = { height: 800, offsetTop: 0, addEventListener: (n: string, cb: () => void) => void (all[n] ??= []).push(cb), removeEventListener() {} };
+		(HTMLElement.prototype as any).getBoundingClientRect = function (this: HTMLElement) {
+			return this.getAttribute("data-testid") === "chat-bar-swap-wrap" ? { top: top - 40, height: 30 } : { top, height: 90 };
+		};
+		startPath = "/wolf/w/thread/b";
+		await mount(A);
+		assert.equal(over(), "130px");
+		top = 200; // the keyboard lifts the dock far up: 800 - 160 = 640 would squeeze the page to nothing
+		await fire("resize");
+		await flush();
+		assert.equal(over(), "480px", "clamped to 60% of 800");
+		top = 650;
+		await fire("scroll");
+		await fire("resize");
+		await flush();
+		assert.equal(over(), "190px", "re-measured");
+		await click(q('[data-testid="bar-sheet-open"]'));
+		await flush();
+		assert.equal(bar().getAttribute("data-state"), "sheet");
+		await fire("resize"); // in a browser the bar growing to full screen fires the ResizeObserver; the stub here does not
+		assert.equal(over(), "", "the sheet covers the page: no pad");
+		await act(async () => root?.unmount());
+		root = null;
+		assert.equal(over(), "", "removed on unmount");
 	});
 
 	it("shows no dock and reserves nothing until something is popped out", async () => {
@@ -386,14 +432,15 @@ describe("ChatBar on a phone", () => {
 		assert.equal(reserve(), "");
 	});
 
-	it("the Dock button clears the popped-out thread and keeps its draft", async () => {
+	it("has no Dock button; swapping on another thread's page keeps the draft with its own thread", async () => {
+		startPath = "/wolf/w/thread/b";
 		await mount();
+		assert.equal(q('[data-testid="chat-bar-dock"]'), null);
 		await type("phone draft");
-		await click(q('[data-testid="chat-bar-dock"]'));
+		await click(q('[data-testid="chat-bar-swap"]'));
 		await flush();
-		assert.equal(q('[data-testid="chat-bar"]'), null);
-		assert.equal(reserve(), "");
-		assert.equal(mem.get(ATTACHED_KEY), undefined);
+		assert.equal(q('[data-testid="chat-bar"]'), null, "docked into the page");
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/b");
 		assert.equal(mem.get("wolfpack:draft:w:w/a"), "phone draft");
 	});
 

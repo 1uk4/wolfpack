@@ -1,9 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BotIcon, MicIcon, SquareIcon } from "lucide-react";
-import { LiveMeter } from "@/components/composer/dictation";
-import type { AttachedRow } from "@/components/chat-bar/attached-strip-row";
+import { BotIcon, SquareIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { useSubagentModal } from "@/components/thread/subagent-modal";
@@ -15,14 +13,14 @@ import { DONE_LINGER_MS, canStop, elapsedMs, formatChildElapsed, isSettled, part
 /** A strip row's height, for the composer reserve (see ThreadChat). */
 export const STRIP_ROW_PX = 28;
 
-/** The rows the strip draws: active children (settled ones leave at once, they are not listed) plus the attached chat's row. */
-function visibleStripRows(items: readonly ChildThread[], now: number, attached?: AttachedRow | null): number {
-	return partitionChildren(items, now, false).shown.length + (attached ? 1 : 0);
+/** The rows the strip draws: active children (settled ones leave at once, they are not listed). */
+function visibleStripRows(items: readonly ChildThread[], now: number): number {
+	return partitionChildren(items, now, false).shown.length;
 }
 
 /** The bottom room a thread reserves so its tail scrolls clear of the strip: exactly what the strip draws, 0 for none. */
-export function stripReservePx(items: readonly ChildThread[], now: number, attached?: AttachedRow | null): number {
-	const rows = visibleStripRows(items, now, attached);
+export function stripReservePx(items: readonly ChildThread[], now: number): number {
+	const rows = visibleStripRows(items, now);
 	return rows ? rows * STRIP_ROW_PX + 8 : 0;
 }
 
@@ -86,36 +84,16 @@ export function SubagentStripView({
 	now,
 	onOpen,
 	onStop,
-	attached,
 }: {
 	items: readonly ChildThread[];
 	now: number;
 	onOpen: (child: ChildThread) => void;
 	onStop: (child: ChildThread) => void;
-	/** Phone: the floating chat's thread, as one more row (see useAttachedStripRow). */
-	attached?: AttachedRow | null;
 }) {
-	if (visibleStripRows(items, now, attached) === 0) return null;
+	if (visibleStripRows(items, now) === 0) return null;
 	const { shown } = partitionChildren(items, now, false);
 	return (
 		<div data-testid="subagent-strip" className="pointer-events-auto mb-2 overflow-hidden rounded-xl border border-l-2 border-l-(color:--thread-accent) bg-card text-xs shadow-sm">
-			{attached && (
-				<div data-testid="attached-row" data-state={attached.state} data-listening={attached.listening ? "true" : undefined} className="flex items-center gap-2 px-3 hover:bg-accent" style={{ minHeight: STRIP_ROW_PX }}>
-					<button type="button" data-testid="attached-open" aria-label={`Open chat with ${attached.title}`} onClick={attached.onOpen} className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left">
-						<span data-testid="attached-dot" aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: attached.color }} />
-						<span data-testid="attached-title" className="min-w-0 flex-1 truncate font-prose">{attached.title}</span>
-						{attached.listening && <MicIcon data-testid="attached-listening" className="size-3 shrink-0 text-red-500" />}
-						<span data-testid="attached-state" className="shrink-0 text-muted-foreground">{attached.listening ? "listening" : attached.state === "busy" ? "working" : attached.state === "needs-you" ? "needs you" : "chat"}</span>
-					</button>
-					{attached.listening && attached.dictation && <LiveMeter dictation={attached.dictation} className="flex h-3 w-16 shrink-0 items-center gap-[2px]" />}
-					{attached.listening && attached.onStop && (
-						<button type="button" data-testid="attached-stop" aria-label="Stop dictation" onClick={attached.onStop} className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-background hover:text-foreground">
-							<SquareIcon className="size-3" />
-							Stop
-						</button>
-					)}
-				</div>
-			)}
 			{shown.map((c) => (
 				<div key={c.id} data-testid="subagent-row" data-child={c.id} data-state={c.state ?? ""} className="flex items-center gap-2 px-3 hover:bg-accent" style={{ minHeight: STRIP_ROW_PX }}>
 					<button type="button" data-testid="subagent-open" onClick={() => onOpen(c)} className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left">
@@ -143,7 +121,7 @@ export function SubagentStripView({
  * The status strip pinned above the composer: one row per child of this thread. Clicking a row opens the subagent
  * modal over the current page. Stop aborts the child's thread.
  */
-export function SubagentStrip({ wolf, slug, items, now: nowProp, attached }: { wolf: string; slug: string; items: readonly ChildThread[]; now?: number; attached?: AttachedRow | null }) {
+export function SubagentStrip({ wolf, slug, items, now: nowProp }: { wolf: string; slug: string; items: readonly ChildThread[]; now?: number }) {
 	const { openSubagent } = useSubagentModal();
 	const now = useNow(items, nowProp);
 	const open = useCallback((c: ChildThread) => openSubagent(c.id, wolf), [openSubagent, wolf]);
@@ -165,7 +143,7 @@ export function SubagentStrip({ wolf, slug, items, now: nowProp, attached }: { w
 	);
 	return (
 		<>
-			<SubagentStripView items={items} now={now} onOpen={open} onStop={(c) => void stop(c)} attached={attached} />
+			<SubagentStripView items={items} now={now} onOpen={open} onStop={(c) => void stop(c)} />
 			{stopError && (
 				<div data-testid="subagent-stop-error" className="pointer-events-auto mb-2 text-xs text-destructive">
 					{stopError}

@@ -16,8 +16,13 @@ export interface ChatBarState {
 	minimized: boolean;
 }
 
-/** The popped-out thread (the detached chat). A new key: the old "attached" value was the home-wolf default and must not resurrect a bar. */
-export const ATTACHED_KEY = "wolfpack:chatbar:popped-out";
+/** The attached thread (per device, never synced). A new key: the old "attached" value was the home-wolf default and must not resurrect a bar. */
+export const ATTACHED_KEY = "wolfpack:chatbar:attached-thread";
+/**
+ * The key the thread was stored under while the chat was popped out by hand (the pop-out button is gone). Read once by loadAttached, then removed.
+ * Migration: a thread that was popped out stays ATTACHED after the upgrade (it is no longer "docked" by landing on it); it clears only when the thread closes, is archived or deleted.
+ */
+const POPPED_OUT_KEY = "wolfpack:chatbar:popped-out";
 /** Pre-detached-chat keys, removed on load so nothing is popped out until the owner pops something out. */
 export const LEGACY_KEYS = ["wolfpack:chatbar:attached", "wolfpack:chatbar:home-wolf"] as const; // the second is the removed "Home wolf" setting
 
@@ -33,7 +38,15 @@ export interface KeyValueStore {
 
 export function loadAttached(s: KeyValueStore | null): AttachedRef | null {
 	try {
-		const raw = s?.getItem(ATTACHED_KEY);
+		let raw = s?.getItem(ATTACHED_KEY);
+		const old = s?.getItem(POPPED_OUT_KEY);
+		if (old != null) {
+			s?.removeItem(POPPED_OUT_KEY);
+			if (!raw) {
+				raw = old;
+				s?.setItem(ATTACHED_KEY, old);
+			}
+		}
 		if (!raw) return null;
 		const v = JSON.parse(raw) as Partial<AttachedRef>;
 		return typeof v.wolf === "string" && typeof v.slug === "string" && typeof v.threadId === "string" && v.wolf && v.slug ? { wolf: v.wolf, slug: v.slug, threadId: v.threadId } : null;

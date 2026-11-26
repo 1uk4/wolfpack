@@ -25,7 +25,7 @@ import { type AskSession, type NoteState } from "@/components/ask/ask-session";
  * phone is on a thread page, and a run keeps going while the owner browses). This component only shows its meter and
  * registers where the transcript lands while it is mounted; with no composer mounted ChatBar writes it to the draft store.
  */
-export default function ChatBarComposer({ target, title, cardOpen = false, askOpen = false, onReplied, dictation, registerAppend, session, registerNoteSink }: { session?: AskSession; registerNoteSink?: (fn: ((n: NoteState) => void) | null) => void; target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
+export default function ChatBarComposer({ target, title, cardOpen = false, askOpen = false, onReplied, onSending, dictation, registerAppend, session, registerNoteSink }: { /** True while a send's POST is in flight (the swap pill waits, so a failed send still has this composer to restore into). */ onSending?: (v: boolean) => void; session?: AskSession; registerNoteSink?: (fn: ((n: NoteState) => void) | null) => void; target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
 	const api = useAttachedThread()!;
 	const { working } = api;
 	// Attachments pending in the thread page's composer ride with the PAGE's next send, never this input's (Enter here sends text only).
@@ -83,7 +83,8 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 		setAttachments((prev) => prev.filter((a) => a.status === "uploading"));
 		setError(null);
 		api.markSent();
-		const ok = await submitToThread(target, t, working, refs);
+		onSending?.(true);
+		const ok = await submitToThread(target, t, working, refs).finally(() => onSending?.(false));
 		if (ok) onReplied?.(); // free text supersedes any open card (the wolf closes them as superseded)
 		else {
 			api.clearSent();
@@ -94,7 +95,7 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 			schedule(merged);
 			setAttachments((prev) => [...refs.map((r) => ({ key: `att-${r.id}`, name: r.name ?? "image", status: "ready" as const, id: r.id, mimeType: r.mimeType, size: r.size })), ...prev]);
 		}
-	}, [attachments, applyText, schedule, api, target, working, onReplied]);
+	}, [attachments, applyText, schedule, api, target, working, onReplied, onSending]);
 	const stop = useCallback(() => void abortThread(target), [target]);
 	// Submit while dictating only finishes the run (its last words land in the field); the NEXT press sends. A press while the
 	// run is still settling does nothing.
@@ -120,11 +121,12 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 	}, [noteMode, applyText, target.wolf, target.threadId]);
 	const sendNote = useCallback(async (t: string, refs: { id: string }[]) => {
 		api.markSent();
-		const ok = await submitToThread(target, t, working, refs);
+		onSending?.(true);
+		const ok = await submitToThread(target, t, working, refs).finally(() => onSending?.(false));
 		if (ok) onReplied?.();
 		else api.clearSent();
 		return ok;
-	}, [api, target, working, onReplied]);
+	}, [api, target, working, onReplied, onSending]);
 	// Submit while dictating only stops the run (the last words land in the note via appendNoteText); the next press does the normal job.
 	const noteInFlight = useRef(false);
 	const pressNote = useCallback(() => {

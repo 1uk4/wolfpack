@@ -21,6 +21,13 @@ describe("attached thread store", () => {
 		s.setItem(ATTACHED_KEY, "garbage");
 		assert.equal(loadAttached(s), null);
 	});
+	it("a thread stored under the old popped-out key becomes the attached thread, once", () => {
+		const { m, s } = mem();
+		m.set("wolfpack:chatbar:popped-out", JSON.stringify({ wolf: "1uk4", slug: "f1", threadId: "1uk4/f1" }));
+		assert.deepEqual(loadAttached(s), { wolf: "1uk4", slug: "f1", threadId: "1uk4/f1" });
+		assert.equal(m.has("wolfpack:chatbar:popped-out"), false, "the old key is gone");
+		assert.deepEqual(loadAttached(s), { wolf: "1uk4", slug: "f1", threadId: "1uk4/f1" }, "now read from the new key");
+	});
 	it("owner wolf is the first online non-librarian", () => {
 		assert.equal(pickOwnerWolf(wolves), "1uk4");
 		assert.equal(pickOwnerWolf([{ name: "lib", librarian: true }, { name: "x", status: "offline" }]), "lib");

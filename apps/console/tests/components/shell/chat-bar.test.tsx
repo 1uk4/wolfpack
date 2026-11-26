@@ -36,6 +36,8 @@ const { ATTACHED_KEY, BAR_EXTRAS } = await import("../../../src/core/thread/chat
 type Call = { url: string; body?: any };
 let calls: Call[] = [];
 let status: "idle" | "busy" = "idle";
+let bNeedsYou = false; // thread w/b waits on the owner
+let holdSubmit: Promise<void> | null = null; // a send's POST stays in flight until this settles
 let archived = false;
 let gets: string[] = [];
 const handlers = new Map<string, (d: string) => void>();
@@ -47,11 +49,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	const url = String(input);
 	if (init?.method === "POST") {
 		calls.push({ url, body: init.body ? JSON.parse(String(init.body)) : undefined });
+		if (holdSubmit && url.endsWith("/threads/a/submit")) await holdSubmit;
 		return new Response("{}", { status: 200 });
 	}
 	if (init?.method !== "POST") gets.push(url);
 	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
-	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a", archived ? { closed: true } : {}), th("w/b")] });
+	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a", archived ? { closed: true } : {}), th("w/b", bNeedsYou ? { status: "needs-you" } : {})] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
 
@@ -100,6 +103,8 @@ afterEach(async () => {
 	mem.clear();
 	calls = [];
 	status = "idle";
+	bNeedsYou = false;
+	holdSubmit = null;
 	archived = false;
 	gets = [];
 	handlers.clear();
@@ -157,18 +162,14 @@ describe("ChatBar", () => {
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
 	});
 
-	it("Dock hides the bar and keeps the draft unsent", async () => {
+	it("has no pop-out/dock button", async () => {
 		await mount("/kb", A);
-		await type("half a thought");
-		await click(q('[data-testid="chat-bar-dock"]'));
-		await wait();
-		assert.equal(q('[data-testid="chat-bar"]'), null);
-		assert.equal(mem.get(ATTACHED_KEY), undefined);
-		assert.equal(mem.get("wolfpack:draft:w:w/a"), "half a thought");
-		assert.equal(calls.length, 0);
+		assert.ok(q('[data-testid="chat-bar"]'));
+		assert.equal(q('[data-testid="chat-bar-dock"]'), null);
+		assert.equal(document.querySelector('[aria-label="Dock chat"]'), null);
 	});
 
-	it("landing on the popped-out thread's own page docks it", async () => {
+	it("landing on the attached thread's own page hides the bar (the page composer is the chat) without detaching it", async () => {
 		let go: (u: string) => void = () => {};
 		function Nav() {
 			const r = React.useContext((await_ctx as any));
@@ -180,21 +181,23 @@ describe("ChatBar", () => {
 		await act(async () => go("/wolf/w/thread/a"));
 		await wait();
 		assert.equal(q('[data-testid="chat-bar"]'), null);
-		assert.equal(mem.get(ATTACHED_KEY), undefined);
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a", "still attached");
 		assert.equal(mem.get("wolfpack:draft:w:w/a"), "kept");
+		await act(async () => go("/graph"));
+		await wait();
+		assert.ok(q('[data-testid="chat-bar"]'), "floats again off the page");
 	});
 
-	it("a reload on the popped-out thread's own page docks it and leaves the page's draft alone", async () => {
+	it("a reload on the attached thread's own page leaves the page's draft alone", async () => {
 		mem.set("wolfpack:draft:w:w/a", "typed on the page");
 		await mount("/wolf/w/thread/a", A);
 		assert.equal(q('[data-testid="chat-bar"]'), null);
-		assert.equal(mem.get(ATTACHED_KEY), undefined);
 		window.dispatchEvent(new dom.window.Event("pagehide"));
 		await wait();
 		assert.equal(mem.get("wolfpack:draft:w:w/a"), "typed on the page", "no stale flush from the bar");
 	});
 
-	it("clicking the chip opens the thread page, which docks it", async () => {
+	it("clicking the chip opens the thread page, where the chat docks into the page", async () => {
 		function Path() {
 			return <span data-testid="path">{usePathname()}</span>;
 		}
@@ -203,75 +206,68 @@ describe("ChatBar", () => {
 		await wait();
 		assert.equal(q('[data-testid="path"]')?.textContent, "/wolf/w/thread/a");
 		assert.equal(q('[data-testid="chat-bar"]'), null);
-		assert.equal(mem.get(ATTACHED_KEY), undefined);
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a");
 	});
 
-	describe("using another thread's composer docks the bar (user actions only)", () => {
-		const pageComposer = (
-			<form data-testid="composer">
-				<textarea data-testid="page-ta" />
-			</form>
-		);
-		const fire = (el: HTMLElement | null, name: string, init: object = {}) =>
-			act(async () => void el!.dispatchEvent(Object.assign(new dom.window.Event(name, { bubbles: true, cancelable: true }), init)));
-		const page = () => q('[data-testid="page-ta"]');
-		const popped = () => mem.get(ATTACHED_KEY) !== undefined;
+	describe("on another thread's page the bar floats with a swap pill", () => {
+		const swap = () => q('[data-testid="chat-bar-swap"]');
 
-		it("viewing B with an autofocused composer does not dock", async () => {
-			await mount("/wolf/w/thread/b", A, pageComposer);
-			await act(async () => {
-				page()!.focus();
-				page()!.dispatchEvent(new dom.window.Event("focusin", { bubbles: true }));
-			});
-			await wait();
-			assert.equal(q('[data-testid="chat-bar"]'), null, "wide: B's page shows the chat as a strip row, no bar over its composer");
-			assert.equal(popped(), true);
+		it("shows 'Swap to <thread>' on a mismatch only; none on the attached page or a non-thread page", async () => {
+			await mount("/wolf/w/thread/b", A);
+			assert.equal(swap()?.getAttribute("aria-label"), "Swap to w/b");
+			assert.match(swap()!.textContent ?? "", /Swap to w\/b/);
+			assert.equal(document.querySelectorAll('[data-testid="chat-bar"]').length, 1);
+			await act(async () => root?.unmount());
+			document.body.innerHTML = "";
+			await mount("/kb", A);
+			assert.equal(swap(), null, "no pill off thread pages");
+			await act(async () => root?.unmount());
+			document.body.innerHTML = "";
+			await mount("/wolf/w/thread/a", A);
+			assert.equal(swap(), null, "no pill on the attached thread's own page");
 		});
 
-		it("clicking B's composer docks, keeping the draft", async () => {
-			await mount("/graph", A, pageComposer);
+		it("stays open over a thread page even when minimized elsewhere (the pill is the way to type there)", async () => {
+			mem.set("wolfpack:chatbar:minimized", "1");
+			await mount("/wolf/w/thread/b", A);
+			assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
+			assert.ok(swap());
+		});
+
+		it("turns amber and says Answer when the page's thread waits on the owner (its ask sheet is hidden under the bar); choosing it swaps", async () => {
+			bNeedsYou = true;
+			await mount("/wolf/w/thread/b", A);
+			assert.equal(swap()?.getAttribute("aria-label"), "Answer w/b");
+			assert.equal(swap()?.getAttribute("data-needs-you"), "true");
+			assert.match(swap()!.textContent ?? "", /^Answer w\/b$/);
+			await click(swap());
+			await wait();
+			assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/b");
+		});
+
+		it("waits while a send's POST is in flight, so a failed send still has its composer to restore into", async () => {
+			let release!: () => void;
+			holdSubmit = new Promise<void>((r) => void (release = r));
+			await mount("/wolf/w/thread/b", A);
+			await type("hello");
+			await submit();
+			assert.equal(swap()?.hasAttribute("disabled"), true);
+			await click(swap());
+			assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a", "no swap while sending");
+			release();
+			await wait();
+			assert.equal(swap()?.hasAttribute("disabled"), false);
+		});
+
+		it("choosing the pill attaches the page's thread: the bar steps aside for the page composer, drafts stay with their thread", async () => {
+			await mount("/wolf/w/thread/b", A);
 			await type("for a");
-			await fire(page(), "pointerdown");
+			await click(swap());
 			await wait();
-			assert.equal(q('[data-testid="chat-bar"]'), null);
-			assert.equal(popped(), false);
-			assert.equal(mem.get("wolfpack:draft:w:w/a"), "for a");
-		});
-
-		it("typing in B's composer docks; a shortcut chord does not", async () => {
-			await mount("/wolf/w/thread/b", A, pageComposer);
-			await fire(page(), "keydown", { key: "j", metaKey: true });
-			assert.equal(popped(), true);
-			await fire(page(), "beforeinput");
-			await wait();
-			assert.equal(popped(), false);
-			assert.equal(q('[data-testid="chat-bar"]'), null);
-		});
-
-		it("the bar's own textarea and a textarea outside a composer do not dock", async () => {
-			await mount("/kb", A, <textarea data-testid="loose" />);
-			await fire(ta(), "pointerdown");
-			await fire(ta(), "beforeinput");
-			await fire(q('[data-testid="loose"]'), "pointerdown");
-			await fire(q('[data-testid="loose"]'), "beforeinput");
-			assert.equal(popped(), true);
-			assert.ok(q('[data-testid="chat-bar"]'));
-		});
-
-		it("the popped-out thread's own page does not dock on use (popped out while there)", async () => {
-			await mount("/wolf/w/thread/a", undefined, <>{pageComposer}<AttachHere /></>);
-			await click(q('[data-testid="test-attach"]'));
-			await fire(page(), "pointerdown");
-			await fire(page(), "beforeinput");
-			assert.equal(popped(), true);
-		});
-
-		it("/chat/new docks on a click", async () => {
-			await mount("/chat/new", A, pageComposer);
-			assert.equal(popped(), true);
-			await fire(page(), "pointerdown");
-			await wait();
-			assert.equal(popped(), false);
+			assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/b", "attached to the page's thread");
+			assert.equal(q('[data-testid="chat-bar"]'), null, "docked: only the page composer remains");
+			assert.equal(mem.get("wolfpack:draft:w:w/a"), "for a", "A's text stays with A");
+			assert.equal(mem.get("wolfpack:draft:w:w/b"), undefined);
 		});
 	});
 

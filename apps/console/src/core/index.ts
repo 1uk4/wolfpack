@@ -73,6 +73,7 @@ export * from "./thread/reply-notify.ts";
 
 // chat-bar.ts: the floating chat bar's attached-thread model + switcher list. Pure.
 export * from "./thread/chat-bar.ts";
+export * from "./thread/page-pending.ts";
 export * from "./graph/graph-layout.ts";
 export * from "./thread/thread-cards.ts";
 export * from "./thread/tool-rows.ts";

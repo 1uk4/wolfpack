@@ -2,7 +2,8 @@
 
 /**
  * AttachedThreadProvider: the ONE thread the floating chat bar talks to (`{wolf, slug, threadId}`), persisted in
- * localStorage. Navigation never touches it; `attach()` (starting dictation on a thread pops it out) sets it and `dock()` clears it (the chat-bar docks it on landing on the thread or using another composer).
+ * localStorage (per device, never synced). Navigation never touches it; `attach()` (the page's swap pill, a graph pick, dictation, viz mode) sets it. Docking is not a state: on the attached thread's page the page composer is the chat, elsewhere the bar floats. `detach()` only clears it when the thread closes or viz mode ends.
+ * The attachment is shared across browser tabs only through localStorage: there is NO storage listener, so a second tab picks it up on load and the last write wins (an open tab keeps its own until it reloads).
  *
  * It also holds what the bar and its switcher read: the wolf roster and each wolf's thread list, kept live from the
  * /api/events channel (thread-updated patches a row in place, needs-you-changed patches the status and refetches that
@@ -52,12 +53,9 @@ export interface AttachedThreadApi {
 	markSent: () => void;
 	/** A send failed: drop the optimistic "working". */
 	clearSent: () => void;
-	/** Phone: a thread page's strip row asked for the floating chat as a full-screen sheet (the dock is off on thread pages). */
-	phoneSheet: boolean;
-	setPhoneSheet: (v: boolean) => void;
 	attach: (ref: { wolf: string; threadId: string; slug?: string }) => void;
-	/** Dock the floating chat: clears the popped-out thread (its draft stays in the draft store). */
-	dock: () => void;
+	/** Clear the attached thread (its draft stays in the draft store). */
+	detach: () => void;
 	refresh: () => void;
 }
 
@@ -100,7 +98,6 @@ export function AttachedThreadProvider({
 	const attachedRef = useRef<AttachedRef | null>(null);
 	const [ready, setReady] = useState(false);
 	const [minimized, setMinimizedState] = useState(false);
-	const [phoneSheet, setPhoneSheet] = useState(false);
 	const [pageAttachments, setPageAttachmentsState] = useState<{ threadId: string; count: number } | null>(null);
 	const setPageAttachments = useCallback(
 		(threadId: string, count: number) => setPageAttachmentsState((prev) => (count === 0 ? (prev?.threadId === threadId ? null : prev) : prev?.threadId === threadId && prev.count === count ? prev : { threadId, count })),
@@ -240,7 +237,7 @@ export function AttachedThreadProvider({
 		refreshWolf(ref.wolf);
 	}, [setAttached, refreshWolf]);
 
-	const dock = useCallback(() => {
+	const detach = useCallback(() => {
 		setSent(false);
 		setAttached(null);
 	}, [setAttached]);
@@ -276,8 +273,8 @@ export function AttachedThreadProvider({
 
 	const groups = useMemo(() => buildSwitcher(wolves, threads), [wolves, threads]);
 	const value = useMemo<AttachedThreadApi>(
-		() => ({ attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, phoneSheet, setPhoneSheet, wolves, threads, groups, attachedThread, working, closedReason, markSent, clearSent, attach, dock, refresh }),
-		[attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, phoneSheet, wolves, threads, groups, attachedThread, working, closedReason, markSent, clearSent, attach, dock, refresh],
+		() => ({ attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, wolves, threads, groups, attachedThread, working, closedReason, markSent, clearSent, attach, detach, refresh }),
+		[attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, wolves, threads, groups, attachedThread, working, closedReason, markSent, clearSent, attach, detach, refresh],
 	);
 	return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

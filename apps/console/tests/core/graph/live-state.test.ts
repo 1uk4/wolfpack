@@ -1,0 +1,102 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import type { ActivityEvent, PresenceSnapshot } from "@wolfpack/protocol";
+import { emptyLiveState, homeDomainOf, reduceLive, subagentAlpha, visibleThreads, type LiveState } from "../../../src/core/graph/live/live-state.ts";
+
+let n = 0;
+const ev = (verb: string, o: Record<string, unknown> = {}): ActivityEvent =>
+	({ v: 1, id: `e${++n}`, pack: "p", ts: 0, ttlMs: 60_000, actor: { kind: "thread", wolf: "hal", threadId: "t1" }, verb, ...o }) as unknown as ActivityEvent;
+const feed = (s: LiveState, e: ActivityEvent, now: number) => reduceLive(s, { type: "event", event: e, now });
+const tick = (s: LiveState, now: number) => reduceLive(s, { type: "tick", now });
+const kb = { kind: "kb-entry", id: "kb-x", domain: "personal" };
+const sub = { kind: "subagent", wolf: "hal", subagent: "w1", parentThreadId: "t1" };
+
+describe("live overlay reducer", () => {
+	it("thread-active brings the wolf online with a visible thread; thread-idle hides an unbound thread", () => {
+		let s = feed(emptyLiveState(), ev("thread-active", { actor: { kind: "thread", wolf: "hal", threadId: "t1", title: "Plan" } }), 1000);
+		assert.equal(s.wolves.hal!.online, true);
+		assert.deepEqual(visibleThreads(s).map((t) => [t.id, t.title]), [["t1", "Plan"]]);
+		s = feed(s, ev("thread-idle"), 2000);
+		assert.deepEqual(visibleThreads(s), []);
+	});
+
+	it("a bound thread stays visible while idle, carrying its work item; unbound hides it", () => {
+		let s = feed(emptyLiveState(), ev("bound", { target: { kind: "work-item", id: "work-x-1" } }), 0);
+		s = feed(s, ev("thread-idle"), 10);
+		assert.equal(visibleThreads(s)[0]!.bound?.id, "work-x-1");
+		s = feed(s, ev("unbound"), 20);
+		assert.equal(visibleThreads(s).length, 0);
+	});
+
+	it("kb-read sets the wolf's last target and adds a pulse and a trail; unknown verbs are ignored", () => {
+		const s = feed(emptyLiveState(), ev("kb-read", { target: kb }), 5);
+		assert.equal(s.wolves.hal!.lastTarget?.id, "kb-x");
+		assert.equal(s.trails.length, 1);
+		assert.equal(s.pulses.length, 1);
+		assert.equal(feed(s, ev("teleport"), 6), s);
+	});
+
+	it("expires a wolf by its event ttl but keeps it on the roster, offline", () => {
+		let s = feed(emptyLiveState(), ev("thread-active", { ttlMs: 1000 }), 0);
+		s = tick(s, 1500);
+		assert.equal(s.wolves.hal!.online, false);
+		assert.deepEqual(visibleThreads(s), []);
+	});
+
+	it("keeps a finished subagent for the fade window, then drops it", () => {
+		let s = feed(emptyLiveState(), ev("subagent-spawned", { actor: sub }), 0);
+		s = feed(s, ev("subagent-finished", { actor: sub }), 1000);
+		s = tick(s, 9000);
+		const a = Object.values(s.subagents)[0]!;
+		assert.equal(subagentAlpha(a, 9000, 15), 1 - 8000 / 15000);
+		assert.equal(Object.keys(tick(s, 16_001).subagents).length, 0);
+	});
+
+	it("caps trails at 200 (oldest dropped) and fades them after trailSec", () => {
+		let s = emptyLiveState();
+		for (let i = 0; i < 230; i++) s = feed(s, ev("kb-read", { target: { ...kb, id: `k${i}` } }), i);
+		assert.equal(s.trails.length, 200);
+		assert.equal(s.trails[0]!.target.id, "k30");
+		assert.equal(tick(s, 15_000 + 229).trails.length, 0);
+	});
+
+	it("needs-you rings the thread and its wolf until answered", () => {
+		let s = feed(emptyLiveState(), ev("needs-you"), 0);
+		assert.equal(s.threads["hal/t1"]!.needsYou, true);
+		assert.equal(s.wolves.hal!.needsYou, true);
+		s = feed(s, ev("answered"), 5);
+		assert.equal(s.threads["hal/t1"]!.needsYou, false);
+		assert.equal(s.wolves.hal!.needsYou, false);
+	});
+
+	it("roster wolves stay, offline, with a home domain guess", () => {
+		const s = reduceLive(emptyLiveState(), { type: "roster", wolves: ["jack", "zed"], now: 0 });
+		assert.equal(s.wolves.jack!.online, false);
+		assert.equal(homeDomainOf(s.wolves.jack, "jack"), "snapjack");
+		assert.equal(homeDomainOf(s.wolves.zed, "zed"), undefined);
+	});
+
+	it("owner-viewing sets the you-node target until it expires", () => {
+		let s = feed(emptyLiveState(), ev("owner-viewing", { actor: { kind: "owner" }, ttlMs: 1000, target: { kind: "thread", id: "hal/t1" } }), 0);
+		assert.equal(s.owner?.viewing?.id, "hal/t1");
+		s = tick(s, 1001);
+		assert.equal(s.owner, null);
+	});
+
+	it("a presence snapshot rebuilds state; resync clears event-derived state but keeps wolves", () => {
+		const snap = {
+			v: 1, pack: "p", at: 1_000_000, owner: [], subagents: [],
+			wolves: [{ event: ev("kb-read", { target: kb }), expiresAt: 1_030_000 }],
+			threads: [{ event: ev("needs-you"), expiresAt: 1_060_000 }],
+		} as unknown as PresenceSnapshot;
+		let s = feed(emptyLiveState(), ev("thread-active", { actor: { kind: "thread", wolf: "old", threadId: "z" } }), 0);
+		s = reduceLive(s, { type: "snapshot", snapshot: snap, now: 50 });
+		assert.deepEqual(Object.keys(s.threads), ["hal/t1"]);
+		assert.equal(s.threads["hal/t1"]!.expiresAt, 50 + 60_000);
+		assert.equal(s.wolves.hal!.needsYou, true);
+		assert.equal(s.wolves.old!.online, false);
+		assert.equal(s.trails.length, 0);
+		s = reduceLive(s, { type: "resync", now: 60 });
+		assert.deepEqual([Object.keys(s.threads).length, s.wolves.hal!.online], [0, false]);
+	});
+});

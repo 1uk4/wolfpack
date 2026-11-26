@@ -42,6 +42,7 @@ export * from "./pack/pack-health.ts";
 export * from "./pack/pack-actions.ts";
 export * from "./thread/session-witness.ts";
 export * from "./pack/domains-api.ts";
+export * from "./pack/live-activity-api.ts";
 export * from "./pack/keys-api.ts";
 export * from "./pack/model-options.ts";
 export * from "./work/approvals-api.ts";

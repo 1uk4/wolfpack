@@ -100,7 +100,8 @@ export function componentStatus(s: StatusFile, component: string, nowMs: number 
 	const at = state === "updating" ? u.startedAt : state === "updated" || state === "failed" ? u.finishedAt : undefined;
 	const message = state === "disabled" ? s.disabledReason : u.message;
 	const checked = Date.parse(s.lastCheck ?? "");
-	const manual = s.enabled === false && !s.disabledReason;
+	// enabled:false is the timer being off (no reason, or "mode is button/off" written by a run that installs nothing). Only the kill switch is a pause.
+	const manual = s.enabled === false && !s.disabledReason?.startsWith("kill switch");
 	const stale = !manual && Number.isFinite(checked) && nowMs - checked > STALE_AFTER_MS;
 	return {
 		state,
@@ -118,9 +119,10 @@ export function componentStatus(s: StatusFile, component: string, nowMs: number 
 function stepFor(component: string, st: UpdateStatus | undefined): string {
 	if (!st) return STEPS[component] ?? "";
 	const where = `${st.unit ?? component} on ${st.host}`;
+	if (st.manual && st.state !== "failed" && st.state !== "updating") return `Manual updates on ${st.host}. ${STEPS[component] ?? ""}`.trim();
 	switch (st.state) {
 		case "failed":
-			return `Auto-update of ${where} failed (${st.code ?? "error"}); left as it is and not retried for this version. Fix it, then run auto-update.mjs run --now --clear-failed (deploy/auto-update/RUNBOOK.md).`;
+			return `Auto-update of ${where} failed (${st.code ?? "error"}); left as it is and not retried for this version. Fix the cause, then run the update again with --clear-failed.`;
 		case "updating":
 			return `Updating ${where} now.`;
 		case "disabled":

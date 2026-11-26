@@ -309,7 +309,7 @@ describe("update warnings (sidebar notice)", () => {
 	const st = (over: object) => ({ updateStatus: { state: "idle", lastCheck: "2026-11-09T11:20:00Z", ...over } });
 	it("names the machine on a stale warning and says manual mode, not stale, when auto-update is off; one line per machine", () => {
 		const rows = [st({ host: "sfo-01", stale: true }), st({ host: "sfo-01", stale: true }), st({ host: "hal", manual: true }), {}];
-		assert.deepEqual(updateWarnings(rows, now), ["Auto-update hasn't run on sfo-01 for 40m — see deploy/auto-update/RUNBOOK.md", "Manual updates: auto-update is off on hal"]);
+		assert.deepEqual(updateWarnings(rows, now), ["Auto-update hasn't run on sfo-01 for 40m. Its update timer may have stopped; check the machine.", "Manual updates: auto-update is off on hal"]);
 	});
 });
 

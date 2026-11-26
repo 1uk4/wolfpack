@@ -71,7 +71,9 @@ afterEach(() => {
 async function mount(node: React.ReactElement, search = "") {
 	const { parseHTML } = await import("linkedom");
 	const dom = parseHTML("<html><body></body></html>");
-	Object.defineProperty(dom.window, "location", { value: { search }, configurable: true });
+	Object.defineProperty(dom.window, "location", { value: { search, pathname: "/pack/machines", hash: "" }, configurable: true });
+	const replaced: string[] = [];
+	Object.defineProperty(dom.window, "history", { value: { state: null, replaceState: (_s: unknown, _t: string, url: string) => void replaced.push(url) }, configurable: true });
 	Object.assign(globalThis, { window: dom.window, document: dom.document, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, HTMLInputElement: dom.window.HTMLInputElement, IS_REACT_ACT_ENVIRONMENT: true });
 	const { createRoot } = await import("react-dom/client");
 	const el = dom.document.createElement("div");
@@ -88,7 +90,7 @@ async function mount(node: React.ReactElement, search = "") {
 			const key = Object.keys(input).find((k) => k.startsWith("__reactProps$"))!;
 			(input[key] as { onChange: (e: unknown) => void }).onChange({ target: over, currentTarget: over });
 		});
-	return { dom, q, click, change, text: () => el.textContent ?? "", unmount: () => act(async () => root.unmount()) };
+	return { dom, replaced, q, click, change, text: () => el.textContent ?? "", unmount: () => act(async () => root.unmount()) };
 }
 
 const own = (canAct = true) => <ConsoleMachineCard card={host()} canAct={canAct} actions={ACTIONS} logs={{}} />;
@@ -310,6 +312,28 @@ describe("Pack > Machines > Update automatically (own machine)", () => {
 		for (const id of ["machine-channel", "machine-channel-value", "machine-channel-select", "machine-auto-switch", "machine-check"]) assert.equal(m.q(id), null, id);
 		assert.equal(puts(s).length, 0);
 		await m.unmount();
+	});
+
+	it("starts the update once when opened from the sidebar notice (?update=<this machine>:<component>) and clears the param", async () => {
+		const s = script({});
+		const m = await mount(own(), "?update=sfo-01%3Ahubd");
+		assert.equal(posts(s).length, 1);
+		assert.deepEqual(posts(s)[0]!.body, { service: "update" });
+		assert.deepEqual(m.replaced, ["/pack/machines"]);
+		assert.ok(m.q("machine-update-running"));
+		await m.unmount();
+	});
+
+	it("does not start an update when the notice names another machine or nothing is behind", async () => {
+		const other = script({});
+		const a = await mount(own(), "?update=hal2%3Ahubd");
+		assert.equal(posts(other).length, 0);
+		await a.unmount();
+		const none = script({ units: [] });
+		const b = await mount(own(), "?update=sfo-01%3Ahubd");
+		assert.equal(posts(none).length, 0);
+		assert.deepEqual(b.replaced, ["/pack/machines"]);
+		await b.unmount();
 	});
 
 	it("says the setting is not set when there is no subscription file", async () => {

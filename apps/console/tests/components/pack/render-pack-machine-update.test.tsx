@@ -25,7 +25,7 @@ const plain = (html: string) => html.replaceAll("&#x27;", "'");
 
 type Call = { url: string; method: string; body: unknown };
 /** The scripted server. Change its fields between steps to change what the next poll or POST sees. */
-function script(init: { units?: typeof UNITS; last?: unknown; post?: number; retryAfter?: string; sub?: Record<string, unknown>; subStatus?: number; putStatus?: number; hold?: Promise<void>; updateDown?: boolean; updateState?: unknown }) {
+function script(init: { units?: typeof UNITS; last?: unknown; post?: number; retryAfter?: string; sub?: Record<string, unknown>; subStatus?: number; putStatus?: number; hold?: Promise<void>; updateDown?: boolean; updateState?: unknown; inventory?: unknown[]; cmd?: unknown; cmdHold?: Promise<void> }) {
 	const s = {
 		units: init.units ?? UNITS,
 		last: init.last ?? null,
@@ -37,6 +37,9 @@ function script(init: { units?: typeof UNITS; last?: unknown; post?: number; ret
 		hold: init.hold,
 		updateDown: init.updateDown ?? false,
 		updateState: init.updateState as unknown,
+		inventory: init.inventory,
+		cmd: init.cmd ?? { id: "c-1", ok: true },
+		cmdHold: init.cmdHold,
 		calls: [] as Call[],
 	};
 	globalThis.fetch = (async (url: string, o?: RequestInit) => {
@@ -51,6 +54,11 @@ function script(init: { units?: typeof UNITS; last?: unknown; post?: number; ret
 			}
 			return new Response(JSON.stringify(s.sub), { status: s.subStatus });
 		}
+		if (url.startsWith("/api/machines/")) {
+			if (s.cmdHold) await s.cmdHold;
+			return new Response(JSON.stringify(s.cmd), { status: 200 });
+		}
+		if (url.startsWith("/api/health/inventory") && s.inventory) return new Response(JSON.stringify({ state: "ok", rows: s.inventory, hubMachine: "sfo-01" }), { status: 200 });
 		if (method === "POST") return new Response(s.post === 202 ? "{}" : JSON.stringify({ code: s.post === 409 ? "no_update" : "x" }), { status: s.post, headers: s.retryAfter ? { "Retry-After": s.retryAfter } : {} });
 		if (s.updateDown) throw new Error("connection refused");
 		return new Response(JSON.stringify({ units: s.units, last: s.last, ...(s.updateState ? { updateState: s.updateState } : {}) }), { status: 200 });
@@ -134,12 +142,59 @@ describe("Pack > Machines > Retry a failed update (work-wolfpack-s0Tnbth)", () =
 		await m.unmount();
 	});
 
-	it("a failed update on another machine says to open its console, with no button", () => {
-		const view = machineCard(host({ console: false }), null);
-		const out = plain(renderToStaticMarkup(<MachineCard view={view} logs={{}} hostUpdate={FAILED as never} />));
+	it("a failed update on a machine whose worker cannot run update.run shows the reason and the plain 'from its own console' line, with no button", () => {
+		const row = { machine: "sfo-01", kind: "workerd" as const, id: "workerd", ageS: 3, latest: null, updateState: FAILED as never };
+		const view = machineCard(host({ console: false, commands: ["logs.fetch"], inventory: [row] }), null);
+		const out = plain(renderToStaticMarkup(<MachineCard view={view} logs={{}} />));
 		assert.match(out, /Update failed: The update installed but the service did not start healthy/);
-		assert.match(out, /Open sfo-01's console to retry\./);
-		assert.ok(!out.includes("machine-update-retry"));
+		assert.match(out, /Update it from that machine's console/);
+		assert.doesNotMatch(out, /Open sfo-01's console/);
+		assert.ok(!out.includes("machine-update-retry") && !out.includes("machine-remote-update"));
+	});
+});
+
+describe("Pack > Machines > Update a remote machine (work-wolfpack-NqEVJAU)", () => {
+	const workerdRow = (over: Record<string, unknown> = {}) => ({ machine: "sfo-01", kind: "workerd", id: "sfo-01-wolves", version: "0.1.9", channel: "stable", ageS: 3, latest: null, ...over });
+	const cmds = (s: ReturnType<typeof script>) => s.calls.filter((c) => c.url.startsWith("/api/machines/"));
+	const remote = async (s: ReturnType<typeof script>) => {
+		const m = await mount(<MachinesSection />, "?healthFixture=two-hosts-mac-view");
+		for (let i = 0; i < 8 && !m.q("machine-remote-update"); i++) await act(async () => void (await new Promise((r) => setTimeout(r, 20))));
+		void s;
+		return m;
+	};
+
+	it("Retry on a failed remote card sends update.run with clearFailed once, is disabled while pending, and says the update started", async () => {
+		let release = () => {};
+		const s = script({ inventory: [workerdRow({ updateState: FAILED })], cmdHold: new Promise<void>((r) => (release = r)) });
+		const m = await remote(s);
+		assert.match(m.q("machine-remote-failed")!.textContent ?? "", /Update failed: The update installed but the service did not start healthy/);
+		assert.equal(m.q("machine-remote-update-button"), null, "nothing is behind: no Update, only Retry");
+		await m.click("machine-remote-retry");
+		await m.click("machine-remote-retry");
+		assert.deepEqual(cmds(s).map((c) => [c.url, c.body]), [["/api/machines/sfo-01/commands", { kind: "update.run", args: { clearFailed: true } }]], "one send, however many taps");
+		assert.equal((m.q("machine-remote-retry") as HTMLButtonElement).disabled, true);
+		release();
+		await act(async () => {});
+		assert.match(m.q("machine-remote-note")!.textContent ?? "", /Update started/);
+		await m.unmount();
+	});
+
+	it("Update on a remote card that is behind sends update.run, and a timeout reads 'Update sent; it may take a few minutes.' without a resend", async () => {
+		const s = script({ inventory: [workerdRow({ latest: "0.1.10" })], cmd: { id: "c-1", ok: false, code: "timeout" } });
+		const m = await remote(s);
+		await m.click("machine-remote-update-button");
+		assert.deepEqual(cmds(s).map((c) => c.body), [{ kind: "update.run", args: {} }]);
+		assert.equal(m.q("machine-remote-note")!.textContent, "Update sent; it may take a few minutes.");
+		await m.unmount();
+	});
+
+	it("shows a remote machine's installing state as running, with no button to press", async () => {
+		const s = script({ inventory: [workerdRow({ latest: "0.1.10", updateState: hostState("installing") })] });
+		const m = await remote(s);
+		assert.match(m.q("machine-remote-stage")!.textContent ?? "", /Installing…/);
+		assert.equal(m.q("machine-remote-update-button"), null);
+		assert.equal(cmds(s).length, 0);
+		await m.unmount();
 	});
 });
 

@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { useSingleMac } from "@/components/shell/single-mac";
 import { useAppBridge } from "@/components/settings/app-bridge";
 import { useAppUpdateState } from "@/components/settings/use-app-update-state";
-import { failedLine, remoteRetryText, retryLabel, stageLabel, type UpdateState } from "@wolfpack/protocol/update-state";
+import { failedLine, retryLabel, stageLabel, type UpdateState } from "@wolfpack/protocol/update-state";
 import {
 	appCheckNote,
 	appRestartLabel,
@@ -74,6 +74,38 @@ export function AppUpdateBlock({ version, state }: { version: string | null; sta
 			{stage?.state === "failed" && bridge?.checkForUpdates && <button type="button" data-testid="machine-app-retry" disabled={checking} onClick={() => { setChecking(true); setNote(null); void bridge.checkForUpdates!().then((r) => setNote(appCheckNote(r))).catch(() => setNote(appCheckNote({ ok: false }))).finally(() => setChecking(false)); }} className={cn(BTN, "mt-1")}>{retryLabel}</button>}
 			{note && <p data-testid={note.tone === "error" ? "machine-app-update-error" : "machine-app-update-ok"} className={note.tone === "error" ? "mt-1 text-red-600 dark:text-red-400" : "mt-1"}>{note.text}</p>}
 		</div>
+	);
+}
+
+/**
+ * Another machine's update area (work-wolfpack-NqEVJAU): what its workerd reported (failed reason, installing), Update when a component is behind
+ * and Retry when it failed, both sent as update.run through the hub's command channel. A worker without update.run (older) gets the plain
+ * "update it from its own console" line and no button. One send at a time (`busy`); a timeout means the outcome is unknown, never resent.
+ */
+export function RemoteUpdateBlock({ view, note, busy, onRun }: { view: MachineCardView; note?: string; busy: boolean; onRun?: (clearFailed: boolean) => void }) {
+	const u = view.update?.kind === "pack" ? view.update : undefined;
+	const hs = u?.hostState;
+	const failed = hs?.state === "failed";
+	const installing = hs?.state === "installing";
+	const can = !!u?.canRun && !!onRun;
+	const off = busy || !view.online;
+	return (
+		<>
+			{failed && (
+				<p data-testid="machine-remote-failed" className="mt-2 text-red-600 dark:text-red-400">{failedLine(hs)}</p>
+			)}
+			{!can ? (
+				<p data-testid="machine-update-readonly" className="mt-2 text-muted-foreground/70">{UPDATE_READONLY_NOTE}</p>
+			) : (
+				<div data-testid="machine-remote-update" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+					{installing && <p data-testid="machine-remote-stage" className="text-foreground">{stageLabel(hs)}</p>}
+					{failed && <button type="button" data-testid="machine-remote-retry" disabled={off} onClick={() => onRun!(true)} className={BTN}>{retryLabel}</button>}
+					{!failed && !installing && u?.behind && <button type="button" data-testid="machine-remote-update-button" disabled={off} onClick={() => onRun!(false)} className={BTN}>Update</button>}
+					{busy && <BrailleSpinner className="h-[1.25em]" label="Sending update" />}
+					{note && <p data-testid="machine-remote-note" className="text-muted-foreground">{note}</p>}
+				</div>
+			)}
+		</>
 	);
 }
 

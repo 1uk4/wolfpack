@@ -1,5 +1,6 @@
 /** Pack health view model (work-wolfpack-6imFEq7): pure wording and colour for the sidebar bar and the health modal. */
 import type { HostCard, HostInfo } from "./pack-hosts.ts";
+import type { UpdateState } from "@wolfpack/protocol/update-state";
 
 export type HealthStatus = "ok" | "degraded" | "recovering" | "down" | "frozen" | "restarting" | "unknown";
 export type Tone = "red" | "amber" | "grey" | "green";
@@ -147,6 +148,8 @@ export interface InventoryRowView {
 	uptimeS?: number;
 	lagMs?: number;
 	responseMs?: number;
+	/** A workerd row only: the host updater is failed or installing (reported by that machine's workerd). */
+	updateState?: UpdateState;
 	ageS: number;
 	/** The channel's newer version when this row is behind. */
 	latest: string | null;

@@ -12,6 +12,7 @@
 import type { CommandResult } from "./machine-commands.ts";
 import { machineServices, toneOf, type HealthStatus, type Tone } from "./pack-health-view.ts";
 import type { HostCard } from "./pack-hosts.ts";
+import type { UpdateState } from "@wolfpack/protocol/update-state";
 
 export const MAC_RESTART_HINT = "Restart isn't available on the Mac app; quit and reopen it";
 export const NO_RESTART_HINT = "This machine can't restart it from here";
@@ -49,7 +50,7 @@ export interface MachineCardView {
 	services: MachineServiceView[];
 	channel: { value: "stable" | "main" | null; editable: boolean; note?: string; /** The console machine's update mode; own card only. */ mode?: "manual" | "auto" | "off"; /** Shown instead of "unknown" when the inventory could not be read. */ missing?: string };
 	/** The update block: the pack's (banner, channel, Check now) or, in single-Mac on this Mac's card, the app's own updater block; none on other cards in single-Mac. */
-	update?: { kind: "pack" } | { kind: "app"; version: string | null };
+	update?: { kind: "pack"; /** Another machine only: it advertised update.run, so Update and Retry can be sent to it. */ canRun?: true; /** Another machine only: a component is behind the channel's release. */ behind?: true; /** Another machine only: its updater is failed or installing, as its workerd reported. */ hostState?: UpdateState } | { kind: "app"; version: string | null };
 }
 
 /** The button text once the app has downloaded an update, or null when none is staged. */
@@ -128,8 +129,24 @@ export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null
 		online,
 		services,
 		channel: { value, editable, ...(note ? { note } : {}), ...(missing ? { missing } : {}), ...(card.console ? { mode: MODE_LABEL[ownMode === "off" || ownMode === "auto" ? ownMode : "button"] } : {}) },
-		...(singleMac ? (card.console ? { update: { kind: "app" as const, version: services.find((s) => s.version)?.version ?? null } } : {}) : { update: { kind: "pack" as const } }),
+		...(singleMac ? (card.console ? { update: { kind: "app" as const, version: services.find((s) => s.version)?.version ?? null } } : {}) : { update: card.console ? { kind: "pack" as const } : remoteUpdate(card) }),
 	};
+}
+
+/** The update block of another machine's card: what its workerd reported, whether a component is behind, and whether update.run can be sent. */
+function remoteUpdate(card: HostCard): { kind: "pack"; canRun?: true; behind?: true; hostState?: UpdateState } {
+	const hostState = card.inventory.find((e) => e.kind === "workerd" && e.updateState)?.updateState;
+	return { kind: "pack", ...(card.hubId && card.commands?.includes("update.run") ? { canRun: true as const } : {}), ...(card.inventory.some((e) => e.latest) ? { behind: true as const } : {}), ...(hostState ? { hostState } : {}) };
+}
+
+/** One line for the result of an update.run: started, or the reason it was not (a timeout means the outcome is unknown: the owner decides). */
+export function updateRunSummary(r: CommandResult): string {
+	if (r.ok) return "Update started";
+	if (r.code === "timeout") return "Update sent; it may take a few minutes.";
+	if (r.code === "update_busy") return "An update is already running on that machine";
+	if (r.code === "not_sent_offline") return "The machine is offline; nothing was sent";
+	if (r.code === "not_sent_unsupported") return "That machine cannot update from here yet";
+	return r.message ?? "Update failed to start";
 }
 
 /** One line for the result of a restart: the hub's own words win; a machine that refuses gets `unsupportedHint`. */

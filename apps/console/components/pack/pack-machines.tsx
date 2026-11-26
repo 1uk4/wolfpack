@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { useSingleMac } from "@/components/shell/single-mac";
 import { useAppBridge } from "@/components/settings/app-bridge";
 import { useAppUpdateState } from "@/components/settings/use-app-update-state";
-import { failedLine, remoteRetryText, retryLabel, stageLabel, type UpdateState } from "@wolfpack/protocol/update-state";
+import { failedLine, retryLabel, stageLabel, type UpdateState } from "@wolfpack/protocol/update-state";
 import {
 	appCheckNote,
 	appRestartLabel,
@@ -24,6 +24,7 @@ import {
 	logLines,
 	machineCard,
 	restartSummary,
+	updateRunSummary,
 	sendMachineCommand,
 	versionText,
 	updateFinished,
@@ -39,7 +40,7 @@ import {
 	type UpdateUnitView,
 } from "@/src/core";
 
-import { AppUpdateBlock, BTN, ConsoleMachineCard } from "@/components/pack/machine-update-details";
+import { AppUpdateBlock, BTN, ConsoleMachineCard, RemoteUpdateBlock } from "@/components/pack/machine-update-details";
 export { AppUpdateBlock, ConsoleMachineCard };
 
 const TONE: Record<string, string> = { red: "bg-red-500", amber: "bg-amber-500", grey: "bg-muted-foreground/50", green: "bg-emerald-500" };
@@ -72,8 +73,8 @@ export function MachineCard(p: {
 	channelDisabled?: boolean;
 	/** The update banner and the auto switch (the console's own machine only); other machines say where to update. */
 	update?: ReactNode;
-	/** The host's own update state (failed or installing). A failure on a machine without `update` says to open that machine's console to retry. */
-	hostUpdate?: UpdateState | null;
+	/** Another machine only: send update.run to it (clearFailed: Retry). The result line comes back in `notes.update`, the pending state in `busy`. */
+	onUpdate?: (clearFailed: boolean) => void;
 }) {
 	const { view } = p;
 	return (
@@ -90,13 +91,7 @@ export function MachineCard(p: {
 				))}
 			</ul>
 			{view.update?.kind === "app" && <AppUpdateBlock version={view.update.version} />}
-			{view.update?.kind === "pack" && !p.update && p.hostUpdate?.state === "failed" && (
-				<p data-testid="machine-remote-failed" className="mt-2 text-red-600 dark:text-red-400">
-					{failedLine(p.hostUpdate)}
-					<span className="block text-muted-foreground">{remoteRetryText(view.label)}</span>
-				</p>
-			)}
-			{view.update?.kind === "pack" && (p.update ?? <p data-testid="machine-update-readonly" className="mt-2 text-muted-foreground/70">{UPDATE_READONLY_NOTE}</p>)}
+			{view.update?.kind === "pack" && (p.update ?? <RemoteUpdateBlock view={view} note={p.notes?.update} busy={p.busy?.has("update") ?? false} onRun={p.onUpdate} />)}
 			{view.update?.kind === "pack" && <div data-testid="machine-channel" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
 				<span>Update channel</span>
 				{view.channel.editable ? (
@@ -164,6 +159,8 @@ export function MachinesSection() {
 	const singleMac = useSingleMac();
 	const [send, setSend] = useState<Send>(() => sendMachineCommand);
 	// dev: ?healthUpdate= / ?healthAuto= replace the update and subscription routes with a fake (pack-health-fixtures.ts); until it loads, nothing is fetched.
+	// dev: ?remoteUpdate= gives the other machines canned inventory rows (their update state) instead of the hub read.
+	const remoteWanted = typeof window !== "undefined" && process.env.NODE_ENV !== "production" && /[?&]remoteUpdate=/.test(window.location.search);
 	const fakeWanted = typeof window !== "undefined" && process.env.NODE_ENV !== "production" && /[?&]health(Update|Auto)=/.test(window.location.search);
 	const [updateApi, setUpdateApi] = useState<typeof fetch | undefined>(() => (fakeWanted ? ((() => new Promise<Response>(() => {})) as typeof fetch) : undefined));
 	useEffect(() => {
@@ -188,6 +185,13 @@ export function MachinesSection() {
 	const [inv, setInv] = useState<Inv | null>(null);
 	useEffect(() => {
 		if (fakeWanted) return;
+		if (remoteWanted) {
+			void import("@/components/pack/pack-health-fixtures").then((f) => {
+				const r = f.fixtureRemoteInventory(window.location.search);
+				if (r) setInv({ state: "ok", rows: r.rows, hubMachine: r.hubMachine });
+			});
+			return;
+		}
 		const ac = new AbortController();
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		// One poll at a time: the next is scheduled after the previous settles; unmount aborts the one in flight.
@@ -209,7 +213,7 @@ export function MachinesSection() {
 			ac.abort();
 			clearTimeout(timer);
 		};
-	}, [fakeWanted]);
+	}, [fakeWanted, remoteWanted]);
 	// Before the first per-viewer answer the cards show a neutral "loading" note, never snapshot data or "version unknown".
 	const merged = snapshot ? { ...snapshot, inventory: inv ? { state: inv.state, rows: inv.state === "ok" ? (inv.rows ?? []) : [], stale: false, hubMachine: inv.hubMachine ?? null } : { state: "loading" as const, rows: [], stale: false, hubMachine: null } } : snapshot;
 	const cards = merged ? groupByHost(merged).filter((c) => c.checked) : [];
@@ -244,6 +248,26 @@ export function MachinesSection() {
 			setBusyKey(key, false);
 		}
 	};
+	const updating = useRef(new Set<string>());
+	/** update.run to another machine: one in flight per machine (a ref, so two quick taps cannot both send), and a timeout is never resent. */
+	const runUpdate = async (v: MachineCardView, clearFailed: boolean) => {
+		const hubId = hubIdOf(v.id);
+		if (!hubId || updating.current.has(v.id)) return;
+		updating.current.add(v.id);
+		const key = `${v.id}/update`;
+		setBusyKey(key, true);
+		setNotes((n) => {
+			const { [key]: _gone, ...rest } = n;
+			return rest;
+		});
+		try {
+			const r = await send(hubId, { kind: "update.run", args: clearFailed ? { clearFailed: true } : {} });
+			setNotes((n) => ({ ...n, [key]: updateRunSummary(r) }));
+		} finally {
+			updating.current.delete(v.id);
+			setBusyKey(key, false);
+		}
+	};
 	return (
 		<div data-testid="pack-machines">
 			{!reachable && (
@@ -265,7 +289,7 @@ export function MachinesSection() {
 					return cards[i]!.console ? (
 						<ConsoleMachineCard key={v.id} card={cards[i]!} canAct={reachable} actions={snapshot.actions} api={updateApi} {...shared} />
 					) : (
-						<MachineCard key={v.id} view={v} {...shared} />
+						<MachineCard key={v.id} view={v} {...shared} onUpdate={(c) => void runUpdate(v, c)} />
 					);
 				})
 			)}

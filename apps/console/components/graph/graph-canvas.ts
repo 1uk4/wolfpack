@@ -646,6 +646,13 @@ export class GraphCanvasRenderer {
 
 	private frameId: number | null = null;
 	private dirty = true;
+	/** Only the overlay changed (requestRedraw): the cached base layers can be reused. `dirty` (markDirty) means the base is stale. */
+	private overlayDirty = false;
+	/** The previous tick ran a base animation (hover fade, zoom glide, sim, pulses): the next draw is a full one so the settle frame lands. */
+	private lastBaseAnim = false;
+	/** Layers 1-7b rendered once per base change (offscreen, device pixels); overlay frames blit it instead of redrawing ~2k nodes. */
+	private baseLayer: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
+	private baseKey = "";
 	/** True while tick() runs: markDirty inside the loop (d3's zoom event
 	 *  fires from advanceZoom) must NOT schedule — the loop schedules
 	 *  itself below. Un-guarded, each glide frame leaked an extra queued
@@ -803,7 +810,7 @@ export class GraphCanvasRenderer {
 			// store (which clears the canvas), and during live window resizes
 			// rAF is starved by relayout — a deferred draw would leave the
 			// canvas blank for the whole drag (the resize-blanking bug).
-			this.draw();
+			this.draw(true);
 		});
 		this.resizeObserver.observe(canvas);
 		this.syncSize();
@@ -1066,6 +1073,7 @@ export class GraphCanvasRenderer {
 		this.destroyed = true;
 		if (this.frameId !== null) cancelAnimationFrame(this.frameId);
 		this.overlay = null;
+		this.baseLayer = null;
 		this.flushCommit();
 		this.sim = null;
 		this.simActive = false;
@@ -1113,7 +1121,9 @@ export class GraphCanvasRenderer {
 
 	/** Request a redraw (the overlay calls this when its state changes). */
 	requestRedraw(): void {
-		this.markDirty();
+		if (this.destroyed) return;
+		this.overlayDirty = true;
+		this.schedule();
 	}
 
 	private overlayHostCache: OverlayHost | null = null;
@@ -1349,6 +1359,10 @@ export class GraphCanvasRenderer {
 	private markDirty(): void {
 		if (this.destroyed) return; // a late setOverlay(null) or overlay redraw after destroy must not start a frame loop
 		this.dirty = true;
+		this.schedule();
+	}
+
+	private schedule(): void {
 		if (this.frameId === null && !this.inTick) {
 			this.frameId = requestAnimationFrame(() => {
 				this.frameId = null;
@@ -1373,11 +1387,14 @@ export class GraphCanvasRenderer {
 			const overlayAnim = this.guardOverlay((o) => o.needsFrames(now), false);
 			let pulseAnim = false;
 			for (const p of this.pulses.values()) if (!p.reduce) pulseAnim = true;
-			// Phones: when ONLY the overlay animates, draw at about 30 fps.
-			const onlyOverlay = overlayAnim && !hoverAnim && !zoomAnim && !simAnim && !pulseAnim && !wasDirty;
+			const baseAnim = hoverAnim || zoomAnim || simAnim || pulseAnim;
+			const forceBase = baseAnim || this.lastBaseAnim;
+			this.lastBaseAnim = baseAnim;
+			// When ONLY the overlay animates, frames are overlay-only (cached base) and capped at the overlay's frame floor.
+			const onlyOverlay = overlayAnim && !forceBase && !wasDirty;
 			const minFrameMs = this.guardOverlay((o) => o.minFrameMs, 0);
 			if (!(onlyOverlay && now - this.lastDrawAt < minFrameMs)) {
-				this.draw();
+				this.draw(forceBase);
 				this.lastDrawAt = now;
 			}
 			// Keep frames coming ONLY while an animation is in motion (hover
@@ -1994,11 +2011,34 @@ export class GraphCanvasRenderer {
 		this.regionRect = { minX, minY, w: spanX, h: spanY };
 	}
 
+	/** The offscreen base layer at the main canvas' pixel size, or null when it cannot be had (the base then draws straight to the canvas). */
+	private ensureBaseLayer(w: number, h: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null {
+		try {
+			if (!this.baseLayer) {
+				const canvas = document.createElement("canvas");
+				const ctx = canvas.getContext("2d");
+				if (!ctx) return null;
+				this.baseLayer = { canvas, ctx };
+			}
+			const l = this.baseLayer;
+			if (l.canvas.width !== w || l.canvas.height !== h) {
+				l.canvas.width = w;
+				l.canvas.height = h; // also clears
+				this.baseKey = "";
+			}
+			return l;
+		} catch {
+			return null;
+		}
+	}
+
 	/** THE draw function: every layer, one frame, one camera. All drawing
 	 *  happens in WORLD coordinates under the camera transform; nothing is
 	 *  recomputed per frame except layer styling. */
-	private draw(): void {
+	private draw(forceBase = false): void {
+		const baseStale = this.dirty || forceBase;
 		this.dirty = false;
+		this.overlayDirty = false;
 		const data = this.data;
 		const settings = this.settings;
 		if (!data || !settings) return;
@@ -2030,6 +2070,23 @@ export class GraphCanvasRenderer {
 		const ratio = zoomRatioOf(this.kFit, k);
 		const nodeAlpha = labelAlpha(ratio, settings.labelZoom);
 		const regionAlpha = 1 - nodeAlpha;
+
+		// Layers 1-7b go to an offscreen cache and are reused while only the overlay changes. Besides the dirty flags, a key of everything
+		// the base reads that can change without markDirty guards against a stale picture; a live sim or a hover fade never reuses it.
+		const pxW = this.canvas.width;
+		const pxH = this.canvas.height;
+		const key = `${tx}|${ty}|${k}|${dpr}|${pxW}|${pxH}|${this.geoVersion}|${this.regionBuiltVersion}|${this.hoverNode?.id ?? ""}|${this.hoverFade}|${this.pulses.size}`;
+		const layer = this.ensureBaseLayer(pxW, pxH);
+		const reuse = !!layer && !baseStale && !this.simActive && key === this.baseKey;
+		if (!reuse) {
+			const mainCtx = ctx;
+			{
+			const ctx = layer ? layer.ctx : mainCtx;
+			if (layer) {
+				ctx.setTransform(1, 0, 0, 1, 0, 0);
+				ctx.clearRect(0, 0, pxW, pxH);
+				ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * tx, dpr * ty);
+			}
 
 		// 1. Cluster regions: one tiny world-space bitmap blit. The upscale
 		//    blur is the region softness; adjacent cluster tints blend
@@ -2149,6 +2206,15 @@ export class GraphCanvasRenderer {
 				ctx.arc(n.x, n.y, nodeR, 0, Math.PI * 2, true);
 				ctx.fill("evenodd");
 			}
+		}
+
+			}
+			this.baseKey = layer ? key : "";
+		}
+		if (layer) {
+			ctx.setTransform(1, 0, 0, 1, 0, 0);
+			ctx.drawImage(layer.canvas, 0, 0);
+			ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * tx, dpr * ty);
 		}
 
 		// 7c. Live overlay: wolves, satellites, trails, pulses, rings (same camera; nothing when it has no data).

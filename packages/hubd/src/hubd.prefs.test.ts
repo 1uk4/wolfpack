@@ -41,6 +41,13 @@ describe("prefs routes", () => {
     expect(await (await call(b, "GET", "/v1/prefs/graph.render-settings")).json()).toEqual({ value: { nodeSize: 3 } });
   });
 
+  it("refuses a 33rd key per person with 400, but still overwrites an existing key", async () => {
+    const t = device();
+    for (let i = 0; i < 32; i++) expect((await call(t, "PUT", `/v1/prefs/k${i}`, { value: i })).status).toBe(200);
+    expect((await call(t, "PUT", "/v1/prefs/k32", { value: 1 })).status).toBe(400);
+    expect((await call(t, "PUT", "/v1/prefs/k0", { value: 9 })).status).toBe(200);
+  });
+
   it("answers 401 without a token", async () => {
     expect((await call(undefined, "GET", "/v1/prefs/x")).status).toBe(401);
     expect((await call(undefined, "PUT", "/v1/prefs/x", { value: 1 })).status).toBe(401);

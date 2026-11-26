@@ -7,12 +7,14 @@
  * Storage: <dataDir>/prefs/<person>/<key>.json, written atomically (writeFileAtomic); async I/O only (no sync disk on request paths).
  * A value is any JSON value, at most MAX_PREF_BYTES serialized.
  */
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "@wolfpack/memory";
 import { HubError } from "./errors.js";
 
 export const MAX_PREF_BYTES = 32 * 1024;
+/** At most this many keys per person: a PUT that would create one more is 400. */
+export const MAX_PREF_KEYS = 32;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 const PERSON = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 
@@ -50,6 +52,11 @@ export function createPrefsStore(dataDir: string): PrefsStore {
       const text = JSON.stringify(value);
       if (text === undefined) throw new HubError("invalid_request", "value must be JSON");
       if (Buffer.byteLength(text) > MAX_PREF_BYTES) throw new HubError("invalid_request", `value too large (max ${MAX_PREF_BYTES} bytes)`);
+      const existing = await readdir(join(dataDir, "prefs", person)).catch(() => [] as string[]);
+      const mine = `${key}.json`;
+      if (!existing.includes(mine) && existing.filter((f) => f.endsWith(".json")).length >= MAX_PREF_KEYS) {
+        throw new HubError("invalid_request", `too many pref keys (max ${MAX_PREF_KEYS})`);
+      }
       await mkdir(join(dataDir, "prefs", person), { recursive: true });
       await writeFileAtomic(file(person, key), text);
     },

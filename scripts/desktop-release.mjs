@@ -4,7 +4,7 @@
 //   node scripts/desktop-release.mjs notes <version> <sha>         -> prints the release notes markdown
 // Nothing is committed: the workflow stamps the version into apps/desktop/package.json on the runner only.
 // Needs full history and all tags (`fetch-depth: 0`). --releases <file> lists release tag names, one per line
-// (`gh release list --json tagName,isDraft,targetCommitish`, JSON): a DRAFT release creates no git tag, so it must count too,
+// (the REST releases list mapped to {tagName,isDraft,targetCommitish}, JSON): a DRAFT release creates no git tag, so it must count too,
 // and a draft aimed at the commit being released is reused by a rerun.
 // The `notes` command reads only component tags reachable from the given sha.
 import { execFileSync } from "node:child_process";

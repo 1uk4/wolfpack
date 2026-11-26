@@ -52,6 +52,19 @@ describe("render-settings route", () => {
 		assert.equal(s.hubCalls.filter((c) => c.startsWith("PUT")).length, 1);
 	});
 
+	test("the first GET answers from the file without waiting for a slow hub's seed PUT", async () => {
+		const file = { ...DEFAULT_RENDER_SETTINGS, nodeSize: 3 };
+		const slow = (async (_u: string, init: RequestInit) =>
+			init.method === "PUT" ? new Promise<Response>(() => {}) : Response.json({ value: null })) as unknown as typeof fetch;
+		const api = createRenderSettingsApi({ readLocal: () => file, writeLocal: (raw) => sanitizeRenderSettings(raw), env: { WOLFPACK_HUB_URL: "http://hub" }, fetch: slow });
+		const r = await Promise.race([
+			api.get(new Request("http://c/x", { headers: { authorization: "Bearer tok1" } })),
+			new Promise<null>((res) => setTimeout(() => res(null), 500)),
+		]);
+		assert.notEqual(r, null, "GET waited for the seed PUT");
+		assert.equal(((await r!.json()) as GraphRenderSettings).nodeSize, 3);
+	});
+
 	test("with no hub configured or an unreachable hub, GET reads and PUT writes the local file", async () => {
 		for (const hub of ["none", "down"] as const) {
 			const s = setup({ hub, file: { ...DEFAULT_RENDER_SETTINGS, edgeWidth: 2 } });

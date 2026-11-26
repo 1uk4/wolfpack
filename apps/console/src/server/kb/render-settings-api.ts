@@ -52,7 +52,7 @@ export function createRenderSettingsApi(d: RenderSettingsApiDeps) {
 			const remote = await hub(req, "GET");
 			if (remote && remote.value !== null) return Response.json(sanitizeRenderSettings(remote.value), { headers: NO_STORE });
 			const local = d.readLocal();
-			if (remote && local) await hub(req, "PUT", local); // one-time seed; best effort, the file stays
+			if (remote && local) void hub(req, "PUT", local).catch(() => {}); // one-time seed, fire and forget: a slow hub never delays the first load; the file stays
 			return Response.json(local, { headers: NO_STORE });
 		},
 

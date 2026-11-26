@@ -44,7 +44,14 @@ function armTimer(): void {
 function dispatch(a: LiveAction): void {
 	// Ticks are the store's own clock: the overlay runs its own, so they are not forwarded.
 	if (a.type !== "tick") for (const l of listeners) l(a);
-	const state = reduceLive(snapshot.state, a);
+	let state: LiveState;
+	try {
+		state = reduceLive(snapshot.state, a);
+	} catch (err) {
+		// One bad event is dropped, never fatal to the page.
+		console.error("live feed: dropped an event the reducer could not apply", err);
+		return;
+	}
 	let recent = snapshot.recent;
 	if (a.type === "event") {
 		const e = a.event;

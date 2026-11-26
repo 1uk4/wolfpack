@@ -1082,9 +1082,25 @@ export class GraphCanvasRenderer {
 		this.canvas.style.cursor = "";
 	}
 
+	/** Set once the overlay threw: it is skipped for the rest of the session so the graph itself keeps rendering. */
+	private overlayBroken = false;
+	/** Run an overlay call; an exception disables the overlay (logged once) and yields `fallback`. */
+	private guardOverlay<T>(fn: (o: LiveOverlay) => T, fallback: T): T {
+		const o = this.overlay;
+		if (!o || this.overlayBroken) return fallback;
+		try {
+			return fn(o);
+		} catch (err) {
+			this.overlayBroken = true;
+			console.error("live overlay disabled after an error", err);
+			return fallback;
+		}
+	}
+
 	/** Attach (or detach with null) the live overlay. The caller owns its lifetime; the renderer only draws and hit-tests it. */
 	setOverlay(o: LiveOverlay | null, cbs?: Pick<RendererCallbacks, "onOverlayHover" | "onOverlaySelect">): void {
 		this.overlay = o;
+		this.overlayBroken = false;
 		this.callbacks = { ...this.callbacks, onOverlayHover: cbs?.onOverlayHover, onOverlaySelect: cbs?.onOverlaySelect };
 		if (!o) this.setOverlayHover(null);
 		this.markDirty();
@@ -1124,8 +1140,7 @@ export class GraphCanvasRenderer {
 
 	/** The overlay thing under the pointer; touch gets a bigger pick pad. */
 	private overlayHit(pos: Pt, pointerType: string): OverlayHit | null {
-		if (!this.overlay) return null;
-		return this.overlay.hitTest(pos.x, pos.y, this.transform, pointerType === "touch" ? 18 : 8);
+		return this.guardOverlay((o) => o.hitTest(pos.x, pos.y, this.transform, pointerType === "touch" ? 18 : 8), null);
 	}
 
 	private setOverlayHover(hit: OverlayHit | null): void {
@@ -1354,14 +1369,14 @@ export class GraphCanvasRenderer {
 			const zoomAnim = this.advanceZoom(dt);
 			const simAnim = this.advanceSim();
 			// Live overlay: its own small physics (reads node positions, never moves them) and its own animation need.
-			const ov = this.overlay;
-			if (ov && this.geometryReady) ov.step(now, dt / 1000, this.overlayHost(), this.transform.k);
-			const overlayAnim = !!ov && ov.needsFrames(now);
+			if (this.geometryReady) this.guardOverlay((o) => o.step(now, dt / 1000, this.overlayHost(), this.transform.k), undefined);
+			const overlayAnim = this.guardOverlay((o) => o.needsFrames(now), false);
 			let pulseAnim = false;
 			for (const p of this.pulses.values()) if (!p.reduce) pulseAnim = true;
 			// Phones: when ONLY the overlay animates, draw at about 30 fps.
 			const onlyOverlay = overlayAnim && !hoverAnim && !zoomAnim && !simAnim && !pulseAnim && !wasDirty;
-			if (!(onlyOverlay && ov && now - this.lastDrawAt < ov.minFrameMs)) {
+			const minFrameMs = this.guardOverlay((o) => o.minFrameMs, 0);
+			if (!(onlyOverlay && now - this.lastDrawAt < minFrameMs)) {
 				this.draw();
 				this.lastDrawAt = now;
 			}
@@ -2137,7 +2152,7 @@ export class GraphCanvasRenderer {
 		}
 
 		// 7c. Live overlay: wolves, satellites, trails, pulses, rings (same camera; nothing when it has no data).
-		if (this.overlay) this.overlay.draw(ctx, this.overlayHost(), k, performance.now());
+		this.guardOverlay((o) => o.draw(ctx, this.overlayHost(), k, performance.now()), undefined);
 
 		// 8. Cluster region labels — THE TOPMOST layer (user 2026-09-16:
 		// node labels and hover names drew over them before; region labels

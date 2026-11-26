@@ -68,7 +68,8 @@ beforeAll(async () => {
 const made: Array<ReturnType<typeof createSupervisor>> = [];
 afterAll(async () => {
   await Promise.all(made.map((m) => m.stop()));
-  await new Promise((r) => fake?.close(r));
+  // fake is unset when beforeAll threw (no Electron binary, runtime not built): never wait on it, or this hook times out and hides that error
+  if (fake) await new Promise((r) => fake.close(r));
   if (root) rmSync(root, { recursive: true, force: true });
 });
 

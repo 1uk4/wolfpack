@@ -195,8 +195,8 @@ describe("machineCard remote update (work-wolfpack-NqEVJAU)", () => {
 	const row = { machine: "sfo-01", kind: "workerd" as const, id: "workerd", version: "0.1.9", channel: "stable" as const, ageS: 3, latest: "0.1.10", updateState: failed };
 	const remote = (commands: string[]) => card({ commands, inventory: [row], workerds: [{ link: link("workerd", "workerd"), wolves: [] }] });
 	it("carries the machine's own update state, whether it is behind, and whether it can run an update (update.run advertised)", () => {
-		assert.deepEqual(machineCard(remote(["logs.fetch", "update.run"]), null).update, { kind: "pack", canRun: true, behind: true, hostState: failed });
-		assert.deepEqual(machineCard(remote(["logs.fetch"]), null).update, { kind: "pack", behind: true, hostState: failed });
+		assert.deepEqual(machineCard(remote(["logs.fetch", "update.run"]), null).update, { kind: "pack", availableText: "workerd 0.1.10 is available", canRun: true, behind: true, hostState: failed });
+		assert.deepEqual(machineCard(remote(["logs.fetch"]), null).update, { kind: "pack", availableText: "workerd 0.1.10 is available", behind: true, hostState: failed });
 	});
 	it("words the update.run answer: sent, unknown outcome, busy, offline", () => {
 		assert.equal(updateRunSummary({ id: "c", ok: true }), "Update started");

@@ -182,6 +182,7 @@ describe("Pack > Machines > Update a remote machine (work-wolfpack-NqEVJAU)", ()
 	it("Update on a remote card that is behind sends update.run, and a timeout reads 'Update sent; it may take a few minutes.' without a resend", async () => {
 		const s = script({ inventory: [workerdRow({ latest: "0.1.10" })], cmd: { id: "c-1", ok: false, code: "timeout" } });
 		const m = await remote(s);
+		assert.equal(m.q("machine-remote-available")!.textContent, "workerd 0.1.10 is available");
 		await m.click("machine-remote-update-button");
 		assert.deepEqual(cmds(s).map((c) => c.body), [{ kind: "update.run", args: {} }]);
 		assert.equal(m.q("machine-remote-note")!.textContent, "Update sent; it may take a few minutes.");
@@ -193,7 +194,31 @@ describe("Pack > Machines > Update a remote machine (work-wolfpack-NqEVJAU)", ()
 		const m = await remote(s);
 		assert.match(m.q("machine-remote-stage")!.textContent ?? "", /Installing…/);
 		assert.equal(m.q("machine-remote-update-button"), null);
+		const remoteCard = [...m.dom.document.querySelectorAll('[data-testid="machine-card"]')].find((c) => c.querySelector('[data-testid="machine-remote-update"]'))!;
+		assert.match(remoteCard.querySelector('[data-testid="update-details"]')?.textContent ?? "", /Roll back from that machine's console\./);
+		assert.equal(remoteCard.querySelector('[data-testid="update-rollback"]'), null);
 		assert.equal(cmds(s).length, 0);
+		await m.unmount();
+	});
+});
+
+describe("Pack > Machines > Update details (work-wolfpack-B8vtRi3)", () => {
+	it("this console's card lists the update details and offers Roll back to the kept release, which posts to /api/health/rollback", async () => {
+		const s = script({ updateState: hostState("idle", { lastCheck: new Date().toISOString() }) });
+		const actions = { systemd: true, rollback: [{ service: "hubd", from: "0.1.15", to: "0.1.14" }, { service: "console", from: "0.1.20", to: "0.1.19" }] };
+		const m = await mount(<ConsoleMachineCard card={host()} canAct actions={actions} logs={{}} />);
+		const area = m.q("machine-update-area")!.parentElement!;
+		assert.equal(m.q("machine-channel")!.compareDocumentPosition(m.q("update-details")!) & 4, 4, "Update details sits below the channel / Check now row");
+		assert.ok(area.contains(m.q("update-details")!));
+		const t = m.q("update-details")!.textContent ?? "";
+		assert.match(t, /Channel:\s*stable/);
+		assert.match(t, /0\.1\.14 → 0\.1\.15/);
+		assert.match(t, /Auto-update:\s*on/);
+		(window as unknown as { confirm: () => boolean }).confirm = () => true;
+		assert.equal(m.q("update-rollback-hubd")?.textContent, "Roll back hubd to 0.1.14");
+		assert.equal(m.q("update-rollback-console")?.textContent, "Roll back console to 0.1.19");
+		await m.click("update-rollback-console");
+		assert.deepEqual(posts(s).filter((c) => c.url.includes("rollback")).map((c) => c.body), [{ service: "console" }]);
 		await m.unmount();
 	});
 });

@@ -50,7 +50,7 @@ export interface MachineCardView {
 	services: MachineServiceView[];
 	channel: { value: "stable" | "main" | null; editable: boolean; note?: string; /** The console machine's update mode; own card only. */ mode?: "manual" | "auto" | "off"; /** Shown instead of "unknown" when the inventory could not be read. */ missing?: string };
 	/** The update block: the pack's (banner, channel, Check now) or, in single-Mac on this Mac's card, the app's own updater block; none on other cards in single-Mac. */
-	update?: { kind: "pack"; /** Another machine only: it advertised update.run, so Update and Retry can be sent to it. */ canRun?: true; /** Another machine only: a component is behind the channel's release. */ behind?: true; /** Another machine only: its updater is failed or installing, as its workerd reported. */ hostState?: UpdateState } | { kind: "app"; version: string | null };
+	update?: { kind: "pack"; /** Another machine only: it advertised update.run, so Update and Retry can be sent to it. */ canRun?: true; /** Another machine only: a component is behind the channel's release. */ behind?: true; /** Another machine only: what is available, worded like the sidebar notice ("hubd 0.1.25 is available", "2 updates available"). */ availableText?: string; /** Another machine only: its updater is failed or installing, as its workerd reported. */ hostState?: UpdateState } | { kind: "app"; version: string | null };
 }
 
 /** The button text once the app has downloaded an update, or null when none is staged. */
@@ -134,9 +134,11 @@ export function machineCard(card: HostCard, ownChannel: "stable" | "main" | null
 }
 
 /** The update block of another machine's card: what its workerd reported, whether a component is behind, and whether update.run can be sent. */
-function remoteUpdate(card: HostCard): { kind: "pack"; canRun?: true; behind?: true; hostState?: UpdateState } {
+function remoteUpdate(card: HostCard): { kind: "pack"; canRun?: true; behind?: true; availableText?: string; hostState?: UpdateState } {
 	const hostState = card.inventory.find((e) => e.kind === "workerd" && e.updateState)?.updateState;
-	return { kind: "pack", ...(card.hubId && card.commands?.includes("update.run") ? { canRun: true as const } : {}), ...(card.inventory.some((e) => e.latest) ? { behind: true as const } : {}), ...(hostState ? { hostState } : {}) };
+	const behind = card.inventory.filter((e) => e.latest);
+	const availableText = behind.length > 1 ? `${behind.length} updates available` : behind.length === 1 ? `${behind[0]!.kind}${behind[0]!.latest ? ` ${behind[0]!.latest}` : ""} is available` : hostState?.latest ? `${hostState.latest} is available` : undefined;
+	return { kind: "pack", ...(availableText ? { availableText } : {}), ...(card.hubId && card.commands?.includes("update.run") ? { canRun: true as const } : {}), ...(card.inventory.some((e) => e.latest) ? { behind: true as const } : {}), ...(hostState ? { hostState } : {}) };
 }
 
 /** One line for the result of an update.run: started, or the reason it was not (a timeout means the outcome is unknown: the owner decides). */

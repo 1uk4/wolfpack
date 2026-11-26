@@ -73,6 +73,8 @@ export function MachineCard(p: {
 	channelDisabled?: boolean;
 	/** The update banner and the auto switch (the console's own machine only); other machines say where to update. */
 	update?: ReactNode;
+	/** The Update details disclosure: last in the update area, below the channel and Check now row. */
+	details?: ReactNode;
 	/** Another machine only: send update.run to it (clearFailed: Retry). The result line comes back in `notes.update`, the pending state in `busy`. */
 	onUpdate?: (clearFailed: boolean) => void;
 }) {
@@ -91,7 +93,7 @@ export function MachineCard(p: {
 				))}
 			</ul>
 			{view.update?.kind === "app" && <AppUpdateBlock version={view.update.version} />}
-			{view.update?.kind === "pack" && (p.update ?? <RemoteUpdateBlock view={view} note={p.notes?.update} busy={p.busy?.has("update") ?? false} onRun={p.onUpdate} />)}
+			{view.update?.kind === "pack" && (p.update ?? <RemoteUpdateBlock view={view} note={p.notes?.update} busy={p.busy?.has("update") ?? false} onRun={p.onUpdate} logs={p.logs} onRefreshLog={p.onRefreshLog} />)}
 			{view.update?.kind === "pack" && <div data-testid="machine-channel" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
 				<span>Update channel</span>
 				{view.channel.editable ? (
@@ -107,6 +109,7 @@ export function MachineCard(p: {
 				{p.onCheck && <button type="button" data-testid="machine-check" onClick={p.onCheck} className={cn(BTN, "ml-auto")}>Check now</button>}
 			</div>}
 			{view.update?.kind === "pack" && p.checkNote && <p data-testid="machine-check-note" className="mt-1 text-muted-foreground">{p.checkNote}</p>}
+			{view.update?.kind === "pack" && p.details}
 		</section>
 	);
 }

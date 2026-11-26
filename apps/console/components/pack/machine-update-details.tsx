@@ -27,6 +27,9 @@ import {
 	updateOffered,
 	updateOutcome,
 	updateQuestion,
+	rollbackOffered,
+	rollbackOutcome,
+	rollbackQuestion,
 	UPDATE_READONLY_NOTE,
 	type CommandResult,
 	type HealthActionsView,
@@ -38,6 +41,7 @@ import {
 
 
 import { MachineCard } from "@/components/pack/pack-machines";
+import { LOGGABLE, UpdateDetails, feedLabel, type DetailsLog } from "@/components/pack/update-details";
 
 export const BTN = "rounded-sm border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50 max-md:min-h-11 max-md:px-3 max-md:py-2";
 
@@ -63,7 +67,7 @@ export function AppUpdateBlock({ version, state, heading }: { version: string | 
 	// `ready` from the seeded state counts too: a window opened after the download gets no legacy push (work-wolfpack-WIaZh5k).
 	const restart = appRestartLabel(ready ?? (stage?.state === "ready" ? (stage.latest ?? "") : null)) ?? (stage?.state === "ready" ? "Restart to update" : null);
 	return (
-		<div data-testid={heading ? "machine-this-app" : "machine-app-update"} className="mt-2 rounded-md border px-2 py-1.5 text-muted-foreground">
+		<div data-testid={heading ? "machine-this-app" : "machine-app-update"} className={cn("mt-2 rounded-md border px-2 py-1.5 text-muted-foreground", heading && "mb-3")}>
 			{heading && <h3 className="text-sm font-medium text-foreground">{heading}</h3>}
 			<p data-testid="machine-app-update-note">Updates install by themselves: the app downloads them in the background and asks you to restart.</p>
 			<div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -81,6 +85,8 @@ export function AppUpdateBlock({ version, state, heading }: { version: string | 
 			{stage?.state === "failed" && bridge?.checkForUpdates && <button type="button" data-testid="machine-app-retry" disabled={checking} onClick={() => { setChecking(true); setNote(null); void bridge.checkForUpdates!().then((r) => setNote(appCheckNote(r))).catch(() => setNote(appCheckNote({ ok: false }))).finally(() => setChecking(false)); }} className={cn(BTN, "mt-1")}>{retryLabel}</button>}
 			{heading && channelNote && <p data-testid="machine-app-channel-note" className="mt-1 text-muted-foreground/70">{channelNote}</p>}
 			{note && <p data-testid={note.tone === "error" ? "machine-app-update-error" : "machine-app-update-ok"} className={note.tone === "error" ? "mt-1 text-red-600 dark:text-red-400" : "mt-1"}>{note.text}</p>}
+			{/* The feed label is channel-derived: the desktop does not expose a custom WOLFPACK_UPDATE_FEED to the page. Logs opens the app's log folder (not on the remote bridge). */}
+			<UpdateDetails state={stage} feed={feedLabel("app", stage?.channel ?? null)} onLogs={bridge && !bridge.remote && bridge.showFolder ? () => void bridge.showFolder("logs") : undefined} />
 		</div>
 	);
 }
@@ -90,7 +96,7 @@ export function AppUpdateBlock({ version, state, heading }: { version: string | 
  * and Retry when it failed, both sent as update.run through the hub's command channel. A worker without update.run (older) gets the plain
  * "update it from its own console" line and no button. One send at a time (`busy`); a timeout means the outcome is unknown, never resent.
  */
-export function RemoteUpdateBlock({ view, note, busy, onRun }: { view: MachineCardView; note?: string; busy: boolean; onRun?: (clearFailed: boolean) => void }) {
+export function RemoteUpdateBlock({ view, note, busy, onRun, logs, onRefreshLog }: { view: MachineCardView; note?: string; busy: boolean; onRun?: (clearFailed: boolean) => void; logs?: Record<string, DetailsLog>; onRefreshLog?: (service: string) => void }) {
 	const u = view.update?.kind === "pack" ? view.update : undefined;
 	const hs = u?.hostState;
 	const failed = hs?.state === "failed";
@@ -108,11 +114,13 @@ export function RemoteUpdateBlock({ view, note, busy, onRun }: { view: MachineCa
 				<div data-testid="machine-remote-update" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
 					{installing && <p data-testid="machine-remote-stage" className="text-foreground">{stageLabel(hs)}</p>}
 					{failed && <button type="button" data-testid="machine-remote-retry" disabled={off} onClick={() => onRun!(true)} className={BTN}>{retryLabel}</button>}
+					{!failed && !installing && u?.behind && u.availableText && <span data-testid="machine-remote-available" className="text-foreground">{u.availableText}</span>}
 					{!failed && !installing && u?.behind && <button type="button" data-testid="machine-remote-update-button" disabled={off} onClick={() => onRun!(false)} className={BTN}>Update</button>}
 					{busy && <BrailleSpinner className="h-[1.25em]" label="Sending update" />}
 					{note && <p data-testid="machine-remote-note" className="text-muted-foreground">{note}</p>}
 				</div>
 			)}
+			{hs && <UpdateDetails state={hs} feed={feedLabel("pack", hs.channel)} onLogs={view.online && hs.component && LOGGABLE.has(hs.component) && onRefreshLog ? () => onRefreshLog(hs.component!) : undefined} log={hs.component ? logs?.[hs.component] : undefined} rollback={{ remoteText: "Roll back from that machine's console." }} />}
 		</>
 	);
 }
@@ -293,6 +301,34 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 		const s = await read(true);
 		setCheckNote(!s ? "Could not check for updates" : s.units.length ? null : `Already up to date on ${label}`);
 	};
+	// Roll back (work-wolfpack-B8vtRi3): every service with a kept previous release, under systemd; one POST per tap, confirmed first.
+	const [rbNote, setRbNote] = useState<string | null>(null);
+	const [rbBusy, setRbBusy] = useState(false);
+	const rbs = actions?.systemd ? actions.rollback.filter((r) => rollbackOffered(r) && r.to) : [];
+	const rollBack = async (service: string) => {
+		const rb = rbs.find((r) => r.service === service);
+		if (!rb || rbBusy || !window.confirm(rollbackQuestion(rb.service, rb.from, rb.to))) return;
+		setRbBusy(true);
+		setRbNote(null);
+		let status = 0;
+		let retry: string | null = null;
+		let body: unknown = null;
+		try {
+			const r = await call("/api/health/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ service: rb.service }) });
+			status = r.status;
+			retry = r.headers.get("Retry-After");
+			if (status !== 202) body = await r.json().catch(() => null);
+		} catch {
+			status = 0;
+		}
+		const out = rollbackOutcome(status, retry, body);
+		if (mounted.current) {
+			setRbNote(out.kind === "issued" ? `Rolling ${rb.service} back; it restarts shortly.` : out.kind === "wait" ? `Too many tries; retry in ${Math.ceil(out.retryS / 60)} min` : out.message);
+			setRbBusy(false);
+		}
+	};
+	const comp = state?.updateState?.component;
+	const logComp = comp && LOGGABLE.has(comp) ? comp : "hubd";
 	const units = state?.units ?? [];
 	const recentlyDone = done !== null && now - done < 120_000;
 	const hostStage = state?.updateState && stageLabel(state.updateState) && (state.updateState.state === "installing" || state.updateState.state === "failed") ? state.updateState : null;
@@ -352,8 +388,13 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 				<span className="text-muted-foreground/70">wolfd always waits for you</span>
 				{sub?.exists === false && sub.mode === "unknown" && <span className="text-muted-foreground/70">not set (host default)</span>}
 			</div>
-						{saveErr && <p data-testid="machine-save-error" className="mt-1 text-red-600 dark:text-red-400">{saveErr}</p>}
+			{saveErr && <p data-testid="machine-save-error" className="mt-1 text-red-600 dark:text-red-400">{saveErr}</p>}
 		</div>
 	);
-	return <MachineCard view={machineCard(card, sub?.channel ?? null, { singleMac, mode: sub?.mode ?? null, readFailed: subErr && !sub })} update={update} checkNote={checkNote} onCheck={() => void check()} channelDisabled={!canAct || !sub || saving} onChannel={(c) => void save({ channel: c })} {...rest} />;
+	const details = singleMac ? undefined : (
+		<div data-testid="machine-update-details-area">
+			<UpdateDetails state={state?.updateState ?? (sub ? ({ target: "pack", host: card.label, state: "idle", current: actions?.rollback.find((r) => r.service === "console")?.from ?? null, latest: units[0]?.to ?? null, progress: null, lastCheck: null, channel: sub.channel, auto: sub.mode === "auto" ? "on" : "off" } as UpdateState) : null)} feed={feedLabel("pack", sub?.channel ?? null)} onLogs={rest.onRefreshLog && canAct ? () => rest.onRefreshLog!(logComp) : undefined} log={rest.logs?.[logComp]} rollback={{ offered: rbs.map((r) => ({ service: r.service, to: r.to! })), onRollback: (svc) => void rollBack(svc), busy: rbBusy, note: rbNote }} />
+		</div>
+	);
+	return <MachineCard view={machineCard(card, sub?.channel ?? null, { singleMac, mode: sub?.mode ?? null, readFailed: subErr && !sub })} update={update} details={details} checkNote={checkNote} onCheck={() => void check()} channelDisabled={!canAct || !sub || saving} onChannel={(c) => void save({ channel: c })} {...rest} />;
 }

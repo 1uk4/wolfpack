@@ -114,11 +114,12 @@ export function homeDomainOf(w: LiveWolf | undefined, name: string): string | un
  * 0..1 opacity of a thread: 1 while active, bound, waiting on you or with a running subagent; an idle unbound thread fades linearly to 0
  * over the fade window, counted from the later of going idle and its last subagent finishing.
  */
-export function threadAlpha(s: LiveState, t: LiveThread, now: number, fadeSec: number): number {
+export function threadAlpha(s: LiveState, t: LiveThread, now: number, fadeSec: number, subs?: readonly LiveSubagent[]): number {
 	if (t.active || t.bound !== undefined || t.needsYou) return 1;
 	let from = t.idleAt;
-	for (const a of Object.values(s.subagents)) {
-		if (a.wolf !== t.wolf || a.parentThreadId !== t.id) continue;
+	// `subs` (this thread's subagents, when the caller has them indexed) saves a scan of every subagent per thread.
+	for (const a of subs ?? Object.values(s.subagents)) {
+		if (!subs && (a.wolf !== t.wolf || a.parentThreadId !== t.id)) continue;
 		if (a.finishedAt === undefined) return 1;
 		from = Math.max(from ?? -Infinity, a.finishedAt);
 	}

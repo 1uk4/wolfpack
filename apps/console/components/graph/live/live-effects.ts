@@ -29,10 +29,19 @@ export type EffectDrawer = (a: EffectArgs) => void;
 
 export const AMBER = "#f59e0b";
 
+const RGBA_CACHE = new Map<string, string>();
+/** `rgba()` string for a hex colour; alpha is quantised to 1/64 and the strings are memoised (drawn every frame for every wolf). */
 export function rgba(hex: string, a: number): string {
-	const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(hex);
-	if (!m) return `rgba(128,128,128,${a})`;
-	return `rgba(${parseInt(m[1]!, 16)},${parseInt(m[2]!, 16)},${parseInt(m[3]!, 16)},${Math.max(0, Math.min(1, a))})`;
+	const q = Math.round(Math.max(0, Math.min(1, a)) * 64);
+	const key = hex + q;
+	let out = RGBA_CACHE.get(key);
+	if (out === undefined) {
+		const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(hex);
+		out = m ? `rgba(${parseInt(m[1]!, 16)},${parseInt(m[2]!, 16)},${parseInt(m[3]!, 16)},${q / 64})` : `rgba(128,128,128,${q / 64})`;
+		if (RGBA_CACHE.size > 4000) RGBA_CACHE.clear();
+		RGBA_CACHE.set(key, out);
+	}
+	return out;
 }
 
 const clampI = (i: number) => Math.min(5, Math.max(1, Number.isFinite(i) ? i : 1));
@@ -75,10 +84,44 @@ const ring: EffectDrawer = ({ ctx, x, y, r, k, color, intensity, reduced, time =
 	ctx.stroke();
 };
 
+/** The glow as a pre-rendered sprite per colour (one radial gradient ever, then a drawImage per wolf per frame). */
+const GLOW_SPRITES = new Map<string, HTMLCanvasElement>();
+const SPRITE_PX = 64;
+function glowSprite(color: string, inner: number): HTMLCanvasElement | null {
+	if (typeof document === "undefined") return null;
+	const key = color + inner;
+	let c = GLOW_SPRITES.get(key);
+	if (!c) {
+		c = document.createElement("canvas");
+		c.width = c.height = SPRITE_PX;
+		const sctx = c.getContext("2d");
+		if (!sctx) return null;
+		const mid = SPRITE_PX / 2;
+		const g = sctx.createRadialGradient(mid, mid, mid * inner, mid, mid, mid);
+		g.addColorStop(0, rgba(color, 1));
+		g.addColorStop(1, rgba(color, 0));
+		sctx.fillStyle = g;
+		sctx.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
+		if (GLOW_SPRITES.size > 64) GLOW_SPRITES.clear();
+		GLOW_SPRITES.set(key, c);
+	}
+	return c;
+}
+
 const glow: EffectDrawer = ({ ctx, x, y, r, color, intensity, alpha = 1 }) => {
 	const outer = r * (2.2 + 0.4 * sizeMul(intensity));
+	const a = 0.28 * alphaMul(intensity) * alpha;
+	const inner = (r * 0.4) / outer;
+	const sprite = glowSprite(color, inner);
+	if (sprite) {
+		const prev = ctx.globalAlpha;
+		ctx.globalAlpha = prev * a;
+		ctx.drawImage(sprite, x - outer, y - outer, outer * 2, outer * 2);
+		ctx.globalAlpha = prev;
+		return;
+	}
 	const g = ctx.createRadialGradient(x, y, r * 0.4, x, y, outer);
-	g.addColorStop(0, rgba(color, 0.28 * alphaMul(intensity) * alpha));
+	g.addColorStop(0, rgba(color, a));
 	g.addColorStop(1, rgba(color, 0));
 	ctx.fillStyle = g;
 	ctx.beginPath();

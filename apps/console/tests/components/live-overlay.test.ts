@@ -31,16 +31,17 @@ describe("live overlay frame scheduling", () => {
 		o.dispatch({ type: "event", event: ev("teleport"), now: Date.now() }); // unknown verb: state object unchanged
 		o.dispatch({ type: "tick", now: Date.now() + 1000 }); // nothing expired
 		assert.equal(frames, 0);
-		assert.equal(o.needsFrames(0), false);
+		o.needsFrames(0);
+		assert.equal(o.frameNeed, "float"); // nothing but the idle float: no fast or slow need
+		assert.equal(o.minFrameMs, 40);
 	});
 
-	it("a needs-you ring pulses at about 8 fps without keeping the frame loop alive", () => {
+	it("a needs-you ring breathes on the idle float's 25 fps frame floor, never on a fast one", () => {
 		o.start();
 		o.dispatch({ type: "event", event: ev("needs-you"), now: Date.now() });
-		frames = 0;
-		assert.equal(o.needsFrames(0), false); // the loop is not held; the throttle timer asks for frames
-		for (let i = 0; i < 20; i++) mock.timers.tick(50); // one second of wall time
-		assert.ok(frames >= 7 && frames <= 9, `frames in 1 s: ${frames}`);
+		assert.equal(o.needsFrames(0), true);
+		assert.equal(o.frameNeed, "float");
+		assert.equal(o.minFrameMs, 40);
 	});
 
 	it("frames stop once a trail has faded away", () => {
@@ -50,7 +51,8 @@ describe("live overlay frame scheduling", () => {
 		frames = 0;
 		mock.timers.tick(5000);
 		assert.equal(frames, 0);
-		assert.equal(o.needsFrames(0), false);
+		o.needsFrames(0);
+		assert.equal(o.frameNeed, "float"); // the faded trail no longer asks for fast or slow frames
 	});
 });
 

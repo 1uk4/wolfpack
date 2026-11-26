@@ -522,26 +522,36 @@ function drawNameLines(
 	radius: number,
 	color: string,
 	privateView = false,
+	k = 1,
+	batched = false,
 ): void {
 	context.fillStyle = color;
 	context.textAlign = "center";
 	context.textBaseline = "top";
 	const firstTop = y + radius + world.labelGap;
 	// Private view: the same footprint as soft blurred dots, no readable text.
-	if (privateView) blurLabels(context, color, world.labelSize * 0.45);
+	// Batched (the node-label pass): the caller set the blur once for the whole batch, only the glow colour follows the label.
+	if (privateView) {
+		if (batched) context.shadowColor = color;
+		else blurLabels(context, color, world.labelSize * 0.45, k);
+	}
 	const shown = redactLines(lines, privateView);
 	for (let i = 0; i < shown.length; i++) {
 		context.fillText(shown[i]!, x, firstTop + i * world.labelSize * LABEL_LINE_HEIGHT);
 	}
-	if (privateView) context.shadowBlur = 0;
+	if (privateView && !batched) context.shadowBlur = 0;
 }
 
 /** Private view: a soft glow under the redacted label (shadowBlur works in every canvas, unlike ctx.filter on Safari). `blurWorld` is in
  *  world units; shadowBlur ignores the transform, so it is scaled by the current zoom. Callers reset it. */
-function blurLabels(context: CanvasRenderingContext2D, color: string, blurWorld: number): void {
+function blurLabels(context: CanvasRenderingContext2D, color: string, blurWorld: number, k: number): void {
 	context.shadowColor = color;
-	context.shadowBlur = blurWorld * (context.getTransform?.().a ?? 1);
+	context.shadowBlur = blurWorld * k * (devicePixelRatioOf());
 }
+
+/** The canvas' device-pixel factor on the base transform (the camera transform's scale is dpr * k). */
+let blurDpr = 1;
+const devicePixelRatioOf = (): number => blurDpr;
 
 /** One batch of nodes that share a look: drawn with a single fill (disc)
  *  or stroke (ring). */
@@ -650,6 +660,8 @@ export class GraphCanvasRenderer {
 	private overlayDirty = false;
 	/** The previous tick ran a base animation (hover fade, zoom glide, sim, pulses): the next draw is a full one so the settle frame lands. */
 	private lastBaseAnim = false;
+	/** The last tick animated only the overlay: the next ticks may wait out its frame floor. */
+	private overlayOnlyAnim = false;
 	/** Layers 1-7b rendered once per base change (offscreen, device pixels); overlay frames blit it instead of redrawing ~2k nodes. */
 	private baseLayer: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
 	private baseKey = "";
@@ -810,6 +822,7 @@ export class GraphCanvasRenderer {
 			// store (which clears the canvas), and during live window resizes
 			// rAF is starved by relayout — a deferred draw would leave the
 			// canvas blank for the whole drag (the resize-blanking bug).
+			this.guardOverlay((o) => o.onResize(), undefined);
 			this.draw(true);
 		});
 		this.resizeObserver.observe(canvas);
@@ -1372,6 +1385,18 @@ export class GraphCanvasRenderer {
 	}
 
 	private tick(): void {
+		// Only the overlay is animating and nothing else asked for a frame: wait out its frame floor without stepping or drawing
+		// (a 120 Hz screen must not run the overlay at 120 fps). lastTickAt stays put, so the next step's dt covers the wait.
+		if (this.overlayOnlyAnim && !this.dirty && !this.overlayDirty && !this.lastBaseAnim) {
+			const floor = this.guardOverlay((o) => o.minFrameMs, 0);
+			if (floor > 0 && performance.now() - this.lastDrawAt < floor) {
+				this.frameId = requestAnimationFrame(() => {
+					this.frameId = null;
+					this.tick();
+				});
+				return;
+			}
+		}
 		this.inTick = true;
 		try {
 			const now = performance.now();
@@ -1400,7 +1425,8 @@ export class GraphCanvasRenderer {
 			// Keep frames coming ONLY while an animation is in motion (hover
 			// fade, zoom glide, or live physics); an idle graph schedules no
 			// rAF at all.
-			this.animating = hoverAnim || zoomAnim || simAnim || pulseAnim || overlayAnim;
+			this.animating = baseAnim || overlayAnim;
+			this.overlayOnlyAnim = overlayAnim && !baseAnim;
 		} finally {
 			this.inTick = false;
 		}
@@ -2046,6 +2072,7 @@ export class GraphCanvasRenderer {
 		const h = this.canvas.clientHeight;
 		const dpr = window.devicePixelRatio || 1;
 		const ctx = this.ctx;
+		blurDpr = dpr;
 
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		ctx.clearRect(0, 0, w, h);
@@ -2140,6 +2167,7 @@ export class GraphCanvasRenderer {
 		if (nodeAlpha > 0.01) {
 			ctx.save();
 			ctx.font = this.worldLabelFont;
+			if (settings.privateView) blurLabels(ctx, data.colors.label, this.world.labelSize * 0.45, k); // once for the whole batch
 			for (const [id, lines] of this.labelLines) {
 				const n = this.nodeById.get(id);
 				if (!n) continue;
@@ -2147,7 +2175,7 @@ export class GraphCanvasRenderer {
 				const a = labelAlpha(ratio, settings.labelZoom * (n.labelGate ?? 1)) * (routeDone ? DEP_STYLE.routeDoneNodeAlpha : (n.dim ? DIM_LABEL_ALPHA : 1) * this.restDim(id));
 				if (a <= 0.01) continue;
 				ctx.globalAlpha = a;
-				drawNameLines(ctx, n.x, n.y, lines, this.world, this.radiusOf(n), routeDone ? ROUTE_DONE_COLOR : data.colors.label, settings.privateView);
+				drawNameLines(ctx, n.x, n.y, lines, this.world, this.radiusOf(n), routeDone ? ROUTE_DONE_COLOR : data.colors.label, settings.privateView, k, true);
 			}
 			ctx.restore();
 		}
@@ -2175,7 +2203,7 @@ export class GraphCanvasRenderer {
 				ctx.save();
 				ctx.globalAlpha = this.hoverFade;
 				ctx.font = this.worldLabelFont;
-				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, nodeR, data.colors.hoverText, settings.privateView);
+				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, nodeR, data.colors.hoverText, settings.privateView, k);
 				ctx.restore();
 			}
 		}
@@ -2244,7 +2272,7 @@ export class GraphCanvasRenderer {
 				ctx.fillStyle = rgbaFromHex(rm.color, 0.9);
 				const firstOffset = (-(rm.lines.length - 1) / 2) * lineH;
 				const shownLines = redactLines(rm.lines, settings.privateView);
-				if (settings.privateView) blurLabels(ctx, rgbaFromHex(rm.color, 0.9), (settings.clusterLabelSize * 0.45) / k);
+				if (settings.privateView) blurLabels(ctx, rgbaFromHex(rm.color, 0.9), (settings.clusterLabelSize * 0.45) / k, k);
 				for (let i = 0; i < shownLines.length; i++) {
 					ctx.fillText(shownLines[i]!, rm.cx, rm.cy + firstOffset + i * lineH);
 				}

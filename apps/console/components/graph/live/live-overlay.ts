@@ -13,8 +13,10 @@ import {
 	subagentAlpha,
 	threadAlpha,
 	trailAlpha,
-	visibleThreads,
 	type LiveAction,
+	type LiveSubagent,
+	type LiveThread,
+	type LiveWolf,
 	type LiveOptions,
 	type LiveState,
 	type LiveTarget,
@@ -23,6 +25,7 @@ import { ownerThreadKey, targetNodeId, threadSlugOf } from "@/src/core";
 import { DEFAULT_PHYSICS, stepWolves, wolvesMoving, type WolfBody } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba } from "./live-effects";
+import { floatOffset, nameHash } from "./live-float";
 import { redact } from "@/src/core";
 
 export interface Pt { x: number; y: number }
@@ -68,6 +71,20 @@ const YOU_R = 6;
 const PULSE_R = 8;
 const HL_R = 9;
 const HL_PAD = 4;
+/** Idle float amplitudes in reference px (through scaleFor(k).m): wolves about 3.5, subagent icons about 2. */
+const FLOAT_WOLF_PX = 3.5;
+const FLOAT_SUB_PX = 2;
+/** Offline wolves drift smaller and slower. */
+const FLOAT_OFFLINE_AMP = 0.4;
+const FLOAT_OFFLINE_SLOW = 1.6;
+/** Fully zoomed out the wolves are tiny: the float shrinks to a quiet shimmer. */
+const FLOAT_COMPACT_AMP = 0.3;
+/** Frame floors (ms) by kind of need. */
+const FAST_MS = 16;
+const FAST_MOBILE_MS = 30;
+const SLOW_MS = 100;
+const FLOAT_MS = 40;
+const FLOAT_MOBILE_MS = 60;
 
 export interface OverlayScale {
 	/** Wolf icon width on screen, px. */
@@ -113,43 +130,68 @@ export interface AttachedRef { wolf: string; threadId: string }
 /** What the activity feed asks the overlay to ring: a graph node id, an event target (resolved like a trail), or a wolf's glyph. */
 export interface OverlayHighlight { nodeId?: string; target?: LiveTarget; wolf?: string }
 
-const hash = (s: string) => {
-	let h = 7;
-	for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-	return Math.abs(h);
-};
-
 const TUG_STALE_MS = 3000;
-const RING_FRAME_MS = 125;
+/** What the overlay is animating right now: fast (pulses, wolf motion, tugs, you-node, highlight), float (the idle drift) or slow (fades). */
+export type FrameNeed = "none" | "slow" | "float" | "fast";
+
+/** Per wolf, recomputed only when its state object changes: home domain and the home angle from the name hash. */
+interface WolfMeta { w: LiveWolf; dom: string | undefined; ang: number }
 
 export class LiveOverlay {
 	private state: LiveState = emptyLiveState(Date.now());
 	private bodies = new Map<string, WolfBody & { offline?: boolean }>();
 	/** A target a wolf should drift to; dropped after TUG_STALE_MS if no frame consumed it (so it can never hold the frame loop). */
 	private pendingTugs = new Map<string, { target: LiveTarget; at: number }>();
-	/** Earliest time the next needs-you ring frame may be drawn (the ring pulses slowly, about 8 fps). */
-	private nextFrameAt = 0;
-	private ringTimer: ReturnType<typeof setTimeout> | null = null;
+	private need: FrameNeed = "none";
+	private wolfMeta = new Map<string, WolfMeta>();
+	private hashes = new Map<string, number>();
+	private bodyList: (WolfBody & { offline?: boolean })[] = [];
+	/** Per-frame indexes (rebuilt by items()): the wolf and thread items by key. */
+	private wolfItems = new Map<string, OverlayItem>();
+	private threadItems = new Map<string, OverlayItem>();
 	private trailFrom = new Map<string, Pt>();
 	private you: Pt | null = null;
 	private attached: AttachedRef | null = null;
 	private highlight: OverlayHighlight | null = null;
 	private settings: OverlaySettings = LIVE_DEFAULTS;
 	private timer: ReturnType<typeof setInterval> | null = null;
-	readonly mobile: boolean;
+	private mobileNow = false;
+	/** Phone-sized or touch-first; recomputed on resize. */
+	get mobile(): boolean {
+		return this.mobileNow;
+	}
 	/** Read live, so a change of the OS setting applies without a reload. */
 	get reduced(): boolean {
 		return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 	}
 
 	constructor(private readonly requestFrame: () => void) {
-		const mq = (q: string) => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(q).matches;
-		this.mobile = mq("(pointer: coarse)") || (typeof window !== "undefined" && window.innerWidth < 700);
+		this.onResize();
 	}
 
-	/** About 30 fps on phones. */
+	/** The window or the graph changed size: re-read the phone check (a rotated or resized window changes the frame budget). */
+	onResize(): void {
+		const mq = (q: string) => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(q).matches;
+		this.mobileNow = mq("(pointer: coarse)") || (typeof window !== "undefined" && window.innerWidth < 700);
+	}
+
+	/** What the last `needsFrames` found (none / slow / float / fast). */
+	get frameNeed(): FrameNeed {
+		return this.need;
+	}
+
+	/** The least time between overlay frames for the current need: ~60 fps (30 on phones) for motion, 25 (16) for the idle float, 10 for fades. */
 	get minFrameMs(): number {
-		return this.mobile ? 33 : 0;
+		switch (this.need) {
+			case "fast":
+				return this.mobileNow ? FAST_MOBILE_MS : FAST_MS;
+			case "float":
+				return this.mobileNow ? FLOAT_MOBILE_MS : FLOAT_MS;
+			case "slow":
+				return SLOW_MS;
+			default:
+				return 0;
+		}
 	}
 	get enabled(): boolean {
 		return this.settings.enabled;
@@ -172,6 +214,8 @@ export class LiveOverlay {
 		if (!s.enabled && was) {
 			this.state = emptyLiveState(Date.now());
 			this.bodies.clear();
+			this.bodyList.length = 0;
+			this.need = "none";
 		}
 		this.requestFrame();
 	}
@@ -229,38 +273,51 @@ export class LiveOverlay {
 		this.started = false;
 		if (this.timer) clearInterval(this.timer);
 		this.timer = null;
-		if (this.ringTimer) clearTimeout(this.ringTimer);
-		this.ringTimer = null;
 	}
 
 	/** Anything left to animate (the renderer keeps its rAF loop alive only while this is true). */
 	needsFrames(now: number): boolean {
+		this.need = "none";
 		if (!this.settings.enabled) return false;
-		if (this.reduced) return false;
+		if (this.reduced) return false; // reduced motion: a still picture (rings, glows and positions are static)
+		this.need = this.classifyNeed(now);
+		return this.need !== "none";
+	}
+
+	/** fast > float > slow. No spreads or Object.values here: this runs on every rAF. The idle float holds the loop (at its own, lower, rate) while any wolf is shown; it also carries the needs-you ring's breathing. */
+	private classifyNeed(now: number): FrameNeed {
 		const s = this.state;
-		if (this.highlight) return true;
+		if (this.highlight || s.pulses.length > 0 || this.youMoving) return "fast";
 		const wall = Date.now();
-		if (s.pulses.length > 0) return true;
-		// Trails keep frames coming only while they are still visibly fading.
-		if (s.trails.some((t) => this.trailFrom.has(t.id) && trailAlpha(t, wall, this.settings.trailSec) > 0)) return true;
-		if ([...this.pendingTugs.values()].some((p) => wall - p.at < TUG_STALE_MS)) return true;
-		if (Object.values(s.subagents).some((a) => a.finishedAt !== undefined && subagentAlpha(a, wall, this.settings.subagentFadeSec) > 0.02)) return true;
-		if (Object.values(s.threads).some((t) => {
-			const al = threadAlpha(s, t, wall, this.settings.subagentFadeSec);
-			return !t.active && al > 0.02 && al < 1;
-		})) return true; // an idle thread is fading out
-		if (wolvesMoving([...this.bodies.values()], now) || this.youMoving) return true;
-		// A needs-you ring alone does not hold the rAF loop: it asks for a frame itself at about 8 fps.
-		if (Object.values(s.wolves).some((w) => w.needsYou) && !this.ringTimer) {
-			this.ringTimer = setTimeout(() => {
-				this.ringTimer = null;
-				this.nextFrameAt = Date.now() + RING_FRAME_MS;
-				this.requestFrame();
-			}, Math.max(0, this.nextFrameAt - Date.now()));
+		for (const p of this.pendingTugs.values()) if (wall - p.at < TUG_STALE_MS) return "fast";
+		if (wolvesMoving(this.bodyList, now)) return "fast";
+		for (const w in s.wolves) return "float"; // any wolf at all
+		const fade = this.settings.subagentFadeSec;
+		// Trails and fades keep frames coming only while they are still visibly fading.
+		for (const t of s.trails) if (this.trailFrom.has(t.id) && trailAlpha(t, wall, this.settings.trailSec) > 0) return "slow";
+		for (const id in s.subagents) {
+			const a = s.subagents[id]!;
+			if (a.finishedAt !== undefined && subagentAlpha(a, wall, fade) > 0.02) return "slow";
 		}
-		return false;
+		for (const id in s.threads) {
+			const t = s.threads[id]!;
+			if (t.active) continue;
+			const al = threadAlpha(s, t, wall, fade);
+			if (al > 0.02 && al < 1) return "slow"; // an idle thread is fading out
+		}
+		return "none";
 	}
 	private youMoving = false;
+
+	private hashOf(name: string): number {
+		let h = this.hashes.get(name);
+		if (h === undefined) {
+			h = nameHash(name);
+			if (this.hashes.size > 2000) this.hashes.clear();
+			this.hashes.set(name, h);
+		}
+		return h;
+	}
 
 	get hasAnything(): boolean {
 		return this.settings.enabled && Object.keys(this.state.wolves).length > 0;
@@ -272,12 +329,19 @@ export class LiveOverlay {
 		if (!this.settings.enabled) return;
 		const s = this.state;
 		const { m } = scaleFor(k);
-		const bodies: (WolfBody & { offline?: boolean })[] = [];
-		for (const w of Object.values(s.wolves)) {
-			const dom = homeDomainOf(w, w.name);
+		const bodies = this.bodyList;
+		bodies.length = 0;
+		for (const name in s.wolves) {
+			const w = s.wolves[name]!;
+			// Home domain and angle only change when the wolf's state object does.
+			let meta = this.wolfMeta.get(w.name);
+			if (!meta || meta.w !== w) {
+				meta = { w, dom: homeDomainOf(w, w.name), ang: (this.hashOf(w.name) % 360) * (Math.PI / 180) };
+				this.wolfMeta.set(w.name, meta);
+			}
+			const dom = meta.dom;
 			const homePt = (dom ? host.nodePos(`dom:${dom}`) : null) ?? host.center();
-			const jitter = hash(w.name);
-			const ang = (jitter % 360) * (Math.PI / 180);
+			const ang = meta.ang;
 			const home = { x: homePt.x + Math.cos(ang) * HOME_ORBIT * m, y: homePt.y + Math.sin(ang) * HOME_ORBIT * m };
 			let b = this.bodies.get(w.name);
 			if (!b) {
@@ -297,7 +361,7 @@ export class LiveOverlay {
 			this.pendingTugs.delete(w.name);
 			bodies.push(b);
 		}
-		for (const name of [...this.bodies.keys()]) if (!s.wolves[name]) this.bodies.delete(name);
+		if (this.bodies.size > bodies.length) for (const name of [...this.bodies.keys()]) if (!s.wolves[name]) (this.bodies.delete(name), this.wolfMeta.delete(name));
 		if (this.reduced) {
 			for (const b of bodies) {
 				const t = b.tug ?? b.home;
@@ -341,14 +405,13 @@ export class LiveOverlay {
 	/** Points the you-node is linked to: the viewed thread / item first, then the floating chat's attached thread. */
 	private youLinks(host: OverlayHost): Pt[] {
 		const out: Pt[] = [];
-		const items = this.cachedItems;
 		const s = this.state;
 		const v = s.owner?.viewing;
 		if (v) {
 			if (v.kind === "thread") {
 				const key = ownerThreadKey(s);
 				const t = key ? s.threads[key] : null;
-				const it = t ? items.find((i) => i.kind === "thread" && i.key === `${t.wolf}/${t.id}`) : null;
+				const it = t ? this.threadItems.get(`${t.wolf}/${t.id}`) : null;
 				if (it) out.push({ x: it.x, y: it.y });
 			} else {
 				const id = targetNodeId(v, (n) => host.hasNode(n));
@@ -358,8 +421,15 @@ export class LiveOverlay {
 		}
 		if (this.attached) {
 			const a = this.attached;
-			const it = items.find((i) => i.kind === "thread" && i.wolf === a.wolf && threadSlugOf(a.wolf, i.threadId ?? "") === threadSlugOf(a.wolf, a.threadId));
-			const wb = items.find((i) => i.kind === "wolf" && i.wolf === a.wolf);
+			let it: OverlayItem | undefined;
+			const slug = threadSlugOf(a.wolf, a.threadId);
+			for (const i of this.threadItems.values()) {
+				if (i.wolf === a.wolf && threadSlugOf(a.wolf, i.threadId ?? "") === slug) {
+					it = i;
+					break;
+				}
+			}
+			const wb = this.wolfItems.get(a.wolf);
 			const p = it ?? wb;
 			if (p) out.push({ x: p.x, y: p.y });
 		}
@@ -374,36 +444,76 @@ export class LiveOverlay {
 		const out: OverlayItem[] = [];
 		const sc = scaleFor(k);
 		const m = sc.m;
-		const threads = visibleThreads(s, this.settings.subagentFadeSec, now);
-		for (const w of Object.values(s.wolves)) {
+		const fade = this.settings.subagentFadeSec;
+		const reduced = this.reduced;
+		// Indexes built once per call: subagents by parent thread, visible threads by wolf.
+		const subsByThread = new Map<string, LiveSubagent[]>();
+		for (const id in s.subagents) {
+			const a = s.subagents[id]!;
+			const key = `${a.wolf}/${a.parentThreadId}`;
+			const list = subsByThread.get(key);
+			if (list) list.push(a);
+			else subsByThread.set(key, [a]);
+		}
+		const threadsByWolf = new Map<string, { t: LiveThread; alpha: number }[]>();
+		for (const id in s.threads) {
+			const t = s.threads[id]!;
+			const alpha = threadAlpha(s, t, now, fade, subsByThread.get(`${t.wolf}/${t.id}`) ?? []);
+			if (alpha <= 0) continue;
+			const list = threadsByWolf.get(t.wolf);
+			if (list) list.push({ t, alpha });
+			else threadsByWolf.set(t.wolf, [{ t, alpha }]);
+		}
+		this.wolfItems.clear();
+		this.threadItems.clear();
+		const placed = new Set<string>();
+		for (const name in s.wolves) {
+			const w = s.wolves[name]!;
 			const b = this.bodies.get(w.name);
 			if (!b) continue;
-			const dom = homeDomainOf(w, w.name);
+			const dom = this.wolfMeta.get(w.name)?.dom ?? homeDomainOf(w, w.name);
 			const color = (dom && host.nodeColor(`dom:${dom}`)) || host.colors.node;
-			out.push({ kind: "wolf", key: w.name, wolf: w.name, x: b.x, y: b.y, r: sc.wolfPx / 2 / k, alpha: w.online ? 1 : 0.35, needsYou: w.needsYou, online: w.online, color, label: w.name });
-			const mine = sc.compact ? [] : threads.filter((t) => t.wolf === w.name).sort((a, c) => (a.id < c.id ? -1 : 1));
-			mine.forEach((t, i) => {
+			// The idle float: a pure function of the clock, so every frame rate shows the same path.
+			const fo = floatOffset(this.hashOf(w.name), now, FLOAT_WOLF_PX * m * (sc.compact ? FLOAT_COMPACT_AMP : 1) * (w.online ? 1 : FLOAT_OFFLINE_AMP), { reduced, slow: w.online ? 1 : FLOAT_OFFLINE_SLOW });
+			const wx = b.x + fo.dx;
+			const wy = b.y + fo.dy;
+			const wolfItem: OverlayItem = { kind: "wolf", key: w.name, wolf: w.name, x: wx, y: wy, r: sc.wolfPx / 2 / k, alpha: w.online ? 1 : 0.35, needsYou: w.needsYou, online: w.online, color, label: w.name };
+			out.push(wolfItem);
+			this.wolfItems.set(w.name, wolfItem);
+			const mine = sc.compact ? [] : (threadsByWolf.get(w.name) ?? []).sort((a, c) => (a.t.id < c.t.id ? -1 : 1));
+			mine.forEach(({ t, alpha }, i) => {
 				const ang = -Math.PI / 2 + (i - (mine.length - 1) / 2) * 0.75 + 0.35;
-				const tx = b.x + Math.cos(ang) * SAT_ORBIT * m;
-				const ty = b.y + Math.sin(ang) * SAT_ORBIT * m;
-				out.push({ kind: "thread", key: `${t.wolf}/${t.id}`, wolf: t.wolf, threadId: t.id, x: tx, y: ty, r: THREAD_DOT_R * m, alpha: (t.active ? 0.95 : 0.55) * threadAlpha(s, t, now, this.settings.subagentFadeSec), needsYou: t.needsYou, online: w.online, color, label: t.title ?? threadSlugOf(t.wolf, t.id) });
-				const subs = Object.values(s.subagents).filter((a) => a.wolf === t.wolf && a.parentThreadId === t.id);
+				const tx = wx + Math.cos(ang) * SAT_ORBIT * m;
+				const ty = wy + Math.sin(ang) * SAT_ORBIT * m;
+				const tkey = `${t.wolf}/${t.id}`;
+				const threadItem: OverlayItem = { kind: "thread", key: tkey, wolf: t.wolf, threadId: t.id, x: tx, y: ty, r: THREAD_DOT_R * m, alpha: (t.active ? 0.95 : 0.55) * alpha, needsYou: t.needsYou, online: w.online, color, label: t.title ?? threadSlugOf(t.wolf, t.id) };
+				out.push(threadItem);
+				this.threadItems.set(tkey, threadItem);
+				const subs = subsByThread.get(tkey) ?? [];
 				subs.forEach((a, j) => {
-					const al = subagentAlpha(a, now, this.settings.subagentFadeSec);
+					const al = subagentAlpha(a, now, fade);
 					if (al <= 0.02) return;
-					const sa = ang + (j - (subs.length - 1) / 2) * 0.9;
-					out.push({ kind: "subagent", key: a.key, wolf: a.wolf, threadId: t.id, x: tx + Math.cos(sa) * SUB_ORBIT * m, y: ty + Math.sin(sa) * SUB_ORBIT * m, r: (sc.wolfPx * SUBAGENT_RATIO) / 2 / k, alpha: al, needsYou: false, online: w.online, color, label: a.title ?? a.name });
+					const h = this.hashOf(a.key);
+					// Subagents drift a little and wobble slowly around their thread.
+					const sf = floatOffset(h, now, FLOAT_SUB_PX * m, { reduced });
+					const wob = reduced ? 0 : 0.25 * Math.sin(now / 1400 + (h % 628) / 100);
+					const sa = ang + (j - (subs.length - 1) / 2) * 0.9 + wob;
+					out.push({ kind: "subagent", key: a.key, wolf: a.wolf, threadId: t.id, x: tx + Math.cos(sa) * SUB_ORBIT * m + sf.dx, y: ty + Math.sin(sa) * SUB_ORBIT * m + sf.dy, r: (sc.wolfPx * SUBAGENT_RATIO) / 2 / k, alpha: al, needsYou: false, online: w.online, color, label: a.title ?? a.name });
+					placed.add(a.key);
 				});
 			});
 		}
 		// Subagents whose parent thread is hidden or unknown hang off their wolf.
-		for (const a of Object.values(s.subagents)) {
-			if (out.some((i) => i.key === a.key)) continue;
-			const b = this.bodies.get(a.wolf);
-			const al = subagentAlpha(a, now, this.settings.subagentFadeSec);
-			if (!b || al <= 0.02 || sc.compact) continue;
-			const ang = (hash(a.key) % 360) * (Math.PI / 180);
-			out.push({ kind: "subagent", key: a.key, wolf: a.wolf, threadId: a.parentThreadId, x: b.x + Math.cos(ang) * SUB_FREE_ORBIT * m, y: b.y + Math.sin(ang) * SUB_FREE_ORBIT * m, r: (sc.wolfPx * SUBAGENT_RATIO) / 2 / k, alpha: al, needsYou: false, online: true, color: out.find((i) => i.kind === "wolf" && i.wolf === a.wolf)?.color ?? host.colors.node, label: a.title ?? a.name });
+		for (const id in s.subagents) {
+			const a = s.subagents[id]!;
+			if (placed.has(a.key)) continue;
+			const wi = this.wolfItems.get(a.wolf);
+			const al = subagentAlpha(a, now, fade);
+			if (!wi || al <= 0.02 || sc.compact) continue;
+			const h = this.hashOf(a.key);
+			const sf = floatOffset(h, now, FLOAT_SUB_PX * m, { reduced });
+			const ang = (h % 360) * (Math.PI / 180) + (reduced ? 0 : 0.25 * Math.sin(now / 1400 + (h % 628) / 100));
+			out.push({ kind: "subagent", key: a.key, wolf: a.wolf, threadId: a.parentThreadId, x: wi.x + Math.cos(ang) * SUB_FREE_ORBIT * m + sf.dx, y: wi.y + Math.sin(ang) * SUB_FREE_ORBIT * m + sf.dy, r: (sc.wolfPx * SUBAGENT_RATIO) / 2 / k, alpha: al, needsYou: false, online: true, color: wi.color, label: a.title ?? a.name });
 		}
 		this.cachedItems = out;
 		if (this.you) out.push({ kind: "you", key: "you", wolf: "", x: this.you.x, y: this.you.y, r: YOU_R * m, alpha: 1, needsYou: false, online: true, color: host.colors.hoverText, label: "You" });
@@ -441,7 +551,7 @@ export class LiveOverlay {
 			const from = this.trailFrom.get(t.id);
 			if (!to || !from) continue;
 			const age = 1 - trailAlpha(t, wall, this.settings.trailSec);
-			const w = items.find((i) => i.kind === "wolf" && i.wolf === t.wolf);
+			const w = this.wolfItems.get(t.wolf);
 			EFFECTS.trail!({ ctx, x: from.x, y: from.y, toX: to.x, toY: to.y, r: 0, k, t: reduced ? Math.min(age, 0.6) : age, color: w?.color ?? host.colors.node, intensity: I, reduced });
 		}
 		// Pulses on the touched node.
@@ -449,14 +559,14 @@ export class LiveOverlay {
 			const id = targetNodeId(p.target, (n) => host.hasNode(n));
 			const at = id ? host.nodePos(id) : null;
 			if (!at) continue;
-			const w = items.find((i) => i.kind === "wolf" && i.wolf === p.wolf);
+			const w = this.wolfItems.get(p.wolf);
 			EFFECTS.pulse!({ ctx, x: at.x, y: at.y, r: PULSE_R * m, k, t: Math.min(1, (wall - p.at) / DEFAULT_LIVE_OPTIONS.pulseMs), color: w?.color ?? host.colors.node, intensity: I, reduced });
 		}
 		// Links: wolf -> its thread dots, thread -> bound work item (faint), subagent -> parent.
 		ctx.lineWidth = 0.8 / k;
 		for (const it of items) {
 			if (it.kind === "thread") {
-				const wolf = items.find((i) => i.kind === "wolf" && i.wolf === it.wolf);
+				const wolf = this.wolfItems.get(it.wolf);
 				if (wolf) this.line(ctx, wolf, it, rgba(it.color, 0.25 * it.alpha));
 				const t = s.threads[it.key];
 				if (t?.bound) {
@@ -469,12 +579,13 @@ export class LiveOverlay {
 					}
 				}
 			} else if (it.kind === "subagent") {
-				const parent = items.find((i) => i.kind === "thread" && i.wolf === it.wolf && i.threadId === it.threadId) ?? items.find((i) => i.kind === "wolf" && i.wolf === it.wolf);
+				const parent = this.threadItems.get(`${it.wolf}/${it.threadId}`) ?? this.wolfItems.get(it.wolf);
 				if (parent) this.line(ctx, parent, it, rgba(it.color, 0.2 * it.alpha));
 			}
 		}
 		// The you-node's dashed links.
-		const you = items.find((i) => i.kind === "you");
+		const last = items[items.length - 1];
+		const you = last?.kind === "you" ? last : undefined;
 		if (you) {
 			const links = this.youLinks(host);
 			ctx.setLineDash([3 / k, 3 / k]);
@@ -531,7 +642,7 @@ export class LiveOverlay {
 			let r = HL_R * m;
 			let color = host.colors.hoverText;
 			if (hl.wolf) {
-				const it = items.find((i) => i.kind === "wolf" && i.wolf === hl.wolf);
+				const it = this.wolfItems.get(hl.wolf);
 				if (it) [at, r, color] = [it, it.r + HL_PAD * m, it.color];
 			}
 			if (!at) {

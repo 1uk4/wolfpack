@@ -24,6 +24,14 @@ export function buildSrcdoc(html: string): string {
 	return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">${html.replace(META_REFRESH, "")}`;
 }
 
+/**
+ * The iframe's sandbox attribute. A frame with no `<script` gets no permissions at all (scripts off), which removes the
+ * script-driven navigation a prompt-injected frame could use to leak what it read; one with scripts keeps `allow-scripts`.
+ */
+export function frameSandbox(html: string): string {
+	return /<script/i.test(html) ? "allow-scripts" : "";
+}
+
 type State = { phase: "loading" } | { phase: "nowolf" } | { phase: "navigated" } | { phase: "ready"; html: string } | { phase: "error"; status: number | null; outdated?: boolean };
 
 export const frameUrl = (wolf: string, path: string) => `/api/wolves/${encodeURIComponent(wolf)}/frame-file?path=${encodeURIComponent(path)}`;
@@ -100,7 +108,7 @@ export function FrameViewRenderer({ descriptor, wolf = "", onTitle }: ViewRender
 			key={nonce}
 			title={descriptor.title ?? path}
 			data-testid="frame-iframe"
-			sandbox="allow-scripts"
+			sandbox={frameSandbox(state.html)}
 			referrerPolicy="no-referrer"
 			srcDoc={buildSrcdoc(state.html)}
 			onLoad={() => {

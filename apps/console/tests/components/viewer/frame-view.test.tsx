@@ -17,7 +17,7 @@ Object.assign(globalThis, {
 	IS_REACT_ACT_ENVIRONMENT: true,
 });
 
-const { FrameViewRenderer, FRAME_CSP } = await import("../../../components/viewer/renderers/frame-view.tsx");
+const { FrameViewRenderer, FRAME_CSP, frameSandbox } = await import("../../../components/viewer/renderers/frame-view.tsx");
 const { ViewerActionsContext } = await import("../../../components/viewer/viewer-actions.ts");
 const { parseFrameDescriptor } = await import("../../../components/viewer/view-descriptor.ts");
 
@@ -65,6 +65,14 @@ const iframe = () => document.querySelector("iframe") as HTMLElement | null;
 const attr = (el: HTMLElement, name: string) => Array.from((el as unknown as { attributes: ArrayLike<{ name: string; value: string }> }).attributes).find((a) => a.name.toLowerCase() === name)?.value ?? null;
 
 describe("frame renderer", () => {
+	it("runs script-free HTML with no sandbox permissions and keeps allow-scripts for HTML with a script", async () => {
+		assert.equal(frameSandbox("<svg><text>a</text></svg>"), "");
+		assert.equal(frameSandbox("<p>x</p><SCRIPT>1</SCRIPT>"), "allow-scripts");
+		reply.body = "<p>static</p>";
+		await mount();
+		assert.equal(iframe()!.getAttribute("sandbox"), "");
+	});
+
 	it("loads the file in an iframe sandboxed to scripts only, with the CSP meta before the author's head and meta", async () => {
 		reply.body = '<html><head><meta charset="utf-8"><script>1</script></head><body>x</body></html>';
 		await mount();

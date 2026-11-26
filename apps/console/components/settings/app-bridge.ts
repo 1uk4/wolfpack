@@ -1,5 +1,6 @@
 "use client";
 import { createContext, useContext, useEffect, useState } from "react";
+import type { AppUpdaterEvent } from "@wolfpack/protocol/update-state";
 import { readSingleMac } from "@/components/shell/single-mac";
 
 /**
@@ -42,8 +43,10 @@ export interface AppBridge {
 	resetAppUi?(): Promise<Result>;
 	/** Pack > Machines: ask the app's updater now (main shows its own up-to-date / couldn't-check dialog). Older apps lack it. */
 	checkForUpdates?(): Promise<Result>;
-	/** Pushes {status:"downloaded", version} once an update is staged; returns the unsubscribe. */
-	onUpdateStatus?(cb: (s: { status: string; version?: string }) => void): () => void;
+	/** Pushes every updater step (raw AppUpdaterEvent JSON; the downloaded step also has status:"downloaded"); returns the unsubscribe. */
+	onUpdateStatus?(cb: (s: AppUpdaterEvent & { status?: string }) => void): () => void;
+	/** The last updater step, or null: seeds a window opened mid-download. */
+	getUpdateState?(): Promise<(AppUpdaterEvent & { status?: string }) | null>;
 	/** Quit and install the staged update. */
 	installUpdate?(): void;
 }

@@ -79,7 +79,7 @@ describe("desktop window chrome", () => {
 		const bridge = exposed.get("wolfpack") as Record<string, unknown>;
 		assert.equal(bridge.platform, "win32");
 		assert.deepEqual(Object.keys(bridge).sort(), [
-			"checkForUpdates", "expandWindow", "getZoom", "installUpdate", "notify", "onNavigate", "onUpdateStatus", "onZoom", "platform", "singleMac",
+			"checkForUpdates", "expandWindow", "getUpdateState", "getZoom", "installUpdate", "notify", "onNavigate", "onUpdateStatus", "onZoom", "platform", "singleMac",
 		]);
 	});
 });

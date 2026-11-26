@@ -64,7 +64,7 @@ export function AppUpdateBlock({ version }: { version: string | null }) {
 	const [ready, setReady] = useState<string | null>(null);
 	const [checking, setChecking] = useState(false);
 	const [note, setNote] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
-	useEffect(() => bridge?.onUpdateStatus?.((s) => { if (s.status === "downloaded" && s.version) setReady(s.version); }), [bridge]);
+	useEffect(() => bridge?.onUpdateStatus?.((s) => { if (s.status === "downloaded" && "version" in s && s.version) setReady(s.version); }), [bridge]);
 	const restart = appRestartLabel(ready);
 	return (
 		<div data-testid="machine-app-update" className="mt-2 rounded-md border px-2 py-1.5 text-muted-foreground">

@@ -104,7 +104,28 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 		dispatch({ type: collapse ? "collapse" : "expand" });
 	};
 
+	// Touch has no leave: a highlight pinned by a tap clears after about 3 s or on the next press, so it can never keep the graph animating.
+	const lastPointer = useRef<string>("mouse");
+	const pinnedByTouch = useRef(false);
+	useEffect(() => {
+		if (active === null || !pinnedByTouch.current) return;
+		const clear = () => {
+			pinnedByTouch.current = false;
+			setActive(null);
+			highlight(null);
+		};
+		const timer = setTimeout(clear, 3000);
+		// Deferred one tick so the press that pinned it does not clear it.
+		const arm = setTimeout(() => window.addEventListener("pointerdown", clear, { once: true, capture: true }), 0);
+		return () => {
+			clearTimeout(timer);
+			clearTimeout(arm);
+			window.removeEventListener("pointerdown", clear, true);
+		};
+	}, [active, highlight]);
+
 	const enter = (l: FeedLine) => {
+		pinnedByTouch.current = lastPointer.current === "touch";
 		setActive(l.key);
 		highlight({ nodeId: l.nodeId, target: l.target, wolf: l.target || l.nodeId ? undefined : l.wolf === "you" ? undefined : l.wolf });
 	};
@@ -162,6 +183,9 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 								key={l.key}
 								role={clickable ? "button" : undefined}
 								tabIndex={clickable ? 0 : undefined}
+								onPointerDown={(e) => {
+									lastPointer.current = e.pointerType;
+								}}
 								onMouseEnter={() => enter(l)}
 								onClick={() => {
 									enter(l);

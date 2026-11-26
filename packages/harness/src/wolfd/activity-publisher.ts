@@ -136,10 +136,12 @@ export class ActivityPublisher {
       if (ok) {
         this.fails = 0;
         this.loggedFail = false;
-      } else if (status === 404) {
+      } else if (status === 404 || status === 401 || status === 403) {
+        // 404: an older hub without the endpoint. 401/403: this token may not publish. Either way retrying every few seconds is noise.
+        const why = status === 404 ? "hub does not support /v1/activity" : `hub refused the activity token (${status})`;
         this.queue = [];
         this.blockedUntil = Date.now() + this.o.notSupportedBackoffMs;
-        if (!this.loggedUnsupported) { this.loggedUnsupported = true; this.o.log?.("activity publish: hub does not support /v1/activity; pausing 10 min"); }
+        if (!this.loggedUnsupported) { this.loggedUnsupported = true; this.o.log?.(`activity publish: ${why}; pausing 10 min`); }
       } else {
         // the batch is lost (activity is ephemeral); back off, and open the breaker after repeated failures
         this.fails++;
@@ -157,7 +159,7 @@ export class ActivityPublisher {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     this.blockedUntil = 0;
-    try { await this.flush(1000); } catch { /* ignore */ }
+    try { await this.flush(500); } catch { /* ignore */ }
     this.stopped = true;
   }
 }

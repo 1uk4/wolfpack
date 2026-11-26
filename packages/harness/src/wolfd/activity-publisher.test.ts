@@ -88,6 +88,29 @@ describe("ActivityPublisher", () => {
     expect(f.mock.calls.length).toBe(2);
   });
 
+  it("treats 401 like 404: one log line, then ten minutes of quiet", async () => {
+    const f = mk(401);
+    const log = vi.fn();
+    const p = make(f as unknown as typeof fetch, { log });
+    p.emit(draft);
+    await vi.advanceTimersByTimeAsync(1000);
+    for (let i = 0; i < 20; i++) { p.emit(draft); await vi.advanceTimersByTimeAsync(20_000); }
+    expect(f).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(f.mock.calls.length).toBe(2);
+  });
+
+  it("stop() gives the final flush 500 ms, not longer", async () => {
+    // AbortSignal.timeout runs on the real clock, so observe the budget it is given.
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const p = make(mk() as unknown as typeof fetch);
+    p.emit(draft);
+    await p.stop();
+    expect(timeout).toHaveBeenCalledWith(500);
+    timeout.mockRestore();
+  });
+
   it("is a no-op without a hub target", async () => {
     const f = vi.fn();
     const p = new ActivityPublisher({ target: undefined, wolf: "w", fetchImpl: f as unknown as typeof fetch });

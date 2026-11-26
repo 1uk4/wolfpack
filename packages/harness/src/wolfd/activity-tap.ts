@@ -20,6 +20,8 @@ export interface TapThread {
   boundWorkItem?: string;
   parentThreadId?: string;
   state?: string;
+  /** Set when the thread was removed (wolfd emits thread-updated with closed:true on removeThread). */
+  closed?: boolean;
 }
 
 type Ev = { type: string; [k: string]: unknown };
@@ -61,7 +63,12 @@ export class ActivityTap {
           if (ev.status === "busy") {
             if (this.beats.has(id)) return;
             this.active(id);
-            const h = setInterval(() => { try { this.active(id); } catch { /* ignore */ } }, this.heartbeatMs);
+            const h = setInterval(() => {
+              try {
+                if (!this.lookup(id)) return this.forget(id); // the thread is gone: no more heartbeats
+                this.active(id);
+              } catch { /* ignore */ }
+            }, this.heartbeatMs);
             h.unref?.();
             this.beats.set(id, h);
           } else {
@@ -89,8 +96,19 @@ export class ActivityTap {
     } catch { /* observation only */ }
   }
 
+  /** Drop everything remembered about a thread (removed or finished) and stop its heartbeat. */
+  private forget(id: string): void {
+    const h = this.beats.get(id);
+    if (h) clearInterval(h);
+    this.beats.delete(id);
+    this.bound.delete(id);
+    this.seenChild.delete(id);
+    this.finishedChild.delete(id);
+  }
+
   private threadUpdated(t: TapThread | undefined): void {
     if (!t?.id) return;
+    if (t.closed) return this.forget(t.id);
     // bound / unbound
     const prev = this.bound.has(t.id) ? this.bound.get(t.id) : undefined;
     const seen = this.bound.has(t.id);

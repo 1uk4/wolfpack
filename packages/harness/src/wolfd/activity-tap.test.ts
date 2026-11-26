@@ -27,6 +27,31 @@ describe("ActivityTap", () => {
     expect(emitted.map((e) => e.verb)).toEqual(["thread-active", "thread-active", "thread-active", "thread-idle"]);
   });
 
+  it("a removed (closed) thread stops its heartbeat and forgets its bound item", () => {
+    const { tap, emitted } = setup();
+    tap.onWolfEvent({ type: "thread-status", threadId: "t1", status: "busy" });
+    tap.onWolfEvent({ type: "thread-updated", thread: { id: "t1", kind: "feature", title: "x", boundWorkItem: "work-a-1" } });
+    tap.onWolfEvent({ type: "thread-updated", thread: { id: "t1", kind: "feature", title: "x", boundWorkItem: "work-a-1", closed: true } });
+    emitted.length = 0;
+    vi.advanceTimersByTime(120_000);
+    expect(emitted).toEqual([]);
+    // forgotten: the same id coming back with the same item is a fresh bind
+    tap.onWolfEvent({ type: "thread-updated", thread: { id: "t1", kind: "feature", title: "x", boundWorkItem: "work-a-1" } });
+    expect(emitted.map((e) => e.verb)).toEqual(["bound"]);
+  });
+
+  it("a busy thread that disappears from the registry stops heartbeating", () => {
+    const live: Record<string, TapThread> = { g1: { id: "g1", kind: "feature", title: "G" } };
+    const emitted: { verb: string }[] = [];
+    const tap = new ActivityTap({ emit: (d) => void emitted.push(d as never) }, (id) => live[id], 30_000);
+    tap.onWolfEvent({ type: "thread-status", threadId: "g1", status: "busy" });
+    delete live.g1;
+    vi.advanceTimersByTime(30_000);
+    emitted.length = 0;
+    vi.advanceTimersByTime(120_000);
+    expect(emitted).toEqual([]);
+  });
+
   it("an idle status for a thread that never went busy sends nothing", () => {
     const { tap, emitted } = setup();
     tap.onWolfEvent({ type: "thread-status", threadId: "t1", status: "idle" });

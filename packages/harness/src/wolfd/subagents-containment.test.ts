@@ -363,7 +363,7 @@ describe("review follow-ups", () => {
     // (at the fence seam: a 2 MB tool call in a scripted child's context ends its turn before the later steps run)
     const frames = mkdtempSync(join(tmpdir(), "viz-rules-"));
     const other = mkdtempSync(join(tmpdir(), "viz-other-"));
-    fenceRoot(frames, [], frameWriteProblem);
+    fenceRoot(frames, [], { rule: frameWriteProblem });
     fenceRoot(other);
     const ran: string[] = [];
     const tool = (name: string) => fenceWriteTool({ name, execute: async (a: { path: string }) => void ran.push(`${name}:${a.path}`) });

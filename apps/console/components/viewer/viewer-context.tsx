@@ -44,6 +44,25 @@ export function openKbLink(e: { button: number; metaKey: boolean; ctrlKey: boole
 	open({ kind, id });
 }
 
+/** A graduation "More details" link (`/work/<id>?view=graduation&wolf=<wolf>`) as a view: kind graduation, id `<itemId>@<wolf>`. Anything else is null. */
+export function graduationFromHref(href: string | null | undefined): ViewDescriptor | null {
+	const m = /^\/work\/([^/?#]+)\?view=graduation&wolf=([^&#]+)$/.exec(href ?? "");
+	if (!m) return null;
+	try {
+		return { kind: "graduation", id: `${decodeURIComponent(m[1]!)}@${decodeURIComponent(m[2]!)}` };
+	} catch {
+		return null;
+	}
+}
+
+/** onClick for a graduation "More details" link: a plain click opens the graduation view when the host allows it; otherwise the href is followed. */
+export function openGraduationLink(e: Parameters<typeof openKbLink>[0], open: OpenViewFn | null, href: string | null | undefined): void {
+	const d = graduationFromHref(href);
+	if (!d || !open || !open.canOpen(d.kind) || !isPlainClick({ ...e, defaultPrevented: e.defaultPrevented ?? false })) return;
+	e.preventDefault();
+	open(d);
+}
+
 /** An in-app KB link: `/kb/entry/<id>` is kind kb, `/kb/work/<id>` is kind work; anything else is null. */
 export function viewFromHref(href: string | null): { kind: "kb" | "work"; id: string } | null {
 	const m = /^\/kb\/(entry|work)\/([^/?#]+)$/.exec(href ?? "");

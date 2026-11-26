@@ -303,6 +303,29 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 			setUi(out.kind === "wait" ? { phase: "wait", until: Date.now() + out.retryS * 1000 } : { phase: "error", message: out.message });
 		}
 	};
+	// Opened from the sidebar notice's "Update now" (work-wolfpack-vkAgw7I): ?update=<machine>:<components>. Once the first update read is in, the
+	// param is cleared (a reload must not start it again), and when it names this machine and something is behind, the same send() as the
+	// Update button runs, with no confirm step. The row is scrolled to and ringed for a few seconds.
+	const arrival = useRef(false);
+	const areaRef = useRef<HTMLDivElement>(null);
+	const [ring, setRing] = useState(false);
+	useEffect(() => {
+		if (arrival.current || state === null) return;
+		arrival.current = true;
+		const params = new URLSearchParams(window.location.search ?? "");
+		const want = params.get("update");
+		if (want === null) return;
+		params.delete("update");
+		const qs = params.toString();
+		window.history.replaceState(window.history.state, "", (window.location.pathname ?? "") + (qs ? `?${qs}` : "") + (window.location.hash ?? ""));
+		const machine = want.split(":")[0];
+		if (singleMac || (machine && machine !== card.label && machine !== card.id)) return;
+		areaRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+		setRing(true);
+		setTimeout(() => mounted.current && setRing(false), 8_000);
+		if (canAct && state.units.length > 0) void send();
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, on the first read; send is rebuilt each render
+	}, [state]);
 	const save = async (patch: Partial<Sub>) => {
 		// Not before the subscription is read (the base would be a guess) and not while another save is in flight (reverts and PUTs would cross).
 		const prev = sub;
@@ -332,7 +355,7 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 	const busy = ui.phase === "sending";
 	const waitS = ui.phase === "wait" ? Math.max(0, Math.ceil((ui.until - Date.now()) / 1000)) : 0;
 	const update = (
-		<div data-testid="machine-update-area" className="mt-2">
+		<div data-testid="machine-update-area" ref={areaRef} className={cn("mt-2 rounded-md", ring && "ring-2 ring-teal-400/60 ring-offset-2 ring-offset-background")}>
 			{showBanner && (
 				<div data-testid="machine-update" className="rounded-md border px-2 py-1.5">
 					<div className="flex flex-wrap items-center gap-x-2 gap-y-1">

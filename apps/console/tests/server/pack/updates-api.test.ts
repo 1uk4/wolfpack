@@ -162,6 +162,34 @@ describe("GET /api/updates", () => {
 		}
 	});
 
+	it("a timer-off host (mode button, so the status carries enabled:false and a reason) reads as Manual updates: no stale, no 'updates itself'; a kill switch stays a pause", async () => {
+		const manifestBase = await serve({ schema: 1, generatedAt: "2026-11-09T03:30:00Z", components: { console: entry("console", "0.1.19") } });
+		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
+		writeFileSync(join(dir, "VERSION"), "0.1.18\n");
+		const statusFile = join(dir, "status.json");
+		const write = (state: string, disabledReason: string) =>
+			writeFileSync(statusFile, JSON.stringify({ schema: 1, host: "sfo-01", enabled: false, disabledReason, lastCheck: "2026-11-09T09:00:00.000Z", result: "disabled", units: { console: { component: "console", current: "0.1.18", target: null, state } } }));
+		const row = async () => (await createUpdatesHandler({ env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_AUTO_UPDATE_STATUS: statusFile }, consoleDir: dir, now: () => Date.parse("2026-11-09T12:00:00.000Z") })()).components[0]!;
+		try {
+			write("disabled", "mode is button: the timer installs nothing");
+			let c = await row();
+			assert.equal(c.updateStatus?.manual, true);
+			assert.equal(c.updateStatus?.stale, undefined);
+			assert.equal(c.outdated, true);
+			assert.match(c.updateStep, /^Manual updates on sfo-01/);
+			assert.doesNotMatch(c.updateStep, /updates itself/);
+			write("updated", "mode is button: the timer installs nothing");
+			c = await row();
+			assert.doesNotMatch(c.updateStep, /updates itself/);
+			write("disabled", "kill switch: /var/lib/wolfpack-auto-update/auto-update.disabled exists");
+			c = await row();
+			assert.equal(c.updateStatus?.manual, undefined);
+			assert.equal(c.updateStatus?.stale, true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("refresh re-reads the manifest at once; without it the cached manifest is served", async () => {
 		let hits = 0;
 		const s = createServer((_req, res) => {

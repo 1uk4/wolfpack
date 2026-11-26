@@ -26,6 +26,13 @@ describe("inventory link frames", () => {
     expect(flagged.ok && (flagged.frame as { inventory?: boolean }).inventory).toBe(true);
   });
 
+  it("a workerd entry keeps the host update state it reports, and drops nothing of it", () => {
+    const updateState = { target: "pack", host: "sfo-01", component: "workerd", state: "failed", current: "0.1.9", latest: "0.1.10", progress: null, lastCheck: null, channel: "stable", auto: "on", error: { code: "checksum", message: "The download did not match.", retryable: true } };
+    const r = InventoryEntrySchema.safeParse({ ...entry, updateState });
+    expect(r.success && r.data.updateState).toEqual(updateState);
+    expect(InventoryEntrySchema.safeParse({ ...entry, updateState: { ...updateState, state: "exploded" } }).success).toBe(false);
+  });
+
   it("an entry rejects negative uptime and an unknown channel", () => {
     expect(InventoryEntrySchema.safeParse({ ...entry, uptimeS: -1 }).success).toBe(false);
     expect(InventoryEntrySchema.safeParse({ ...entry, channel: "beta" }).success).toBe(false);

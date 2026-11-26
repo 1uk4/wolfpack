@@ -16,7 +16,7 @@ export interface HubHealth {
   stop(): void;
 }
 
-const PUBLIC_COMMANDS: ReadonlySet<string> = new Set<CommandKind>(["wolves.restart", "workerd.restart", "logs.fetch"]);
+const PUBLIC_COMMANDS: ReadonlySet<string> = new Set<CommandKind>(["wolves.restart", "workerd.restart", "logs.fetch", "update.run"]);
 
 export function createHubHealth(hosts?: () => HubHealthHost[]): HubHealth {
   const monitor: LagMonitor = createLagMonitor();

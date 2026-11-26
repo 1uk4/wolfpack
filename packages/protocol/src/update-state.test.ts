@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapAppEvent, stageLabel, failedLine, retryLabel, remoteRetryText, mapHostStatus, plainError, type HostStatusFile, type UpdateState } from "./update-state.js";
+import { mapAppEvent, stageLabel, failedLine, retryLabel, mapHostStatus, worstHostUpdateState, plainError, type HostStatusFile, type UpdateState } from "./update-state.js";
 
 const NOW = Date.parse("2026-11-09T12:00:00.000Z");
 const app = { version: "0.2.0", channel: "stable" as const, now: NOW, host: "this Mac" };
@@ -75,6 +75,15 @@ describe("mapHostStatus", () => {
   });
 });
 
+describe("worstHostUpdateState", () => {
+  it("picks the failed component over an installing one, and says nothing when the host is quiet", () => {
+    const both = file({ hubd: unit("hubd", "updating"), workerd: unit("workerd", "failed", { code: "checksum" }) });
+    expect(worstHostUpdateState(both, ctx)).toMatchObject({ state: "failed", component: "workerd" });
+    expect(worstHostUpdateState(file({ hubd: unit("hubd", "updating") }), ctx)).toMatchObject({ state: "installing", component: "hubd" });
+    expect(worstHostUpdateState(file({ hubd: unit("hubd", "idle") }), ctx)).toBeUndefined();
+  });
+});
+
 describe("review fixes", () => {
   it("an installing step older than 5 minutes is idle, a fresh one installing", () => {
     expect(mapAppEvent(undefined, { type: "installing", at: NOW - 6 * 60_000 }, app).state).toBe("idle");
@@ -114,12 +123,11 @@ describe("plainError", () => {
 });
 
 describe("update vocabulary (work-wolfpack-s0Tnbth)", () => {
-  it("words a failure as 'Update failed: <plain reason>' with a Retry button, and a remote machine as text to open its console", () => {
+  it("words a failure as 'Update failed: <plain reason>' with a Retry button", () => {
     const failed: UpdateState = { ...idle, state: "failed", error: { code: "offline", message: "Couldn't reach the update server. Check your internet connection and try again.", retryable: true } };
     expect(failedLine(failed)).toBe("Update failed: Couldn't reach the update server. Check your internet connection and try again.");
     expect(failedLine({ ...idle, state: "failed" })).toBe("Update failed");
     expect(retryLabel).toBe("Retry");
-    expect(remoteRetryText("sfo-01")).toBe("Open sfo-01's console to retry.");
   });
 });
 

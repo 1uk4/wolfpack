@@ -4,8 +4,12 @@
  * Pure: no I/O, the clock comes in through `ctx.now`. User-facing labels for the states are not here.
  */
 
-export type UpdateTarget = "app" | "pack";
-export type UpdateStage = "idle" | "checking" | "available" | "downloading" | "ready" | "installing" | "updated" | "failed" | "manual" | "paused" | "stale";
+export const UPDATE_TARGETS = ["app", "pack"] as const;
+export type UpdateTarget = (typeof UPDATE_TARGETS)[number];
+export const UPDATE_STAGES = ["idle", "checking", "available", "downloading", "ready", "installing", "updated", "failed", "manual", "paused", "stale"] as const;
+export type UpdateStage = (typeof UPDATE_STAGES)[number];
+export const UPDATE_CHANNELS = ["stable", "main"] as const;
+export const UPDATE_AUTO = ["on", "off", "stale"] as const;
 
 export interface UpdateError {
 	code: string;
@@ -29,8 +33,8 @@ export interface UpdateState {
 	progress: number | null;
 	/** ISO time of the last check, or null. */
 	lastCheck: string | null;
-	channel: "stable" | "main" | null;
-	auto: "on" | "off" | "stale";
+	channel: (typeof UPDATE_CHANNELS)[number] | null;
+	auto: (typeof UPDATE_AUTO)[number];
 	error?: UpdateError;
 }
 
@@ -65,7 +69,7 @@ export interface HostStatusUnit {
 export interface UpdateContext {
 	/** Running version (app) shown as `current` and in the "newest version" sentence. */
 	version?: string | null;
-	channel: "stable" | "main" | null;
+	channel: (typeof UPDATE_CHANNELS)[number] | null;
 	/** Clock, ms since epoch. */
 	now: number;
 	host?: string;
@@ -128,8 +132,11 @@ export function failedLine(s: Pick<UpdateState, "error">): string {
 /** The button on a failed update: it clears the held failure and tries again. */
 export const retryLabel = "Retry";
 
-/** What a machine other than the one this console runs on shows instead of a Retry button. */
-export const remoteRetryText = (host: string): string => `Open ${host}'s console to retry.`;
+/** The host's one state worth showing on a machine card: a failed component first, else one installing; undefined when it has neither. */
+export function worstHostUpdateState(file: HostStatusFile, ctx: UpdateContext, components: readonly string[] = ["console", "hubd", "wolfd", "workerd"]): UpdateState | undefined {
+	const states = components.flatMap((c) => mapHostStatus(file, c, ctx) ?? []);
+	return states.find((s) => s.state === "failed") ?? states.find((s) => s.state === "installing");
+}
 
 /** The next app state after one updater event. `prev` is undefined before the first event. */
 export function mapAppEvent(prev: UpdateState | undefined, e: AppUpdaterEvent, ctx: UpdateContext): UpdateState {

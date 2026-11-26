@@ -18,14 +18,15 @@ export interface GraphSettingsState {
 	changeSettings: (update: (cur: GraphRenderSettings) => GraphRenderSettings) => void;
 }
 
-function saveToServer(s: GraphRenderSettings): void {
+function saveToServer(s: GraphRenderSettings, done?: () => void): void {
 	fetch("/api/graph/render-settings", {
 		method: "PUT",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(s),
 	})
 		.then(() => dataStore.invalidate("/api/graph/render-settings"))
-		.catch((err) => console.error("[graph] settings save failed:", err));
+		.catch((err) => console.error("[graph] settings save failed:", err))
+		.finally(() => done?.());
 }
 
 export function useGraphSettings(): GraphSettingsState {
@@ -40,6 +41,8 @@ export function useGraphSettings(): GraphSettingsState {
 	// so merely mounting never PUTs defaults over the server copy.
 	const serverLoaded = useRef(false);
 	const savePending = useRef(false);
+	// True from a local change until its save settles: a focus refresh must not overwrite it.
+	const saving = useRef(false);
 
 	const changeSettings = (update: (cur: GraphRenderSettings) => GraphRenderSettings) => {
 		userTouched.current = true;
@@ -61,18 +64,39 @@ export function useGraphSettings(): GraphSettingsState {
 				setLoaded(true);
 				if (savePending.current) {
 					savePending.current = false;
-					saveToServer(settingsRef.current);
+					saveToServer(settingsRef.current, () => (saving.current = false));
 				}
 			});
 	}, []);
 
+	// Per-person settings sync across devices: when this tab comes back to the foreground, re-read them (unless a local change is
+	// still waiting to be saved, which must win).
+	useEffect(() => {
+		const refresh = () => {
+			if (document.visibilityState === "hidden" || !serverLoaded.current || saving.current) return;
+			dataStore
+				.load<unknown>("/api/graph/render-settings", { maxAgeMs: 0 })
+				.then((raw) => {
+					if (raw !== null && !saving.current) setSettings(sanitizeRenderSettings(raw));
+				})
+				.catch(() => {});
+		};
+		window.addEventListener("focus", refresh);
+		document.addEventListener("visibilitychange", refresh);
+		return () => {
+			window.removeEventListener("focus", refresh);
+			document.removeEventListener("visibilitychange", refresh);
+		};
+	}, []);
+
 	useEffect(() => {
 		if (!userTouched.current) return; // mount-run / server-apply: no save
+		saving.current = true; // a local change is unsaved until its PUT settles
 		if (!serverLoaded.current) {
 			savePending.current = true; // hold until the GET settles
 			return;
 		}
-		const id = setTimeout(() => saveToServer(settings), 400);
+		const id = setTimeout(() => saveToServer(settings, () => (saving.current = false)), 400);
 		return () => clearTimeout(id);
 	}, [settings]);
 

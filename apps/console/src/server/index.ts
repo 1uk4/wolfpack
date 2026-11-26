@@ -29,6 +29,7 @@ export * from "./thread/console-client.ts";
 export * from "./thread/thread-api.ts";
 export * from "./kb/memory-api.ts";
 export * from "./kb/kb-activity-api.ts";
+export * from "./kb/render-settings-api.ts";
 export * from "./thread/needs-you-api.ts";
 export * from "./pack/devices-api.ts";
 export * from "./pack/machines-api.ts";

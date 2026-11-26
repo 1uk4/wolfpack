@@ -8,9 +8,10 @@
  */
 
 import { useRef, useState } from "react";
-import { SettingsIcon } from "lucide-react";
+import { ChevronRight as ChevronRightIcon, SettingsIcon } from "lucide-react";
 import { usePopoverDismiss } from "@/components/shell/popover-dismiss";
 import { Hint } from "@/components/ui/hint";
+import { SimpleControls } from "./graph-simple-controls.tsx";
 import {
 	CHARGE_RANGE,
 	CLUSTER_LABEL_SIZE_LADDER,
@@ -124,6 +125,7 @@ export function GraphSettingsControl({
 				<button
 				type="button"
 				aria-expanded={open}
+				aria-label="Graph display settings"
 				onClick={() => setOpen((o) => !o)}
 				className={`flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent ${
 					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
@@ -144,8 +146,24 @@ export function GraphSettingsControl({
 				// (pr-2.5) -> scrollbar -> 10px (p-2.5) -> panel edge. The
 				// scrollbar itself does NOT move: it stays pinned at the same
 				// distance from the panel's right border.
-				<div className="absolute right-0 top-full mt-2 flex max-h-[60vh] w-72 flex-col rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
-					<div className="flex flex-col gap-2 overflow-y-auto pr-2.5">
+				// Redesign (work-wolfpack-H1OQNIh): simple controls up front, every detailed control in the collapsed Advanced section.
+				// Below md the panel is a bottom sheet (fixed to the bottom edge, 44 px touch targets in the simple controls); from md up
+				// it is the old popover under the gear. Translucent surface, hairline border, 12 px radius, a short entrance that
+				// motion-reduce turns off.
+				<div
+					role="dialog"
+					aria-label="Graph settings"
+					className="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-[12px] border-t border-border/60 bg-card/80 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-200 md:absolute md:inset-x-auto md:bottom-auto md:right-0 md:top-full md:mt-2 md:max-h-[70vh] md:w-72 md:rounded-[12px] md:border md:pb-3"
+				>
+					<span aria-hidden className="mx-auto mb-2 h-1 w-9 shrink-0 rounded-full bg-border md:hidden" />
+					<div className="flex flex-col gap-2 overflow-y-auto pr-1">
+						<SimpleControls settings={settings} changeSettings={changeSettings} domains={domains}>
+						<details className="group rounded-[10px] border border-border/60 bg-background/40 px-2">
+							<summary className="flex min-h-11 cursor-pointer list-none items-center gap-1.5 text-[11px] font-medium text-muted-foreground md:min-h-7 [&::-webkit-details-marker]:hidden">
+								<ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90 motion-reduce:transition-none" />
+								Advanced
+							</summary>
+							<div className="flex flex-col gap-2 pb-2 pt-1">
 						{/* The KB-graph view: what the regions group by, which optional
 						    layers are on (the librarian filters server-side, so a toggle
 						    refetches), and the domain filter. */}
@@ -521,6 +539,9 @@ export function GraphSettingsControl({
 									}))}
 							/>
 						</div>
+							</div>
+						</details>
+						</SimpleControls>
 					</div>
 				</div>
 			)}

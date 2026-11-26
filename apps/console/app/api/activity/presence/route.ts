@@ -1,5 +1,4 @@
-import { liveActivityApi } from "@/src/server";
-import { createPresenceApi } from "@/src/server/pack/presence-api";
+import { createPresenceApi, liveActivityApi } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 

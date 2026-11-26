@@ -15,7 +15,7 @@ import { useRouter } from "next/navigation";
 import { ActivityIcon, ChevronDownIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { feedCountReducer, feedPillLabel, formatFeed, relativeTime, type FeedLine } from "@/src/core";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
 import { liveSettingsOf, type OverlayHighlight } from "./live-overlay";
@@ -165,6 +165,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 			<div className={`pointer-events-auto overflow-hidden rounded-[12px] border border-border/50 bg-background/70 shadow-sm backdrop-blur-md ${motion}`}>
 				<div className="flex items-center justify-between px-2.5 pt-1.5 text-[11px] text-muted-foreground">
 					<span className="inline-flex items-center gap-1.5"><ActivityIcon className="size-3.5" />Activity</span>
+					<TooltipProvider>
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<button type="button" aria-label="Collapse activity feed" onClick={() => toggle(true)} className="rounded p-0.5 hover:text-foreground">
@@ -173,6 +174,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 						</TooltipTrigger>
 						<TooltipContent>Collapse</TooltipContent>
 					</Tooltip>
+					</TooltipProvider>
 				</div>
 				<div ref={listRef} className="max-h-[168px] overflow-y-auto px-1.5 pb-1.5 pt-1" onMouseLeave={leave}>
 					{shown.map((l, i) => {

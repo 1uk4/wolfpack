@@ -62,6 +62,20 @@ describe("graph load and frame cost", () => {
 		frames = [];
 	});
 
+	it("live sim frames do not re-measure labels", async () => {
+		const r = await setup(20);
+		const measured = counts.measureText;
+		assert.ok(measured >= 20, "labels were wrapped once at build");
+		r.sim.alpha(1);
+		r.simActive = true;
+		r.markDirty();
+		const before = r.geoVersion;
+		await pump(8);
+		assert.ok(r.geoVersion - before >= 3, "the sim ticked several frames");
+		assert.equal(counts.measureText, measured);
+		r.destroy();
+	});
+
 	it("settings that load with the same physics values neither rebuild the sim nor reheat it; a real change does", async () => {
 		const { DEFAULT_PHYSICS_TUNING } = await import("../../../src/core/graph/render-settings.ts");
 		const r = await setup();

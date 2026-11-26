@@ -735,6 +735,7 @@ export class GraphCanvasRenderer {
 	private regionBuiltVersion = -1;
 	private frameCount = 0; // draw counter for the live-sim splat throttle
 	private labelLines = new Map<string, string[]>();
+	private labelKey: { data: unknown; visible: unknown; font: string; maxW: number } | null = null;
 	private worldLabelFont = "";
 	private world: WorldSizes = { nodeR: 0, labelSize: 0, labelGap: 0 };
 
@@ -1701,15 +1702,21 @@ export class GraphCanvasRenderer {
 		// Label wrapping: measureText once per node per geometry build,
 		// never per frame. Wrap width keeps the bigger-label/bigger-wrap
 		// behavior from the sigma era.
-		this.labelLines = new Map();
-		const ctx = this.ctx;
-		const prevFont = ctx.font;
-		ctx.font = this.worldLabelFont;
+		// Wrapped lines depend on data, visibility, font and wrap width, never
+		// on position, so live-sim frames reuse them.
 		const maxW = LABEL_MAX_WIDTH * (settings.labelSize / LABEL_SIZE);
-		for (const n of data.nodes) {
-			if (isVisible(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
+		const lk = this.labelKey;
+		if (!lk || lk.data !== data || lk.visible !== visible || lk.font !== this.worldLabelFont || lk.maxW !== maxW) {
+			this.labelKey = { data, visible, font: this.worldLabelFont, maxW };
+			this.labelLines = new Map();
+			const ctx = this.ctx;
+			const prevFont = ctx.font;
+			ctx.font = this.worldLabelFont;
+			for (const n of data.nodes) {
+				if (isVisible(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
+			}
+			ctx.font = prevFont;
 		}
-		ctx.font = prevFont;
 	}
 
 	/** (Re)create the live sim from data.nodes at their current

@@ -84,6 +84,19 @@ describe("desktop window chrome", () => {
 	});
 });
 
+describe("desktop preload in remote mode (work-wolfpack-byIU7oz)", () => {
+	it("exposes only the app's own update calls under app, flagged remote, never folders, key or reset", () => {
+		let api: Record<string, unknown> = {};
+		const context = {
+			process: { platform: "darwin", argv: ["--wolfpack-remote"] },
+			require: () => ({ contextBridge: { exposeInMainWorld: (_n: string, a: Record<string, unknown>) => void (api = a) }, ipcRenderer: {} }),
+		};
+		runInNewContext(readFileSync(new URL("../../desktop/electron/preload.cjs", import.meta.url), "utf8"), context);
+		assert.equal(api.singleMac, false);
+		assert.deepEqual(Object.keys(api.app as object).sort(), ["checkForUpdates", "getUpdateState", "installUpdate", "onUpdateStatus", "remote", "updateChannel"]);
+	});
+});
+
 describe("desktop packaging policy", () => {
 	const yaml = require("js-yaml") as { load(source: string): Record<string, any> };
 	const config = yaml.load(readFileSync(new URL("../../desktop/electron-builder.yml", import.meta.url), "utf8"));

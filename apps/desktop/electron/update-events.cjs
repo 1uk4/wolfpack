@@ -51,4 +51,19 @@ function guardedCheck(guard, run) {
 		});
 }
 
-module.exports = { wireUpdater, shouldCheckOnFocus, guardedCheck };
+/** An update IPC call is allowed only from the main frame of a page on the console origin the window loaded (local or remote). */
+function fromAppOrigin(e, origin) {
+	try {
+		if (!e?.senderFrame || !e.sender || e.senderFrame !== e.sender.mainFrame) return false;
+		return new URL(e.senderFrame.url).origin === new URL(origin).origin;
+	} catch {
+		return false;
+	}
+}
+
+/** Restart-and-install only makes sense once the update has finished downloading. */
+function canInstall(last) {
+	return last?.type === "downloaded";
+}
+
+module.exports = { wireUpdater, shouldCheckOnFocus, guardedCheck, fromAppOrigin, canInstall };

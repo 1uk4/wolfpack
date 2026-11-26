@@ -24,6 +24,11 @@ export interface UpdateChannelState {
 	returnNote?: string;
 }
 export interface AppBridge {
+	/**
+	 * True when the app's window shows another machine's console (remote mode): the bridge then carries only the update calls and
+	 * updateChannel; folders, key, reset and the rest are absent and must not be called (work-wolfpack-byIU7oz).
+	 */
+	remote?: boolean;
 	folders(): Promise<{ state: string; wolves: string; logs?: string }>;
 	showFolder(name: "state" | "wolves" | "logs"): Promise<Result>;
 	loginItem: {
@@ -102,10 +107,25 @@ function devUpdateStep(): (AppUpdaterEvent & { status?: string }) | null {
 	}
 }
 
+/** Dev only: `?appRemote=1` shows the desktop app's remote mode (kept for the tab; `?appRemote=0` clears), combined with `&appUpdate=<stage>`. */
+function readDevAppRemote(): boolean {
+	if (process.env.NODE_ENV !== "development") return false;
+	const key = "wolfpack.dev.appRemote";
+	const q = new URLSearchParams(window.location.search).get("appRemote");
+	if (q === "1") window.sessionStorage.setItem(key, "1");
+	else if (q === "0") window.sessionStorage.removeItem(key);
+	return window.sessionStorage.getItem(key) === "1";
+}
+
 function readBridge(): AppBridge | null {
 	const real = (window as unknown as { wolfpack?: { app?: AppBridge } }).wolfpack?.app;
 	if (real) return real;
-	return process.env.NODE_ENV === "development" && readSingleMac() ? devStub() : null;
+	if (process.env.NODE_ENV !== "development") return null;
+	if (readDevAppRemote()) {
+		const { checkForUpdates, onUpdateStatus, getUpdateState, installUpdate } = devStub();
+		return { remote: true, checkForUpdates, onUpdateStatus, getUpdateState, installUpdate, updateChannel: { get: async () => ({ available: false, channel: "stable", note: "This console is served by another machine, so its app updates are set there." }), set: async (channel) => ({ ok: false, available: false, channel }), checkMain: async () => ({ ahead: null, upToDate: false }) } } as AppBridge;
+	}
+	return readSingleMac() ? devStub() : null;
 }
 
 export function useAppBridge(): AppBridge | null {

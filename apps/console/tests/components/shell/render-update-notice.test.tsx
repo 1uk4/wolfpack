@@ -79,6 +79,13 @@ describe("sidebar update notice", () => {
 		for (const s of ["idle", "updated", "available"]) assert.equal(view(app(s)), "");
 	});
 
+	it("heads the Mac app's row with This app when the window shows a remote console", () => {
+		const app = { target: "app", host: "this Mac", state: "ready", current: "0.2.0", latest: "0.2.1", progress: 100, lastCheck: null, channel: "stable", auto: "on" };
+		const view = (appHeading?: string) => text(renderToStaticMarkup(<UpdateNoticeView rows={[]} app={app as never} appHeading={appHeading} dismissed={new Set()} onDismiss={() => {}} onInstall={() => {}} />));
+		assert.match(view("This app"), /This app: Ready, restart to update.*Update now/);
+		assert.doesNotMatch(view(), /This app/);
+	});
+
 	it("hides a quiet (background) Mac app failure in the sidebar but keeps a user-pressed one", () => {
 		const failed = (quiet: boolean) => ({ target: "app", host: "this Mac", state: "failed", current: "0.2.0", latest: null, progress: null, lastCheck: null, channel: "stable", auto: "on", error: { code: "offline", message: "Couldn't reach the update server.", retryable: true, ...(quiet ? { quiet: true } : {}) } }) as never;
 		const view = (a: unknown) => text(renderToStaticMarkup(<UpdateNoticeView rows={[]} app={a as never} dismissed={new Set()} onDismiss={() => {}} onRetryApp={() => {}} />));

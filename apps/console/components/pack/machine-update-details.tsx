@@ -45,8 +45,14 @@ export const BTN = "rounded-sm border px-2.5 py-1 text-xs text-muted-foreground 
  * Single-Mac: the desktop app's own updater (electron-updater downloads in the background and installs on quit). Says so, shows the app
  * version, offers Check now (the app answers with its own dialog) and, once an update is downloaded, Restart to update.
  */
-export function AppUpdateBlock({ version, state }: { version: string | null; state?: UpdateState | null }) {
+export function AppUpdateBlock({ version, state, heading }: { version: string | null; state?: UpdateState | null; /** Remote mode: "This app" heads the block, and the channel switch's reason is shown (work-wolfpack-byIU7oz). */ heading?: string }) {
 	const bridge = useAppBridge();
+	// The app's own stable/main switch is unavailable while its window shows another machine's console; the app says why.
+	const [channelNote, setChannelNote] = useState<string | null>(null);
+	useEffect(() => {
+		if (!heading) return;
+		void bridge?.updateChannel?.get().then((s) => setChannelNote(s.available ? null : (s.note ?? null))).catch(() => {});
+	}, [bridge, heading]);
 	const hooked = useAppUpdateState({ version });
 	const stage = state === undefined ? hooked : state;
 	const label = stage ? stageLabel(stage) : null;
@@ -57,7 +63,8 @@ export function AppUpdateBlock({ version, state }: { version: string | null; sta
 	// `ready` from the seeded state counts too: a window opened after the download gets no legacy push (work-wolfpack-WIaZh5k).
 	const restart = appRestartLabel(ready ?? (stage?.state === "ready" ? (stage.latest ?? "") : null)) ?? (stage?.state === "ready" ? "Restart to update" : null);
 	return (
-		<div data-testid="machine-app-update" className="mt-2 rounded-md border px-2 py-1.5 text-muted-foreground">
+		<div data-testid={heading ? "machine-this-app" : "machine-app-update"} className="mt-2 rounded-md border px-2 py-1.5 text-muted-foreground">
+			{heading && <h3 className="text-sm font-medium text-foreground">{heading}</h3>}
 			<p data-testid="machine-app-update-note">Updates install by themselves: the app downloads them in the background and asks you to restart.</p>
 			<div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
 				<span data-testid="machine-app-version" className="text-foreground">{version ? `Wolfpack v${version}` : "Wolfpack"}</span>
@@ -72,6 +79,7 @@ export function AppUpdateBlock({ version, state }: { version: string | null; sta
 				</p>
 			)}
 			{stage?.state === "failed" && bridge?.checkForUpdates && <button type="button" data-testid="machine-app-retry" disabled={checking} onClick={() => { setChecking(true); setNote(null); void bridge.checkForUpdates!().then((r) => setNote(appCheckNote(r))).catch(() => setNote(appCheckNote({ ok: false }))).finally(() => setChecking(false)); }} className={cn(BTN, "mt-1")}>{retryLabel}</button>}
+			{heading && channelNote && <p data-testid="machine-app-channel-note" className="mt-1 text-muted-foreground/70">{channelNote}</p>}
 			{note && <p data-testid={note.tone === "error" ? "machine-app-update-error" : "machine-app-update-ok"} className={note.tone === "error" ? "mt-1 text-red-600 dark:text-red-400" : "mt-1"}>{note.text}</p>}
 		</div>
 	);

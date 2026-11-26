@@ -46,23 +46,26 @@ Object.assign(globalThis, {
 const { PackPage } = await import("../../../components/pack/pack-page.tsx");
 const { getPackHealth } = await import("../../../components/pack/pack-health-store.ts");
 const { SingleMacContext } = await import("../../../components/shell/single-mac.tsx");
+const { AppBridgeContext } = await import("../../../components/settings/app-bridge.ts");
 const { FakeNav, currentUrl } = await import("../../helpers/fake-nav.tsx");
 
 let root: Root | null = null;
 const q = (s: string) => document.querySelector(s) as HTMLElement | null;
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); });
 const click = (el: HTMLElement) => act(async () => void el.dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { button: 0 })));
-async function mount(section: string, singleMac: boolean | null = null, start = `/pack/${section}`) {
+async function mount(section: string, singleMac: boolean | null = null, start = `/pack/${section}`, bridge?: unknown) {
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
 	await act(async () =>
 		root!.render(
-			<SingleMacContext.Provider value={singleMac}>
-				<FakeNav start={start}>
-					<PackPage section={section as never} />
-				</FakeNav>
-			</SingleMacContext.Provider>,
+			<AppBridgeContext.Provider value={bridge as never}>
+				<SingleMacContext.Provider value={singleMac}>
+					<FakeNav start={start}>
+						<PackPage section={section as never} />
+					</FakeNav>
+				</SingleMacContext.Provider>
+			</AppBridgeContext.Provider>,
 		),
 	);
 	await flush();
@@ -187,5 +190,41 @@ describe("the Pack page", () => {
 		} finally {
 			(window.location as { search: string }).search = "?healthFixture=issues";
 		}
+	});
+});
+
+describe("Pack > Machines in the Mac app's remote mode (work-wolfpack-byIU7oz)", () => {
+	const remote = (over: Record<string, unknown> = {}) => ({
+		remote: true,
+		checkForUpdates: async () => ({ ok: true }),
+		installUpdate: () => {},
+		onUpdateStatus: () => () => {},
+		getUpdateState: async () => ({ type: "error", message: "net::ERR_INTERNET_DISCONNECTED" }),
+		updateChannel: { get: async () => ({ available: false, channel: "stable", note: "This console is served by another machine, so its app updates are set there." }) },
+		...over,
+	});
+
+	it("shows This app first, above the machine cards, with the app's own Retry and why the channel switch is unavailable", async () => {
+		await mount("machines", false, "/pack/machines", remote());
+		const block = q('[data-testid="machine-this-app"]')!;
+		assert.notEqual(block, null);
+		assert.match(block.textContent ?? "", /^This app/);
+		assert.ok(block.compareDocumentPosition(q('[data-testid="machine-card"]')!) & 4, "the This app block precedes the first machine card");
+		assert.match(q('[data-testid="machine-app-retry"]')?.textContent ?? "", /Retry/);
+		assert.match(q('[data-testid="machine-app-channel-note"]')?.textContent ?? "", /served by another machine/);
+	});
+
+	it("offers Update now when the app's update is ready, and it installs", async () => {
+		let installed = 0;
+		await mount("machines", false, "/pack/machines", remote({ getUpdateState: async () => ({ type: "downloaded", version: "0.4.2", status: "downloaded" }), installUpdate: () => void installed++ }));
+		const btn = q('[data-testid="machine-app-restart"]')!;
+		assert.match(btn.textContent ?? "", /Restart to update to v0\.4\.2/); // the single-Mac block's own wording
+		await click(btn);
+		assert.equal(installed, 1);
+	});
+
+	it("adds no This app block to the single-Mac app", async () => {
+		await mount("machines", true, "/pack/machines", { ...remote(), remote: undefined });
+		assert.equal(q('[data-testid="machine-this-app"]'), null);
 	});
 });

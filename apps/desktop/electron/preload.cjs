@@ -85,6 +85,19 @@ if (api.singleMac && !process.argv.includes("--wolfpack-setup")) {
 	};
 }
 
+// Remote mode (main.cjs passes --wolfpack-remote; the window shows another machine's console): only the app's own update calls, so the console can show
+// "This app" beside that machine's rows (work-wolfpack-byIU7oz). Folders, key, reset and the rest stay local-only.
+if (process.argv.includes("--wolfpack-remote") && !api.app) {
+	api.app = {
+		remote: true,
+		updateChannel: { get: () => ipcRenderer.invoke("wolfpack:app:update-channel") }, // answers { available:false, note } in remote mode
+		checkForUpdates: () => ipcRenderer.invoke("wolfpack:update-check"),
+		onUpdateStatus: api.onUpdateStatus,
+		installUpdate: api.installUpdate,
+		getUpdateState: api.getUpdateState,
+	};
+}
+
 // The setup wizard window only (main.cjs passes --wolfpack-setup); the console never sees it.
 if (process.argv.includes("--wolfpack-setup")) {
 	api.setup = {

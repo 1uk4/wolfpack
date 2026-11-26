@@ -59,13 +59,13 @@ function title(g: Group): string {
 }
 
 /** The Mac app's own stage: shown while downloading, ready, installing or failed; idle/checking/updated stay quiet in the sidebar. */
-function AppRow({ app, onInstall, onRetry }: { app: UpdateState; onInstall?: () => void; onRetry?: () => void }) {
+function AppRow({ app, heading, onInstall, onRetry }: { app: UpdateState; heading?: string; onInstall?: () => void; onRetry?: () => void }) {
 	const failed = app.state === "failed";
 	return (
 		<div data-testid="update-notice-app" className="rounded-md border border-teal-500/30 bg-teal-500/5 px-2.5 py-2 text-xs">
 			<div className="flex items-start gap-1.5 text-foreground">
 				<ArrowUpCircleIcon className={`mt-0.5 size-3 shrink-0 ${failed ? "text-red-400" : "text-teal-400"}`} />
-				<span>{failed ? failedLine(app) : stageLabel(app)}</span>
+				<span>{heading ? `${heading}: ` : ""}{failed ? failedLine(app) : stageLabel(app)}</span>
 			</div>
 			{failed && onRetry && (
 				<div className="mt-1.5 pl-[18px]">
@@ -87,13 +87,13 @@ function AppRow({ app, onInstall, onRetry }: { app: UpdateState; onInstall?: () 
 
 const APP_SHOWN = new Set(["downloading", "ready", "installing", "failed"]);
 
-export function UpdateNoticeView({ rows, dismissed, onDismiss, app, onInstall, onRetry, retrying, onRetryApp, retryError, onOpenNotes, notes, onCloseNotes }: { /** Open the release notes for a machine's row (the container fetches them); with no handler What's new stays a plain link. */ onOpenNotes?: (machine: string, tag: string) => void; /** The open notes: the machine whose row asked and the fetch state. */ notes?: { machine: string; state: NotesState } | null; onCloseNotes?: () => void; retryError?: string | null;  rows: Row[]; dismissed: ReadonlySet<string>; onDismiss: (keys: string[]) => void; app?: UpdateState | null; onInstall?: () => void; /** Retry a failed pack update on this console's own machine (clears the held failure and tries again); `retrying` while it is pending. */ onRetry?: () => void; retrying?: boolean; /** Retry a failed Mac app update (checks for updates again). */ onRetryApp?: () => void }) {
+export function UpdateNoticeView({ appHeading, rows, dismissed, onDismiss, app, onInstall, onRetry, retrying, onRetryApp, retryError, onOpenNotes, notes, onCloseNotes }: { /** Remote mode: "This app" heads the Mac app's row. */ appHeading?: string; /** Open the release notes for a machine's row (the container fetches them); with no handler What's new stays a plain link. */ onOpenNotes?: (machine: string, tag: string) => void; /** The open notes: the machine whose row asked and the fetch state. */ notes?: { machine: string; state: NotesState } | null; onCloseNotes?: () => void; retryError?: string | null;  rows: Row[]; dismissed: ReadonlySet<string>; onDismiss: (keys: string[]) => void; app?: UpdateState | null; onInstall?: () => void; /** Retry a failed pack update on this console's own machine (clears the held failure and tries again); `retrying` while it is pending. */ onRetry?: () => void; retrying?: boolean; /** Retry a failed Mac app update (checks for updates again). */ onRetryApp?: () => void }) {
 	const groups = groupRows(rows, dismissed);
 	const showApp = app != null && APP_SHOWN.has(app.state) && !(app.state === "failed" && app.error?.quiet); // an offline laptop failing its background check stays quiet here; the Pack machine card still shows it
 	if (!groups.length && !showApp) return null;
 	return (
 		<div data-testid="update-notice" className="mb-1 flex flex-col gap-1.5">
-			{showApp && <AppRow app={app} onInstall={onInstall} onRetry={onRetryApp} />}
+			{showApp && <AppRow app={app} heading={appHeading} onInstall={onInstall} onRetry={onRetryApp} />}
 			{groups.map((g) => (
 				<div key={g.machine} className="relative rounded-md border border-teal-500/30 bg-teal-500/5 px-2.5 py-2 text-xs">
 					<button type="button" aria-label="Dismiss" onClick={() => onDismiss(g.items.map((i) => i.key))} className="absolute right-1 top-1 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground">
@@ -199,5 +199,5 @@ export function UpdateNotice() {
 			.finally(() => (setRetrying(false), setReload((n) => n + 1)));
 	};
 	const n = useOpenNotes();
-	return <UpdateNoticeView {...n} rows={rows} dismissed={dismissed} onDismiss={dismiss} app={app} onInstall={() => void bridge?.installUpdate?.()} onRetry={retry} retrying={retrying} retryError={retryError} onRetryApp={() => void bridge?.checkForUpdates?.()} />;
+	return <UpdateNoticeView {...n} appHeading={bridge?.remote ? "This app" : undefined} rows={rows} dismissed={dismissed} onDismiss={dismiss} app={app} onInstall={() => void bridge?.installUpdate?.()} onRetry={retry} retrying={retrying} retryError={retryError} onRetryApp={() => void bridge?.checkForUpdates?.()} />;
 }

@@ -42,7 +42,7 @@ const { consoleEnv } = require("./console-env.cjs");
 const { windowAllClosedAction, focusFirstWindow, createTray } = require("./tray.cjs");
 const { createAppSettings } = require("./app-settings.cjs");
 const { createUpdateChannel } = require("./update-channel.cjs");
-const { wireUpdater, shouldCheckOnFocus, guardedCheck } = require("./update-events.cjs");
+const { wireUpdater, shouldCheckOnFocus, guardedCheck, fromAppOrigin, canInstall } = require("./update-events.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/shell/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -454,7 +454,7 @@ function createWindow(url, landing = url) {
 			sandbox: true,
 			nodeIntegration: false,
 			preload: path.join(__dirname, "preload.cjs"),
-			additionalArguments: supervisor ? ["--wolfpack-single-mac"] : [], // app runtime: preload exposes singleMac (work-wolfpack-TdmbaV4)
+			additionalArguments: supervisor ? ["--wolfpack-single-mac"] : remoteTarget ? ["--wolfpack-remote"] : [], // app runtime: preload exposes singleMac (work-wolfpack-TdmbaV4); remote: the app's own update calls only (work-wolfpack-byIU7oz)
 		},
 		// Live-resize + first-paint flash (owner, 2026-09-17): during a resize
 		// the native window surface changes size before Chromium's compositor
@@ -857,9 +857,20 @@ async function main() {
 	// interval fire after it below. setupAutoUpdater's contract: failures
 	// are log lines — this can never block boot.
 	setupAutoUpdater();
-	ipcMain.on("wolfpack:update-install", () => installUpdateNow());
-	ipcMain.handle("wolfpack:update-state", () => updateEvents?.last() ?? null);
-	ipcMain.handle("wolfpack:update-check", () => checkForUpdates({ manual: true, inline: true }));
+	// Every update IPC is for the console page itself (same origin the window loaded), never a foreign frame; install waits for a finished download.
+	const fromApp = (e) => fromAppOrigin(e, url);
+	ipcMain.on("wolfpack:update-install", (e) => {
+		if (fromApp(e) && canInstall(updateEvents?.last())) installUpdateNow();
+	});
+	ipcMain.handle("wolfpack:update-state", (e) => (fromApp(e) ? updateEvents?.last() ?? null : null));
+	ipcMain.handle("wolfpack:update-check", (e) => (fromApp(e) ? checkForUpdates({ manual: true, inline: true }) : { ok: false, error: "Not allowed" }));
+	// Remote mode: the console's "This app" block asks why the channel switch is unavailable (local mode registers the full app:* set below).
+	if (remoteTarget) {
+		ipcMain.handle("wolfpack:app:update-channel", (e) => {
+			if (!fromApp(e)) return { available: false, channel: "stable" };
+			return updateChannel?.state() ?? { available: false, channel: "stable", note: "Updates are off in this build." };
+		});
+	}
 	// Needs-you notifications: validation + delivery live in notify.cjs (tested without Electron).
 	const notifyNeedsYou = createNeedsYouNotifier({ Notification, appOrigin: new URL(url).origin, log });
 	ipcMain.on("wolfpack:notify", (event, n) => notifyNeedsYou(event, BrowserWindow.fromWebContents(event.sender), n));

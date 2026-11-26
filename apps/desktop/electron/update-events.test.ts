@@ -3,7 +3,9 @@ import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { wireUpdater, shouldCheckOnFocus, guardedCheck } = require("./update-events.cjs") as {
+const { wireUpdater, shouldCheckOnFocus, guardedCheck, fromAppOrigin, canInstall } = require("./update-events.cjs") as {
+	fromAppOrigin: (e: unknown, origin: string) => boolean;
+	canInstall: (last: unknown) => boolean;
 	wireUpdater: (u: EventEmitter, send: (e: unknown) => void, log?: (m: string) => void) => { last: () => unknown; setSource: (s: "user" | "background") => void };
 	guardedCheck: (guard: { busy: boolean }, run: () => unknown) => Promise<unknown>;
 	shouldCheckOnFocus: (lastAt: number | null, now: number) => boolean;
@@ -77,6 +79,28 @@ describe("guardedCheck", () => {
 		expect(guard.busy).toBe(false);
 		await expect(guardedCheck(guard, () => 5)).resolves.toBe(5);
 		expect(guard.busy).toBe(false);
+	});
+});
+
+describe("fromAppOrigin", () => {
+	const APP = "http://127.0.0.1:3230";
+	const mainEvent = (url: string) => {
+		const frame = { url };
+		return { sender: { mainFrame: frame }, senderFrame: frame };
+	};
+	it("accepts the console origin's main frame and rejects a foreign origin, a subframe and garbage", () => {
+		expect(fromAppOrigin(mainEvent(`${APP}/pack`), APP)).toBe(true);
+		expect(fromAppOrigin(mainEvent("https://evil.example/pack"), APP)).toBe(false);
+		expect(fromAppOrigin({ sender: { mainFrame: {} }, senderFrame: { url: `${APP}/x` } }, APP)).toBe(false);
+		expect(fromAppOrigin(mainEvent("not a url"), APP)).toBe(false);
+		expect(fromAppOrigin({}, APP)).toBe(false);
+	});
+});
+
+describe("canInstall", () => {
+	it("installs only once the update is downloaded", () => {
+		expect(canInstall({ type: "downloaded", version: "1.2.0" })).toBe(true);
+		for (const last of [null, { type: "progress", percent: 50 }, { type: "available", version: "1.2.0" }, { type: "installing" }, { type: "error", message: "x" }]) expect(canInstall(last)).toBe(false);
 	});
 });
 

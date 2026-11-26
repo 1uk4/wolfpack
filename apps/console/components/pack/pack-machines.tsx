@@ -157,6 +157,7 @@ function ServiceRow({ s, log, note, busy, onRestart, onRefresh }: { s: MachineSe
 export function MachinesSection() {
 	const { snapshot, reachable, lastSeenAt, now } = usePackHealth();
 	const singleMac = useSingleMac();
+	const thisAppRemote = useAppBridge()?.remote === true; // the Mac app showing another machine's console
 	const [send, setSend] = useState<Send>(() => sendMachineCommand);
 	// dev: ?healthUpdate= / ?healthAuto= replace the update and subscription routes with a fake (pack-health-fixtures.ts); until it loads, nothing is fetched.
 	// dev: ?remoteUpdate= gives the other machines canned inventory rows (their update state) instead of the hub read.
@@ -275,6 +276,7 @@ export function MachinesSection() {
 					This console's server is not answering. The cards below are its last report{lastSeenAt !== null ? ` (${ageText(now - lastSeenAt)})` : ""}.
 				</p>
 			)}
+			{thisAppRemote && <AppUpdateBlock heading="This app" version={null} />}
 			{snapshot === null ? (
 				<p className="text-muted-foreground">{reachable ? "Checking the pack…" : "No report yet."}</p>
 			) : (

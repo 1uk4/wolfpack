@@ -48,19 +48,67 @@ describe("live feed connection policy", () => {
 		return actions;
 	};
 
-	it("with no hub (presence 204) never opens the stream and retries only after 10 minutes", async () => {
+	it("with no hub (presence 204) never opens the stream and retries only after 2 minutes", async () => {
 		const f = (async (u: string) => {
 			calls.push(u);
 			return new Response(null, { status: 204 });
 		}) as unknown as typeof fetch;
 		start(f);
 		await flush();
-		mock.timers.tick(9 * 60_000);
+		mock.timers.tick(119_000);
 		await flush();
 		assert.deepEqual(calls, ["/api/activity/presence"]);
-		mock.timers.tick(61_000);
+		mock.timers.tick(1_000);
 		await flush();
 		assert.deepEqual(calls, ["/api/activity/presence", "/api/activity/presence"]);
+	});
+
+	it("a transient 503 on presence retries within the backoff and then connects", async () => {
+		let presence = 0;
+		const f = (async (u: string) => {
+			calls.push(u);
+			if (u.endsWith("presence")) return ++presence === 1 ? new Response(null, { status: 503 }) : new Response(snapBody, { status: 200 });
+			return streamOf([evFrame("a")], { release: () => {} });
+		}) as unknown as typeof fetch;
+		start(f);
+		await flush();
+		assert.deepEqual(calls, ["/api/activity/presence"]);
+		mock.timers.tick(1_000);
+		await flush();
+		assert.deepEqual(calls, ["/api/activity/presence", "/api/activity/presence", "/api/activity/stream"]);
+	});
+
+	it("a network error on the stream request retries within the backoff", async () => {
+		let streams = 0;
+		const f = (async (u: string) => {
+			calls.push(u);
+			if (u.endsWith("presence")) return new Response(snapBody, { status: 200 });
+			if (++streams === 1) throw new TypeError("Failed to fetch");
+			return streamOf([evFrame("a")], { release: () => {} });
+		}) as unknown as typeof fetch;
+		start(f);
+		await flush();
+		mock.timers.tick(1_000);
+		await flush();
+		assert.equal(streams, 2);
+	});
+
+	it("coming back online or focusing while slow-waiting retries at once", async () => {
+		const handlers: Record<string, () => void> = {};
+		(globalThis as unknown as { window: unknown }).window = { addEventListener: (n: string, h: () => void) => void (handlers[n] = h), removeEventListener() {} };
+		const f = (async (u: string) => {
+			calls.push(u);
+			return new Response(null, { status: 204 });
+		}) as unknown as typeof fetch;
+		start(f);
+		await flush();
+		handlers.online?.();
+		await flush();
+		assert.equal(calls.length, 2);
+		handlers.focus?.();
+		await flush();
+		assert.equal(calls.length, 3);
+		delete (globalThis as unknown as { window?: unknown }).window;
 	});
 
 	it("a stream that only sends keepalive comments reconnects slowly and keeps backing off", async () => {

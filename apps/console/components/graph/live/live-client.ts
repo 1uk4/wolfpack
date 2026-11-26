@@ -1,7 +1,7 @@
 /**
  * The live feed (browser): follows GET /api/activity/stream (the console's proxy of the hub's pack.activity frames) and refetches
  * GET /api/activity/presence on every (re)connect and on `resync`. Everything is best effort: no hub (204), an unreachable hub or any
- * failure just leaves the overlay empty and retries slowly; a 401 stops for good (the app shell signs the browser out by itself).
+ * failure just leaves the overlay empty and retries (a 204/403/404 every 2 minutes, errors on the 1-60 s backoff); a 401 stops for good (the app shell signs the browser out by itself).
  *
  * Background: the stream is closed while the tab is hidden and reopened (with a fresh presence snapshot) on return.
  * Last-Event-ID: the cursor of the last frame that carried an `id:` (resync) is sent on reconnect; pack.activity frames have none.
@@ -58,13 +58,14 @@ export function startLiveFeed(opts: LiveFeedOptions): () => void {
 	/** Time of the last applied stream event: a snapshot fetched before it would be older and must not overwrite it. */
 	let lastEventAt = -Infinity;
 
-	/** "ok": presence answered 200 with a valid body. "none": no hub (204/404/403) or an invalid body. "auth": 401. "error": network failure. */
+	/** "ok": 200 with a valid body. "none": no live data here (204/403/404 or an invalid body). "auth": 401. "error": 5xx, other statuses or a network failure (normal backoff). */
 	async function snapshot(signal: AbortSignal): Promise<"ok" | "none" | "auth" | "error"> {
 		const startedAt = now();
 		try {
 			const r = await doFetch("/api/activity/presence", { signal, cache: "no-store" });
 			if (r.status === 401) return "auth";
-			if (r.status !== 200) return "none";
+			if (r.status === 204 || r.status === 403 || r.status === 404) return "none";
+			if (r.status !== 200) return "error";
 			const snap = (await r.json()) as PresenceSnapshot;
 			if (!snap || snap.v !== 1 || !Array.isArray(snap.wolves)) return "none";
 			if (lastEventAt <= startedAt) opts.dispatch({ type: "snapshot", snapshot: snap, now: now() });
@@ -74,7 +75,16 @@ export function startLiveFeed(opts: LiveFeedOptions): () => void {
 		}
 	}
 
-	const SLOW_MS = 10 * 60_000;
+	const SLOW_MS = 2 * 60_000;
+
+	/** A pending timer (backoff or slow wait) can be cut short by online/focus/visible. */
+	function schedule(ms: number): void {
+		timer = setTimeout(() => void run(), ms);
+	}
+	function backoff(idx: number): void {
+		attempt = idx + 1;
+		schedule(BACKOFF_MS[Math.min(idx, BACKOFF_MS.length - 1)]);
+	}
 
 	async function run(): Promise<void> {
 		if (stopped) return;
@@ -82,23 +92,29 @@ export function startLiveFeed(opts: LiveFeedOptions): () => void {
 		ctl = c;
 		let delayIdx = attempt;
 		let gotReal = false;
+		let opened = false; // the stream answered 200: only then is a silent connection judged unhealthy
 		try {
 			const snap = await snapshot(c.signal);
 			if (c.signal.aborted || stopped) return;
 			if (snap === "auth") return void (stopped = true);
 			if (snap === "none") {
-				// No hub (or an old one): stay quiet until the tab comes back or 10 minutes pass.
-				timer = setTimeout(() => void run(), SLOW_MS);
+				// No live data here (204/403/404): ask rarely; the tab coming back, going online or being focused retries at once.
+				schedule(SLOW_MS);
 				return;
 			}
+			if (snap === "error") return backoff(attempt); // 5xx, restart gap, network: the normal 1-60 s backoff
 			const headers: Record<string, string> = { Accept: "text/event-stream" };
 			if (cursor) headers["Last-Event-ID"] = cursor;
 			const r = await doFetch("/api/activity/stream", { headers, signal: c.signal, cache: "no-store" });
 			if (r.status === 401) return void (stopped = true);
-			if (r.status !== 200 || !r.body) {
-				timer = setTimeout(() => void run(), SLOW_MS); // 204/403/404: no hub for us, ask rarely
+			if (r.status === 204 || r.status === 403 || r.status === 404) {
+				schedule(SLOW_MS);
 				return;
+			}
+			if (r.status !== 200 || !r.body) {
+				return backoff(attempt);
 			} else {
+				opened = true;
 				const parse = createSseParser((f) => {
 					if (f.id) cursor = f.id;
 					let j: { type?: string; event?: unknown };
@@ -132,9 +148,8 @@ export function startLiveFeed(opts: LiveFeedOptions): () => void {
 		}
 		if (stopped || c.signal.aborted) return;
 		// A connection that never carried a real frame (only keepalive comments, or nothing) is not a healthy one: back off slowly.
-		if (!gotReal) delayIdx = Math.max(attempt, 4);
-		attempt = delayIdx + 1;
-		timer = setTimeout(() => void run(), BACKOFF_MS[Math.min(delayIdx, BACKOFF_MS.length - 1)]);
+		if (opened && !gotReal) delayIdx = Math.max(attempt, 4);
+		backoff(delayIdx);
 	}
 
 	const onVisibility = () => {
@@ -151,7 +166,19 @@ export function startLiveFeed(opts: LiveFeedOptions): () => void {
 			void run(); // back from the background: a fresh stream and a fresh presence snapshot
 		}
 	};
+	/** Back online or window focused while waiting for a retry: try now. */
+	const onWake = () => {
+		if (stopped || document.hidden || !timer) return;
+		clearTimeout(timer);
+		timer = null;
+		attempt = 0;
+		void run();
+	};
 	document.addEventListener("visibilitychange", onVisibility);
+	if (typeof window !== "undefined") {
+		window.addEventListener("online", onWake);
+		window.addEventListener("focus", onWake);
+	}
 	if (!document.hidden) void run();
 
 	return () => {
@@ -159,5 +186,9 @@ export function startLiveFeed(opts: LiveFeedOptions): () => void {
 		ctl?.abort();
 		if (timer) clearTimeout(timer);
 		document.removeEventListener("visibilitychange", onVisibility);
+		if (typeof window !== "undefined") {
+			window.removeEventListener("online", onWake);
+			window.removeEventListener("focus", onWake);
+		}
 	};
 }

@@ -9,7 +9,10 @@
 #               PR-only, nothing is committed), signs, notarises, staples, and publishes desktop/vX.Y.Z at the merge commit (not a draft,
 #               --latest=false so releases/latest stays a component release). Notes list the bundled console/wolfd and the hubd/workerd versions.
 #               Then refreshes the rolling `desktop-latest` feed: binaries first, latest-mac.yml last. Feed file latest-mac.yml.
-#               Stable runs queue (never cancel) so quick merges publish in order.
+#               Release runs of both channels share one concurrency group (`desktop-feed`, they all write desktop-latest) and are never
+#               cancelled. GitHub keeps only ONE pending run per group, so with several quick merges a middle run can be dropped; the last
+#               one still builds the newest commit. When called from release-stable.yml, that workflow's own `release-stable` group is held
+#               through the desktop build (up to 90 min), so the next stable merge's tagging waits for it. Accepted.
 #             main (ref stable or wolf/1uk4): the runner sets the version to X.Y.Z-main.<run_number> (nothing committed), so electron-builder
 #               writes main-mac.yml (channel from the semver prerelease tag). Publishes automatically as a PRE-RELEASE desktop/vX.Y.Z-main.N
 #               (never a draft, never releases/latest) and refreshes the rolling `desktop-latest` feed with main-mac.yml in the same run.
@@ -88,9 +91,9 @@ jobs:
       github.event_name != 'pull_request' && (
       ((inputs.channel || 'stable') == 'stable' && github.ref == 'refs/heads/stable') ||
       (inputs.channel == 'main' && (github.ref == 'refs/heads/stable' || github.ref == 'refs/heads/wolf/1uk4')))
-    # Stable runs queue one behind the other and are never cancelled; main runs keep their own group per ref.
+    # One group for every release run: stable and main both rewrite the desktop-latest feed. Never cancelled; one pending run at most.
     concurrency:
-      group: ${{ (inputs.channel || 'stable') == 'stable' && 'desktop-release-stable' || format('desktop-release-main-{0}', github.ref) }}
+      group: desktop-feed
       cancel-in-progress: false
     runs-on: macos-26   # same as build: actool needs Xcode 26 on macOS 26 to compile build/icon.icon
     timeout-minutes: 90
@@ -130,9 +133,9 @@ jobs:
           if [ "$CHANNEL" = main ]; then
             V=$(node -p 'require("./apps/desktop/package.json").version.replace(/-.*$/,"")+"-main."+process.env.RUN_NUMBER')
           else
-            # A draft release has no git tag, so the release list counts as well as the tags.
-            gh release list --limit 1000 --json tagName -q '.[].tagName' > "$RUNNER_TEMP/releases.txt"
-            V=$(node scripts/desktop-release.mjs version --releases "$RUNNER_TEMP/releases.txt")
+            # A draft release has no git tag, so the release list counts as well as the tags; a draft aimed at this commit is reused.
+            gh release list --limit 200 --json tagName,isDraft,targetCommitish > "$RUNNER_TEMP/releases.json"
+            V=$(node scripts/desktop-release.mjs version --releases "$RUNNER_TEMP/releases.json")
           fi
           V="$V" node -e 'const fs=require("fs");const f="apps/desktop/package.json";const p=JSON.parse(fs.readFileSync(f,"utf8"));p.version=process.env.V;fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")'
           echo "desktop version $V"

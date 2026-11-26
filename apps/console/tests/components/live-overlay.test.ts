@@ -53,3 +53,57 @@ describe("live overlay frame scheduling", () => {
 		assert.equal(o.needsFrames(0), false);
 	});
 });
+
+describe("live overlay fade clock", () => {
+	const host = {
+		nodePos: () => null,
+		hasNode: () => false,
+		nodeColor: () => undefined,
+		center: () => ({ x: 0, y: 0 }),
+		colors: { node: "#888", edge: "#444", label: "#fff", hoverText: "#fff" },
+		fontFamily: "sans-serif",
+	};
+	const grad = { addColorStop: () => undefined };
+	const ctx = new Proxy({}, { get: (_t, p) => (p === "measureText" ? () => ({ width: 1 }) : p === "createRadialGradient" || p === "createLinearGradient" ? () => grad : () => undefined), set: () => true }) as unknown as CanvasRenderingContext2D;
+	const alphaOf = (o: LiveOverlay, kind: string): number | undefined => {
+		for (let x = -400; x <= 400; x += 5) {
+			const hit = o.hitTest(x, 0, { x: 0, y: 0, k: 1 }, 1e6);
+			if (hit?.item.kind === kind) return hit.item.alpha;
+		}
+		return undefined;
+	};
+	let o: LiveOverlay;
+	beforeEach(() => {
+		mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now: 5_000_000_000_000 });
+		o = new LiveOverlay(() => {});
+		o.configure(LIVE_DEFAULTS);
+	});
+	afterEach(() => {
+		o.stop();
+		mock.timers.reset();
+	});
+	const th = (id: string, sub?: string) => ({ kind: "thread", wolf: "hal", threadId: id, ...(sub ? { subagent: sub } : {}) });
+
+	it("an idle thread is half faded 7.5 s into a 15 s fade when the renderer passes its monotonic clock to step and draw", () => {
+		const mono = 123_456; // performance.now(): tiny next to epoch ms
+		o.dispatch({ type: "event", event: ev("thread-active", { actor: th("tf") }), now: Date.now() });
+		o.dispatch({ type: "event", event: ev("thread-idle", { actor: th("tf") }), now: Date.now() });
+		mock.timers.tick(7500);
+		o.step(mono, 0.016, host, 1);
+		o.draw(ctx, host, 1, mono);
+		const a = alphaOf(o, "thread");
+		assert.ok(a !== undefined && Math.abs(a - 0.55 * 0.5) < 0.02, `thread alpha ${a}`);
+	});
+
+	it("a finished subagent is half faded 7.5 s after it finished when the renderer passes its monotonic clock to draw", () => {
+		const mono = 123_456;
+		o.dispatch({ type: "event", event: ev("thread-active", { actor: th("ts") }), now: Date.now() });
+		o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("ts", "sub1") }), now: Date.now() });
+		o.dispatch({ type: "event", event: ev("subagent-finished", { actor: th("ts", "sub1") }), now: Date.now() });
+		mock.timers.tick(7500);
+		o.step(mono, 0.016, host, 1);
+		o.draw(ctx, host, 1, mono);
+		const a = alphaOf(o, "subagent");
+		assert.ok(a !== undefined && a > 0.2 && a < 0.8, `subagent alpha ${a}`);
+	});
+});

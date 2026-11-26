@@ -370,13 +370,25 @@ export class LiveOverlay {
 
 	// ── drawing (world coordinates, camera already applied) ──
 
+	/**
+	 * `now` is the renderer's monotonic clock (animation phase only). Everything stored in the state (idle and finish times, trails, pulses)
+	 * is epoch ms, so fades are computed from the wall clock here, never from `now`.
+	 */
 	draw(ctx: CanvasRenderingContext2D, host: OverlayHost, k: number, now: number): void {
 		if (!this.settings.enabled || Object.keys(this.state.wolves).length === 0) return;
+		ctx.save();
+		try {
+			this.drawBody(ctx, host, k, now, Date.now());
+		} finally {
+			ctx.restore(); // a throw mid-draw must not leave the canvas context unbalanced
+		}
+	}
+
+	private drawBody(ctx: CanvasRenderingContext2D, host: OverlayHost, k: number, now: number, wall: number): void {
 		const s = this.state;
 		const I = this.settings.intensity;
 		const reduced = this.reduced;
-		const items = this.items(host, k, now);
-		ctx.save();
+		const items = this.items(host, k, wall);
 		ctx.lineCap = "round";
 
 		// Trails: the path the wolf took to the thing it touched, fading over trailSec.
@@ -385,7 +397,7 @@ export class LiveOverlay {
 			const to = id ? host.nodePos(id) : null;
 			const from = this.trailFrom.get(t.id);
 			if (!to || !from) continue;
-			const age = 1 - trailAlpha(t, now, this.settings.trailSec);
+			const age = 1 - trailAlpha(t, wall, this.settings.trailSec);
 			const w = items.find((i) => i.kind === "wolf" && i.wolf === t.wolf);
 			EFFECTS.trail!({ ctx, x: from.x, y: from.y, toX: to.x, toY: to.y, r: 0, k, t: reduced ? Math.min(age, 0.6) : age, color: w?.color ?? host.colors.node, intensity: I, reduced });
 		}
@@ -395,7 +407,7 @@ export class LiveOverlay {
 			const at = id ? host.nodePos(id) : null;
 			if (!at) continue;
 			const w = items.find((i) => i.kind === "wolf" && i.wolf === p.wolf);
-			EFFECTS.pulse!({ ctx, x: at.x, y: at.y, r: 8 / k, k, t: Math.min(1, (now - p.at) / DEFAULT_LIVE_OPTIONS.pulseMs), color: w?.color ?? host.colors.node, intensity: I, reduced });
+			EFFECTS.pulse!({ ctx, x: at.x, y: at.y, r: 8 / k, k, t: Math.min(1, (wall - p.at) / DEFAULT_LIVE_OPTIONS.pulseMs), color: w?.color ?? host.colors.node, intensity: I, reduced });
 		}
 		// Links: wolf -> its thread dots, thread -> bound work item (faint), subagent -> parent.
 		ctx.lineWidth = 0.8 / k;
@@ -497,7 +509,6 @@ export class LiveOverlay {
 				ctx.stroke();
 			}
 		}
-		ctx.restore();
 	}
 
 	private line(ctx: CanvasRenderingContext2D, a: Pt, b: Pt, style: string): void {

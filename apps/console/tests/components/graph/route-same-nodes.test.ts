@@ -53,7 +53,8 @@ const sel = (steps: string[][], target: string) => ({
 async function setup() {
 	const { GraphCanvasRenderer } = await import("../../../components/graph/graph-canvas.ts");
 	const r: any = new GraphCanvasRenderer(canvas, { onSelect() {}, onStageClick() {}, onCommit() {}, onCameraMove() {} } as any, { k: 1, x: 400, y: 300 });
-	const nodes = [["fac:d", 0, 0], ["a", 50, 80], ["b", -60, 120], ["t", 200, 90], ["u", 300, -40]].map(([id, x, y]) => ({ id: id as string, x: x as number, y: y as number, label: id as string } as { id: string; x: number; y: number; label: string; fx?: number | null; fy?: number | null }));
+	// Centred on the origin (centroid 0,0): an off-centre fixture is re-centred on load, which moves the nodes and shifts the camera the pointer events assume.
+	const nodes = [["fac:d", -98, -50], ["a", -48, 30], ["b", -158, 70], ["t", 102, 40], ["u", 202, -90]].map(([id, x, y]) => ({ id: id as string, x: x as number, y: y as number, label: id as string } as { id: string; x: number; y: number; label: string; fx?: number | null; fy?: number | null }));
 	r.setSettings({ nodeSize: 6, labelSize: 10, labelZoom: 0.5, edgeWidth: 1 });
 	r.setData({
 		nodes, edges: [{ from: "fac:d", to: "a" }], depEdges: [], depSprings: [], clusters: [],

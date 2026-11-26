@@ -32,6 +32,7 @@ export * from "./thread/question-core.ts";
 // through this barrel (shell law: pure core via @/src/core only).
 export * from "./thread/events.ts";
 export * from "./graph/layout.ts";
+export * from "./graph/recentre.ts";
 export * from "./graph/route-layout.ts";
 export * from "./thread/pending.ts";
 export * from "./thread/math-delims.ts";

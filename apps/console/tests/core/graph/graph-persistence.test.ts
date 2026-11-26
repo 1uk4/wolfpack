@@ -110,6 +110,64 @@ describe("resolvePositions", () => {
 	});
 });
 
+describe("resolvePositions drift", () => {
+	/** A healthy layout: 16x15 grid, 120 apart, spanning about ±900, chained edges. */
+	const healthy = (): { nodes: { id: string }[]; edges: { from: string; to: string }[]; known: Map<string, { x: number; y: number }> } => {
+		const nodes: { id: string }[] = [];
+		const edges: { from: string; to: string }[] = [];
+		const known = new Map<string, { x: number; y: number }>();
+		for (let i = 0; i < 16; i++) {
+			for (let j = 0; j < 15; j++) {
+				const id = `ent:g${i}_${j}`;
+				nodes.push({ id });
+				known.set(id, { x: (i - 7.5) * 120, y: (j - 7) * 120 });
+				if (j > 0) edges.push({ from: `ent:g${i}_${j - 1}`, to: id });
+			}
+		}
+		return { nodes, edges, known };
+	};
+
+	it("20 batches of 50 new chained nodes keep the layout near the origin and bounded", () => {
+		const { nodes, edges, known } = healthy();
+		let positions = known;
+		for (let b = 0; b < 20; b++) {
+			for (let j = 0; j < 50; j++) {
+				const id = `work:b${b}_${j}`;
+				nodes.push({ id });
+				// each batch is its own chain (no anchored neighbour yet), so it lands on the rim
+				if (j > 0) edges.push({ from: `work:b${b}_${j - 1}`, to: id });
+			}
+			positions = resolvePositions(nodes, edges, positions).positions;
+		}
+		let sx = 0;
+		let sy = 0;
+		let minX = Infinity;
+		let maxX = -Infinity;
+		let minY = Infinity;
+		let maxY = -Infinity;
+		for (const p of positions.values()) {
+			sx += p.x;
+			sy += p.y;
+			minX = Math.min(minX, p.x);
+			maxX = Math.max(maxX, p.x);
+			minY = Math.min(minY, p.y);
+			maxY = Math.max(maxY, p.y);
+		}
+		// Measured: fixed layout centroid 66, bbox 2443x2501; the pre-fix layout code gave 148 and 4031x4010.
+		assert.ok(Math.hypot(sx / positions.size, sy / positions.size) < 100, "centroid within 100 of the origin");
+		assert.ok(maxX - minX < 3000 && maxY - minY < 3000, `bbox ${Math.round(maxX - minX)}x${Math.round(maxY - minY)} stays under 3000`);
+	});
+
+	// Kept: the "nothing missing" test above checks only `added` and the size, not that
+	// every position is returned untouched, which is what a settled healthy layout needs.
+	it("a healthy layout with no new nodes is returned unchanged", () => {
+		const { nodes, edges, known } = healthy();
+		const { positions, added } = resolvePositions(nodes, edges, known);
+		assert.deepEqual(added, []);
+		assert.deepEqual(positions, known);
+	});
+});
+
 describe("parseCamera", () => {
 	it("round-trips a stored camera", () => {
 		assert.deepEqual(parseCamera(JSON.stringify({ k: 2, x: -10, y: 5 })), { k: 2, x: -10, y: 5 });

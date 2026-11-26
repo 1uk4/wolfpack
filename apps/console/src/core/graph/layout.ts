@@ -135,6 +135,8 @@ const BOOTSTRAP_GRAVITY = 0.2;
 /** Exported: the live sim reuses this so its rest state matches the
  *  server settle's equilibrium (one engine, one rest). */
 export const INCREMENTAL_GRAVITY = 0.12;
+/** Units per sqrt(node) that cap the rim radius (healthy layouts run ~22; 30 leaves headroom). */
+const RIM_SPACING = 30;
 /** Exported: default cluster-centroid pull strength (tuned by replay —
  *  compact enough to read as blobs, weak enough that cluster shape is
  *  still the edge network's). */
@@ -404,21 +406,28 @@ export function incrementalLayout(
 	let maxX = -Infinity;
 	let minY = Infinity;
 	let maxY = -Infinity;
-	let cx = 0;
-	let cy = 0;
+	let centroidX = 0;
+	let centroidY = 0;
 	for (const a of anchors.values()) {
 		minX = Math.min(minX, a.x);
 		maxX = Math.max(maxX, a.x);
 		minY = Math.min(minY, a.y);
 		maxY = Math.max(maxY, a.y);
-		cx += a.x;
-		cy += a.y;
+		centroidX += a.x;
+		centroidY += a.y;
 	}
 	const hasCore = anchors.size > 0;
 	if (hasCore) {
-		cx /= anchors.size;
-		cy /= anchors.size;
+		centroidX /= anchors.size;
+		centroidY /= anchors.size;
 	}
+	// The layout stays anchored to the ORIGIN: the anchors' centroid only
+	// feeds the rim radius, never the seed centre, the gravity target or the
+	// depth centre. A centroid-following layout inherits each batch's offset
+	// and scale and creeps away (a 21k-unit box seen on a real hub). Note the
+	// origin seeds and the rim cap stop new drift; they do not heal a layout
+	// that already drifted (its stored positions are kept as anchors).
+	const ORIGIN = { x: 0, y: 0 };
 	const coreRadius = hasCore ? Math.max(maxX - minX, maxY - minY) / 2 : 1;
 
 	// Adjacency for neighbor seeding (undirected: edges include assertions).
@@ -444,10 +453,13 @@ export function incrementalLayout(
 	for (const [id, a] of anchors) {
 		if ((adjacency.get(id)?.length ?? 0) === 0) continue;
 		connectedAnchored++;
-		rimRadius += Math.hypot(a.x - cx, a.y - cy);
+		rimRadius += Math.hypot(a.x - centroidX, a.y - centroidY);
 	}
 	if (connectedAnchored > 0) rimRadius = (rimRadius / connectedAnchored) * 1.7;
 	else if (hasCore) rimRadius = coreRadius * 1.15; // no connected anchors yet: bbox fallback
+	// Absolute cap: at most ~RIM_SPACING world units per sqrt(node), so the rim
+	// cannot scale with how far earlier batches already spread.
+	rimRadius = Math.min(rimRadius, RIM_SPACING * Math.sqrt(nodes.length) + 100);
 	rimRadius += 4;
 
 	// Seed every node.
@@ -480,8 +492,8 @@ export function incrementalLayout(
 			} else if (hasCore) {
 				const angle = rand() * Math.PI * 2;
 				const radius = rimRadius + rand() * 8;
-				x = cx + Math.cos(angle) * radius;
-				y = cy + Math.sin(angle) * radius;
+				x = ORIGIN.x + Math.cos(angle) * radius;
+				y = ORIGIN.y + Math.sin(angle) * radius;
 				// An orphan's intended rest spot IS the rim seed: anchor it
 				// there so gravity cannot sink it into the core. (A later
 				// batch linking it to the graph pulls it in naturally —
@@ -504,8 +516,8 @@ export function incrementalLayout(
 		depSprings: options.depSprings,
 		linkLengths: options.linkLengths,
 		gravity: {
-			x: cx,
-			y: cy,
+			x: ORIGIN.x,
+			y: ORIGIN.y,
 			strength: options.gravityStrength ?? (hasCore ? INCREMENTAL_GRAVITY : BOOTSTRAP_GRAVITY),
 		},
 		clusterPull: options.clusters
@@ -513,11 +525,11 @@ export function incrementalLayout(
 			: undefined,
 		depthAnchor:
 			options.depthAnchor && options.depthAnchor.mode !== "off"
-				? { ...options.depthAnchor, center: options.depthAnchor.center ?? { x: cx, y: cy } }
+				? { ...options.depthAnchor, center: options.depthAnchor.center ?? ORIGIN }
 				: options.depthAnchor,
 	});
 	const dMode = options.depthAnchor?.mode ?? "off";
-	const dCenter = options.depthAnchor?.center ?? { x: cx, y: cy };
+	const dCenter = options.depthAnchor?.center ?? ORIGIN;
 	const byId = new Map(simNodes.map((n) => [n.id, n]));
 	for (let i = 0; i < ticks; i++) {
 		sim.tick();

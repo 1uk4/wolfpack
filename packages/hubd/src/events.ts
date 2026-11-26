@@ -48,6 +48,9 @@ export function createEventBus(opts: EventBusOptions = {}) {
   const buffer: HubEvent[] = [];
   const subs = new Set<Sub>();
   let closed = false;
+  /** SSE frames built once per event and written to every stream; weak so nothing outlives the event. */
+  const frames = new WeakMap<object, string>();
+  const hubFrames = new WeakMap<object, string>();
   /** Highest seq at the last lost ledger diff: a cursor at or below it (same boot) may have missed events, so it must resync. */
   let gapSeq = -1;
 
@@ -116,7 +119,12 @@ export function createEventBus(opts: EventBusOptions = {}) {
       const send = (ev: HubEvent) => {
         if (res.destroyed || res.writableEnded) return;
         if (res.writableLength > MAX_WRITABLE) return void res.destroy(); // a client that stopped reading
-        res.write(`id: ${boot}:${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
+        let frame = hubFrames.get(ev);
+        if (frame === undefined) {
+          frame = `id: ${boot}:${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`;
+          hubFrames.set(ev, frame);
+        }
+        res.write(frame);
       };
       if (from !== undefined) {
         const cur = from;
@@ -144,7 +152,13 @@ export function createEventBus(opts: EventBusOptions = {}) {
             }
             return;
           }
-          res.write(`data: ${JSON.stringify({ type: PACK_ACTIVITY_EVENT_TYPE, at: new Date().toISOString(), event: ev })}\n\n`);
+          // One serialization per event, shared by every stream (the bus hands every subscriber the same object).
+          let frame = frames.get(ev);
+          if (frame === undefined) {
+            frame = `data: ${JSON.stringify({ type: PACK_ACTIVITY_EVENT_TYPE, at: new Date().toISOString(), event: ev })}\n\n`;
+            frames.set(ev, frame);
+          }
+          res.write(frame);
         });
       }
       const ka = setInterval(() => (res.destroyed || res.writableEnded ? gone() : res.write(": ka\n\n")), KEEPALIVE_MS);

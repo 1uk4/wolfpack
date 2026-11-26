@@ -1090,7 +1090,11 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "hubEvents": {
           const hdr = req.headers["last-event-id"];
           const cursor = (Array.isArray(hdr) ? hdr[0] : hdr)?.trim() || url.searchParams.get("from")?.trim() || undefined;
-          bus.attach(res, cursor, identity ? { pack: packOf(identity), bus: activityBus } : undefined);
+          // Activity frames: opt-in (?activity=1) AND a console/browser (device or owner) token. Worker tokens never get them.
+          // TODO(multi-person): devices belong to the owner, who sees every domain; when a device can belong to another person,
+          // filter frames per domain with domainsOf(identity).
+          const wantsActivity = url.searchParams.get("activity") === "1" && !!identity && (identity.kind === "console" || identity.kind === "browser");
+          bus.attach(res, cursor, wantsActivity ? { pack: packOf(identity!), bus: activityBus } : undefined);
           if (tokenId) {
             // Revoked between auth and attach, or later (the watcher): close this stream.
             if (!tokens.ids().includes(tokenId)) return void res.destroy();
@@ -1107,12 +1111,13 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           return send(res, 202, activityIngestFn(who, body));
         }
         case "hubActivityPresence": {
+          deviceCaller(identity); // device or owner tokens only (403 for a worker token)
           let snap;
           try {
             snap = presence.snapshot(packOf(identity!));
           } catch (e) {
             console.error("hubd: presence snapshot failed:", (e as Error).message);
-            snap = { v: 1, pack: packOf(identity!), at: Date.now(), wolves: [], threads: [], subagents: [], owner: [] };
+            snap = { v: 1, pack: packOf(identity!), at: (opts.now ?? Date.now)(), wolves: [], threads: [], subagents: [], owner: [] };
           }
           return send(res, 200, snap);
         }

@@ -38,9 +38,9 @@ const post = (h: HubServer, headers: Record<string, string>, events: unknown[]) 
   fetch(h.url + "/v1/activity", { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ v: 1, events }) });
 
 /** Open /v1/events; `activity()` returns the pack.activity frames seen so far after a short settle. */
-async function open(h: HubServer) {
+async function open(h: HubServer, o: { headers?: Record<string, string>; activity?: boolean } = {}) {
   const ctl = new AbortController();
-  const res = await fetch(h.url + "/v1/events", { headers: OP, signal: ctl.signal });
+  const res = await fetch(h.url + "/v1/events" + (o.activity === false ? "" : "?activity=1"), { headers: o.headers ?? OP, signal: ctl.signal });
   const reader = res.body!.getReader();
   const dec = new TextDecoder();
   let buf = "";
@@ -109,6 +109,26 @@ describe("POST /v1/activity", () => {
     const { h, w1 } = await start();
     const r = await post(h, w1, [ev({ id: "x".repeat(70_000) })]);
     expect(r.status).toBe(400);
+  });
+});
+
+describe("activity scope", () => {
+  it("only a device token that opts in with ?activity=1 receives pack.activity frames; a worker token never does", async () => {
+    const { h, w1, w2 } = await start();
+    const wolfFlagged = await open(h, { headers: w2 });
+    const noFlag = await open(h, { activity: false });
+    const flagged = await open(h);
+    await post(h, w1, [ev()]);
+    const count = async (s: Awaited<ReturnType<typeof open>>) => (await s.frames()).filter((f) => f.data.type === "pack.activity").length;
+    expect(await count(flagged)).toBe(1);
+    expect(await count(noFlag)).toBe(0);
+    expect(await count(wolfFlagged)).toBe(0);
+    for (const s of [wolfFlagged, noFlag, flagged]) s.close();
+  });
+
+  it("presence is 403 for a worker token", async () => {
+    const { h, w1 } = await start();
+    expect((await fetch(h.url + "/v1/activity/presence", { headers: w1 })).status).toBe(403);
   });
 });
 

@@ -86,10 +86,15 @@ export function flushViewer() {
 	}
 }
 
+/** The view the owner most recently opened/changed in ANY thread's panel (null once closed). Read by owner presence (components/shell/use-owner-presence.ts). */
+let latestShown: ViewDescriptor | null = null;
+export const getLatestShownView = (): ViewDescriptor | null => latestShown;
+
 let hooked = false;
 function set(wolf: string, threadId: string, next: ViewerState) {
 	const key = viewerKey(wolf, threadId);
 	states.set(key, next);
+	latestShown = next.open && next.stack.length > 0 ? next.stack[next.stack.length - 1]! : null;
 	const t = timers.get(key);
 	if (t) clearTimeout(t);
 	timers.set(key, setTimeout(() => write(key), VIEWER_DEBOUNCE_MS));
@@ -155,7 +160,7 @@ export function resetViewerCache() {
 	states.clear();
 }
 
-function subscribe(l: () => void) {
+export function subscribe(l: () => void) {
 	listeners.add(l);
 	return () => void listeners.delete(l);
 }

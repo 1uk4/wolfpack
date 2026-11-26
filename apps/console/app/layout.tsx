@@ -11,6 +11,7 @@ import { MemoryEventsProvider } from "@/components/memory/memory-events";
 import { AppearanceProvider } from "@/components/settings/appearance";
 import { AttachedThreadProvider } from "@/components/chat-bar/attached-thread";
 import { NavTracker } from "@/components/shell/nav-tracker";
+import { OwnerPresence } from "@/components/shell/use-owner-presence";
 import HubAuth from "@/components/shell/hub-auth";
 import UpdateBanner from "@/components/shell/update-banner";
 import { SingleMacProvider } from "@/components/shell/single-mac";
@@ -51,6 +52,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 			<HubAuth />
 			<ViewportVars />
 			<NavTracker />
+			<OwnerPresence />
 			<ServerEventsProvider>
 				<MemoryEventsProvider>
 					<AppearanceProvider>

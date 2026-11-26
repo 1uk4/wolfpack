@@ -58,6 +58,7 @@ import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "@/src/c
 import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, ROUTE_DONE_COLOR } from "@/src/core";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
+import type { LiveOverlay, OverlayHit, OverlayHost } from "./live/live-overlay";
 import {
 	CHARGE_STRENGTH,
 	CLUSTER_PULL_STRENGTH,
@@ -170,6 +171,10 @@ export interface RendererCallbacks {
 	/** The live sim settled after a drag: commit the new rest state
 	 *  (the caller PUTs it to the positions store). */
 	onCommit: (positions: Record<string, Position>) => void;
+	/** Live overlay: the pointer is over a wolf / thread / subagent (null = left it). */
+	onOverlayHover?: (hit: OverlayHit | null) => void;
+	/** Live overlay: a click or tap (not a drag) landed on one. */
+	onOverlaySelect?: (hit: OverlayHit, pointerType: string) => void;
 }
 
 // ─── Constants (ported verbatim from the sigma view) ────────────────────────
@@ -659,6 +664,11 @@ export class GraphCanvasRenderer {
 
 	private resizeObserver: ResizeObserver;
 	private downPos: Pt | null = null;
+	/** The live overlay (wolves, satellites, pulses): drawn above the nodes inside THIS loop; null = nothing changes. */
+	private overlay: LiveOverlay | null = null;
+	private overlayHoverKey: string | null = null;
+	private overlayDown: OverlayHit | null = null;
+	private lastDrawAt = 0;
 
 	// ── Cached world geometry ─────────────────────────────────────────────
 	// Everything above is drawn per frame; everything below is derived from
@@ -1040,6 +1050,7 @@ export class GraphCanvasRenderer {
 
 	destroy(): void {
 		if (this.frameId !== null) cancelAnimationFrame(this.frameId);
+		this.overlay = null;
 		this.flushCommit();
 		this.sim = null;
 		this.simActive = false;
@@ -1054,6 +1065,54 @@ export class GraphCanvasRenderer {
 		this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
 		this.canvas.removeEventListener("contextmenu", this.onContextMenu);
 		this.canvas.style.cursor = "";
+	}
+
+	/** Attach (or detach with null) the live overlay. The caller owns its lifetime; the renderer only draws and hit-tests it. */
+	setOverlay(o: LiveOverlay | null, cbs?: Pick<RendererCallbacks, "onOverlayHover" | "onOverlaySelect">): void {
+		this.overlay = o;
+		this.callbacks = { ...this.callbacks, onOverlayHover: cbs?.onOverlayHover, onOverlaySelect: cbs?.onOverlaySelect };
+		if (!o) this.setOverlayHover(null);
+		this.markDirty();
+	}
+
+	/** Request a redraw (the overlay calls this when its state changes). */
+	requestRedraw(): void {
+		this.markDirty();
+	}
+
+	private overlayHostCache: OverlayHost | null = null;
+	private overlayHost(): OverlayHost {
+		const data = this.data;
+		if (this.overlayHostCache && this.overlayHostCache.colors === data?.colors) return this.overlayHostCache;
+		const host: OverlayHost = {
+			nodePos: (id) => {
+				const n = this.nodeById.get(id);
+				return n ? { x: n.x, y: n.y } : null;
+			},
+			hasNode: (id) => this.nodeById.has(id),
+			nodeColor: (id) => this.nodeById.get(id)?.color,
+			center: () => {
+				const b = this.worldBBox;
+				return b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 } : { x: 0, y: 0 };
+			},
+			colors: data?.colors ?? { node: "#888888", edge: "#888888", label: "#888888", hoverText: "#ffffff" },
+			fontFamily: data?.fontFamily ?? "sans-serif",
+		};
+		this.overlayHostCache = host;
+		return host;
+	}
+
+	/** The overlay thing under the pointer; touch gets a bigger pick pad. */
+	private overlayHit(pos: Pt, pointerType: string): OverlayHit | null {
+		if (!this.overlay) return null;
+		return this.overlay.hitTest(pos.x, pos.y, this.transform, pointerType === "touch" ? 18 : 8);
+	}
+
+	private setOverlayHover(hit: OverlayHit | null): void {
+		const key = hit ? hit.item.kind + ":" + hit.item.key : null;
+		if (key === this.overlayHoverKey) return;
+		this.overlayHoverKey = key;
+		this.callbacks.onOverlayHover?.(hit);
 	}
 
 	// ── Event handlers (state mutation only — never draw) ──
@@ -1095,6 +1154,15 @@ export class GraphCanvasRenderer {
 			}
 			return;
 		}
+		if (e.pointerType !== "touch") {
+			const oh = this.overlayHit(pos, e.pointerType);
+			this.setOverlayHover(oh);
+			if (oh) {
+				if (this.hoverId) this.setHover(null);
+				this.canvas.style.cursor = "pointer";
+				return;
+			}
+		}
 		const node = this.pickAt(pos.x, pos.y);
 		if ((node?.id ?? null) !== this.hoverId) this.setHover(node?.id ?? null);
 		this.canvas.style.cursor = node ? "pointer" : "";
@@ -1107,7 +1175,9 @@ export class GraphCanvasRenderer {
 		// used to open under the menu).
 		if (e.button !== 0) return;
 		const pos = this.eventPos(e);
-		const node = this.pickAt(pos.x, pos.y);
+		// An overlay thing under the press: remember it for the click, but do NOT take the press (pan and pinch stay d3-zoom's).
+		this.overlayDown = this.overlayHit(pos, e.pointerType);
+		const node = this.overlayDown ? null : this.pickAt(pos.x, pos.y);
 		if (node && this.sim) {
 			// Node press: pin the node (at ITS OWN position — the cursor
 			// may be inside the pick pad, off-center). preventDefault kills
@@ -1169,7 +1239,13 @@ export class GraphCanvasRenderer {
 		const pos = this.eventPos(e);
 		const moved = Math.hypot(pos.x - this.downPos.x, pos.y - this.downPos.y);
 		this.downPos = null;
+		const od = this.overlayDown;
+		this.overlayDown = null;
 		if (moved > CLICK_SLOP) return; // that was a drag (pan), not a click
+		if (od) {
+			this.callbacks.onOverlaySelect?.(od, e.pointerType);
+			return;
+		}
 		const node = this.pickAt(pos.x, pos.y);
 		if (node) this.callbacks.onSelect(node.id, pos);
 		else this.callbacks.onStageClick();
@@ -1188,6 +1264,7 @@ export class GraphCanvasRenderer {
 	private onPointerLeave = () => {
 		if (this.dragId) return; // pointer capture keeps the drag alive
 		this.downPos = null;
+		this.setOverlayHover(null);
 		this.setHover(null);
 	};
 
@@ -1250,17 +1327,27 @@ export class GraphCanvasRenderer {
 			const now = performance.now();
 			// Clamp the dt: a long idle gap must not teleport the ease forward.
 			const dt = Math.min(Math.max(now - this.lastTickAt, 8), 100);
+			const wasDirty = this.dirty;
 			this.lastTickAt = now;
 			const hoverAnim = this.advanceHover();
 			const zoomAnim = this.advanceZoom(dt);
 			const simAnim = this.advanceSim();
-			this.draw();
+			// Live overlay: its own small physics (reads node positions, never moves them) and its own animation need.
+			const ov = this.overlay;
+			if (ov && this.geometryReady) ov.step(now, dt / 1000, this.overlayHost(), this.transform.k);
+			const overlayAnim = !!ov && ov.needsFrames(now);
+			let pulseAnim = false;
+			for (const p of this.pulses.values()) if (!p.reduce) pulseAnim = true;
+			// Phones: when ONLY the overlay animates, draw at about 30 fps.
+			const onlyOverlay = overlayAnim && !hoverAnim && !zoomAnim && !simAnim && !pulseAnim && !wasDirty;
+			if (!(onlyOverlay && ov && now - this.lastDrawAt < ov.minFrameMs)) {
+				this.draw();
+				this.lastDrawAt = now;
+			}
 			// Keep frames coming ONLY while an animation is in motion (hover
 			// fade, zoom glide, or live physics); an idle graph schedules no
 			// rAF at all.
-			let pulseAnim = false;
-			for (const p of this.pulses.values()) if (!p.reduce) pulseAnim = true;
-			this.animating = hoverAnim || zoomAnim || simAnim || pulseAnim;
+			this.animating = hoverAnim || zoomAnim || simAnim || pulseAnim || overlayAnim;
 		} finally {
 			this.inTick = false;
 		}
@@ -2027,6 +2114,9 @@ export class GraphCanvasRenderer {
 				ctx.fill("evenodd");
 			}
 		}
+
+		// 7c. Live overlay: wolves, satellites, trails, pulses, rings (same camera; nothing when it has no data).
+		if (this.overlay) this.overlay.draw(ctx, this.overlayHost(), k, performance.now());
 
 		// 8. Cluster region labels — THE TOPMOST layer (user 2026-09-16:
 		// node labels and hover names drew over them before; region labels

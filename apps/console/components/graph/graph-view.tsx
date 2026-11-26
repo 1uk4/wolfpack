@@ -46,6 +46,7 @@ import {
 	type Position,
 } from "@/src/core";
 import { GraphCanvasRenderer } from "./graph-canvas.ts";
+import { LiveGraphLayer } from "./live/live-layer";
 import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
 import { useWorkReader } from "../work/work-reader.tsx";
@@ -192,6 +193,8 @@ export function GraphView({
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 	const rendererRef = useRef<GraphCanvasRenderer | null>(null);
+	/** The same renderer as state, so the live layer (a child) attaches once it exists. */
+	const [liveRenderer, setLiveRenderer] = useState<GraphCanvasRenderer | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
 	const graphRef = useRef(graph);
 	graphRef.current = graph;
@@ -308,8 +311,10 @@ export function GraphView({
 			initialCamera,
 		);
 		rendererRef.current = renderer;
+		setLiveRenderer(renderer);
 		return () => {
 			rendererRef.current = null;
+			setLiveRenderer(null);
 			// Flush a pending camera write so an unmount <250ms after a move
 			// still persists the user's last standpoint.
 			if (cameraTimer && lastCamera) {
@@ -529,6 +534,7 @@ export function GraphView({
 						{/* THE single canvas: every layer (regions, edges, nodes, both
 						    label systems, hover) draws into it, once per frame. */}
 						<canvas ref={canvasRef} className="block h-full w-full touch-none" />
+						<LiveGraphLayer renderer={liveRenderer} settings={settings} />
 					</div>
 				)}
 

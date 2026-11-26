@@ -1,0 +1,92 @@
+"use client";
+
+/**
+ * THE SHARED LIVE FEED: one SSE stream per browser tab, reference counted. The graph overlay and any other consumer (the activity feed,
+ * work-wolfpack-TVKc9Td) acquire it; the stream opens with the first one and closes with the last.
+ *   useLiveActivity()   -> { state, recent }: the reduced pack state (same reducer as the overlay) and a ring of the last 50 events
+ *                          (newest last), each { id, at (arrival ms), ts, verb, actor, target }.
+ *   onLiveAction(fn)    -> raw actions (event / snapshot / resync), for consumers with their own reducer options (the overlay).
+ */
+import { useEffect, useSyncExternalStore } from "react";
+import type { ActivityEvent } from "@wolfpack/protocol";
+import { emptyLiveState, reduceLive, type LiveAction, type LiveState } from "@/src/core/graph/live/live-state";
+import { startLiveFeed } from "./live-client";
+
+export interface RecentEvent { id: string; at: number; ts: number; verb: string; actor: ActivityEvent["actor"]; target?: ActivityEvent["target"] }
+export interface LiveActivitySnapshot { state: LiveState; recent: readonly RecentEvent[] }
+
+export const RECENT_MAX = 50;
+const EMPTY: LiveActivitySnapshot = { state: emptyLiveState(0), recent: [] };
+
+let snapshot: LiveActivitySnapshot = EMPTY;
+const subs = new Set<() => void>();
+const listeners = new Set<(a: LiveAction) => void>();
+let refs = 0;
+let stopFeed: (() => void) | null = null;
+let timer: ReturnType<typeof setInterval> | null = null;
+let sig = "";
+
+const signature = (s: LiveState) => `${Object.values(s.wolves).map((w) => `${w.name}${w.online ? 1 : 0}${w.needsYou ? 1 : 0}`).join()}|${Object.keys(s.threads).length}|${Object.keys(s.subagents).length}|${s.owner ? 1 : 0}`;
+const emit = () => subs.forEach((f) => f());
+
+function dispatch(a: LiveAction): void {
+	for (const l of listeners) l(a);
+	const state = reduceLive(snapshot.state, a);
+	let recent = snapshot.recent;
+	if (a.type === "event") {
+		const e = a.event;
+		recent = [...recent, { id: e.id, at: a.now, ts: e.ts, verb: e.verb, actor: e.actor, target: e.target }].slice(-RECENT_MAX);
+	}
+	if (a.type === "tick") {
+		const s = signature(state);
+		if (s === sig) return; // nothing visible changed: no re-render
+		sig = s;
+	}
+	snapshot = { state, recent };
+	emit();
+}
+
+/** Open the shared stream (first holder) and get the release function. */
+export function acquireLiveFeed(): () => void {
+	refs++;
+	if (refs === 1) {
+		stopFeed = startLiveFeed({ dispatch });
+		timer = setInterval(() => {
+			if (typeof document === "undefined" || !document.hidden) dispatch({ type: "tick", now: Date.now() });
+		}, 1000);
+	}
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		if (--refs > 0) return;
+		stopFeed?.();
+		stopFeed = null;
+		if (timer) clearInterval(timer);
+		timer = null;
+		snapshot = EMPTY;
+		sig = "";
+		emit();
+	};
+}
+
+/** The current shared snapshot (a late subscriber such as the overlay starts from it). */
+export const getLiveSnapshot = (): LiveActivitySnapshot => snapshot;
+
+/** Raw actions as they arrive (not replayed: a late subscriber sees the next snapshot/resync). */
+export function onLiveAction(fn: (a: LiveAction) => void): () => void {
+	listeners.add(fn);
+	return () => void listeners.delete(fn);
+}
+
+const subscribe = (f: () => void) => {
+	subs.add(f);
+	return () => void subs.delete(f);
+};
+
+/** The shared live state and recent-event ring. Opens the stream while mounted (shared with the graph overlay). */
+export function useLiveActivity(opts: { enabled?: boolean } = {}): LiveActivitySnapshot {
+	const enabled = opts.enabled ?? true;
+	useEffect(() => (enabled ? acquireLiveFeed() : undefined), [enabled]);
+	return useSyncExternalStore(subscribe, () => snapshot, () => EMPTY);
+}

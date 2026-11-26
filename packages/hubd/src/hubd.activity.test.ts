@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActivityEvent } from "@wolfpack/protocol";
 import { createMemoryBus, type ActivityBus } from "./activity/bus.js";
+import { createPresenceStore } from "./activity/presence.js";
 import { createEventBus } from "./events.js";
 import { createHubServer, type HubOptions, type HubServer } from "./server.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
@@ -146,6 +147,20 @@ describe("GET /v1/activity/presence", () => {
     s = await snap();
     expect(s.wolves).toHaveLength(0);
     expect(s.threads).toHaveLength(1);
+  });
+});
+
+describe("presence store", () => {
+  it("a later transient event from the same actor does not evict its needs-you or bound state", () => {
+    const store = createPresenceStore();
+    const th = { kind: "thread", wolf: "w1", threadId: "t1" };
+    store.set(ev({ pack: "p", verb: "needs-you" }, th) as ActivityEvent);
+    store.set(ev({ pack: "p", verb: "bound" }, th) as ActivityEvent);
+    store.set(ev({ pack: "p", verb: "kb-write" }, th) as ActivityEvent);
+    store.set(ev({ pack: "p", verb: "contribution" }, th) as ActivityEvent);
+    const verbs = store.snapshot("p").threads.map((e) => e.event.verb).sort();
+    expect(verbs).toEqual(["bound", "contribution", "needs-you"]);
+    store.stop();
   });
 });
 

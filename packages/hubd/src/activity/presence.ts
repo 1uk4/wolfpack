@@ -8,9 +8,18 @@ import { ACTIVITY_VERSION, type ActivityEvent, type PresenceEntry, type Presence
 export const PRESENCE_MAX_ENTRIES = 5000;
 const SWEEP_MS = 5000;
 
+/** State-bearing verbs each own a slot per actor (a later verb of the same slot replaces it); transient verbs share one slot. */
+const SLOT: Partial<Record<ActivityEvent["verb"], string>> = {
+  "thread-active": "activity", "thread-idle": "activity",
+  "needs-you": "needs", answered: "needs",
+  bound: "binding", unbound: "binding",
+  "subagent-spawned": "subagent", "subagent-finished": "subagent",
+  "owner-viewing": "viewing",
+};
+
 const keyOf = (e: ActivityEvent): string => {
   const a = e.actor;
-  return [e.pack, a.kind, a.wolf ?? "", a.threadId ?? "", a.subagent ?? ""].join("\u0000");
+  return [e.pack, a.kind, a.wolf ?? "", a.threadId ?? "", a.subagent ?? "", SLOT[e.verb] ?? "transient"].join("\u0000");
 };
 
 export function createPresenceStore(opts: { now?: () => number; maxEntries?: number; sweepMs?: number } = {}) {

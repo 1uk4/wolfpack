@@ -29,6 +29,7 @@ import { appendToDraft, draftKey } from "@/lib/composer-draft";
 import { setVizMode, useVizActive } from "@/components/viewer/viz-mode";
 import { useFrameBadges } from "@/components/viewer/frame-store";
 import { FrameBadges } from "@/components/viewer/frame-badges";
+import { BarIcon } from "@/components/chat-bar/bar-icon";
 import { useThreadColor } from "@/components/thread/use-thread-color";
 import { useBarCards, type BarCards } from "@/components/chat-bar/chat-bar-cards";
 import type { Answering } from "@/components/ask/ask-sheet";
@@ -165,7 +166,7 @@ export function ChatBar() {
 	const dictating = dictation.active;
 	const own = onOwn;
 	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dictating, vizAttached };
-	const full = !!attached && !own && !dockless && (!wide || !minimized);
+	const full = !!attached && !own && !dockless && !minimized;
 	const shown = !!attached && !own && !dockless;
 
 	// Published so the popped-out thread's own page shows and drives the same run (use-thread-dictation.ts). Every field
@@ -362,6 +363,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 	const api = useAttachedThread()!;
 	const { setMinimized, working, attachedThread, groups } = api;
 	const minimized = api.minimized && !swap;
+	const needsYouTotal = groups.reduce((n, g) => n + g.needsYou, 0);
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
 	const wolfColor = api.wolves.find((w) => w.name === target.wolf)?.color;
 	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.kind ? { kind: attachedThread.kind } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all, wolfColor).hex;
@@ -519,7 +521,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 			data-testid="chat-bar-chip"
 			aria-haspopup={BAR_EXTRAS.switcher ? "dialog" : undefined}
 			aria-expanded={BAR_EXTRAS.switcher ? switcher : undefined}
-			onClick={() => (minimized ? setMinimized(false) : BAR_EXTRAS.switcher ? (vizOn ? undefined : setSwitcher((s) => !s)) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
+			onClick={() => (BAR_EXTRAS.switcher ? (vizOn ? undefined : setSwitcher((s) => !s)) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
 			className={cn("flex items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-11 max-w-[60vw]" : "max-w-56")}
 			title={`${target.wolf} · ${title}`}
 		>
@@ -562,6 +564,22 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 			</Hint>
 		</div>
 	) : null;
+
+	// Collapsed: a small draggable icon on every screen size. It keeps the bar's `chat-bar` test id and "minimized" state; over another thread's page the bar never collapses (`minimized` is false then), because the swap pill is the way to type there.
+	if (minimized) {
+		return (
+			<BarIcon
+				phone={phone}
+				label={needsYouTotal > 0 ? `Expand chat bar (${needsYouTotal} waiting for you)` : "Expand chat bar"}
+				color={color}
+				wolfStatus={api.wolves.find((w) => w.name === target.wolf)?.status ?? "online"}
+				needsYou={needsYouTotal}
+				working={working}
+				dictation={dictation}
+				onExpand={() => setMinimized(false)}
+			/>
+		);
+	}
 
 	if (phone) {
 		const bottomPad = inset > 0 ? 0 : "env(safe-area-inset-bottom)";
@@ -626,48 +644,23 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 				{!minimized && !sheet && chipRow}
 				<div className="relative flex items-center gap-1 px-1.5">
 					{chip}
-					{(sheet || minimized) && badge}
-					{working && !minimized && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
-					{minimized && <CompactMeter dictation={dictation} />}
-					{minimized ? (
-						<button type="button" aria-label="Expand chat bar" data-testid="chat-bar-expand" onClick={() => setMinimized(false)} className={cn(tap, "ml-auto")}>
-							<MessageSquareIcon className="size-4" />
-						</button>
-					) : (
-						<div className="ml-auto flex items-center">
-							{!sheet && (
-								<button type="button" aria-label="Open full screen" data-testid="bar-sheet-open" onClick={() => openSheet(false)} className={tap}>
-									<ChevronUpIcon className="size-5" />
-								</button>
-							)}
-							<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className={tap}>
-								<ChevronDownIcon className="size-4" />
+					{sheet && badge}
+					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
+					<div className="ml-auto flex items-center">
+						{!sheet && (
+							<button type="button" aria-label="Open full screen" data-testid="bar-sheet-open" onClick={() => openSheet(false)} className={tap}>
+								<ChevronUpIcon className="size-5" />
 							</button>
-						</div>
-					)}
+						)}
+						<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className={tap}>
+							<ChevronDownIcon className="size-4" />
+						</button>
+					</div>
 				</div>
 				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} onSending={setSending} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
 				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 			</>
-		);
-	}
-
-	if (minimized) {
-		return (
-			<div data-testid="chat-bar" data-state="minimized" className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2">
-				<div className="relative rounded-full border bg-card shadow-md focus-within:ring-1 focus-within:ring-(color:--thread-accent)" style={{ borderColor: color }}>
-					<div className="flex items-center">
-						{chip}
-						<CompactMeter dictation={dictation} />
-						{badge}
-						<button type="button" aria-label="Expand chat bar" data-testid="chat-bar-expand" onClick={() => setMinimized(false)} className="mr-1 rounded-full p-1 text-muted-foreground hover:bg-accent">
-							<MessageSquareIcon className="size-3.5" />
-						</button>
-					</div>
-					{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
-				</div>
-			</div>
 		);
 	}
 

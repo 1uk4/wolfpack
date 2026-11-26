@@ -410,15 +410,15 @@ describe("ChatBar on a phone", () => {
 		assert.match(bar().getAttribute("style")!, /env\(safe-area-inset-bottom\)/);
 	});
 
-	it("reserves room for the dock on phone pages, also when minimized, and clears it when the dock goes", async () => {
+	it("reserves room for the dock on phone pages, clears it when the bar collapses to the floating icon, and when the dock goes", async () => {
 		(HTMLElement.prototype as any).getBoundingClientRect = () => ({ height: 90 });
 		await mount();
 		assert.equal(reserve(), "90px");
 		await click(q('[data-testid="chat-bar-minimize"]'));
 		assert.equal(bar().getAttribute("data-state"), "minimized");
-		assert.equal(reserve(), "90px");
-		assert.ok(q('[data-testid="chat-bar-expand"]')!.className.includes("min-h-11"));
-		await resize(false); // desktop pill, minimized: no reserve
+		assert.equal(reserve(), "", "the icon floats over the page: nothing to reserve");
+		assert.ok(q('[data-testid="chat-bar-expand"]')!.className.includes("size-12"), "48px: above the 44px touch minimum");
+		await resize(false); // desktop, minimized: no reserve
 		assert.equal(reserve(), "");
 	});
 

@@ -2,10 +2,11 @@
  * POST /v1/activity core: per-token rate limit, actor ownership checks, pack stamping, then publish on the bus.
  * Never throws for bad input (it counts a drop) and never lets a bus/presence failure escape.
  */
-import { parseActivityBatch, type ActivityEvent, type ActivityIngestResponse } from "@wolfpack/protocol";
+import { parseActivityBatch, parseActivityEvent, type ActivityEvent, type ActivityIngestResponse } from "@wolfpack/protocol";
 import { HubError } from "../errors.js";
 import type { ActivityBus } from "./bus.js";
 import type { PresenceStore } from "./presence.js";
+import type { ActivityStatsStore } from "./stats.js";
 
 export const ACTIVITY_BODY_LIMIT = 64 * 1024;
 export const DEFAULT_RATE_PER_SEC = 20;
@@ -23,6 +24,8 @@ export interface Publisher {
 export interface IngestOptions {
   bus: ActivityBus;
   presence: PresenceStore;
+  /** Optional per-wolf counters. */
+  stats?: ActivityStatsStore;
   /** The hub's pack id: every accepted event is stamped with it, whatever the client sent. */
   pack: string;
   /** Is `wolf` an active wolf registered on `hostId`? */
@@ -71,10 +74,22 @@ export function createActivityIngest(o: IngestOptions) {
       const parsed = parseActivityBatch(stamped);
       if (!parsed.ok) throw new HubError("invalid_request", parsed.reason === "too-large" ? "too many events in one batch" : "events must be an array");
       const total = Array.isArray(raw) ? raw.length : 0;
+      const stats = o.stats;
+      if (stats && parsed.dropped > 0) {
+        // Invalid events: charge the wolf they claim (bounded name), else the publishing host / token.
+        for (const x of Array.isArray(stamped) ? stamped : []) {
+          if (parseActivityEvent(x).ok) continue;
+          const w = (x as { actor?: { wolf?: unknown } } | null)?.actor?.wolf;
+          stats.reject(typeof w === "string" && w ? w : who.worker ? `host:${who.hostId ?? "?"}` : "owner", "invalid");
+        }
+      }
       const room = take(who.tokenId, parsed.events.length);
       let accepted = 0;
-      for (const ev of parsed.events.slice(0, room)) {
-        if (!allowed(ev, who)) continue;
+      for (const [i, ev] of parsed.events.entries()) {
+        const name = ev.actor.wolf ?? (who.worker ? `host:${who.hostId ?? "?"}` : "owner");
+        if (i >= room) { stats?.add(name, "rateLimited"); continue; }
+        if (!allowed(ev, who)) { stats?.reject(name, "spoofed"); continue; }
+        stats?.add(name, "accepted");
         try {
           o.presence.set(ev);
         } catch {

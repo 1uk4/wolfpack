@@ -53,7 +53,7 @@ import {
   GraduationResultSchema,
   KbActivityResponseSchema,
 } from "./schemas.js";
-import { ActivityBatchSchema, ActivityIngestResponseSchema, PresenceSnapshotSchema } from "./activity.js";
+import { ActivityBatchSchema, ActivityIngestResponseSchema, ActivityStatsSchema, PresenceSnapshotSchema } from "./activity.js";
 import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffRequestSchema, KbManifestDiffResponseSchema } from "./kb-sync.js";
 
 import * as R from "./registry.js";
@@ -675,6 +675,8 @@ export const ROUTES = {
   hubActivityIngest: { scope: "hub", method: "POST", path: "/v1/activity", body: ActivityBatchSchema, response: { kind: "json", schema: ActivityIngestResponseSchema }, status: [202], error: err },
   /** Current presence of the caller's pack (wolves, threads, subagents, owner), expired entries removed. */
   hubActivityPresence: { scope: "hub", method: "GET", path: "/v1/activity/presence", response: { kind: "json", schema: PresenceSnapshotSchema }, status: [200], error: err },
+  /** In-memory activity counters per wolf (accepted, rejected by reason, rate-limited, derived-published, queue-dropped). Owner and device tokens only (403 for a worker token). */
+  hubActivityStats: { scope: "hub", method: "GET", path: "/v1/activity/stats", response: { kind: "json", schema: ActivityStatsSchema }, status: [200], error: err },
   /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a
    * preview with a confirmation token. Answers at once with the job `{jobId, kind, state: "running", startedAt}`; a start

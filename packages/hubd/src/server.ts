@@ -68,6 +68,7 @@ import { actorOf, createTokenStore, type AuthIdentity } from "./auth.js";
 import { createEventBus } from "./events.js";
 import { createMemoryBus, guardBus, type ActivityBus } from "./activity/bus.js";
 import { createPresenceStore } from "./activity/presence.js";
+import { createActivityStats } from "./activity/stats.js";
 import { createActivityDeriver } from "./activity/derive.js";
 import { ACTIVITY_BODY_LIMIT, createActivityIngest } from "./activity/ingest.js";
 import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
@@ -391,7 +392,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   const packOf = (_identity: AuthIdentity): string => packId;
   const activityBus = guardBus(opts.activityBus ?? createMemoryBus()); // every user of the bus (ingest, SSE attach) goes through the guard
   const presence = createPresenceStore({ now: opts.now });
-  const derive = createActivityDeriver({ bus: activityBus, presence, pack: packId, now: opts.now, domainOf: (id) => domainCache.get(id) });
+  const activityStats = createActivityStats();
+  const derive = createActivityDeriver({ bus: activityBus, presence, pack: packId, now: opts.now, domainOf: (id) => domainCache.get(id), stats: activityStats });
   const bus = createEventBus({
     bufferSize: opts.eventBufferSize,
     maxStreams: opts.maxEventStreams,
@@ -568,6 +570,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     const activityIngest = createActivityIngest({
       bus: activityBus,
       presence,
+      stats: activityStats,
       pack: packId,
       wolfOnHost: (wolf, hostId) => hostOf(wolf) === hostId,
       now: opts.now,
@@ -1121,6 +1124,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           if (!identity?.tokenId) throw new Error("invariant: an authenticated identity always carries its token id"); // a logged 500, never a shared bucket
           const who = { tokenId: identity.tokenId, hostId: identity.hostId, worker: identity.kind === "worker" };
           return send(res, 202, activityIngestFn(who, body));
+        }
+        case "hubActivityStats": {
+          deviceCaller(identity); // device or owner tokens only (403 for a worker token)
+          return send(res, 200, activityStats.snapshot(packOf(identity!), (opts.now ?? Date.now)()));
         }
         case "hubActivityPresence": {
           deviceCaller(identity); // device or owner tokens only (403 for a worker token)

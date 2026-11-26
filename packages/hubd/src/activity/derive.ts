@@ -12,12 +12,15 @@ import { randomUUID } from "node:crypto";
 import { sanitizeActivityTitle, type ActivityActor, type ActivityEvent, type ActivityVerb } from "@wolfpack/protocol";
 import type { ActivityBus } from "./bus.js";
 import type { PresenceStore } from "./presence.js";
+import type { ActivityStatsStore } from "./stats.js";
 
 export const THREAD_HEADER = "x-wolfpack-thread-id";
 export const SUBAGENT_HEADER = "x-wolfpack-subagent";
 const TTL_MS = 30_000;
 const DRAIN_CHUNK = 50;
 const LEDGER_BATCH_CAP = 20;
+/** Events waiting for fan-out. Past this the newest are dropped (activity is lossy), so a slow loop cannot grow the queue without bound. */
+export const DERIVE_QUEUE_MAX = 2000;
 
 export interface RequestActivityCtx {
   threadId?: string;
@@ -47,6 +50,8 @@ export interface ActivityDeriverOptions {
   pack: string;
   now?: () => number;
   domainOf?: (workId: string) => string | undefined;
+  stats?: ActivityStatsStore;
+  queueMax?: number;
 }
 
 export function createActivityDeriver(o: ActivityDeriverOptions) {
@@ -58,7 +63,10 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
   let draining = false;
   const drain = (): void => {
     draining = false;
-    for (const ev of queue.splice(0, DRAIN_CHUNK)) o.bus.publish(ev);
+    for (const ev of queue.splice(0, DRAIN_CHUNK)) {
+      o.bus.publish(ev);
+      o.stats?.add(ev.actor.wolf ?? ev.actor.kind, "derivedPublished");
+    }
     if (queue.length) {
       draining = true;
       setImmediate(drain);
@@ -74,6 +82,10 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
       if (actor.kind !== "hub") o.presence.set(ev); // hub trails are transient: no presence slot
     } catch {
       /* best effort */
+    }
+    if (queue.length >= (o.queueMax ?? DERIVE_QUEUE_MAX)) {
+      o.stats?.add(actor.wolf ?? actor.kind, "queueDropped");
+      return;
     }
     queue.push(ev);
     if (!draining) {

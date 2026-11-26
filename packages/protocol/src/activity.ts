@@ -114,6 +114,21 @@ export const PresenceSnapshotSchema = z.object({
 });
 export type PresenceSnapshot = z.infer<typeof PresenceSnapshotSchema>;
 
+/** GET /v1/activity/stats (owner / device tokens only): in-memory counters per wolf, at most 200 rows (the rest fold into "_other"). */
+export const ActivityStatsSchema = z.object({
+  v: z.literal(ACTIVITY_VERSION),
+  pack: z.string(),
+  at: z.number().int().nonnegative(),
+  wolves: z.record(z.string(), z.object({
+    accepted: z.number().int().nonnegative(),
+    rejected: z.record(z.string(), z.number().int().nonnegative()),
+    rateLimited: z.number().int().nonnegative(),
+    derivedPublished: z.number().int().nonnegative(),
+    queueDropped: z.number().int().nonnegative(),
+  })),
+});
+export type ActivityStats = z.infer<typeof ActivityStatsSchema>;
+
 /**
  * SSE frame on GET /v1/events: `data: {"type":"pack.activity","at":<iso>,"event":<ActivityEvent>}`, with NO `id:` line, so it never moves a
  * client's Last-Event-ID cursor. Not part of HubEventSchema: existing consumers skip the unknown type (parseHubEvent "unknown").

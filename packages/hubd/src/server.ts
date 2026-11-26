@@ -1118,7 +1118,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         }
         case "hubActivityIngest": {
           const body = await readJson(req, { maxBytes: ACTIVITY_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
-          const who = { tokenId: identity!.tokenId ?? "?", hostId: identity!.hostId, worker: identity!.kind === "worker" };
+          if (!identity?.tokenId) throw new Error("invariant: an authenticated identity always carries its token id"); // a logged 500, never a shared bucket
+          const who = { tokenId: identity.tokenId, hostId: identity.hostId, worker: identity.kind === "worker" };
           return send(res, 202, activityIngestFn(who, body));
         }
         case "hubActivityPresence": {

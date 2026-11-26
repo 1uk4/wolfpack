@@ -10,7 +10,8 @@ import type { PresenceStore } from "./presence.js";
 export const ACTIVITY_BODY_LIMIT = 64 * 1024;
 export const DEFAULT_RATE_PER_SEC = 20;
 export const DEFAULT_BURST = 100;
-const MAX_BUCKETS = 1000;
+/** Rate-limit buckets kept (one per token). When full, the oldest-inserted bucket is evicted: that token simply restarts with a full burst. 10k tokens is far beyond any real pack, so eviction is a memory bound, not a limiter. */
+const MAX_BUCKETS = 10_000;
 
 /** Who is publishing: a worker token (its host), or any other device token (console / browser: owner events only). */
 export interface Publisher {

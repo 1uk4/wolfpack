@@ -34,6 +34,8 @@ export interface LiveWolf {
 	/** The thread the wolf is currently active on. */
 	activeThreadId?: string;
 	needsYou: boolean;
+	/** A wolf-level needs-you with no thread behind it; kept until `answered`, expiry or the wolf going offline. */
+	needsYouThreadless?: boolean;
 	/** Target-domain frequency, for the home-domain fallback. */
 	domainCounts: Record<string, number>;
 }
@@ -127,9 +129,8 @@ function withWolfNeeds(s: LiveState): LiveState {
 	for (const t of Object.values(s.threads)) if (t.needsYou) need.add(t.wolf);
 	let wolves = s.wolves;
 	for (const w of Object.values(s.wolves)) {
-		// A wolf-level needs-you (no thread) is kept until `answered` or expiry; thread-level ones follow their threads.
-		const hasThreadless = w.needsYou && !Object.values(s.threads).some((t) => t.wolf === w.name);
-		const next = need.has(w.name) || hasThreadless;
+		// Thread-level needs follow their threads; the wolf-level one lives in its own flag.
+		const next = need.has(w.name) || w.needsYouThreadless === true;
 		if (next !== w.needsYou) wolves = { ...wolves, [w.name]: { ...w, needsYou: next } };
 	}
 	return wolves === s.wolves ? s : { ...s, wolves };
@@ -199,17 +200,20 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 			if (!name) break;
 			const key = `${wolfName}/${threadId ?? ""}/${name}`;
 			const prev = st.subagents[key] ?? { key, name, wolf: wolfName, parentThreadId: threadId, title: e.actor.title, expiresAt };
-			const fadeEnd = now + o.subagentFadeSec * 1000;
-			st = { ...st, subagents: { ...st.subagents, [key]: { ...prev, finishedAt: snapshotLife === undefined ? now : now, expiresAt: fadeEnd } } };
+			const fadeMs = o.subagentFadeSec * 1000;
+			// A snapshot entry keeps its real remaining life: back-date finishedAt by the part of the fade already spent.
+			const finishedAt = snapshotLife === undefined ? now : now - Math.max(0, fadeMs - snapshotLife);
+			st = { ...st, subagents: { ...st.subagents, [key]: { ...prev, finishedAt, expiresAt: finishedAt + fadeMs } } };
 			break;
 		}
 		case "needs-you":
 			if (tKey) putThread({ ...mkThread(), needsYou: true });
+			else wolf = { ...wolf, needsYouThreadless: true };
 			wolf = { ...wolf, needsYou: true };
 			break;
 		case "answered":
 			if (tKey && thread0) putThread({ ...thread0, needsYou: false });
-			if (!tKey) wolf = { ...wolf, needsYou: false };
+			wolf = { ...wolf, needsYouThreadless: false }; // whether or not the thread is still in state
 			break;
 		default: // kb-read, kb-write, contribution, shipped
 			if (target) wolf = { ...wolf, lastTarget: target };
@@ -227,7 +231,7 @@ function tick(s: LiveState, now: number, o: LiveOptions): LiveState {
 	for (const [k, w] of Object.entries(s.wolves)) {
 		const online = w.expiresAt > now;
 		// An offline wolf stays, with no thread or alert state of its own.
-		wolves[k] = online === w.online ? w : { ...w, online, activeThreadId: online ? w.activeThreadId : undefined, needsYou: online ? w.needsYou : false };
+		wolves[k] = online === w.online ? w : { ...w, online, activeThreadId: online ? w.activeThreadId : undefined, needsYou: online ? w.needsYou : false, needsYouThreadless: online ? w.needsYouThreadless : false };
 	}
 	const threads = Object.fromEntries(Object.entries(s.threads).filter(([, t]) => t.expiresAt > now));
 	const subagents = Object.fromEntries(Object.entries(s.subagents).filter(([, a]) => (a.finishedAt === undefined ? a.expiresAt > now : now < a.finishedAt + o.subagentFadeSec * 1000)));
@@ -256,7 +260,7 @@ export function reduceLive(s: LiveState, a: LiveAction, o: LiveOptions = DEFAULT
 		}
 		case "resync": {
 			// Frames may have been missed: forget everything event-derived (wolves stay, offline) until a snapshot rebuilds it.
-			const wolves = Object.fromEntries(Object.entries(s.wolves).map(([k, w]) => [k, { ...w, online: false, expiresAt: 0, needsYou: false, activeThreadId: undefined }]));
+			const wolves = Object.fromEntries(Object.entries(s.wolves).map(([k, w]) => [k, { ...w, online: false, expiresAt: 0, needsYou: false, needsYouThreadless: false, activeThreadId: undefined }]));
 			return { ...emptyLiveState(a.now), wolves };
 		}
 		case "snapshot": {

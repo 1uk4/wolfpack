@@ -48,7 +48,7 @@ describe("live overlay reducer", () => {
 		s = feed(s, ev("subagent-finished", { actor: sub }), 1000);
 		s = tick(s, 9000);
 		const a = Object.values(s.subagents)[0]!;
-		assert.equal(subagentAlpha(a, 9000, 15), 1 - 8000 / 15000);
+		assert.equal(subagentAlpha(a, 8500, 15), 0.5); // finished at 1000, 7500 ms into the 15 s fade
 		assert.equal(Object.keys(tick(s, 16_001).subagents).length, 0);
 	});
 
@@ -58,6 +58,39 @@ describe("live overlay reducer", () => {
 		assert.equal(s.trails.length, 200);
 		assert.equal(s.trails[0]!.target.id, "k30");
 		assert.equal(tick(s, 15_000 + 229).trails.length, 0);
+	});
+
+	it("clears the wolf's needs-you flag once its needs-you thread expires", () => {
+		let s = feed(emptyLiveState(), ev("needs-you", { ttlMs: 1000 }), 0);
+		assert.equal(s.wolves.hal!.needsYou, true);
+		s = feed(s, ev("thread-active", { actor: { kind: "thread", wolf: "hal", threadId: "t2" }, ttlMs: 60_000 }), 500);
+		s = tick(s, 1500);
+		assert.equal(s.threads["hal/t1"], undefined);
+		assert.equal(s.wolves.hal!.online, true);
+		assert.equal(s.wolves.hal!.needsYou, false);
+	});
+
+	it("answered clears the wolf flag even when the thread is not in state", () => {
+		let s = feed(emptyLiveState(), ev("needs-you", { actor: { kind: "thread", wolf: "hal" } }), 0);
+		assert.equal(s.wolves.hal!.needsYou, true);
+		s = feed(s, ev("answered", { actor: { kind: "thread", wolf: "hal", threadId: "gone" } }), 5);
+		assert.equal(s.wolves.hal!.needsYou, false);
+	});
+
+	it("a thread-less needs-you sticks on a wolf that already has threads", () => {
+		let s = feed(emptyLiveState(), ev("thread-active"), 0);
+		s = feed(s, ev("needs-you", { actor: { kind: "thread", wolf: "hal" } }), 5);
+		assert.equal(s.wolves.hal!.needsYou, true);
+		s = tick(s, 10);
+		assert.equal(s.wolves.hal!.needsYou, true);
+	});
+
+	it("restores a finished subagent from a snapshot with its real remaining life", () => {
+		const fin = { v: 1, id: "s1", pack: "p", ts: 0, ttlMs: 60_000, actor: { kind: "subagent", wolf: "hal", subagent: "w1", parentThreadId: "t1" }, verb: "subagent-finished" } as unknown as ActivityEvent;
+		const snapshot = { v: 1, at: 1000, wolves: [], threads: [], subagents: [{ event: fin, expiresAt: 4000 }], owner: [] } as unknown as PresenceSnapshot;
+		const s = reduceLive(emptyLiveState(), { type: "snapshot", snapshot, now: 50_000 });
+		assert.equal(Object.keys(tick(s, 52_900).subagents).length, 1);
+		assert.equal(Object.keys(tick(s, 53_100).subagents).length, 0);
 	});
 
 	it("needs-you rings the thread and its wolf until answered", () => {

@@ -63,6 +63,32 @@ describe("live feed connection policy", () => {
 		assert.deepEqual(calls, ["/api/activity/presence", "/api/activity/presence"]);
 	});
 
+	it("stop aborts the open stream request, and a stop during the presence fetch never opens a stream", async () => {
+		const signals: AbortSignal[] = [];
+		const f = (async (u: string, init: RequestInit) => {
+			calls.push(u);
+			if (init.signal) signals.push(init.signal);
+			if (u.endsWith("presence")) return new Response(snapBody, { status: 200 });
+			return streamOf([evFrame("a")], { release: () => {} });
+		}) as unknown as typeof fetch;
+		start(f);
+		await flush();
+		assert.equal(calls.at(-1), "/api/activity/stream");
+		stop?.();
+		assert.equal(signals.at(-1)!.aborted, true);
+		calls = [];
+		let release!: (r: Response) => void;
+		const slow = (async (u: string) => {
+			calls.push(u);
+			return new Promise<Response>((r) => (release = r));
+		}) as unknown as typeof fetch;
+		const stopB = startLiveFeed({ dispatch: () => {}, fetchImpl: slow });
+		stopB();
+		release(new Response(snapBody, { status: 200 }));
+		await flush();
+		assert.deepEqual(calls, ["/api/activity/presence"]);
+	});
+
 	it("a transient 503 on presence retries within the backoff and then connects", async () => {
 		let presence = 0;
 		const f = (async (u: string) => {

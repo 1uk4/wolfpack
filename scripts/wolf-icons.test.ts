@@ -27,9 +27,9 @@ describe("wolf icons", () => {
     expect(markSvg({ size: 100, scale: 0.5 })).toContain('fill-rule="evenodd"');
   });
 
-  it("keeps the sidebar mark's path identical to brand/wolf-head.svg", () => {
+  it("keeps the shared wolf-head path (sidebar mark, live map) identical to brand/wolf-head.svg", () => {
     const brand = dOf("brand/wolf-head.svg", /<path d="([^"]+)"/);
-    const tsx = dOf("apps/console/components/shell/wolfpack-mark.tsx", /\bd="([^"]+)"/);
+    const tsx = dOf("apps/console/components/shell/wolf-head-path.ts", /WOLF_HEAD_PATH = "([^"]+)"/);
     expect(tsx).toBe(brand);
   });
 });

@@ -386,4 +386,24 @@ describe("hubd token auth", () => {
     expect(await row(b.tokenId)).not.toContain("isOwner");
     await expect(lines(["tokens", "owner", w.tokenId])).rejects.toThrow(/worker/);
   });
+
+  it("CLI: tokens owner --token-file promotes the token whose secret is in the file, by hash and not by label; unknown, worker and unreadable files fail", async () => {
+    const lines = async (args: string[]) => { const o: string[] = []; await main([...args, "--data-dir", dir], {}, (m) => o.push(m)); return o.join("\n"); };
+    const mineRes = await pairVia({ label: "wolf", kind: "console" });
+    const mine = (await mineRes.json()) as { token: string; tokenId: string };
+    const twin = await mint("console", { label: "wolf" }); // same label, different secret
+    const w = await mint("worker", { hostId: "vps-1" });
+    const file = (secret: string) => { const p = join(dir, `secret-${secret.slice(0, 6)}.json`); writeFileSync(p, JSON.stringify({ token: secret })); return p; };
+    const row = async (id: string) => (await lines(["tokens", "list"])).split("\n").find((l) => l.startsWith(id))!;
+    expect(await lines(["tokens", "owner", "--token-file", file(mine.token)])).toContain("promoted");
+    expect(await row(mine.tokenId)).toContain("isOwner=true");
+    expect(await row(twin.tokenId)).not.toContain("isOwner");
+    expect(await lines(["tokens", "owner", "--token-file", file(mine.token)])).toContain("already");
+    await expect(lines(["tokens", "owner", "--token-file", file("not-a-known-secret")])).rejects.toThrow(/no token with that secret/);
+    await expect(lines(["tokens", "owner", "--token-file", file(w.token)])).rejects.toThrow(/worker/);
+    await expect(lines(["tokens", "owner", "--token-file", join(dir, "missing.json")])).rejects.toThrow(/cannot read a token/);
+    await expect(lines(["tokens", "owner", "--token-file", file(mine.token), "--unset"])).rejects.toThrow(/only promotes/);
+    await expect(lines(["tokens", "owner", twin.tokenId, "--token-file", file(mine.token)])).rejects.toThrow(/not both/);
+    expect(await row(twin.tokenId)).not.toContain("isOwner");
+  });
 });

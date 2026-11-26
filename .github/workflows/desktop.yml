@@ -134,7 +134,9 @@ jobs:
             V=$(node -p 'require("./apps/desktop/package.json").version.replace(/-.*$/,"")+"-main."+process.env.RUN_NUMBER')
           else
             # A draft release has no git tag, so the release list counts as well as the tags; a draft aimed at this commit is reused.
-            gh release list --limit 200 --json tagName,isDraft,targetCommitish > "$RUNNER_TEMP/releases.json"
+            # `gh release list --json` has no targetCommitish field, so the REST API supplies it (same shape the script reads).
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | {tagName: .tag_name, isDraft: .draft, targetCommitish: .target_commitish}' | jq -s . > "$RUNNER_TEMP/releases.json"
             V=$(node scripts/desktop-release.mjs version --releases "$RUNNER_TEMP/releases.json")
           fi
           V="$V" node -e 'const fs=require("fs");const f="apps/desktop/package.json";const p=JSON.parse(fs.readFileSync(f,"utf8"));p.version=process.env.V;fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")'

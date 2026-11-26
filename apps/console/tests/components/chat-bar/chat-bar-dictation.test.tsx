@@ -303,6 +303,7 @@ describe("floating chat dictation", () => {
 		await wait();
 		const ws = await say("spoken words");
 		await fire(q('[data-testid="chat-bar-chip"]')!, "click");
+		await fire(q('[data-testid="switcher-action"][data-action="open-thread"]')!, "click");
 		await endRun(ws);
 		await wait();
 		assert.equal(q('[data-testid="path"]')!.textContent, "/wolf/w/thread/a");
@@ -399,7 +400,8 @@ describe("floating chat dictation: docking details", () => {
 		const ws = await say("words");
 		const before = navLog.stack.length;
 		await fire(q('[data-testid="chat-bar-chip"]')!, "click");
-		await fire(q('[data-testid="chat-bar-chip"]')!, "click");
+		await fire(q('[data-testid="switcher-action"][data-action="open-thread"]')!, "click");
+		await fire(q('[data-testid="switcher-action"][data-action="open-thread"]')!, "click");
 		await endRun(ws);
 		await wait();
 		assert.equal(navLog.stack.length, before + 1, "one navigation");

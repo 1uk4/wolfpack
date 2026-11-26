@@ -48,6 +48,7 @@ const { FakeNav } = await import("../../helpers/fake-nav.tsx");
 const { AttachedThreadProvider } = await import("../../../components/chat-bar/attached-thread.tsx");
 const { ChatBar } = await import("../../../components/chat-bar/chat-bar.tsx");
 const { ATTACHED_KEY, BAR_EXTRAS } = await import("../../../src/core/thread/chat-bar.ts");
+const { dataStore } = await import("../../../src/core/data-store.ts");
 // The extras (cards, peek, badge, switcher) are off in the shipped floating chat; this file covers their kept code, so it switches them on.
 Object.assign(BAR_EXTRAS, { cards: true, peek: true, badge: true, switcher: true });
 
@@ -146,6 +147,8 @@ const reserve = () => document.documentElement.style.getPropertyValue("--chat-ba
 afterEach(async () => {
 	await act(async () => root?.unmount());
 	root = null;
+	threadStatus = {};
+	dataStore.clear(); // the thread list goes through the client store: the next test must not read this one's list (production keeps one store per session)
 	document.body.innerHTML = "";
 	mem.clear();
 	calls = [];
@@ -269,17 +272,81 @@ describe("ChatBar on a phone", () => {
 		assert.equal(ta().value, "keep me");
 	});
 
-	it("the switcher is a full-screen sheet on phone and a popover on desktop", async () => {
+	it("the switcher is a bottom sheet with 44px rows on phone and a popover on desktop", async () => {
 		await mount();
 		await click(q('[data-testid="chat-bar-chip"]'));
 		assert.equal(q('[data-testid="chat-bar-switcher"]')!.getAttribute("data-layout"), "sheet");
 		assert.match(q('[data-testid="switcher-entry"]')!.className, /min-h-11/);
+		assert.match(q('[data-testid="switcher-action"]')!.className, /min-h-11/);
 		await click(q('[data-testid="switcher-close"]'));
 		assert.equal(q('[data-testid="chat-bar-switcher"]'), null);
 		await resize(false);
 		await click(q('[data-testid="chat-bar-chip"]'));
 		assert.equal(q('[data-testid="chat-bar-switcher"]')!.getAttribute("data-layout"), "popover");
 		assert.equal(q('[data-testid="switcher-close"]'), null);
+	});
+
+	it("the switcher lists the thread waiting on the owner first with an amber count, and picking it attaches the bar to it", async () => {
+		threadStatus = { "w/c": "needs-you" };
+		await mount();
+		await click(q('[data-testid="chat-bar-chip"]'));
+		assert.equal(q('[data-testid="switcher-wolf-count"]')!.textContent, "1");
+		const entries = qa('[data-testid="switcher-entry"]');
+		assert.equal(entries[0]!.getAttribute("data-thread"), "w/c");
+		assert.equal(entries[0]!.querySelector('[data-testid="switcher-entry-waiting"]')!.getAttribute("aria-label"), "waiting on you");
+		await click(entries[0]!);
+		await flush();
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/c");
+		assert.equal(q('[data-testid="chat-bar-switcher"]'), null, "the switcher closes after a pick");
+	});
+
+	it("the open switcher keeps its order when a status changes, showing the new status in place; the next open re-sorts", async () => {
+		threadStatus = { "w/c": "needs-you" };
+		await mount();
+		await click(q('[data-testid="chat-bar-chip"]'));
+		const order = () => qa('[data-testid="switcher-entry"]').map((e) => e.getAttribute("data-thread"));
+		const before = order();
+		assert.equal(before[0], "w/c");
+		const b = () => qa('[data-testid="switcher-entry"]').find((e) => e.getAttribute("data-thread") === "w/b")!;
+		assert.equal(b().querySelector('[data-testid="switcher-entry-waiting"]'), null);
+		await emit("needs-you-changed", { wolf: "w", threadId: "w/b", status: "needs-you" });
+		assert.deepEqual(order(), before, "nothing jumps under the pointer");
+		assert.equal(b().querySelector('[data-testid="switcher-entry-waiting"]')?.getAttribute("aria-label"), "waiting on you", "the live status shows in place");
+		assert.equal(q('[data-testid="switcher-wolf-count"]')!.textContent, "2", "the wolf's count is live too");
+		await click(q('[data-testid="switcher-close"]'));
+		await click(q('[data-testid="chat-bar-chip"]'));
+		assert.deepEqual(order().slice(0, 2).sort(), ["w/b", "w/c"], "the next open puts both waiting threads first");
+	});
+
+	it("picking a thread waiting on the owner shows its questionnaire in the bar", async () => {
+		phone = false; // the card shows inline in the floating bar
+		threadStatus = { "w/c": "needs-you" };
+		bodies.c = { messages: [], pendingCards: [{ callId: "k1", threadId: "w/c", card: { tool: "ask_user_question", ...colors }, raisedAt: "2026-01-01T00:00:00Z" }] };
+		await mount();
+		assert.equal(q('[data-testid="bar-card"]'), null);
+		await click(q('[data-testid="chat-bar-chip"]'));
+		await click(qa('[data-testid="switcher-entry"]').find((e) => e.getAttribute("data-thread") === "w/c")!);
+		await until(() => q('[data-testid="bar-card"]'), "the questionnaire");
+		assert.match(q('[data-testid="bar-card"]')!.textContent!, /Which color\?/, "the question is in the bar");
+	});
+
+	it("the switcher shortcut opens it, except in visualization mode where the bar has no switcher", async () => {
+		const { setVizActive } = await import("../../../components/viewer/viz-mode.ts");
+		const { kbdEventForAction } = await import("../../../src/core/index.ts");
+		phone = false;
+		const press = () => act(async () => void window.dispatchEvent(new dom.window.CustomEvent(kbdEventForAction("chat-bar-switcher"), { detail: {} })));
+		await mount();
+		await press();
+		assert.ok(q('[data-testid="chat-bar-switcher"]'), "the shortcut opens it");
+		await click(q('[data-testid="switcher-action"][data-action="open-thread"]')); // closes it
+		setVizActive({ wolf: "w", threadId: "w/a" });
+		try {
+			await flush();
+			await press();
+			assert.equal(q('[data-testid="chat-bar-switcher"]'), null);
+		} finally {
+			setVizActive(null);
+		}
 	});
 
 	it("desktop keeps its cards inline with no strip or sheet controls", async () => {

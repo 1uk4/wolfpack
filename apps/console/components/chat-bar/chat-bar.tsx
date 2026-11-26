@@ -16,7 +16,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { getPageNoteAppend } from "@/components/composer/use-thread-dictation";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowLeftRightIcon, MessageCircleQuestionIcon, ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon } from "lucide-react";
+import { ArrowLeftRightIcon, EyeIcon, MessageCircleQuestionIcon, ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
 import { useSubagentChildren } from "@/components/thread/use-subagent-children";
 import { cn } from "@/lib/utils";
@@ -26,7 +26,8 @@ import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 import { abortThread as abortBarThread, onOwnThreadPage, swapTarget } from "@/components/chat-bar/chat-bar-io";
 import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/composer/dictation";
 import { appendToDraft, draftKey } from "@/lib/composer-draft";
-import { useVizActive } from "@/components/viewer/viz-mode";
+import { setVizMode, useVizActive } from "@/components/viewer/viz-mode";
+import { useFrameBadges } from "@/components/viewer/frame-store";
 import { FrameBadges } from "@/components/viewer/frame-badges";
 import { useThreadColor } from "@/components/thread/use-thread-color";
 import { useBarCards, type BarCards } from "@/components/chat-bar/chat-bar-cards";
@@ -34,7 +35,7 @@ import type { Answering } from "@/components/ask/ask-sheet";
 import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask/ask-session";
 import { replyLabel } from "@/components/ask/ask-reply";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
-import { attachable, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
+import { attachable, inFrozenOrder, switcherOrder, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar/chat-bar-io";
 
@@ -131,7 +132,9 @@ export function ChatBar() {
 
 	// Shortcuts: the dispatcher hands over the KeyboardEvent; the browser's own key (Cmd+J = downloads) is swallowed only
 	// when the bar (or, on its own thread's page, the page composer) actually answers.
-	const live = useRef({ attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dictating: false });
+	// Visualization mode on the attached thread (anywhere): the bar has no switcher then, so its shortcut does nothing either.
+	const vizAttached = !!viz && !!attached && viz.wolf === attached.wolf && viz.threadId === attached.threadId;
+	const live = useRef({ attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dictating: false, vizAttached });
 
 	// Dictation lives HERE, not in the composer: ChatBar stays mounted across page changes (and while the composer is
 	// unmounted: minimized, or the phone on a thread page), so a run keeps listening while the owner browses. The
@@ -161,7 +164,7 @@ export function ChatBar() {
 	// itself (thread-chat.tsx). Leaving the page mid-run makes `onOwn` false, and the bar appears with the run live.
 	const dictating = dictation.active;
 	const own = onOwn;
-	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dictating };
+	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dictating, vizAttached };
 	const full = !!attached && !own && !dockless && (!wide || !minimized);
 	const shown = !!attached && !own && !dockless;
 
@@ -202,7 +205,7 @@ export function ChatBar() {
 		const onSwitcher = (e: Event) => {
 			const kev = (e as CustomEvent<{ event?: KeyboardEvent }>).detail?.event;
 			const l = live.current;
-			if (!BAR_EXTRAS.switcher || !l.attached || !l.wide || l.onOwn) return;
+			if (!BAR_EXTRAS.switcher || !l.attached || !l.wide || l.onOwn || l.vizAttached) return;
 			kev?.preventDefault();
 			if (l.minimized) l.setMinimized?.(false);
 			setSwitcher(true);
@@ -644,7 +647,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 					)}
 				</div>
 				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} onSending={setSending} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
-				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
+				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 			</>
 		);
@@ -688,7 +691,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 					)}
 				</div>
 				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} onSending={setSending} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />}
-				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
+				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
 			</div>
 		</div>
 	);
@@ -797,11 +800,20 @@ export function NeedsYouBadge({ waiting, all, approvals }: { waiting: (BarThread
 	);
 }
 
-/** The thread switcher: home + needs-you + recent feature threads, grouped by wolf. A dialog: focus moves in, arrows walk the entries, Esc / outside click close and return focus to the chip. */
-export function Switcher({ groups, current, onClose, sheet = false }: { groups: SwitcherGroup[]; current: Pick<AttachedRef, "wolf" | "threadId">; onClose: () => void; sheet?: boolean }) {
+/**
+ * The wolf and thread switcher, opened from the chip (the wolf's name): wolves with status dots and their threads, the ones waiting on the owner first with an amber count.
+ * A compact popover on desktop, a bottom sheet (rows of at least 44px) on the phone. A dialog: focus moves in, arrows walk the entries, Esc / outside click close and return focus to the chip.
+ * The footer opens the attached wolf's visualizations, and the attached thread's own page.
+ */
+export function Switcher({ groups: liveGroups, current, onClose, sheet = false }: { groups: SwitcherGroup[]; current: Pick<AttachedRef, "wolf" | "threadId">; onClose: () => void; sheet?: boolean }) {
+	// The order is frozen while it is open (nothing jumps under the pointer); statuses and counts stay live, and the next open re-sorts.
+	const [frozen] = useState(() => switcherOrder(liveGroups));
+	const groups = useMemo(() => inFrozenOrder(liveGroups, frozen), [liveGroups, frozen]);
 	const api = useAttachedThread();
+	const router = useRouter();
+	const frames = useFrameBadges(current.wolf, current.threadId);
 	const ref = useRef<HTMLDivElement | null>(null);
-	const items = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-testid="switcher-entry"]') ?? []);
+	const items = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-testid="switcher-entry"], [data-testid="switcher-action"]:not(:disabled)') ?? []);
 	useEffect(() => {
 		const list = items();
 		(list.find((b) => b.getAttribute("aria-current") === "true") ?? list[0] ?? ref.current)?.focus();
@@ -829,20 +841,36 @@ export function Switcher({ groups, current, onClose, sheet = false }: { groups: 
 		const i = list.indexOf(document.activeElement as HTMLElement);
 		list[(i + (e.key === "ArrowDown" ? 1 : -1) + list.length) % list.length]!.focus();
 	};
+	const row = cn("flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none", sheet && "min-h-11");
+	// Leaving for the thread page waits for a running dictation to finish first (so its words land in the draft), like the chip used to.
+	const threadHere = (vizOn = false) =>
+		afterBarDictation(() => {
+			// Visualization mode is the stored per-thread choice; the thread page reads it on arrival (viz-mode.ts).
+			if (vizOn) setVizMode(current.wolf, current.threadId, true);
+			onClose();
+			router.push(threadHref(current.wolf, current.threadId));
+		});
+	const visualizations = () => threadHere(true);
 	return (
-		<div ref={ref} role="dialog" aria-label="Attach the bar to a thread" tabIndex={-1} onKeyDown={onKeyDown} data-testid="chat-bar-switcher" data-layout={sheet ? "sheet" : "popover"} className={cn("z-50 overflow-y-auto bg-popover p-1 outline-none", sheet ? "fixed inset-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]" : "absolute bottom-full left-0 z-40 mb-2 max-h-80 w-72 rounded-xl border shadow-lg")}>
-			<div className="flex items-center justify-between">
-				<p className="px-2 py-1 font-ui text-[10px] uppercase tracking-wide text-muted-foreground">Attach the bar to…</p>
-				{sheet && (
+		<>
+		{sheet && <button type="button" tabIndex={-1} aria-label="Close" data-testid="switcher-backdrop" onClick={onClose} className="fixed inset-0 z-[49] bg-black/40 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200" />}
+		<div ref={ref} role="dialog" aria-label="Switch wolf or thread" tabIndex={-1} onKeyDown={onKeyDown} data-testid="chat-bar-switcher" data-layout={sheet ? "sheet" : "popover"} className={cn("z-50 overflow-y-auto border bg-popover/95 p-1 outline-none backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150", sheet ? "fixed inset-x-0 bottom-0 max-h-[70dvh] rounded-t-2xl border-b-0 pb-[env(safe-area-inset-bottom)] shadow-2xl motion-safe:slide-in-from-bottom-4" : "absolute bottom-full left-0 z-40 mb-2 max-h-80 w-72 rounded-xl shadow-lg motion-safe:zoom-in-95")}>
+			{sheet && (
+				<div className="flex min-h-11 items-center justify-between">
+					<span aria-hidden className="ml-2 h-1 w-10 rounded-full bg-muted-foreground/40" />
 					<button type="button" aria-label="Close" data-testid="switcher-close" onClick={onClose} className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-muted-foreground hover:bg-accent">
 						<ChevronDownIcon className="size-5" />
 					</button>
-				)}
-			</div>
+				</div>
+			)}
 			{groups.length === 0 && <p className="px-2 py-2 text-xs text-muted-foreground">No threads yet.</p>}
 			{groups.map((g) => (
-				<div key={g.wolf} role="group" aria-label={g.wolf} data-testid="switcher-group" data-wolf={g.wolf}>
-					<p className="px-2 pt-1.5 font-ui text-[10px] uppercase tracking-wide text-muted-foreground">{g.wolf}</p>
+				<div key={g.wolf} role="group" aria-label={g.wolf} data-testid="switcher-group" data-wolf={g.wolf} data-needs-you={g.needsYou > 0 ? g.needsYou : undefined}>
+					<p className="flex items-center gap-1.5 px-2 pt-1.5 font-ui text-[10px] uppercase tracking-wide text-muted-foreground">
+						<span role="img" aria-label={g.status === "offline" ? "offline" : "online"} data-testid="switcher-wolf-dot" data-status={g.status} className={cn("size-1.5 shrink-0 rounded-full", g.status === "offline" ? "bg-muted-foreground/40" : "bg-emerald-500")} />
+						<span className="min-w-0 flex-1 truncate">{g.wolf}</span>
+						{g.needsYou > 0 && <span data-testid="switcher-wolf-count" aria-label={`${g.needsYou} waiting for you`} className="rounded-full bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">{g.needsYou}</span>}
+					</p>
 					{g.entries.map((e) => (
 						<button
 							key={e.threadId}
@@ -855,15 +883,27 @@ export function Switcher({ groups, current, onClose, sheet = false }: { groups: 
 								api?.attach({ wolf: e.wolf, threadId: e.threadId, slug: e.slug });
 								onClose();
 							}}
-							className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-accent", sheet && "min-h-11", "focus-visible:bg-accent focus-visible:outline-none", e.wolf === current.wolf && e.threadId === current.threadId && "bg-accent")}
+							className={cn(row, e.wolf === current.wolf && e.threadId === current.threadId && "bg-accent")}
 						>
 							<span className="min-w-0 flex-1 truncate">{e.title}</span>
-							{e.status === "needs-you" && <span className="font-ui text-[10px] text-amber-400">needs you</span>}
-							{e.status === "busy" && <span className="font-ui text-[10px] text-muted-foreground">working</span>}
+							{e.needsYou && <span role="img" aria-label="waiting on you" data-testid="switcher-entry-waiting" className="size-2 shrink-0 rounded-full bg-amber-500" />}
+							{!e.needsYou && e.status === "busy" && <BrailleSpinner />}
 						</button>
 					))}
 				</div>
 			))}
+			<div role="group" aria-label="Actions" className="mt-1 border-t pt-1">
+				<button type="button" data-testid="switcher-action" data-action="visualizations" disabled={frames.length === 0} onClick={visualizations} className={cn(row, "disabled:opacity-40")}>
+					<EyeIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+					<span className="min-w-0 flex-1 truncate">Open visualizations</span>
+					{frames.length > 0 && <span className="font-ui text-[10px] text-muted-foreground">{frames.length}</span>}
+				</button>
+				<button type="button" data-testid="switcher-action" data-action="open-thread" onClick={() => threadHere()} className={row}>
+					<MessageSquareIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+					<span className="min-w-0 flex-1 truncate">Open thread page</span>
+				</button>
+			</div>
 		</div>
+		</>
 	);
 }

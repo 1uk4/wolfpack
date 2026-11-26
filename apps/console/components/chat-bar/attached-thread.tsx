@@ -13,6 +13,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
 	buildSwitcher,
+	hasPagePendingAsk,
+	subscribePagePending,
 	loadAttached,
 	LEGACY_KEYS,
 	loadMinimized,
@@ -271,7 +273,11 @@ export function AttachedThreadProvider({
 		return () => clearTimeout(t);
 	}, [sent, rowStatus]);
 
-	const groups = useMemo(() => buildSwitcher(wolves, threads), [wolves, threads]);
+	// A thread page publishes "a paged ask is pending here" (page-pending.ts); the switcher counts it even before the list row says needs-you.
+	const [pagePendingTick, setPagePendingTick] = useState(0);
+	useEffect(() => subscribePagePending(() => setPagePendingTick((n) => n + 1)), []);
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- pagePendingTick is the store's change signal; the predicate reads the store itself
+	const groups = useMemo(() => buildSwitcher(wolves, threads, hasPagePendingAsk), [wolves, threads, pagePendingTick]);
 	const value = useMemo<AttachedThreadApi>(
 		() => ({ attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, wolves, threads, groups, attachedThread, working, closedReason, markSent, clearSent, attach, detach, refresh }),
 		[attached, ready, minimized, setMinimized, pageAttachments, setPageAttachments, wolves, threads, groups, attachedThread, working, closedReason, markSent, clearSent, attach, detach, refresh],

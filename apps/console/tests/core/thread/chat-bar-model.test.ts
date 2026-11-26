@@ -40,4 +40,21 @@ describe("switcher", () => {
 		const g = buildSwitcher(wolves, { "1uk4": [t("1uk4/home", { kind: "home" }), ...many] });
 		assert.equal(g[0]!.entries.length, 1 + SWITCHER_RECENT);
 	});
+	it("wolves and threads waiting on the owner sort first with an amber count; the rest keep a stable order", () => {
+		const ws = [{ name: "lib", librarian: true }, { name: "1uk4" }, { name: "hal" }, { name: "sfo", status: "online" }];
+		const ts = {
+			lib: [t("lib/home", { kind: "home" })],
+			"1uk4": [t("1uk4/home", { kind: "home" }), t("1uk4/a"), t("1uk4/b"), t("1uk4/c", { status: "needs-you" })],
+			hal: [t("hal/home", { kind: "home" }), t("hal/x"), t("hal/y"), t("hal/z", { status: "needs-you" })],
+			sfo: [t("sfo/home", { kind: "home", status: "needs-you" })],
+		};
+		// hal/x has a paged ask pending on its open page (the page-pending store), though its list row still says idle.
+		const g = buildSwitcher(ws, ts, (wolf, id) => wolf === "hal" && id === "hal/x");
+		// Waiting wolves lead (most waiting first), then the owner wolf, then the roster order.
+		assert.deepEqual(g.map((x) => [x.wolf, x.needsYou]), [["hal", 2], ["1uk4", 1], ["sfo", 1], ["lib", 0]]);
+		// Inside a wolf: waiting threads first (newest first), then the home thread, then the rest newest first.
+		assert.deepEqual(g[0]!.entries.map((e) => [e.threadId, e.needsYou]), [["hal/z", true], ["hal/x", true], ["hal/home", false], ["hal/y", false]]);
+		assert.deepEqual(g[2]!.entries.map((e) => e.threadId), ["sfo/home"]);
+		assert.equal(g[3]!.status, "online");
+	});
 });

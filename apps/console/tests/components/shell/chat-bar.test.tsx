@@ -135,7 +135,7 @@ describe("ChatBar", () => {
 	});
 
 	it("with the extras off the bar fetches no cards, reply peek or needs-you list", async () => {
-		assert.equal(BAR_EXTRAS.cards || BAR_EXTRAS.peek || BAR_EXTRAS.badge || BAR_EXTRAS.switcher, false);
+		assert.equal(BAR_EXTRAS.cards || BAR_EXTRAS.peek || BAR_EXTRAS.badge, false);
 		// The paged-ask sheet is the one extra that is on: it reads the thread's pending cards, so it is off here to check the rest.
 		BAR_EXTRAS.ask = false;
 		try {
@@ -214,12 +214,13 @@ describe("ChatBar", () => {
 		assert.equal(mem.get("wolfpack:draft:w:w/a"), "typed on the page", "no stale flush from the bar");
 	});
 
-	it("clicking the chip opens the thread page, where the chat docks into the page", async () => {
+	it("the switcher's Open thread page opens the thread page, where the chat docks into the page", async () => {
 		function Path() {
 			return <span data-testid="path">{usePathname()}</span>;
 		}
 		await mount("/kb", A, <Path />);
 		await click(q('[data-testid="chat-bar-chip"]'));
+		await click(q('[data-testid="switcher-action"][data-action="open-thread"]'));
 		await wait();
 		assert.equal(q('[data-testid="path"]')?.textContent, "/wolf/w/thread/a");
 		assert.equal(q('[data-testid="chat-bar"]'), null);
@@ -436,7 +437,7 @@ describe("real keydown through KeyboardShortcuts", () => {
 		});
 		await wait();
 	}
-	it("Cmd+J un-minimizes and focuses; Cmd+Shift+J does nothing (switcher off); a bare j in another input is ignored", async () => {
+	it("Cmd+J un-minimizes and focuses; Cmd+Shift+J opens the switcher; a bare j in another input is ignored", async () => {
 		await mountWithKeys("/kb");
 		await click(q('[data-testid="chat-bar-minimize"]'));
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "minimized");
@@ -449,7 +450,7 @@ describe("real keydown through KeyboardShortcuts", () => {
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
 		await keydown({ key: "j", metaKey: true, shiftKey: true });
 		await wait();
-		assert.equal(q('[data-testid="chat-bar-switcher"]'), null, "switcher is off");
+		assert.equal(q('[data-testid="chat-bar-switcher"]')?.getAttribute("data-layout"), "popover");
 	});
 	it("Cmd+J is left to the browser with nothing attached", async () => {
 		await mountWithKeys("/kb");

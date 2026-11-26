@@ -103,6 +103,15 @@ afterEach(async () => {
 	document.body.innerHTML = "";
 });
 
+describe("frame badges hydration", () => {
+	it("the server render has no badges even when frames are stored, so the first client render matches it", async () => {
+		store.set(`wolfpack:frames:${TID}`, JSON.stringify([{ objectId: "f1", path: "a.html", title: "A", rev: 1 }]));
+		const { renderToString } = await import("react-dom/server");
+		const { FrameBadges } = await import("../../../components/viewer/frame-badges.tsx");
+		assert.equal(renderToString(<FrameBadges wolf="1uk4" threadId={TID} vizOn={false} />), "");
+	});
+});
+
 describe("frame badges from a link", () => {
 	it("opening ?view=frame:<path> adds a badge titled with the path, and a dismissed one does not come back from the same link", async () => {
 		await mount([], { start: "/wolf/1uk4/thread/home?view=frame%3Aviz%2Fa.html" });

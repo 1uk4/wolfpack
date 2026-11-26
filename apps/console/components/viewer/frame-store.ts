@@ -153,9 +153,11 @@ const labelOf = (f: StoredFrame) => f.title || (f.path.split("/").pop() ?? f.pat
 /** The thread's visible frame badges (not dismissed), in the order the frames first appeared. */
 export function useFrameBadges(wolf: string, threadId: string): FrameBadge[] {
 	const v = useSyncExternalStore(subscribe, () => version, () => 0);
+	// The server (and the hydrating first client render) has no localStorage: render no badges then, so both match; they appear after mount.
+	const mounted = useSyncExternalStore(subscribeNever, () => true, () => false);
 	return useMemo(
 		() =>
-			readFrames(threadId)
+			(mounted ? readFrames(threadId) : [])
 				.filter((f) => !isFrameDismissed(threadId, f.objectId))
 				.map((f) => ({
 					objectId: f.objectId,
@@ -163,6 +165,8 @@ export function useFrameBadges(wolf: string, threadId: string): FrameBadge[] {
 					descriptor: { kind: "frame", id: f.path, wolf, ...(f.title ? { title: f.title } : {}), ...(f.rev !== undefined ? { rev: f.rev } : {}) },
 				})),
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- `v` is the store's change counter
-		[wolf, threadId, v],
+		[wolf, threadId, v, mounted],
 	);
 }
+
+const subscribeNever = () => () => {};

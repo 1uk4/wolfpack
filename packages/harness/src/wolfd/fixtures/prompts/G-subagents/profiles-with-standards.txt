@@ -1208,6 +1208,7 @@ Goal: each thread checks its own worktree in its own browser tab, and never dist
 - Check desktop width (the browser's default viewport is 1280x800) and mobile width, 390px.
 - For 390px, call `browser_goto` with `width: 390` (height defaults to 844), then `browser_screenshot`. `browser_screenshot` also takes `width`/`height` to resize before shooting. It resizes only your thread's tab and sticks until you change it or call `browser_close`, so pass `width: 1280` to go back to desktop. The result line `Viewport: 390x844` confirms the size.
 - Look at the 390px screenshot and confirm the mobile layout shows, not just that the page loaded.
+- The wolf browser cannot stream a `fetch()` response body: every streaming `fetch()` (SSE over fetch, for example `/api/activity/stream`) fails at once with `net::ERR_FAILED` / `TypeError: Failed to fetch`, even for routes that work. `EventSource` streams work. Check a fetch-based stream with `curl -N` against the slot instead, and leave the in-browser check to the owner.
 
 ## 4. Report
 - Include the screenshots, the slot URL `http://127.0.0.1:<port>`, and the line `wolfpack preview slot pair <port>`. The owner runs it once per port to open the same slot in his own browser.

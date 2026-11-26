@@ -91,3 +91,31 @@ export function parseActivityBatch(xs: unknown):
   }
   return { ok: true, events, dropped: xs.length - events.length };
 }
+
+/** POST /v1/activity reply (202): events kept for fan-out / events dropped (invalid, spoofed actor, or over the rate limit). */
+export const ActivityIngestResponseSchema = z.object({ accepted: z.number().int().nonnegative(), dropped: z.number().int().nonnegative() });
+export type ActivityIngestResponse = z.infer<typeof ActivityIngestResponseSchema>;
+
+/** One live presence entry: the last event of an actor and when the hub forgets it (epoch ms, hub clock). */
+export const PresenceEntrySchema = z.object({ event: ActivityEventSchema, expiresAt: z.number().int().nonnegative() });
+export type PresenceEntry = z.infer<typeof PresenceEntrySchema>;
+
+/** GET /v1/activity/presence: the caller's pack, grouped by actor kind. A console draws this on connect and after a `resync`. */
+export const PresenceSnapshotSchema = z.object({
+  v: z.literal(ACTIVITY_VERSION),
+  pack: z.string(),
+  at: z.number().int().nonnegative(),
+  wolves: z.array(PresenceEntrySchema),
+  threads: z.array(PresenceEntrySchema),
+  subagents: z.array(PresenceEntrySchema),
+  owner: z.array(PresenceEntrySchema),
+});
+export type PresenceSnapshot = z.infer<typeof PresenceSnapshotSchema>;
+
+/**
+ * SSE frame on GET /v1/events: `data: {"type":"pack.activity","at":<iso>,"event":<ActivityEvent>}`, with NO `id:` line, so it never moves a
+ * client's Last-Event-ID cursor. Not part of HubEventSchema: existing consumers skip the unknown type (parseHubEvent "unknown").
+ */
+export const PACK_ACTIVITY_EVENT_TYPE = "pack.activity" as const;
+export const PackActivityFrameSchema = z.object({ type: z.literal(PACK_ACTIVITY_EVENT_TYPE), at: z.string(), event: ActivityEventSchema });
+export type PackActivityFrame = z.infer<typeof PackActivityFrameSchema>;

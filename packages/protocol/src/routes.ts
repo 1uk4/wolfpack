@@ -53,6 +53,7 @@ import {
   GraduationResultSchema,
   KbActivityResponseSchema,
 } from "./schemas.js";
+import { ActivityBatchSchema, ActivityIngestResponseSchema, PresenceSnapshotSchema } from "./activity.js";
 import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffRequestSchema, KbManifestDiffResponseSchema } from "./kb-sync.js";
 
 import * as R from "./registry.js";
@@ -658,6 +659,14 @@ export const ROUTES = {
    * Keepalive comments; never ends with `[DONE]`.
    */
   hubEvents: { scope: "hub", method: "GET", path: "/v1/events", response: { kind: "sse", event: HubEventSchema }, status: [200], error: err },
+  /**
+   * Live pack map ingest. Body `{v:1, events:[ActivityEvent]}` (64 KB max). Wolf (worker) tokens publish wolf/thread/subagent events AS A WOLF REGISTERED ON THEIR HOST;
+   * console/browser tokens publish `owner` events only. The hub overwrites `pack`; invalid, spoofed and over-rate-limit events are dropped, never an error.
+   * 202 `{accepted, dropped}`. Fan-out: `pack.activity` frames on hubEvents (no `id:` line; see PackActivityFrameSchema).
+   */
+  hubActivityIngest: { scope: "hub", method: "POST", path: "/v1/activity", body: ActivityBatchSchema, response: { kind: "json", schema: ActivityIngestResponseSchema }, status: [202], error: err },
+  /** Current presence of the caller's pack (wolves, threads, subagents, owner), expired entries removed. */
+  hubActivityPresence: { scope: "hub", method: "GET", path: "/v1/activity/presence", response: { kind: "json", schema: PresenceSnapshotSchema }, status: [200], error: err },
   /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a
    * preview with a confirmation token. Answers at once with the job `{jobId, kind, state: "running", startedAt}`; a start

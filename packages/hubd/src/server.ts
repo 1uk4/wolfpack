@@ -66,6 +66,9 @@ import {
 } from "./work-writes.js";
 import { actorOf, createTokenStore, type AuthIdentity } from "./auth.js";
 import { createEventBus } from "./events.js";
+import { createMemoryBus, guardBus, type ActivityBus } from "./activity/bus.js";
+import { createPresenceStore } from "./activity/presence.js";
+import { ACTIVITY_BODY_LIMIT, createActivityIngest } from "./activity/ingest.js";
 import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
 import { createKbRevisions, type KbRetention } from "./kb-revisions.js";
 import { loadWorkState } from "@wolfpack/kb/client";
@@ -131,6 +134,13 @@ export interface HubOptions {
   eventBufferSize?: number;
   /** Max concurrent GET /v1/events streams; beyond it a new one is refused with 409 `busy` (retryable). Default 128. */
   maxEventStreams?: number;
+  /** The pack this hub serves. Activity events are stamped with it and only streams of this pack receive them. Default "default" (one pack per hub today). */
+  packId?: string;
+  /** Activity bus adapter (default in-memory; a Redis Streams adapter slots in here). A failing adapter never affects the Work API or KB. */
+  activityBus?: ActivityBus;
+  /** Per-token activity ingest rate limit: sustained events/s (default 20) and burst (default 100). */
+  activityRatePerSec?: number;
+  activityBurst?: number;
   /** @internal TEST-ONLY: failure injection inside KB commits. */
   kbFaults?: KbCommitFaults;
   /** How often hubd scans the KB domain folders for direct writes (Dewey's), ms. Default 3000; 0 disables the timer (tests call scanKb). */
@@ -373,6 +383,11 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     },
   });
   const domainCache = new Map<string, string>(); // work item id -> domain
+  // Live pack map. One pack per hub today: `packOf` is the single place that maps a caller to its pack (multi-pack = change it here).
+  const packId = opts.packId ?? "default";
+  const packOf = (_identity: AuthIdentity): string => packId;
+  const activityBus = guardBus(opts.activityBus ?? createMemoryBus()); // every user of the bus (ingest, SSE attach) goes through the guard
+  const presence = createPresenceStore({ now: opts.now });
   const bus = createEventBus({
     bufferSize: opts.eventBufferSize,
     maxStreams: opts.maxEventStreams,
@@ -426,6 +441,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let stopWatcher: () => void = () => {};
   let tokensFlush: () => void = () => {};
   let authenticateFn!: (req: IncomingMessage) => AuthIdentity | null;
+  let activityIngestFn!: ReturnType<typeof createActivityIngest>["ingest"];
   let link!: Link;
   let linkContrib!: LinkContributions;
   const inboxRoot = opts.inboxRoot ?? contributionsRoot(opts.dataDir);
@@ -513,6 +529,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     stopWatcher = () => {
       clearInterval(watcher);
       clearInterval(sweeper);
+      presence.stop();
     };
     tokensFlush = () => tokens.flush();
     /** The shared check for dispatch AND the coming HTTP `upgrade` path. */
@@ -543,6 +560,16 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         return undefined;
       }
     };
+    const activityIngest = createActivityIngest({
+      bus: activityBus,
+      presence,
+      pack: packId,
+      wolfOnHost: (wolf, hostId) => hostOf(wolf) === hostId,
+      now: opts.now,
+      ratePerSec: opts.activityRatePerSec,
+      burst: opts.activityBurst,
+    });
+    activityIngestFn = activityIngest.ingest;
     linkContrib = createLinkContributions({
       domainsOf,
       dataDir: opts.dataDir,
@@ -1045,7 +1072,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "hubEvents": {
           const hdr = req.headers["last-event-id"];
           const cursor = (Array.isArray(hdr) ? hdr[0] : hdr)?.trim() || url.searchParams.get("from")?.trim() || undefined;
-          bus.attach(res, cursor);
+          bus.attach(res, cursor, identity ? { pack: packOf(identity), bus: activityBus } : undefined);
           if (tokenId) {
             // Revoked between auth and attach, or later (the watcher): close this stream.
             if (!tokens.ids().includes(tokenId)) return void res.destroy();
@@ -1055,6 +1082,21 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
             res.once("close", () => set!.delete(res));
           }
           return;
+        }
+        case "hubActivityIngest": {
+          const body = await readJson(req, { maxBytes: ACTIVITY_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
+          const who = { tokenId: identity!.tokenId ?? "?", hostId: identity!.hostId, worker: identity!.kind === "worker" };
+          return send(res, 202, activityIngestFn(who, body));
+        }
+        case "hubActivityPresence": {
+          let snap;
+          try {
+            snap = presence.snapshot(packOf(identity!));
+          } catch (e) {
+            console.error("hubd: presence snapshot failed:", (e as Error).message);
+            snap = { v: 1, pack: packOf(identity!), at: Date.now(), wolves: [], threads: [], subagents: [], owner: [] };
+          }
+          return send(res, 200, snap);
         }
         case "hubGraduateWork": {
           const actor = writeActor(req);

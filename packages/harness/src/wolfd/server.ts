@@ -208,6 +208,7 @@ export class WolfServer {
   constructor(private readonly opts: WolfServerOptions) {
     this.name = opts.name;
     this.activityTap = opts.activity ? new ActivityTap(opts.activity, (id) => this.threads.get(id)?.threadSummary()) : undefined;
+    this.activityTap?.startWolfBeat(opts.name);
     this.host = opts.host ?? "local";
     this.settleMs = opts.settleTimeoutMs ?? 5000;
     if (opts.den) this.memoryBus = memoryEventsFor(opts.den, opts.name);
@@ -346,7 +347,7 @@ export class WolfServer {
   async close(): Promise<void> {
     this.closing = true;
     this.stopApprovalWatch?.();
-    this.activityTap?.stop();
+    this.activityTap?.stop(); // queues wolf-offline
     void this.opts.activity?.stop().catch(() => {});
     this.lag?.stop();
     this.http.closeAllConnections();

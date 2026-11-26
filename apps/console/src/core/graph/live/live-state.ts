@@ -94,7 +94,7 @@ export type LiveAction =
 export const emptyLiveState = (now = 0): LiveState => ({ wolves: {}, threads: {}, subagents: {}, trails: [], pulses: [], owner: null, now });
 
 const TRAIL_VERBS = new Set(["kb-read", "kb-write", "contribution", "shipped", "bound"]);
-const KNOWN_VERBS = new Set(["thread-active", "thread-idle", "bound", "unbound", "subagent-spawned", "subagent-finished", "kb-read", "kb-write", "contribution", "shipped", "needs-you", "answered", "owner-viewing"]);
+const KNOWN_VERBS = new Set(["thread-active", "thread-idle", "bound", "unbound", "subagent-spawned", "subagent-finished", "kb-read", "kb-write", "contribution", "shipped", "needs-you", "answered", "owner-viewing", "wolf-online", "wolf-offline"]);
 
 const targetOf = (e: ActivityEvent): LiveTarget | undefined => (e.target ? { kind: e.target.kind, id: e.target.id, domain: e.target.domain ?? e.domain, title: e.target.title } : undefined);
 
@@ -190,6 +190,11 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 	};
 
 	switch (e.verb) {
+		case "wolf-online":
+			break; // the wolf is online (set above); nothing else to track
+		case "wolf-offline":
+			st = { ...st, wolves: { ...st.wolves, [wolfName]: { ...wolf, online: false, expiresAt: 0, activeThreadId: undefined, needsYou: false, needsYouThreadless: false } } };
+			return withWolfNeeds(st);
 		case "thread-active":
 			if (tKey) {
 				putThread({ ...mkThread(), active: true, idleAt: undefined });

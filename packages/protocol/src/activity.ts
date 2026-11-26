@@ -17,6 +17,8 @@ export const ACTIVITY_BATCH_MAX = 100;
 export const ACTIVITY_VERBS = [
   "thread-active", "thread-idle", "bound", "unbound", "subagent-spawned", "subagent-finished",
   "kb-read", "kb-write", "contribution", "shipped", "needs-you", "answered", "owner-viewing",
+  // wolf-level presence (idle or busy): a heartbeat every ~60 s, and a best-effort wolf-offline on clean shutdown. Added later: an older hub drops them per event.
+  "wolf-online", "wolf-offline",
 ] as const;
 export type ActivityVerb = (typeof ACTIVITY_VERBS)[number];
 export const ACTIVITY_ACTOR_KINDS = ["wolf", "thread", "subagent", "owner"] as const;

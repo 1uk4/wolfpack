@@ -164,6 +164,22 @@ describe("presence store", () => {
   });
 });
 
+describe("wolf presence", () => {
+  it("lists a wolf from its wolf-online heartbeat, expires it with the ttl, and drops it on wolf-offline", () => {
+    let t = 1000;
+    const store = createPresenceStore({ now: () => t });
+    const w = (verb: string, wolf: string) => ev({ pack: "p", verb, ttlMs: 180_000 }, { kind: "wolf", wolf }) as ActivityEvent;
+    store.set(w("wolf-online", "hal"));
+    store.set(w("wolf-online", "jack"));
+    expect(store.snapshot("p").wolves.map((e) => e.event.actor.wolf).sort()).toEqual(["hal", "jack"]);
+    store.set(w("wolf-offline", "jack"));
+    expect(store.snapshot("p").wolves.map((e) => e.event.actor.wolf)).toEqual(["hal"]);
+    t += 180_001;
+    expect(store.snapshot("p").wolves).toEqual([]);
+    store.stop();
+  });
+});
+
 describe("activity bus", () => {
   it("delivers only to subscribers of the event's pack", () => {
     const bus = createMemoryBus();

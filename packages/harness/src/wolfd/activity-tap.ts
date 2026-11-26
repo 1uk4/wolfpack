@@ -10,7 +10,7 @@
  * Write, contribution and ship events are NOT emitted here: the hub derives them from its ledger.
  */
 import type { ActivityActor } from "@wolfpack/protocol";
-import { ACTIVITY_HEARTBEAT_MS, kbEntryOfPath, type ActivityPublisher } from "./activity-publisher.js";
+import { ACTIVITY_HEARTBEAT_MS, ACTIVITY_WOLF_BEAT_MS, kbEntryOfPath, type ActivityPublisher } from "./activity-publisher.js";
 
 /** The slice of a thread summary the tap needs. */
 export interface TapThread {
@@ -147,8 +147,26 @@ export class ActivityTap {
     } catch { /* ignore */ }
   }
 
+  private wolfBeat: ReturnType<typeof setInterval> | undefined;
+  private wolfName: string | undefined;
+
+  /** Announce the wolf now and every ACTIVITY_WOLF_BEAT_MS, idle or busy (unref'd; emit never blocks). */
+  startWolfBeat(wolf: string, periodMs = ACTIVITY_WOLF_BEAT_MS): void {
+    if (this.wolfBeat) return;
+    this.wolfName = wolf;
+    const beat = () => this.pub.emit({ verb: "wolf-online", actor: { kind: "wolf", wolf } });
+    try { beat(); } catch { /* ignore */ }
+    this.wolfBeat = setInterval(() => { try { beat(); } catch { /* ignore */ } }, periodMs);
+    this.wolfBeat.unref?.();
+  }
+
   stop(): void {
     for (const h of this.beats.values()) clearInterval(h);
     this.beats.clear();
+    if (this.wolfBeat) {
+      clearInterval(this.wolfBeat);
+      this.wolfBeat = undefined;
+      try { this.pub.emit({ verb: "wolf-offline", actor: { kind: "wolf", wolf: this.wolfName! } }); } catch { /* best effort */ }
+    }
   }
 }

@@ -101,6 +101,18 @@ describe("live overlay reducer", () => {
 		assert.equal(s.wolves.hal!.needsYou, true);
 	});
 
+	it("a snapshot holding only a wolf heartbeat marks the wolf online; wolf-offline and an expired heartbeat dim it, without threads or trails", () => {
+		const beat = ev("wolf-online", { actor: { kind: "wolf", wolf: "hal" }, ttlMs: 180_000 });
+		const snapshot = { v: 1, at: 1000, wolves: [{ event: beat, expiresAt: 181_000 }], threads: [], subagents: [], owner: [] } as unknown as PresenceSnapshot;
+		let s = reduceLive(emptyLiveState(), { type: "snapshot", snapshot, now: 5000 });
+		assert.equal(s.wolves.hal!.online, true);
+		assert.deepEqual([Object.keys(s.threads), s.trails.length], [[], 0]);
+		s = feed(s, ev("wolf-offline", { actor: { kind: "wolf", wolf: "hal" } }), 6000);
+		assert.equal(tick(s, 6001).wolves.hal!.online, false);
+		s = reduceLive(emptyLiveState(), { type: "snapshot", snapshot, now: 5000 });
+		assert.equal(tick(s, 5000 + 180_001).wolves.hal!.online, false);
+	});
+
 	it("restores a finished subagent from a snapshot with its real remaining life", () => {
 		const fin = { v: 1, id: "s1", pack: "p", ts: 0, ttlMs: 60_000, actor: { kind: "subagent", wolf: "hal", subagent: "w1", parentThreadId: "t1" }, verb: "subagent-finished" } as unknown as ActivityEvent;
 		const snapshot = { v: 1, at: 1000, wolves: [], threads: [], subagents: [{ event: fin, expiresAt: 4000 }], owner: [] } as unknown as PresenceSnapshot;

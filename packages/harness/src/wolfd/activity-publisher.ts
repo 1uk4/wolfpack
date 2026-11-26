@@ -20,12 +20,15 @@ export const ACTIVITY_DEFAULT_TTL_MS: Record<string, number> = {
   "subagent-spawned": 60 * 60_000,
   "subagent-finished": 60_000,
   "kb-read": 5 * 60_000,
+  "wolf-online": 180_000, // 3x the 60 s wolf heartbeat
   "needs-you": 60 * 60_000,
   answered: 60_000,
 };
 const FALLBACK_TTL_MS = 60_000;
 /** thread-active heartbeat period while a thread is busy. */
 export const ACTIVITY_HEARTBEAT_MS = 30_000;
+/** wolf-online heartbeat period (idle or busy). */
+export const ACTIVITY_WOLF_BEAT_MS = 60_000;
 
 export type ActivityDraft = {
   verb: ActivityVerb;

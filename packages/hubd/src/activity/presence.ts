@@ -15,6 +15,7 @@ const SLOT: Partial<Record<ActivityEvent["verb"], string>> = {
   bound: "binding", unbound: "binding",
   "subagent-spawned": "subagent", "subagent-finished": "subagent",
   "owner-viewing": "viewing",
+  "wolf-online": "wolf", "wolf-offline": "wolf",
 };
 
 const keyOf = (e: ActivityEvent): string => {
@@ -36,6 +37,7 @@ export function createPresenceStore(opts: { now?: () => number; maxEntries?: num
     set(event: ActivityEvent): void {
       const k = keyOf(event);
       map.delete(k); // re-insert at the end: most recently active last
+      if (event.verb === "wolf-offline") return; // a clean shutdown forgets the wolf slot at once
       map.set(k, { event, expiresAt: now() + event.ttlMs });
       if (map.size > max) map.delete(map.keys().next().value as string);
     },

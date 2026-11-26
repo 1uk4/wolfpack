@@ -16,6 +16,21 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("ActivityTap", () => {
+  it("announces the wolf at start and every 60 s, idle or busy, on an unref'd timer; stop sends wolf-offline", () => {
+    const { tap, emitted } = setup();
+    const spy = vi.spyOn(globalThis, "setInterval");
+    tap.startWolfBeat("hal");
+    expect(emitted).toMatchObject([{ verb: "wolf-online", actor: { kind: "wolf", wolf: "hal" } }]);
+    vi.advanceTimersByTime(125_000);
+    expect(emitted.map((e) => e.verb)).toEqual(["wolf-online", "wolf-online", "wolf-online"]);
+    expect((spy.mock.results.at(-1)!.value as { hasRef(): boolean }).hasRef()).toBe(false);
+    tap.stop();
+    expect(emitted.at(-1)).toMatchObject({ verb: "wolf-offline", actor: { kind: "wolf", wolf: "hal" } });
+    const n = emitted.length;
+    vi.advanceTimersByTime(300_000);
+    expect(emitted.length).toBe(n);
+  });
+
   it("thread busy sends thread-active with its work item, heartbeats every 30 s, and idle stops it", () => {
     const { tap, emitted } = setup();
     tap.onWolfEvent({ type: "thread-status", threadId: "t1", status: "busy" });

@@ -55,33 +55,51 @@ export function startLiveFeed(opts: LiveFeedOptions): () => void {
 	let attempt = 0;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 
-	async function snapshot(signal: AbortSignal): Promise<void> {
+	/** Time of the last applied stream event: a snapshot fetched before it would be older and must not overwrite it. */
+	let lastEventAt = -Infinity;
+
+	/** "ok": presence answered 200 with a valid body. "none": no hub (204/404/403) or an invalid body. "auth": 401. "error": network failure. */
+	async function snapshot(signal: AbortSignal): Promise<"ok" | "none" | "auth" | "error"> {
+		const startedAt = now();
 		try {
 			const r = await doFetch("/api/activity/presence", { signal, cache: "no-store" });
-			if (r.status !== 200) return;
+			if (r.status === 401) return "auth";
+			if (r.status !== 200) return "none";
 			const snap = (await r.json()) as PresenceSnapshot;
-			if (snap && snap.v === 1 && Array.isArray(snap.wolves)) opts.dispatch({ type: "snapshot", snapshot: snap, now: now() });
+			if (!snap || snap.v !== 1 || !Array.isArray(snap.wolves)) return "none";
+			if (lastEventAt <= startedAt) opts.dispatch({ type: "snapshot", snapshot: snap, now: now() });
+			return "ok";
 		} catch {
-			/* no snapshot: the overlay fills from live frames */
+			return "error";
 		}
 	}
+
+	const SLOW_MS = 10 * 60_000;
 
 	async function run(): Promise<void> {
 		if (stopped) return;
 		const c = new AbortController();
 		ctl = c;
 		let delayIdx = attempt;
+		let gotReal = false;
 		try {
-			await snapshot(c.signal);
+			const snap = await snapshot(c.signal);
+			if (c.signal.aborted || stopped) return;
+			if (snap === "auth") return void (stopped = true);
+			if (snap === "none") {
+				// No hub (or an old one): stay quiet until the tab comes back or 10 minutes pass.
+				timer = setTimeout(() => void run(), SLOW_MS);
+				return;
+			}
 			const headers: Record<string, string> = { Accept: "text/event-stream" };
 			if (cursor) headers["Last-Event-ID"] = cursor;
 			const r = await doFetch("/api/activity/stream", { headers, signal: c.signal, cache: "no-store" });
 			if (r.status === 401) return void (stopped = true);
 			if (r.status !== 200 || !r.body) {
-				delayIdx = Math.max(attempt, 4); // no hub / not reachable: ask rarely
+				timer = setTimeout(() => void run(), SLOW_MS); // 204/403/404: no hub for us, ask rarely
+				return;
 			} else {
 				const parse = createSseParser((f) => {
-					attempt = 0;
 					if (f.id) cursor = f.id;
 					let j: { type?: string; event?: unknown };
 					try {
@@ -89,8 +107,14 @@ export function startLiveFeed(opts: LiveFeedOptions): () => void {
 					} catch {
 						return;
 					}
-					if (j.type === "pack.activity" && isEvent(j.event)) opts.dispatch({ type: "event", event: j.event, now: now() });
-					else if (j.type === "resync") {
+					if (j.type === "pack.activity" && isEvent(j.event)) {
+						gotReal = true;
+						attempt = 0;
+						lastEventAt = now();
+						opts.dispatch({ type: "event", event: j.event, now: lastEventAt });
+					} else if (j.type === "resync") {
+						gotReal = true;
+						attempt = 0;
 						opts.dispatch({ type: "resync", now: now() });
 						void snapshot(c.signal);
 					}
@@ -107,6 +131,8 @@ export function startLiveFeed(opts: LiveFeedOptions): () => void {
 			/* aborted or dropped: reconnect below */
 		}
 		if (stopped || c.signal.aborted) return;
+		// A connection that never carried a real frame (only keepalive comments, or nothing) is not a healthy one: back off slowly.
+		if (!gotReal) delayIdx = Math.max(attempt, 4);
 		attempt = delayIdx + 1;
 		timer = setTimeout(() => void run(), BACKOFF_MS[Math.min(delayIdx, BACKOFF_MS.length - 1)]);
 	}

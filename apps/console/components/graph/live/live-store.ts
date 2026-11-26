@@ -9,14 +9,15 @@
  */
 import { useEffect, useSyncExternalStore } from "react";
 import type { ActivityEvent } from "@wolfpack/protocol";
-import { emptyLiveState, reduceLive, type LiveAction, type LiveState } from "@/src/core/graph/live/live-state";
+import { emptyLiveState, liveActive, liveSignature, reduceLive, type LiveAction, type LiveState } from "@/src/core/graph/live/live-state";
 import { startLiveFeed } from "./live-client";
 
 export interface RecentEvent { id: string; at: number; ts: number; verb: string; actor: ActivityEvent["actor"]; target?: ActivityEvent["target"] }
-export interface LiveActivitySnapshot { state: LiveState; recent: readonly RecentEvent[] }
+/** `connected`: the hub has answered (a presence snapshot or a stream frame arrived) since the feed opened. */
+export interface LiveActivitySnapshot { state: LiveState; recent: readonly RecentEvent[]; connected: boolean }
 
 export const RECENT_MAX = 50;
-const EMPTY: LiveActivitySnapshot = { state: emptyLiveState(0), recent: [] };
+const EMPTY: LiveActivitySnapshot = { state: emptyLiveState(0), recent: [], connected: false };
 
 let snapshot: LiveActivitySnapshot = EMPTY;
 const subs = new Set<() => void>();
@@ -26,11 +27,23 @@ let stopFeed: (() => void) | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
 let sig = "";
 
-const signature = (s: LiveState) => `${Object.values(s.wolves).map((w) => `${w.name}${w.online ? 1 : 0}${w.needsYou ? 1 : 0}`).join()}|${Object.keys(s.threads).length}|${Object.keys(s.subagents).length}|${s.owner ? 1 : 0}`;
 const emit = () => subs.forEach((f) => f());
 
+/** The clock runs only while something can expire; with no live data there is no timer. */
+function armTimer(): void {
+	if (timer || refs === 0 || !liveActive(snapshot.state)) return;
+	timer = setInterval(() => {
+		if (typeof document === "undefined" || !document.hidden) dispatch({ type: "tick", now: Date.now() });
+		if (!liveActive(snapshot.state) && timer) {
+			clearInterval(timer);
+			timer = null;
+		}
+	}, 1000);
+}
+
 function dispatch(a: LiveAction): void {
-	for (const l of listeners) l(a);
+	// Ticks are the store's own clock: the overlay runs its own, so they are not forwarded.
+	if (a.type !== "tick") for (const l of listeners) l(a);
 	const state = reduceLive(snapshot.state, a);
 	let recent = snapshot.recent;
 	if (a.type === "event") {
@@ -38,12 +51,13 @@ function dispatch(a: LiveAction): void {
 		recent = [...recent, { id: e.id, at: a.now, ts: e.ts, verb: e.verb, actor: e.actor, target: e.target }].slice(-RECENT_MAX);
 	}
 	if (a.type === "tick") {
-		const s = signature(state);
+		const s = liveSignature(state);
 		if (s === sig) return; // nothing visible changed: no re-render
 		sig = s;
 	}
-	snapshot = { state, recent };
+	snapshot = { state, recent, connected: snapshot.connected || a.type !== "tick" };
 	emit();
+	armTimer();
 }
 
 /** Open the shared stream (first holder) and get the release function. */
@@ -51,9 +65,6 @@ export function acquireLiveFeed(): () => void {
 	refs++;
 	if (refs === 1) {
 		stopFeed = startLiveFeed({ dispatch });
-		timer = setInterval(() => {
-			if (typeof document === "undefined" || !document.hidden) dispatch({ type: "tick", now: Date.now() });
-		}, 1000);
 	}
 	let released = false;
 	return () => {

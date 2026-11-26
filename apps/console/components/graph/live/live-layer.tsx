@@ -15,7 +15,7 @@ import { BellIcon, ExternalLinkIcon, XIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
-import { acquireLiveFeed, getLiveSnapshot, onLiveAction } from "./live-store";
+import { acquireLiveFeed, getLiveSnapshot, onLiveAction, useLiveActivity } from "./live-store";
 import { LiveOverlay, liveSettingsOf, type OverlayCard, type OverlayHit } from "./live-overlay";
 
 interface Shown { hit: OverlayHit; card: OverlayCard; pinned: boolean; width: number }
@@ -107,12 +107,13 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 		};
 	}, [renderer, live.enabled]);
 
-	// Every pack wolf, offline ones dimmed at home.
+	// Every pack wolf, offline ones dimmed at home: only once the hub has answered, so with no hub the graph is exactly as before.
+	const { connected } = useLiveActivity({ enabled: false });
 	const names = (attachedApi?.wolves ?? []).map((w) => w.name).join("\u0000");
 	useEffect(() => {
-		if (!renderer || !live.enabled || !names) return;
+		if (!renderer || !live.enabled || !names || !connected) return;
 		overlayRef.current?.dispatch({ type: "roster", wolves: names.split("\u0000"), now: Date.now() });
-	}, [renderer, live.enabled, names]);
+	}, [renderer, live.enabled, names, connected]);
 
 	// The you-node also links to the floating chat's attached thread.
 	const att = attachedApi?.attached ?? null;

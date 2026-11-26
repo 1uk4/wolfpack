@@ -7,6 +7,8 @@ import {
 	DEFAULT_LIVE_OPTIONS,
 	emptyLiveState,
 	homeDomainOf,
+	liveActive,
+	liveSignature,
 	reduceLive,
 	subagentAlpha,
 	trailAlpha,
@@ -78,17 +80,23 @@ const hash = (s: string) => {
 	return Math.abs(h);
 };
 
+const TUG_STALE_MS = 3000;
+const RING_FRAME_MS = 125;
+
 export class LiveOverlay {
 	private state: LiveState = emptyLiveState(Date.now());
 	private bodies = new Map<string, WolfBody & { offline?: boolean }>();
-	private pendingTugs = new Map<string, LiveTarget>();
+	/** A target a wolf should drift to; dropped after TUG_STALE_MS if no frame consumed it (so it can never hold the frame loop). */
+	private pendingTugs = new Map<string, { target: LiveTarget; at: number }>();
+	/** Earliest time the next needs-you ring frame may be drawn (the ring pulses slowly, about 8 fps). */
+	private nextFrameAt = 0;
+	private ringTimer: ReturnType<typeof setTimeout> | null = null;
 	private trailFrom = new Map<string, Pt>();
 	private you: Pt | null = null;
 	private attached: AttachedRef | null = null;
 	private highlight: OverlayHighlight | null = null;
 	private settings: OverlaySettings = LIVE_DEFAULTS;
 	private timer: ReturnType<typeof setInterval> | null = null;
-	private lastSig = "";
 	readonly mobile: boolean;
 	/** Read live, so a change of the OS setting applies without a reload. */
 	get reduced(): boolean {
@@ -143,35 +151,47 @@ export class LiveOverlay {
 	/** Start from an already-reduced state (the shared feed was running before this graph mounted). */
 	loadState(s: LiveState): void {
 		if (this.settings.enabled && Object.keys(s.wolves).length > 0) this.state = s;
+		this.arm();
 		this.requestFrame();
 	}
 
 	dispatch(a: LiveAction): void {
 		if (!this.settings.enabled) return;
-		this.state = reduceLive(this.state, a, this.liveOpts());
+		const sigBefore = liveSignature(this.state);
+		const next = reduceLive(this.state, a, this.liveOpts());
+		if (next === this.state) return; // nothing changed: no frame
+		this.state = next;
 		if (a.type === "event" && a.event.target && a.event.actor.wolf && ["kb-read", "kb-write", "contribution", "shipped", "bound"].includes(a.event.verb)) {
-			this.pendingTugs.set(a.event.actor.wolf, { kind: a.event.target.kind, id: a.event.target.id, domain: a.event.target.domain ?? a.event.domain });
+			this.pendingTugs.set(a.event.actor.wolf, { target: { kind: a.event.target.kind, id: a.event.target.id, domain: a.event.target.domain ?? a.event.domain }, at: Date.now() });
 		}
-		this.requestFrame();
+		this.arm();
+		if (a.type !== "tick" || liveSignature(next) !== sigBefore) this.requestFrame();
 	}
 
 	/** Start the 1 s housekeeping clock (expiry); paused while the tab is hidden. */
 	start(): void {
-		if (this.timer) return;
+		this.started = true;
+		this.arm();
+	}
+	private started = false;
+	/** The clock runs only while something can expire; with no live data there is no timer at all. */
+	private arm(): void {
+		if (!this.started || this.timer || !this.settings.enabled || !liveActive(this.state)) return;
 		this.timer = setInterval(() => {
 			if (typeof document !== "undefined" && document.hidden) return;
-			this.state = reduceLive(this.state, { type: "tick", now: Date.now() }, this.liveOpts());
-			const s = this.state;
-			const sig = `${Object.values(s.wolves).map((w) => `${w.name}${w.online ? 1 : 0}${w.needsYou ? 1 : 0}`).join()}|${Object.keys(s.threads).length}|${Object.keys(s.subagents).length}|${s.trails.length}|${s.pulses.length}|${s.owner ? 1 : 0}`;
-			if (sig !== this.lastSig) {
-				this.lastSig = sig;
-				this.requestFrame();
+			this.dispatch({ type: "tick", now: Date.now() });
+			if (!liveActive(this.state) && this.timer) {
+				clearInterval(this.timer);
+				this.timer = null;
 			}
 		}, 1000);
 	}
 	stop(): void {
+		this.started = false;
 		if (this.timer) clearInterval(this.timer);
 		this.timer = null;
+		if (this.ringTimer) clearTimeout(this.ringTimer);
+		this.ringTimer = null;
 	}
 
 	/** Anything left to animate (the renderer keeps its rAF loop alive only while this is true). */
@@ -180,10 +200,22 @@ export class LiveOverlay {
 		if (this.reduced) return false;
 		const s = this.state;
 		if (this.highlight) return true;
-		if (s.pulses.length > 0 || s.trails.length > 0 || this.pendingTugs.size > 0) return true;
-		if (Object.values(s.subagents).some((a) => a.finishedAt !== undefined)) return true;
-		if (Object.values(s.wolves).some((w) => w.needsYou)) return true;
-		return wolvesMoving([...this.bodies.values()], now) || this.youMoving;
+		const wall = Date.now();
+		if (s.pulses.length > 0) return true;
+		// Trails keep frames coming only while they are still visibly fading.
+		if (s.trails.some((t) => this.trailFrom.has(t.id) && trailAlpha(t, wall, this.settings.trailSec) > 0)) return true;
+		if ([...this.pendingTugs.values()].some((p) => wall - p.at < TUG_STALE_MS)) return true;
+		if (Object.values(s.subagents).some((a) => a.finishedAt !== undefined && subagentAlpha(a, wall, this.settings.subagentFadeSec) > 0.02)) return true;
+		if (wolvesMoving([...this.bodies.values()], now) || this.youMoving) return true;
+		// A needs-you ring alone does not hold the rAF loop: it asks for a frame itself at about 8 fps.
+		if (Object.values(s.wolves).some((w) => w.needsYou) && !this.ringTimer) {
+			this.ringTimer = setTimeout(() => {
+				this.ringTimer = null;
+				this.nextFrameAt = Date.now() + RING_FRAME_MS;
+				this.requestFrame();
+			}, Math.max(0, this.nextFrameAt - Date.now()));
+		}
+		return false;
 	}
 	private youMoving = false;
 
@@ -212,7 +244,7 @@ export class LiveOverlay {
 			const off = !w.online;
 			if (off && !b.offline) b.tug = { x: home.x, y: home.y, at: now };
 			b.offline = off;
-			const tgt = this.pendingTugs.get(w.name);
+			const tgt = this.pendingTugs.get(w.name)?.target;
 			if (tgt && !off) {
 				const id = targetNodeId(tgt, (n) => host.hasNode(n));
 				const p = id ? host.nodePos(id) : null;

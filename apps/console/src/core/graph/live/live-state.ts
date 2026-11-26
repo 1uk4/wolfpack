@@ -246,6 +246,17 @@ function tick(s: LiveState, now: number, o: LiveOptions): LiveState {
 	});
 }
 
+/** What a viewer can see of a state; two states with the same signature draw the same. Shared by the store and the overlay. */
+export function liveSignature(s: LiveState): string {
+	const wolves = Object.values(s.wolves).map((w) => `${w.name}${w.online ? 1 : 0}${w.needsYou ? 1 : 0}`).join();
+	return `${wolves}|${Object.keys(s.threads).length}|${Object.keys(s.subagents).length}|${s.trails.length}|${s.pulses.length}|${s.owner ? 1 : 0}`;
+}
+
+/** True while something in the state can still expire (so a clock is worth running). An offline roster alone is not. */
+export function liveActive(s: LiveState): boolean {
+	return Object.values(s.wolves).some((w) => w.online) || Object.keys(s.threads).length > 0 || Object.keys(s.subagents).length > 0 || s.trails.length > 0 || s.pulses.length > 0 || s.owner !== null;
+}
+
 /** The one reducer. Unknown verbs and malformed entries leave the state as it was. */
 export function reduceLive(s: LiveState, a: LiveAction, o: LiveOptions = DEFAULT_LIVE_OPTIONS): LiveState {
 	switch (a.type) {

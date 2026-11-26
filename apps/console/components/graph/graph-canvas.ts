@@ -678,6 +678,7 @@ export class GraphCanvasRenderer {
 	private resizeObserver: ResizeObserver;
 	private downPos: Pt | null = null;
 	/** The live overlay (wolves, satellites, pulses): drawn above the nodes inside THIS loop; null = nothing changes. */
+	private destroyed = false;
 	private overlay: LiveOverlay | null = null;
 	private overlayHoverKey: string | null = null;
 	private overlayDown: OverlayHit | null = null;
@@ -1062,6 +1063,7 @@ export class GraphCanvasRenderer {
 	}
 
 	destroy(): void {
+		this.destroyed = true;
 		if (this.frameId !== null) cancelAnimationFrame(this.frameId);
 		this.overlay = null;
 		this.flushCommit();
@@ -1330,6 +1332,7 @@ export class GraphCanvasRenderer {
 	}
 
 	private markDirty(): void {
+		if (this.destroyed) return; // a late setOverlay(null) or overlay redraw after destroy must not start a frame loop
 		this.dirty = true;
 		if (this.frameId === null && !this.inTick) {
 			this.frameId = requestAnimationFrame(() => {

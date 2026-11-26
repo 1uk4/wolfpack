@@ -21,7 +21,11 @@ export const ACTIVITY_VERBS = [
   "wolf-online", "wolf-offline",
 ] as const;
 export type ActivityVerb = (typeof ACTIVITY_VERBS)[number];
+<<<<<<< HEAD
 export const ACTIVITY_ACTOR_KINDS = ["wolf", "thread", "subagent", "owner", "hub"] as const;
+=======
+export const ACTIVITY_ACTOR_KINDS = ["wolf", "thread", "subagent", "owner"] as const;
+>>>>>>> 8519924f (activity: kb-read for bash, INDEX/_digest reads and kb_* args, throttled per thread; domain target (work-wolfpack-Iy6RWcG))
 export const ACTIVITY_TARGET_KINDS = ["kb-entry", "kb-section", "work-item", "thread", "domain"] as const;
 
 /** Trim and cut a display title to ACTIVITY_TITLE_MAX chars (over-long titles are trimmed, not rejected). */

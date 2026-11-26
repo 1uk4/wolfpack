@@ -363,6 +363,30 @@ describe("live map model v2", () => {
 		assert.ok(near(own[0]!.from, hub, 6), "the feature thread's trail leaves from the hub, not the wolf");
 	});
 
+	it("a work-touch draws a trail from the actor's body to that work item's node; a work item not on the map draws nothing, not even to its domain", () => {
+		nodes.set("work:Zz9", { x: 200, y: -150, color: "#ff8844" });
+		send("thread-active", feature);
+		send("thread-active", home);
+		send("subagent-spawned", subTap);
+		run(0.1);
+		const hub = of("feature");
+		const sub = of("subagent");
+		const toZ = () => render().filter((s) => near(s.to, nodes.get("work:Zz9")!, 0.5));
+		assert.equal(toZ().length, 0);
+		send("work-touch", subTap, { kind: "work-item", id: "work-wolfpack-Zz9", domain: "wolfpack" });
+		send("work-touch", feature, { kind: "work-item", id: "work-wolfpack-Zz9", domain: "wolfpack" });
+		run(0.05);
+		const strokes = toZ();
+		assert.ok(strokes.some((s) => near(s.from, hub, 6)), "a trail leaves the feature hub");
+		assert.ok(strokes.some((s) => near(s.from, of("subagent"), 40) || near(s.from, sub, 40)), "a trail leaves the sub-agent");
+		mock.timers.tick(60_000);
+		send("work-touch", subTap, { kind: "work-item", id: "work-wolfpack-Nope", domain: "wolfpack" });
+		run(0.05);
+		const toDomain = render().filter((s) => near(s.to, nodes.get("dom:wolfpack")!, 0.5));
+		assert.equal(toDomain.length, 0, "no fallback to the domain node");
+		nodes.delete("work:Zz9");
+	});
+
 	it("reduced motion: no float or roam, subagents snap to their target", () => {
 		g.window = { matchMedia: () => ({ matches: true }), innerWidth: 1280 };
 		const still = new LiveOverlay(() => {});

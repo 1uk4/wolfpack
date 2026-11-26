@@ -75,13 +75,13 @@ export function kbTargetsOfTool(toolName: string, args: unknown): KbTarget[] {
   }
 }
 
-/** Per-thread throttle for kb-read: the same target at most once per `windowMs`, at most `turnCap` per turn. Bounded memory. */
-export class KbReadThrottle {
+/** Per-thread throttle for kb-read and work-touch (one instance each): the same target at most once per `windowMs`, at most `turnCap` per turn. Bounded memory. */
+export class ActivityThrottle {
   private seen = new Map<string, Map<string, number>>();
   private count = new Map<string, number>();
   constructor(private readonly windowMs = 30_000, private readonly turnCap = 10, private readonly perThreadMax = 64) {}
 
-  allow(threadId: string, t: KbTarget, now = Date.now()): boolean {
+  allow(threadId: string, t: { kind: string; id: string; domain?: string }, now = Date.now()): boolean {
     if ((this.count.get(threadId) ?? 0) >= this.turnCap) return false;
     let m = this.seen.get(threadId);
     if (!m) this.seen.set(threadId, (m = new Map()));

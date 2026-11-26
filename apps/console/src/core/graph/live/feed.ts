@@ -38,6 +38,7 @@ const PHRASE: Record<string, string> = {
 	"kb-write": "wrote",
 	contribution: "updated",
 	shipped: "shipped",
+	"work-touch": "worked on",
 	bound: "bound to",
 	unbound: "unbound from",
 	"needs-you": "needs you",

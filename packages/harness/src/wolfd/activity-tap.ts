@@ -6,11 +6,13 @@
  *  - thread-updated boundWorkItem change -> bound / unbound
  *  - thread-updated of a subagent: first sight -> subagent-spawned, state done|failed|stopped -> subagent-finished
  *  - card-pending / card-settled -> needs-you / answered
+ *  - work-item tool call -> work-touch (activity-work.ts), throttled like kb-read
  *  - kb read -> kb-read (`read` tool on a kb-mirror entry path only; never bash)
  * Write, contribution and ship events are NOT emitted here: the hub derives them from its ledger.
  */
 import type { ActivityActor } from "@wolfpack/protocol";
-import { KbReadThrottle, kbTargetsOfTool } from "./activity-kb.js";
+import { ActivityThrottle, kbTargetsOfTool } from "./activity-kb.js";
+import { workTargetsOfTool } from "./activity-work.js";
 import { ACTIVITY_HEARTBEAT_MS, ACTIVITY_WOLF_BEAT_MS, type ActivityPublisher } from "./activity-publisher.js";
 
 /** The slice of a thread summary the tap needs. */
@@ -32,7 +34,8 @@ export class ActivityTap {
   private bound = new Map<string, string | undefined>();
   private seenChild = new Set<string>();
   private finishedChild = new Set<string>();
-  private throttle = new KbReadThrottle();
+  private throttle = new ActivityThrottle();
+  private workThrottle = new ActivityThrottle();
 
   constructor(
     private readonly pub: Pick<ActivityPublisher, "emit">,
@@ -65,6 +68,7 @@ export class ActivityTap {
           if (ev.status === "busy") {
             if (this.beats.has(id)) return;
             this.throttle.newTurn(id);
+            this.workThrottle.newTurn(id);
             this.active(id);
             const h = setInterval(() => {
               try {
@@ -108,6 +112,7 @@ export class ActivityTap {
     this.seenChild.delete(id);
     this.finishedChild.delete(id);
     this.throttle.forget(id);
+    this.workThrottle.forget(id);
   }
 
   private threadUpdated(t: TapThread | undefined): void {
@@ -146,6 +151,12 @@ export class ActivityTap {
       for (const t of kbTargetsOfTool(toolName, args)) {
         if (!this.throttle.allow(threadId, t)) continue;
         this.pub.emit({ verb: "kb-read", actor: this.actor(this.lookup(threadId), threadId), target: t, ...(t.domain ? { domain: t.domain } : {}) });
+      }
+    } catch { /* ignore */ }
+    try {
+      for (const t of workTargetsOfTool(toolName, args, this.lookup(threadId)?.boundWorkItem)) {
+        if (!this.workThrottle.allow(threadId, t)) continue;
+        this.pub.emit({ verb: "work-touch", actor: this.actor(this.lookup(threadId), threadId), target: t, ...(t.domain ? { domain: t.domain } : {}) });
       }
     } catch { /* ignore */ }
   }

@@ -160,6 +160,44 @@ describe("ActivityTap", () => {
     ]);
   });
 
+  it("work-item tools send work-touch for the item they name (id, ids, else the bound one); sub-agents are attributed; create, query, bind and unknown ids send nothing", () => {
+    const { tap, emitted } = setup();
+    tap.onToolStart("t1", "task_note", { id: "work-wolfpack-AAA", note: "secret text" });
+    tap.onToolStart("t1", "task_stage", { stage: "in_build" }); // defaults to the bound item
+    tap.onToolStart("t1", "task_done", { ids: ["work-wolfpack-B1", "work-spot-B2"] });
+    tap.onToolStart("c1", "task_update", { id: "work-wolfpack-CCC" });
+    tap.onToolStart("t1", "task_create", { title: "x" });
+    tap.onToolStart("t1", "task_query", { current: true });
+    tap.onToolStart("t1", "task_bind", { id: "work-wolfpack-DDD" });
+    tap.onToolStart("t1", "task_claim", {}); // no id, claim has no default
+    expect(emitted.map((e) => [e.verb, e.actor.kind, e.target])).toEqual([
+      ["work-touch", "thread", { kind: "work-item", id: "work-wolfpack-AAA", domain: "wolfpack" }],
+      ["work-touch", "thread", { kind: "work-item", id: "work-wolfpack-abc", domain: "wolfpack" }],
+      ["work-touch", "thread", { kind: "work-item", id: "work-wolfpack-B1", domain: "wolfpack" }],
+      ["work-touch", "thread", { kind: "work-item", id: "work-spot-B2", domain: "spot" }],
+      ["work-touch", "subagent", { kind: "work-item", id: "work-wolfpack-CCC", domain: "wolfpack" }],
+    ]);
+    expect(JSON.stringify(emitted)).not.toContain("secret text");
+  });
+
+  it("work-touch is throttled on its own: the same item once per 30 s per thread, at most 10 per turn, a new turn resets the cap", () => {
+    const { tap, emitted } = setup();
+    const note = (id: string) => tap.onToolStart("t1", "task_note", { id: `work-wolfpack-${id}` });
+    note("A");
+    note("A");
+    expect(emitted).toHaveLength(1);
+    vi.advanceTimersByTime(31_000);
+    note("A");
+    expect(emitted).toHaveLength(2);
+    for (let i = 0; i < 25; i++) note(`W${i}`);
+    expect(emitted).toHaveLength(10);
+    tap.onWolfEvent({ type: "thread-status", threadId: "t1", status: "idle" });
+    tap.onWolfEvent({ type: "thread-status", threadId: "t1", status: "busy" });
+    emitted.length = 0;
+    note("Fresh");
+    expect(emitted.map((e) => e.verb)).toEqual(["work-touch"]);
+  });
+
   it("the same target is sent once per 30 s per thread, and a turn sends at most 10 kb-reads", () => {
     const { tap, emitted } = setup();
     const p = (id: string) => ({ path: `/h/kb-mirror/domains/d/entries/${id}.md` });

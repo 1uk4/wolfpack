@@ -130,8 +130,8 @@ export const workShortId = (id: string): string => /^work-[a-z0-9]+-(.+)$/i.exec
 
 export const emptyLiveState = (now = 0): LiveState => ({ wolves: {}, threads: {}, subagents: {}, trails: [], pulses: [], owner: null, now });
 
-const TRAIL_VERBS = new Set(["kb-read", "kb-write", "contribution", "shipped", "bound"]);
-const KNOWN_VERBS = new Set(["thread-active", "thread-idle", "bound", "unbound", "subagent-spawned", "subagent-finished", "kb-read", "kb-write", "contribution", "shipped", "needs-you", "answered", "owner-viewing", "wolf-online", "wolf-offline"]);
+const TRAIL_VERBS = new Set(["kb-read", "kb-write", "contribution", "shipped", "bound", "work-touch"]);
+const KNOWN_VERBS = new Set(["thread-active", "thread-idle", "bound", "unbound", "subagent-spawned", "subagent-finished", "kb-read", "kb-write", "contribution", "shipped", "needs-you", "answered", "owner-viewing", "wolf-online", "wolf-offline", "work-touch"]);
 
 const targetOf = (e: ActivityEvent): LiveTarget | undefined => (e.target ? { kind: e.target.kind, id: e.target.id, domain: e.target.domain ?? e.domain, title: e.target.title } : undefined);
 
@@ -316,9 +316,12 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 	}
 	st = { ...st, wolves: { ...st.wolves, [wolfName]: wolf } };
 	if (fresh && target && TRAIL_VERBS.has(e.verb)) {
+		// A work-touch lands on that work item only: a work item that is not on the map must not fall back to its domain node.
+		// (The feed line names the item by title or id; it does not need the domain.)
+		const target_: LiveTarget = e.verb === "work-touch" ? { kind: target.kind, id: target.id, ...(target.title !== undefined ? { title: target.title } : {}) } : target;
 		const origin = isSub && e.actor.subagent ? { subagentKey: subKey(e.actor.subagent) } : !isSub && tKey && (st.threads[tKey]?.feature ?? featureOfThread(threadId!)) !== undefined ? { featureKey: tKey } : {};
-		const tr: LiveTrail = { id: e.id, wolf: wolfName, threadId, target, verb: e.verb, at: now, ...origin };
-		st = addTrail(st, tr, { id: e.id, wolf: wolfName, target, verb: e.verb, at: now, ...origin }, o);
+		const tr: LiveTrail = { id: e.id, wolf: wolfName, threadId, target: target_, verb: e.verb, at: now, ...origin };
+		st = addTrail(st, tr, { id: e.id, wolf: wolfName, target: target_, verb: e.verb, at: now, ...origin }, o);
 	}
 	return withWolfNeeds(st);
 }

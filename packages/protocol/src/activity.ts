@@ -19,6 +19,8 @@ export const ACTIVITY_VERBS = [
   "kb-read", "kb-write", "contribution", "shipped", "needs-you", "answered", "owner-viewing",
   // wolf-level presence (idle or busy): a heartbeat every ~60 s, and a best-effort wolf-offline on clean shutdown. Added later: an older hub drops them per event.
   "wolf-online", "wolf-offline",
+  // a work-item tool call (note, stage, done, ...) by any thread or subagent: the actor touched that work item. Added later: an older hub drops it per event.
+  "work-touch",
 ] as const;
 export type ActivityVerb = (typeof ACTIVITY_VERBS)[number];
 export const ACTIVITY_ACTOR_KINDS = ["wolf", "thread", "subagent", "owner", "hub"] as const;

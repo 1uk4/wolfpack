@@ -71,7 +71,7 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
       ...(target ? { target } : {}), ...(domain ? { domain } : {}),
     };
     try {
-      o.presence.set(ev);
+      if (actor.kind !== "hub") o.presence.set(ev); // hub trails are transient: no presence slot
     } catch {
       /* best effort */
     }
@@ -128,12 +128,12 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
         console.error("hubd: activity derive (work) failed:", (e as Error)?.message);
       }
     },
-    /** A KB commit landed for `domain`. Nothing without a request context (the curator's own commits). */
+    /** A KB commit landed for `domain`. With no request context (the hub's curator, system commits) the actor is the hub ("curator"). */
     onKb(entryIds: readonly string[], domain: string): void {
       try {
         const ctx = als.getStore();
-        if (!ctx || ctx.worker === undefined) return;
-        const actor = actorOf(ctx.worker ? "wolf" : "owner", ctx.wolf, ctx);
+        if (ctx && ctx.worker === undefined) return; // a request that has not authenticated yet
+        const actor: ActivityActor | undefined = ctx ? actorOf(ctx.worker ? "wolf" : "owner", ctx.wolf, ctx) : { kind: "hub", title: "curator" };
         if (!actor) return;
         for (const id of entryIds.slice(0, 20)) emit(actor, "kb-write", { kind: "kb-entry", id, domain }, domain);
       } catch (e) {

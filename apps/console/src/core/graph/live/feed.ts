@@ -76,7 +76,8 @@ export function formatFeed(events: readonly FeedEvent[], opts: { private?: boole
 			if (was === (e.verb === "thread-active") || !e.actor.wolf) continue; // a heartbeat, or an idle for a thread never seen active
 		}
 		const you = e.verb === "owner-viewing";
-		const wolf = you ? "you" : e.actor.wolf;
+		const hub = e.actor.kind === "hub";
+		const wolf = you ? "you" : hub ? e.actor.title || "hub" : e.actor.wolf;
 		if (!wolf) continue;
 		const k = sameKey(e);
 		const prev = out[out.length - 1];
@@ -94,7 +95,7 @@ export function formatFeed(events: readonly FeedEvent[], opts: { private?: boole
 		else if (e.verb === "subagent-spawned") phrase = `started ${sa ?? "subagent"}`;
 		else if (e.verb === "subagent-finished") phrase = `${sa ?? "subagent"} finished`;
 		else {
-			const p = PHRASE[e.verb];
+			const p = hub && e.verb === "kb-write" ? "updated" : PHRASE[e.verb];
 			if (!p) continue;
 			phrase = sa ? `${sa} ${p}` : p;
 			if (!opts.private && e.target) name = e.target.title ?? shortId(e.target.id);
@@ -103,7 +104,7 @@ export function formatFeed(events: readonly FeedEvent[], opts: { private?: boole
 		out.push({
 			key: e.id,
 			wolf,
-			color: you ? "hsl(0 0% 62%)" : wolfColor(wolf),
+			color: you || hub ? "hsl(0 0% 62%)" : wolfColor(wolf),
 			text: `${wolf} · ${phrase}${name ? ` ${name}` : ""}`,
 			time: e.at,
 			tone: e.verb === "needs-you" ? "amber" : "normal",

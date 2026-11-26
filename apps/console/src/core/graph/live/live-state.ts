@@ -91,6 +91,9 @@ export type LiveAction =
 	| { type: "resync"; now: number }
 	| { type: "tick"; now: number };
 
+/** Trail/pulse origin name for hub-side writes (curator, system). Not a wolf: it never gets a body. */
+export const HUB_WOLF = "@hub";
+
 export const emptyLiveState = (now = 0): LiveState => ({ wolves: {}, threads: {}, subagents: {}, trails: [], pulses: [], owner: null, now });
 
 const TRAIL_VERBS = new Set(["kb-read", "kb-write", "contribution", "shipped", "bound"]);
@@ -172,6 +175,12 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 	if (e.verb === "owner-viewing") {
 		const t = targetOf(e);
 		return { ...st, owner: { viewing: t, expiresAt } };
+	}
+	if (e.actor.kind === "hub") {
+		// The hub's curator / system commits: a trail from the hub origin (no wolf body, no presence).
+		const t = targetOf(e);
+		if (!fresh || !t || e.verb !== "kb-write") return st;
+		return addTrail(st, { id: e.id, wolf: HUB_WOLF, target: t, verb: e.verb, at: now }, { id: e.id, wolf: HUB_WOLF, target: t, verb: e.verb, at: now }, o);
 	}
 	if (!wolfName) return st;
 

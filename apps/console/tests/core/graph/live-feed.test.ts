@@ -23,6 +23,13 @@ describe("activity feed formatter", () => {
 		assert.deepEqual(texts([ev("answered")]), ["1uk4 · answered"]);
 	});
 
+	it("a hub actor's kb-write reads 'curator updated <title>' in a neutral colour, and the private view drops the title", () => {
+		const hub = { kind: "hub", title: "curator" } as FeedEvent["actor"];
+		assert.deepEqual(texts([ev("kb-write", { actor: hub, target: kb })]), ["curator · updated Crawl Pipeline"]);
+		assert.deepEqual(texts([ev("kb-write", { actor: hub, target: kb })], true), ["curator · updated"]);
+		assert.equal(formatFeed([ev("kb-write", { actor: hub, target: kb })], {})[0]!.color, "hsl(0 0% 62%)");
+	});
+
 	it("needs-you is amber and carries the thread; owner-viewing reads 'you'", () => {
 		const [l] = formatFeed([ev("needs-you")], {});
 		assert.equal(l!.text, "1uk4 · needs you");

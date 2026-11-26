@@ -6,6 +6,7 @@
 import {
 	DEFAULT_LIVE_OPTIONS,
 	emptyLiveState,
+	HUB_WOLF,
 	homeDomainOf,
 	liveActive,
 	liveSignature,
@@ -373,7 +374,8 @@ export class LiveOverlay {
 		// Trails remember where the wolf WAS when the line began.
 		for (const t of s.trails) {
 			if (this.trailFrom.has(t.id)) continue;
-			const b = this.bodies.get(t.wolf);
+			// A hub-side write (curator) starts at the domain hub node, drawn in the neutral node colour.
+			const b = t.wolf === HUB_WOLF ? (t.target.domain ? host.nodePos(`dom:${t.target.domain}`) : null) : this.bodies.get(t.wolf);
 			if (b) this.trailFrom.set(t.id, { x: b.x, y: b.y });
 		}
 		if (this.trailFrom.size > s.trails.length + 50) {

@@ -93,6 +93,17 @@ describe("derive fan-out queue", () => {
     expect(seen.map((e) => e.target!.id)).toEqual(ledger(5).map((e) => e.id));
   });
 
+  it("a KB commit with no request context (curator, system) publishes kb-write by a hub actor, at most 20 per commit, after the hook returned, and never into presence", async () => {
+    const { seen, d } = mk();
+    const ids = Array.from({ length: 30 }, (_, i) => `kb-personal-a${i}`);
+    d.onKb(ids, "personal");
+    expect(seen).toHaveLength(0);
+    await drain();
+    expect(seen).toHaveLength(20);
+    expect(seen[0]).toMatchObject({ verb: "kb-write", actor: { kind: "hub", title: "curator" }, target: { kind: "kb-entry", id: "kb-personal-a0", domain: "personal" }, domain: "personal" });
+    expect(seen[0]!.actor.wolf).toBeUndefined();
+  });
+
   it("derives at most 20 events from one ledger batch, and drains a big backlog in chunks of 50", async () => {
     const { seen, d } = mk();
     for (let i = 0; i < 6; i++) d.run({}, () => d.onLedger({ actor: { id: "owner", kind: "operator" }, events: ledger(100) }));

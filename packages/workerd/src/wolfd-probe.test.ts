@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InventoryEntrySchema, type InventoryEntry } from "@wolfpack/protocol";
+import type { UpdateState } from "@wolfpack/protocol/update-state";
 import { afterEach, describe, expect, it } from "vitest";
 import { createInventoryReporter } from "./wolfd-probe.js";
 
@@ -21,7 +22,7 @@ function stub(listen: number | string): Promise<Server> {
 }
 const child = (name: string, url: string | null) => ({ name, state: "online" as const, pid: 1, url, adopted: false, restarts: 0, failures: 0, nextRestartInMs: null, logFile: "" });
 
-function reporter(children: ReturnType<typeof child>[], over: { consoleUrl?: string; enabled?: boolean; keys?: () => InventoryEntry["keys"]; busy?: (name: string) => Promise<boolean>; transport?: (name: string) => "api" | "subscription" } = {}) {
+function reporter(children: ReturnType<typeof child>[], over: { consoleUrl?: string; enabled?: boolean; keys?: () => InventoryEntry["keys"]; busy?: (name: string) => Promise<boolean>; transport?: (name: string) => "api" | "subscription"; updateState?: () => UpdateState | undefined } = {}) {
   const sent: InventoryEntry[][] = [];
   const r = createInventoryReporter({
     hostId: "sfo-01-wolves",
@@ -34,6 +35,7 @@ function reporter(children: ReturnType<typeof child>[], over: { consoleUrl?: str
     ...(over.consoleUrl ? { consoleUrl: over.consoleUrl } : {}),
     ...(over.keys ? { keys: over.keys } : {}),
     ...(over.busy ? { busy: over.busy } : {}),
+    ...(over.updateState ? { updateState: over.updateState } : {}),
     ...(over.transport ? { transport: over.transport } : {}),
     probeTimeoutMs: 300,
     intervalMs: 3_600_000,
@@ -131,6 +133,14 @@ describe("workerd inventory reporter", () => {
     const unset = reporter([]);
     await unset.r.report();
     expect(unset.sent.at(-1)!.some((x) => x.kind === "console")).toBe(false);
+  });
+
+  it("puts the host's failed or installing update state on its own workerd entry only", async () => {
+    const failed: UpdateState = { target: "pack", host: "sfo-01", component: "workerd", state: "failed", current: "0.1.9", latest: "0.1.10", progress: null, lastCheck: null, channel: "stable", auto: "on", error: { code: "checksum", message: "The download did not match.", retryable: true } };
+    const { r, sent } = reporter([child("hal", null)], { updateState: () => failed });
+    await r.report();
+    expect(sent[0]!.find((e) => e.kind === "workerd")!.updateState).toEqual(failed);
+    expect(sent[0]!.find((e) => e.kind === "wolfd")!.updateState).toBeUndefined();
   });
 
   it("sends nothing until the hub's welcome advertised inventory", async () => {

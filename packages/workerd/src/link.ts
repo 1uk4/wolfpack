@@ -118,6 +118,9 @@ export class HubLink {
   private welcomeTimer: NodeJS.Timeout | null = null;
   private retryAt: number | null = null;
   private stopped = false;
+  /** A hub that answered bad_frame to a hello carrying update.run (its enum predates it): later hellos leave update.run out. */
+  private legacyHub = false;
+  private helloSentUpdateRun = false;
   private heartbeatDeadMs = 0;
   private sentWolves = new Map<string, string>();
   private inflight = new Map<string, number>();
@@ -318,8 +321,10 @@ export class HubLink {
     ws.on("open", () => {
       if (this.ws !== ws) return;
       const wolves = this.o.wolves();
+      const advertised = (this.o.commands?.() ?? []).filter((k) => !(this.legacyHub && k === "update.run"));
+      this.helloSentUpdateRun = advertised.includes("update.run");
       this.sentWolves = new Map(wolves.map((w) => [w.name, JSON.stringify(w.domains)]));
-      ws.send(encodeLinkFrame({ t: "hello", v: LINK_PROTOCOL_VERSION, hostId: this.o.hostId, laptop: this.laptop, ...(machineName() ? { machine: machineName() } : {}), wolves, kbRevisions: this.o.kbRevisions?.() ?? {}, ...(this.o.commands?.().length ? { commands: this.o.commands() } : {}), ...(this.o.pubkey?.() ? { pubkey: this.o.pubkey!() } : {}) }));
+      ws.send(encodeLinkFrame({ t: "hello", v: LINK_PROTOCOL_VERSION, hostId: this.o.hostId, laptop: this.laptop, ...(machineName() ? { machine: machineName() } : {}), wolves, kbRevisions: this.o.kbRevisions?.() ?? {}, ...(advertised.length ? { commands: advertised } : {}), ...(this.o.pubkey?.() ? { pubkey: this.o.pubkey!() } : {}) }));
       this.welcomeTimer = setTimeout(() => {
         if (this.ws !== ws) return;
         this.log("no welcome from the hub in time; reconnecting");
@@ -452,6 +457,13 @@ export class HubLink {
           });
       }
     } else if (f.t === "error") {
+      if (f.code === "bad_frame" && this.st !== "online" && this.helloSentUpdateRun && !this.legacyHub) {
+        // An older hub parses hello.commands with a closed enum, so the unknown update.run kind failed the whole hello: say hello again without it.
+        this.legacyHub = true;
+        this.log("hub rejected the hello (older hub?); reconnecting without update.run");
+        ws.terminate();
+        return;
+      }
       // Never overwrite a sticky reason; a rejected wolf.add is informational.
       if (!this.sticky() && f.code !== "rejected") this.detail = f.message ? `${f.code}: ${f.message}` : f.code;
       if (f.code === "rejected") this.log(`hub: ${f.message ?? "rejected"}`);

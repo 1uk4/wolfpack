@@ -110,6 +110,8 @@ export interface InventoryReporterOptions {
   enabled: () => boolean;
   /** Key presence per slot for the workerd entry (masks only, never values). */
   keys?: () => InventoryEntry["keys"];
+  /** The host updater's failed or installing state (host-update.ts). Absent = not reported. */
+  updateState?: () => InventoryEntry["updateState"];
   /** Whether a turn is running in the named wolf (supervisor.wolfBusy). Absent = busy is not reported. */
   busy?: (name: string) => Promise<boolean>;
   /** A wolf's transport (wolfTransport). Absent = not reported. */
@@ -134,13 +136,14 @@ export function createInventoryReporter(o: InventoryReporterOptions): InventoryR
     const channel = o.channel();
     const base = { machine: o.machine, ...(channel ? { channel } : {}) };
     const kids = o.children();
+    const updateState = o.updateState?.();
     const [probed, busy, con] = await Promise.all([
       Promise.all(kids.map((c) => (c.url && c.state === "online" ? probeWolfd(c.url, timeoutMs) : Promise.resolve(undefined)))),
       Promise.all(kids.map((c) => (o.busy && c.state === "online" ? o.busy(c.name).catch(() => false) : Promise.resolve(false)))),
       o.consoleUrl ? probeConsole(o.consoleUrl, o.machine, timeoutMs) : Promise.resolve(undefined),
     ]);
     const entries: InventoryEntry[] = [
-      { ...base, kind: "workerd", id: o.hostId, ...(o.version ? { version: o.version } : {}), uptimeS: Math.round(process.uptime()), ...(o.keys ? { keys: o.keys() } : {}) },
+      { ...base, kind: "workerd", id: o.hostId, ...(o.version ? { version: o.version } : {}), uptimeS: Math.round(process.uptime()), ...(o.keys ? { keys: o.keys() } : {}), ...(updateState ? { updateState } : {}) },
       ...kids.map((c, i): InventoryEntry => ({ ...base, kind: "wolfd", id: c.name, parent: o.hostId, ...probed[i], ...(busy[i] ? { busy: true } : {}), ...(o.transport ? { transport: o.transport(c.name) } : {}) })),
     ];
     if (con) entries.push(con);

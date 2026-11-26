@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { open } from "node:fs/promises";
 import {
   COMMAND_LOGS_MAX_BYTES,
+  UPDATE_COMPONENTS,
   WORKERD_RESTART_EXIT_CODE,
   type CommandKind,
   type CommandResultCode,
@@ -98,6 +99,8 @@ export interface CommandRunnerOptions {
   hostId?: string;
   /** Present only when workerd can be respawned (see canRestartSelf): enables workerd.restart. `stop` is workerd's normal shutdown; `exit` ends the process after it (or after `fallbackMs`, default 10 s, if stop hangs). */
   restartSelf?: { stop: () => Promise<void>; exit: (code: number) => void; fallbackMs?: number };
+  /** Enables update.run: runs `systemctl` with this argv (no shell). Present only on a systemd host that has the wolfpack-auto-update units. */
+  update?: { systemctl: (argv: string[]) => Promise<{ code: number; stdout: string }>; /** Per-read limit for the busy check (default 2000 ms; the hub gives a command 8 s to ack). */ showTimeoutMs?: number };
   /** The wolves this workerd supervises. Absent (link-only: it supervises none) = wolves.restart is not advertised. */
   wolves?: WolfControl;
   platform?: NodeJS.Platform;
@@ -121,6 +124,13 @@ const JOURNAL_RETRY_LINES = 500;
 
 const ok = (id: string, data?: unknown): LinkCmdResult => ({ t: "cmd.result", id, ok: true, ...(data !== undefined ? { data } : {}) });
 const fail = (id: string, code: CommandResultCode, message: string): LinkCmdResult => ({ t: "cmd.result", id, ok: false, code, message });
+
+/** `systemctl` with this argv, no shell (update.run). A failure to run it at all is a non-zero code. */
+export function execSystemctl(argv: string[]): Promise<{ code: number; stdout: string }> {
+  return new Promise((resolve) => {
+    execFile("systemctl", argv, { timeout: 10_000, windowsHide: true }, (err, stdout) => resolve({ code: err ? (typeof (err as { code?: unknown }).code === "number" ? ((err as { code: number }).code) : 1) : 0, stdout: String(stdout ?? "") }));
+  });
+}
 
 function execJournal(argv: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -223,8 +233,39 @@ export function createCommandRunner(o: CommandRunnerOptions = {}): CommandRunner
     }
   }
 
+  let updateStarting = false;
+  /** Starts the same units as the console's own Update now / Retry (deploy/auto-update/; polkit allows exactly these starts). Fixed names only: nothing from the request is a shell string. */
+  async function runUpdate(id: string, args: { component?: unknown; clearFailed?: boolean }, upd: NonNullable<CommandRunnerOptions["update"]>): Promise<LinkCmdResult> {
+    const { systemctl } = upd;
+    const { component } = args;
+    if (component !== undefined && !(UPDATE_COMPONENTS as readonly unknown[]).includes(component)) return fail(id, "internal", "unknown component");
+    const kind = args.clearFailed === true ? "retry" : "now";
+    const unit = component === undefined ? `wolfpack-auto-update-${kind}.service` : `wolfpack-auto-update-${kind}@${component as string}.service`;
+    if (updateStarting) return fail(id, "update_busy", "an update is already starting");
+    updateStarting = true;
+    try {
+      // A oneshot unit is `activating` while it runs: the all-units run, the retry run or this component's run.
+      const watch = ["wolfpack-auto-update-now.service", "wolfpack-auto-update-retry.service", unit];
+      // Read together, each with its own timeout (a read that hangs or fails counts as not busy), so the check fits the hub's 8 s ack.
+      const limit = upd.showTimeoutMs ?? 2000;
+      const states = await Promise.all(
+        watch.map((u) => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const timeout = new Promise<null>((res) => (timer = setTimeout(() => res(null), limit)));
+          return Promise.race([systemctl(["show", u, "-p", "ActiveState", "--value"]).catch(() => null), timeout]).finally(() => clearTimeout(timer));
+        }),
+      );
+      if (states.some((s) => s && s.code === 0 && s.stdout.trim() === "activating")) return fail(id, "update_busy", "an update is already running");
+      const r = await systemctl(["--no-ask-password", "--no-block", "start", unit]);
+      log(`update.run: ${unit} ${r.code === 0 ? "started" : `FAILED (exit ${r.code})`}`);
+      return r.code === 0 ? ok(id, { unit }) : fail(id, "update_failed", `systemctl exited ${r.code}`);
+    } finally {
+      updateStarting = false;
+    }
+  }
+
   return {
-    supported: () => ["logs.fetch", ...(o.wolves ? (["wolves.restart"] as const) : []), ...(o.restartSelf ? (["workerd.restart"] as const) : []), ...(o.keys && o.hostId ? (["key.set", "key.remove"] as const) : [])],
+    supported: () => ["logs.fetch", ...(o.wolves ? (["wolves.restart"] as const) : []), ...(o.restartSelf ? (["workerd.restart"] as const) : []), ...(o.keys && o.hostId ? (["key.set", "key.remove"] as const) : []), ...(o.update ? (["update.run"] as const) : [])],
     afterSend(cmd, result) {
       if (cmd.kind === "workerd.restart" && result.ok && o.restartSelf) {
         const { stop, exit, fallbackMs = 10_000 } = o.restartSelf;
@@ -262,6 +303,7 @@ export function createCommandRunner(o: CommandRunnerOptions = {}): CommandRunner
           return r.ok ? ok(cmd.id, r.data) : fail(cmd.id, r.code, r.message ?? r.code);
         }
         if (cmd.kind === "workerd.restart" && o.restartSelf) return ok(cmd.id);
+        if (cmd.kind === "update.run" && o.update) return await runUpdate(cmd.id, cmd.args as { component?: unknown; clearFailed?: boolean }, o.update);
         return fail(cmd.id, "internal", "command not supported on this machine");
       } catch (e) {
         log(`command ${cmd.kind} ${cmd.id} failed: ${(e as Error).message}`);

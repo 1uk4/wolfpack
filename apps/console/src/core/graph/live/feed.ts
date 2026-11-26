@@ -4,6 +4,7 @@
  * into one line carrying the latest time. Also: relative time, a stable wolf colour and the collapsed "N new" counter reducer.
  */
 import type { ActivityEvent, PresenceSnapshot } from "@wolfpack/protocol";
+import { threadKey } from "./thread-key.ts";
 import { featureOfThread } from "./live-state.ts";
 
 export interface FeedEvent {
@@ -70,7 +71,7 @@ export function formatFeed(events: readonly FeedEvent[], opts: { private?: boole
 	const activeThreads = new Set<string>();
 	for (const e of events) {
 		if (e.verb === "thread-idle" || e.verb === "thread-active") {
-			const tk = `${e.actor.wolf ?? ""}/${e.actor.threadId ?? ""}`;
+			const tk = threadKey(e.actor.wolf ?? "", e.actor.threadId ?? "");
 			const was = activeThreads.has(tk);
 			if (e.verb === "thread-active") activeThreads.add(tk);
 			else activeThreads.delete(tk);

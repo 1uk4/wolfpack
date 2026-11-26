@@ -5,6 +5,7 @@
  * Fallback: the target's domain node, so a pulse still lands somewhere sensible when the exact node is not in the (filtered) graph.
  */
 import type { LiveState } from "./live-state.ts";
+import { threadKey } from "./thread-key.ts";
 
 export function targetNodeId(target: { kind: string; id: string; domain?: string }, has: (nodeId: string) => boolean): string | null {
 	const cands: string[] = [];
@@ -37,6 +38,6 @@ export function ownerThreadKey(s: LiveState): string | null {
 	const cut = v.id.indexOf("/");
 	const wolf = cut > 0 ? v.id.slice(0, cut) : undefined;
 	const slug = cut > 0 ? v.id.slice(cut + 1) : v.id;
-	const hits = Object.entries(s.threads).filter(([, t]) => (wolf === undefined || t.wolf === wolf) && threadSlugOf(t.wolf, t.id) === threadSlugOf(t.wolf, slug));
+	const hits = Object.entries(s.threads).filter(([, t]) => (wolf === undefined || t.wolf === wolf) && threadKey(t.wolf, t.id) === threadKey(t.wolf, slug));
 	return hits.length === 1 ? hits[0]![0] : null;
 }

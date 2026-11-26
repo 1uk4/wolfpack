@@ -7,6 +7,7 @@
  * Privacy: only ids, kinds and short titles are kept, exactly what the event carries.
  */
 import type { ActivityEvent, PresenceSnapshot } from "@wolfpack/protocol";
+import { threadKey } from "./thread-key.ts";
 
 export interface LiveOptions {
 	/** A finished subagent stays visible this long (default 15 s). */
@@ -229,9 +230,9 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 	let prevSub: LiveSubagent | undefined;
 	if (isSub && e.actor.threadId) for (const a of Object.values(st.subagents)) if (a.wolf === wolfName && a.ownThreadId === e.actor.threadId) { prevSub = a; break; }
 	const threadId = isSub ? (e.actor.parentThreadId ?? prevSub?.parentThreadId) : (e.actor.threadId ?? e.actor.parentThreadId);
-	const subKey = (name: string) => prevSub?.key ?? `${wolfName}/${threadId ?? ""}/${name}`;
+	const subKey = (name: string) => prevSub?.key ?? `${threadKey(wolfName, threadId ?? "")}/${name}`;
 	const ownThreadId = isSub ? e.actor.threadId : undefined;
-	const tKey = threadId ? `${wolfName}/${threadId}` : undefined;
+	const tKey = threadId ? threadKey(wolfName, threadId) : undefined;
 	const thread0 = tKey ? st.threads[tKey] : undefined;
 	const mkThread = (): LiveThread => thread0 ?? { id: threadId!, wolf: wolfName, active: false, needsYou: false, expiresAt };
 	const putThread = (t: LiveThread) => {
@@ -331,7 +332,7 @@ function tick(s: LiveState, now: number, o: LiveOptions): LiveState {
 	}
 	const subagents = Object.fromEntries(Object.entries(s.subagents).filter(([, a]) => (a.finishedAt === undefined ? a.expiresAt > now : now < a.finishedAt + o.subagentFadeSec * 1000)));
 	// A thread outlives its own expiry while one of its subagents is still in state (running or fading).
-	const held = new Set(Object.values(subagents).map((a) => `${a.wolf}/${a.parentThreadId}`));
+	const held = new Set(Object.values(subagents).map((a) => threadKey(a.wolf, a.parentThreadId ?? "")));
 	const threads = Object.fromEntries(Object.entries(s.threads).filter(([k, t]) => t.expiresAt > now || held.has(k)));
 	return withWolfNeeds({
 		wolves,
@@ -372,7 +373,7 @@ export function reduceLive(s: LiveState, a: LiveAction, o: LiveOptions = DEFAULT
 			const open = new Map<string, RosterThread>();
 			const closed = new Set<string>();
 			for (const r of a.threads) {
-				const k = `${r.wolf}/${r.id}`;
+				const k = threadKey(r.wolf, r.id);
 				if (r.closed) closed.add(k);
 				else if (featureOfThread(r.id) !== undefined) open.set(k, r);
 			}

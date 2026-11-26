@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ActivityEvent, PresenceSnapshot } from "@wolfpack/protocol";
+import { threadKey } from "../../../src/core/graph/live/thread-key.ts";
 import { emptyLiveState, homeDomainOf, reduceLive, subagentAlpha, threadAlpha, visibleThreads, type LiveState } from "../../../src/core/graph/live/live-state.ts";
 
 let n = 0;
@@ -12,6 +13,27 @@ const kb = { kind: "kb-entry", id: "kb-x", domain: "personal" };
 const sub = { kind: "subagent", wolf: "hal", subagent: "w1", parentThreadId: "t1" };
 
 describe("live overlay reducer", () => {
+	it("keys a wolf-prefixed thread id once: roster row and subagent parent (either form) join the same hub", () => {
+		const id = "1uk4/feature-work-wolfpack-X";
+		let s = feed(emptyLiveState(), ev("thread-active", { actor: { kind: "thread", wolf: "1uk4", threadId: id } }), 0);
+		assert.deepEqual(Object.keys(s.threads), [id]);
+		s = reduceLive(s, { type: "threads", threads: [{ wolf: "1uk4", id: "feature-work-wolfpack-X" }], now: 1 } as never);
+		assert.deepEqual(Object.keys(s.threads), [id]);
+		for (const [i, parentThreadId] of [id, "feature-work-wolfpack-X"].entries()) {
+			const sa = { kind: "subagent", wolf: "1uk4", subagent: `w${i}`, parentThreadId, threadId: `1uk4/sub-${i}` };
+			s = feed(s, ev("subagent-spawned", { actor: sa, ttlMs: 600_000 }), 2);
+		}
+		s = tick(s, 3);
+		assert.deepEqual(Object.keys(s.threads), [id]);
+		assert.deepEqual(Object.values(s.subagents).map((a) => threadKey(a.wolf, a.parentThreadId!)), [id, id]);
+	});
+
+	it("threadKey prefixes a bare slug, keeps a prefixed id, is idempotent, and treats another wolf's prefix as a slug", () => {
+		assert.equal(threadKey("1uk4", "feature-x"), "1uk4/feature-x");
+		assert.equal(threadKey("1uk4", "1uk4/feature-x"), "1uk4/feature-x");
+		assert.equal(threadKey("1uk4", threadKey("1uk4", "hal/x")), "1uk4/hal/x");
+	});
+
 	it("thread-active brings the wolf online with a visible thread; thread-idle fades an unbound thread out over the fade window", () => {
 		let s = feed(emptyLiveState(), ev("thread-active", { actor: { kind: "thread", wolf: "hal", threadId: "t1", title: "Plan" } }), 1000);
 		assert.equal(s.wolves.hal!.online, true);

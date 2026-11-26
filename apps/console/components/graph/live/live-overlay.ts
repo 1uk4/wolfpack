@@ -24,7 +24,7 @@ import {
 	type LiveState,
 	type LiveTarget,
 } from "@/src/core";
-import { ownerThreadKey, targetNodeId, threadSlugOf } from "@/src/core";
+import { ownerThreadKey, targetNodeId, threadKey, threadSlugOf } from "@/src/core";
 import { stepSub, SUB_PHYSICS, tetherStrength, type SubBody } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba } from "./live-effects";
@@ -630,7 +630,7 @@ export class LiveOverlay {
 
 	/** Where a subagent's tether holds it: its feature hub, else its wolf. Idle it waits just outside; `atHub` is the hub itself (launch and return). */
 	private anchorOf(a: LiveSubagent, host: OverlayHost, m: number, atHub: boolean, out: Pt): Pt {
-		const t = a.parentThreadId ? this.state.threads[`${a.wolf}/${a.parentThreadId}`] : undefined;
+		const t = a.parentThreadId ? this.state.threads[threadKey(a.wolf, a.parentThreadId)] : undefined;
 		const hub = t?.feature !== undefined;
 		if (t && hub) this.hubPos(t, host, m, out);
 		else {
@@ -710,7 +710,7 @@ export class LiveOverlay {
 			if (v.kind === "thread") {
 				const key = ownerThreadKey(s);
 				const t = key ? s.threads[key] : null;
-				const it = t ? (this.threadItems.get(`${t.wolf}/${t.id}`) ?? this.wolfItems.get(t.wolf)) : null; // zoomed out the thread dot is hidden: link the wolf
+				const it = t ? (this.threadItems.get(threadKey(t.wolf, t.id)) ?? this.wolfItems.get(t.wolf)) : null; // zoomed out the thread dot is hidden: link the wolf
 				if (it) out.view = { x: it.x, y: it.y };
 			} else {
 				const id = targetNodeId(v, (n) => host.hasNode(n));
@@ -854,7 +854,7 @@ export class LiveOverlay {
 		const subsByThread = new Map<string, LiveSubagent[]>();
 		for (const id in s.subagents) {
 			const a = s.subagents[id]!;
-			const key = `${a.wolf}/${a.parentThreadId}`;
+			const key = threadKey(a.wolf, a.parentThreadId ?? "");
 			const list = subsByThread.get(key);
 			if (list) list.push(a);
 			else subsByThread.set(key, [a]);
@@ -862,7 +862,7 @@ export class LiveOverlay {
 		const threadsByWolf = new Map<string, { t: LiveThread; alpha: number }[]>();
 		for (const id in s.threads) {
 			const t = s.threads[id]!;
-			const alpha = threadAlpha(s, t, now, fade, subsByThread.get(`${t.wolf}/${t.id}`) ?? []);
+			const alpha = threadAlpha(s, t, now, fade, subsByThread.get(threadKey(t.wolf, t.id)) ?? []);
 			if (alpha <= 0) continue;
 			const list = threadsByWolf.get(t.wolf);
 			if (list) list.push({ t, alpha });
@@ -894,7 +894,7 @@ export class LiveOverlay {
 				const ang = -Math.PI / 2 + (i - (dots.length - 1) / 2) * 0.75 + 0.35;
 				const tx = wx + Math.cos(ang) * SAT_ORBIT * m;
 				const ty = wy + Math.sin(ang) * SAT_ORBIT * m;
-				const tkey = `${t.wolf}/${t.id}`;
+				const tkey = threadKey(t.wolf, t.id);
 				const threadItem: OverlayItem = { kind: "thread", key: tkey, wolf: t.wolf, threadId: t.id, x: tx, y: ty, r: THREAD_DOT_R * m, alpha: (t.active ? 1 : 0.45) * alpha, needsYou: t.needsYou, online: w.online, working: t.active, color, label: t.title ?? threadSlugOf(t.wolf, t.id) };
 				out.push(threadItem);
 				this.threadItems.set(tkey, threadItem);
@@ -902,7 +902,7 @@ export class LiveOverlay {
 			// A feature is a hub at its work node: a very slight float, working while its thread or any of its subagents is, dimmed when idle.
 			for (const { t } of all) {
 				if (!t.feature) continue;
-				const tkey = `${t.wolf}/${t.id}`;
+				const tkey = threadKey(t.wolf, t.id);
 				const pos = this.hubPos(t, host, m, this.anchorTmp);
 				const nodeId = this.hubNodeId(t, host) ?? undefined;
 				// On its node the hub does not float (it is the node); a fallback hub keeps its very slight drift.
@@ -980,7 +980,7 @@ export class LiveOverlay {
 				const a = s.subagents[id]!;
 				const b = this.subBodies.get(a.key);
 				if (!b || wall - b.born >= LAUNCH_MS || a.finishedAt !== undefined) continue;
-				const hub = this.featureItems.get(`${a.wolf}/${a.parentThreadId}`) ?? this.wolfItems.get(a.wolf);
+				const hub = this.featureItems.get(threadKey(a.wolf, a.parentThreadId ?? "")) ?? this.wolfItems.get(a.wolf);
 				if (hub) EFFECTS.pulse!({ ctx, x: hub.x, y: hub.y, r: HUB_R * m * 0.9, k, t: (wall - b.born) / LAUNCH_MS, color: hub.color, intensity: I, reduced });
 			}
 		}
@@ -1001,7 +1001,7 @@ export class LiveOverlay {
 					}
 				}
 			} else if (it.kind === "subagent" && !compactNow) {
-				const parent = this.featureItems.get(`${it.wolf}/${it.threadId}`) ?? this.wolfItems.get(it.wolf);
+				const parent = this.featureItems.get(threadKey(it.wolf, it.threadId ?? "")) ?? this.wolfItems.get(it.wolf);
 				if (parent) {
 					ctx.lineWidth = 0.8 / k;
 					this.line(ctx, parent, it, rgba(it.color, 0.1 * it.alpha));
@@ -1187,7 +1187,7 @@ export class LiveOverlay {
 		const it = hit.item;
 		if (it.kind === "wolf") {
 			const w = s.wolves[it.wolf];
-			const t = w?.activeThreadId ? s.threads[`${it.wolf}/${w.activeThreadId}`] : undefined;
+			const t = w?.activeThreadId ? s.threads[threadKey(it.wolf, w.activeThreadId)] : undefined;
 			let features = 0;
 			let subs = 0;
 			for (const id in s.threads) if (s.threads[id]!.wolf === it.wolf && s.threads[id]!.feature !== undefined) features++;
@@ -1211,7 +1211,7 @@ export class LiveOverlay {
 			return { title: redact(it.label, p), lines: [`Wolf: ${it.wolf}`, ...lines], action: { kind: "open-thread", label: "Open thread", wolf: it.wolf, threadId: it.threadId } };
 		}
 		if (it.kind === "subagent") {
-			const parent = it.threadId ? s.threads[`${it.wolf}/${it.threadId}`] : undefined;
+			const parent = it.threadId ? s.threads[threadKey(it.wolf, it.threadId)] : undefined;
 			const target = s.subagents[it.key]?.target;
 			const lines = [`Subagent of ${it.wolf}`];
 			if (target) lines.push(`Target: ${redact(target.title ?? target.id, p)}`);

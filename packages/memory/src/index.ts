@@ -157,6 +157,7 @@ export {
   type DistillRecord,
   type DistilledContribution,
 } from "./distill.js";
+export { runInTurnContext, currentTurnContext, turnActorHeaders, THREAD_ID_HEADER, SUBAGENT_HEADER, type TurnContext } from "./turn-context.js";
 export { TOPIC_SOFT_CAP } from "./consolidate.js";
 export { refuseTagged } from "./tag-guard.js";
 

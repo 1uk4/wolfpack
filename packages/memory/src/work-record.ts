@@ -27,6 +27,7 @@
  * unreachable-by-config falls back to den consolidation.
  */
 import { createHash } from "node:crypto";
+import { turnActorHeaders } from "./turn-context.js";
 import { z } from "zod";
 import type { RECORD_LINE_KINDS } from "@wolfpack/protocol";
 import { LlmInfraError, WORK_RECORD_SYSTEM, type Engine } from "@wolfpack/engine";
@@ -452,7 +453,7 @@ export class HttpWorkRecordStore implements WorkRecordStore {
     if (!this.configured) throw new Error("Work API not configured (WORK_ENDPOINT / WORK_TOKEN missing)");
     return this.fetchImpl(`${this.endpoint}/work/${encodeURIComponent(id)}`, {
       method,
-      headers: { "X-API-Key": this.token, ...(this.wolf ? { "X-Wolf": this.wolf } : {}), ...(body ? { "Content-Type": "application/json" } : {}), ...extra },
+      headers: { "X-API-Key": this.token, ...(this.wolf ? { "X-Wolf": this.wolf } : {}), ...turnActorHeaders(), ...(body ? { "Content-Type": "application/json" } : {}), ...extra },
       body: body ? JSON.stringify(body) : undefined,
     });
   }

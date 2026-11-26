@@ -51,7 +51,7 @@ import { isImageOnly } from "./card-kinds/types.js";
 import { excludeFromFreeze, forgetContext } from "../context-notice.js";
 import { CardTracker, sourceOf, answerText, attachmentIds, questionNumbers, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
 import { HttpError } from "./http-error.js";
-import { readBindingFile } from "@wolfpack/memory";
+import { readBindingFile, runInTurnContext } from "@wolfpack/memory";
 
 export type WolfEventDraft = WolfEvent extends infer E ? (E extends unknown ? Omit<E, "id" | "wolf" | "at"> : never) : never;
 
@@ -414,7 +414,7 @@ export class ThreadRuntime {
   }
 
   private async resubmitCardAnswers(ready: ReadyAnswer[]): Promise<void> {
-    const r = await this.conv.submit({ input: this.answerInput(ready), whenBusy: "followUp", cardAnswers: cardAnswersOf(ready) });
+    const r = await this.submitTurn({ input: this.answerInput(ready), whenBusy: "followUp", cardAnswers: cardAnswersOf(ready) });
     this.trackQueued(r, { text: "", refs: [], cardAnswers: ready });
   }
 
@@ -708,6 +708,15 @@ export class ThreadRuntime {
     return { ...this.threadSummary(), messages, busy: this.running !== null, lastEventId: this.seq, ...(pendingCards.length ? { pendingCards } : {}), ...paged };
   }
 
+  /**
+   * conv.submit inside the thread's turn context (thread id, and the subagent's name for a child) so Work API writes made by
+   * tools of this turn carry x-wolfpack-thread-id / x-wolfpack-subagent. Reaches tools that run in this process's async chain.
+   */
+  private submitTurn(req: Parameters<EngineConversation["submit"]>[0]): ReturnType<EngineConversation["submit"]> {
+    const s = this.summary;
+    return runInTurnContext({ threadId: s.id, ...(s.kind === "subagent" ? { subagent: s.agent ?? s.title } : {}) }, () => this.conv.submit(req));
+  }
+
   async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = [], opts: { internal?: boolean; resubmit?: boolean } = {}): Promise<SubmitAck> {
     const before = this.turnStarts;
     const textOnly = text;
@@ -757,7 +766,7 @@ export class ThreadRuntime {
     }
     let r;
     try {
-      r = await this.conv.submit({ input, whenBusy });
+      r = await this.submitTurn({ input, whenBusy });
     } catch (e) {
       if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
       throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
@@ -902,7 +911,7 @@ export class ThreadRuntime {
     try {
       let r;
       try {
-        r = await this.conv.submit({ input: this.answerInput([ready]), whenBusy: "steer", cardAnswers: cardAnswersOf([ready]) });
+        r = await this.submitTurn({ input: this.answerInput([ready]), whenBusy: "steer", cardAnswers: cardAnswersOf([ready]) });
       } catch (e) {
         this.cards.release([callId]);
         if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
@@ -1058,7 +1067,7 @@ export class ThreadRuntime {
     try {
       // Mid-turn the answer is steered like a chat message typed then (the engine queues it for the turn's next
       // boundary or its end); idle it starts the turn. "reject" would only matter if a turn began between the two.
-      r = await this.conv.submit({ input: this.answerInput(ready), whenBusy: "steer", cardAnswers: cardAnswersOf(ready) });
+      r = await this.submitTurn({ input: this.answerInput(ready), whenBusy: "steer", cardAnswers: cardAnswersOf(ready) });
     } catch (e) {
       this.cards.release(ids);
       // Safety net: with whenBusy "steer" the engine never answers busy, so this should be unreachable.

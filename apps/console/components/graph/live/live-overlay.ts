@@ -21,6 +21,7 @@ import {
 } from "@/src/core";
 import { ownerThreadKey, targetNodeId, threadSlugOf } from "@/src/core";
 import { DEFAULT_PHYSICS, stepWolves, wolvesMoving, type WolfBody } from "@/src/core";
+import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba } from "./live-effects";
 import { redact } from "@/src/core";
 
@@ -47,6 +48,13 @@ export function liveSettingsOf(settings: unknown): OverlaySettings {
 		subagentFadeSec: num(l.subagentFadeSec, LIVE_DEFAULTS.subagentFadeSec, 0, 300),
 	};
 }
+
+/** Screen-px width of the wolf icon at any zoom; the hit radius is half of it. */
+const WOLF_ICON_PX = 26;
+/** Subagents wear the same logo, about 42% of the wolf's. */
+const SUBAGENT_ICON_PX = 11;
+let wolfHead: Path2D | null = null;
+const wolfHeadPath = (): Path2D => (wolfHead ??= new Path2D(WOLF_HEAD_PATH));
 
 export type OverlayKind = "wolf" | "thread" | "subagent" | "you";
 export interface OverlayItem {
@@ -338,19 +346,19 @@ export class LiveOverlay {
 			if (!b) continue;
 			const dom = homeDomainOf(w, w.name);
 			const color = (dom && host.nodeColor(`dom:${dom}`)) || host.colors.node;
-			out.push({ kind: "wolf", key: w.name, wolf: w.name, x: b.x, y: b.y, r: 7 / k, alpha: w.online ? 1 : 0.35, needsYou: w.needsYou, online: w.online, color, label: w.name });
+			out.push({ kind: "wolf", key: w.name, wolf: w.name, x: b.x, y: b.y, r: WOLF_ICON_PX / 2 / k, alpha: w.online ? 1 : 0.35, needsYou: w.needsYou, online: w.online, color, label: w.name });
 			const mine = threads.filter((t) => t.wolf === w.name).sort((a, c) => (a.id < c.id ? -1 : 1));
 			mine.forEach((t, i) => {
 				const ang = -Math.PI / 2 + (i - (mine.length - 1) / 2) * 0.75 + 0.35;
-				const tx = b.x + Math.cos(ang) * 17 / k;
-				const ty = b.y + Math.sin(ang) * 17 / k;
+				const tx = b.x + Math.cos(ang) * 25 / k;
+				const ty = b.y + Math.sin(ang) * 25 / k;
 				out.push({ kind: "thread", key: `${t.wolf}/${t.id}`, wolf: t.wolf, threadId: t.id, x: tx, y: ty, r: 3.2 / k, alpha: (t.active ? 0.95 : 0.55) * threadAlpha(s, t, now, this.settings.subagentFadeSec), needsYou: t.needsYou, online: w.online, color, label: t.title ?? threadSlugOf(t.wolf, t.id) });
 				const subs = Object.values(s.subagents).filter((a) => a.wolf === t.wolf && a.parentThreadId === t.id);
 				subs.forEach((a, j) => {
 					const al = subagentAlpha(a, now, this.settings.subagentFadeSec);
 					if (al <= 0.02) return;
 					const sa = ang + (j - (subs.length - 1) / 2) * 0.9;
-					out.push({ kind: "subagent", key: a.key, wolf: a.wolf, threadId: t.id, x: tx + Math.cos(sa) * 9 / k, y: ty + Math.sin(sa) * 9 / k, r: 2 / k, alpha: al, needsYou: false, online: w.online, color, label: a.title ?? a.name });
+					out.push({ kind: "subagent", key: a.key, wolf: a.wolf, threadId: t.id, x: tx + Math.cos(sa) * 12 / k, y: ty + Math.sin(sa) * 12 / k, r: SUBAGENT_ICON_PX / 2 / k, alpha: al, needsYou: false, online: w.online, color, label: a.title ?? a.name });
 				});
 			});
 		}
@@ -361,7 +369,7 @@ export class LiveOverlay {
 			const al = subagentAlpha(a, now, this.settings.subagentFadeSec);
 			if (!b || al <= 0.02) continue;
 			const ang = (hash(a.key) % 360) * (Math.PI / 180);
-			out.push({ kind: "subagent", key: a.key, wolf: a.wolf, threadId: a.parentThreadId, x: b.x + Math.cos(ang) * 14 / k, y: b.y + Math.sin(ang) * 14 / k, r: 2 / k, alpha: al, needsYou: false, online: true, color: host.colors.node, label: a.title ?? a.name });
+			out.push({ kind: "subagent", key: a.key, wolf: a.wolf, threadId: a.parentThreadId, x: b.x + Math.cos(ang) * 24 / k, y: b.y + Math.sin(ang) * 24 / k, r: SUBAGENT_ICON_PX / 2 / k, alpha: al, needsYou: false, online: true, color: out.find((i) => i.kind === "wolf" && i.wolf === a.wolf)?.color ?? host.colors.node, label: a.title ?? a.name });
 		}
 		this.cachedItems = out;
 		if (this.you) out.push({ kind: "you", key: "you", wolf: "", x: this.you.x, y: this.you.y, r: 6 / k, alpha: 1, needsYou: false, online: true, color: host.colors.hoverText, label: "You" });
@@ -443,28 +451,25 @@ export class LiveOverlay {
 			ctx.globalAlpha = it.alpha;
 			if (it.kind === "wolf") {
 				if (it.online) EFFECTS.glow!({ ctx, x: it.x, y: it.y, r: it.r, k, t: 0, color: it.color, intensity: I, reduced });
-				ctx.beginPath();
-				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
-				ctx.fillStyle = rgba(it.color, 0.22);
-				ctx.fill();
-				ctx.lineWidth = 1.3 / k;
-				ctx.strokeStyle = rgba(it.color, 0.95);
-				ctx.stroke();
-				ctx.fillStyle = rgba(host.colors.label, 0.95);
-				ctx.font = `600 ${8 / k}px ${host.fontFamily}`;
-				ctx.textAlign = "center";
-				ctx.textBaseline = "middle";
-				ctx.fillText(it.label.charAt(0).toUpperCase(), it.x, it.y + 0.3 / k);
+				// The Wolfpack wolf-head centred on the body in the wolf's colour (alpha dims an offline wolf).
+				ctx.save();
+				ctx.translate(it.x - it.r, it.y - it.r);
+				ctx.scale((it.r * 2) / WOLF_HEAD_BOX, (it.r * 2) / WOLF_HEAD_BOX);
+				ctx.fillStyle = rgba(it.color, 0.95);
+				ctx.fill(wolfHeadPath(), "evenodd");
+				ctx.restore();
 			} else if (it.kind === "thread") {
 				ctx.beginPath();
 				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
 				ctx.fillStyle = rgba(it.color, 0.9);
 				ctx.fill();
 			} else if (it.kind === "subagent") {
-				ctx.beginPath();
-				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
-				ctx.fillStyle = rgba(host.colors.label, 0.75);
-				ctx.fill();
+				ctx.save();
+				ctx.translate(it.x - it.r, it.y - it.r);
+				ctx.scale((it.r * 2) / WOLF_HEAD_BOX, (it.r * 2) / WOLF_HEAD_BOX);
+				ctx.fillStyle = rgba(it.color, 0.9);
+				ctx.fill(wolfHeadPath(), "evenodd");
+				ctx.restore();
 			} else {
 				// You: a small rounded diamond, distinct from the round wolves.
 				ctx.save();

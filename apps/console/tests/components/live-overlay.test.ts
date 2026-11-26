@@ -66,19 +66,30 @@ describe("live overlay fade clock", () => {
 	const grad = { addColorStop: () => undefined };
 	const ctx = new Proxy({}, { get: (_t, p) => (p === "measureText" ? () => ({ width: 1 }) : p === "createRadialGradient" || p === "createLinearGradient" ? () => grad : () => undefined), set: () => true }) as unknown as CanvasRenderingContext2D;
 	const alphaOf = (o: LiveOverlay, kind: string): number | undefined => {
-		for (let x = -400; x <= 400; x += 5) {
-			const hit = o.hitTest(x, 0, { x: 0, y: 0, k: 1 }, 1e6);
-			if (hit?.item.kind === kind) return hit.item.alpha;
+		for (let y = -40; y <= 40; y += 2) {
+			for (let x = -40; x <= 40; x += 2) {
+				const hit = o.hitTest(x, y, { x: 0, y: 0, k: 1 }, 1e6);
+				if (hit?.item.kind === kind) return hit.item.alpha;
+			}
 		}
 		return undefined;
 	};
 	let o: LiveOverlay;
+	const g = globalThis as unknown as { Path2D?: unknown };
+	const hadPath2D = g.Path2D;
 	beforeEach(() => {
+		g.Path2D = class {
+			d: string;
+			constructor(d?: string) {
+				this.d = d ?? "";
+			}
+		};
 		mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now: 5_000_000_000_000 });
 		o = new LiveOverlay(() => {});
 		o.configure(LIVE_DEFAULTS);
 	});
 	afterEach(() => {
+		g.Path2D = hadPath2D;
 		o.stop();
 		mock.timers.reset();
 	});
@@ -93,6 +104,35 @@ describe("live overlay fade clock", () => {
 		o.draw(ctx, host, 1, mono);
 		const a = alphaOf(o, "thread");
 		assert.ok(a !== undefined && Math.abs(a - 0.55 * 0.5) < 0.02, `thread alpha ${a}`);
+	});
+
+	it("draws each wolf as the wolf-head logo path, dimmed when offline", () => {
+		const fills: { d?: string; alpha: number; scale: number }[] = [];
+		let alpha = 1;
+		let scale = 1;
+		const rec = new Proxy({}, {
+			get: (_t, p) => (p === "measureText" ? () => ({ width: 1 }) : p === "createRadialGradient" || p === "createLinearGradient" ? () => grad : p === "scale" ? (sx: number) => (scale = sx) : p === "fill" ? (path?: { d?: string }) => fills.push({ d: path?.d, alpha, scale }) : () => undefined),
+			set: (_t, p, v) => {
+				if (p === "globalAlpha") alpha = v as number;
+				return true;
+			},
+		}) as unknown as CanvasRenderingContext2D;
+		const logo = () => fills.filter((f) => f.d?.startsWith("M8 2L24 18"));
+		{
+			o.dispatch({ type: "event", event: ev("thread-active", { actor: th("tw") }), now: Date.now() });
+			o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("tw", "sa") }), now: Date.now() });
+			o.step(1, 0.016, host, 1);
+			o.draw(rec, host, 1, 1);
+			// Wolf 26 px and subagent 11 px wide, both the logo path (scale = px / 64).
+			assert.deepEqual(logo().map((f) => f.scale).sort((a, b) => b - a), [26 / 64, 11 / 64]);
+			assert.equal(logo().find((f) => f.scale === 26 / 64)?.alpha, 1);
+			mock.timers.tick(3_600_000);
+			o.dispatch({ type: "tick", now: Date.now() });
+			fills.length = 0;
+			o.step(2, 0.016, host, 1);
+			o.draw(rec, host, 1, 2);
+			assert.equal(logo().find((f) => f.scale === 26 / 64)?.alpha, 0.35);
+		}
 	});
 
 	it("a finished subagent is half faded 7.5 s after it finished when the renderer passes its monotonic clock to draw", () => {

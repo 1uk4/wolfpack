@@ -7,9 +7,12 @@
  * the path some other way (variables, `cd ..`, a script) gets through; the brief rewrite, the prompt section and the
  * main-checkout warning are the other layers.
  */
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
+/** An extra rule for one root: `rel` is the target relative to the root, `bytes` the size the file would have after the write or edit. Returns the refusal, or undefined. */
+export type WriteRule = (rel: string, bytes: number) => string | undefined;
 
 interface Fence {
   /** The root as given (not resolved through symlinks). */
@@ -17,6 +20,7 @@ interface Fence {
   offLimits: string[];
   /** Realpaths a call from inside this fence may read (besides the fence root itself). Undefined: reads are not fenced. */
   readRoots?: string[];
+  rule?: WriteRule;
 }
 
 const fenced = new Map<string, Fence>();
@@ -58,8 +62,10 @@ const inside = (root: string, p: string): boolean => {
 };
 
 /** Fence a worktree: calls running in it (or below it) may only write inside it. `offLimits` are the paths bash may not name. */
-export function fenceRoot(root: string, offLimits: string[] = [], opts: { readRoots?: string[] } = {}): void {
-  fenced.set(real(root), { lexical: resolve(root), offLimits, ...(opts.readRoots ? { readRoots: opts.readRoots.map(real) } : {}) });
+/** The third argument is a write rule (the frames dir: .html only, at most 2 MB) or options with read roots and/or a rule. */
+export function fenceRoot(root: string, offLimits: string[] = [], opts: WriteRule | { readRoots?: string[]; rule?: WriteRule } = {}): void {
+  const o = typeof opts === "function" ? { rule: opts } : opts;
+  fenced.set(real(root), { lexical: resolve(root), offLimits, ...(o.readRoots ? { readRoots: o.readRoots.map(real) } : {}), ...(o.rule ? { rule: o.rule } : {}) });
 }
 
 /**
@@ -146,6 +152,34 @@ export function readViolation(cwd: string, path: string): string | undefined {
   return `Refused: ${path} resolves to ${target}, outside what you may read. You may read only: ${allowed.join(", ")}. Configuration, keys and the rest of the wolf's home are off-limits; never copy them into your output.`;
 }
 
+/** The size the file at `target` would have after this write or edit; undefined when it cannot be worked out (the tool reports its own error). */
+function resultingBytes(tool: string, args: { content?: unknown; edits?: unknown; oldText?: unknown; newText?: unknown }, target: string): number | undefined {
+  if (tool === "write") return typeof args.content === "string" ? Buffer.byteLength(args.content) : undefined;
+  if (tool !== "edit") return undefined;
+  let text: string;
+  try {
+    text = readFileSync(target, "utf8");
+  } catch {
+    return undefined;
+  }
+  const edits = Array.isArray(args.edits) ? args.edits : [args];
+  for (const e of edits as Array<{ oldText?: unknown; newText?: unknown }>) {
+    if (typeof e?.oldText === "string" && typeof e.newText === "string") text = text.replace(e.oldText, () => e.newText as string);
+  }
+  return Buffer.byteLength(text);
+}
+
+/** The refusal from the root's own rule (the frames dir: .html only, at most 2 MB), or undefined. Only roots registered with a rule are checked. */
+function ruleViolation(cwd: string, path: string, tool: string, args: object): string | undefined {
+  const home = real(cwd);
+  const hit = [...fenced].find(([r]) => inside(r, home));
+  if (!hit || !hit[1].rule) return undefined;
+  const expanded = path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+  const target = real(isAbsolute(expanded) ? expanded : resolve(cwd, expanded));
+  const bytes = resultingBytes(tool, args, target);
+  return hit[1].rule(relative(hit[0], target), bytes ?? 0);
+}
+
 interface Executable {
   name: string;
   execute: (args: never, api: never, context: never) => unknown;
@@ -161,6 +195,8 @@ export function fenceWriteTool<T extends Executable>(tool: T): T {
       if (cwd && typeof args?.path === "string") {
         const refused = fenceViolation(cwd, args.path);
         if (refused) throw new Error(refused);
+        const ruled = ruleViolation(cwd, args.path, tool.name, args);
+        if (ruled) throw new Error(ruled);
       }
       return inner(args, api, context);
     },

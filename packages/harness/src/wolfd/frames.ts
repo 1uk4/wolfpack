@@ -21,12 +21,21 @@ export function framesRoot(wolfHome: string): string {
   return join(wolfHome, "frames");
 }
 
+/** Why a write of `bytes` to `rel` (relative to the frames dir) breaks the frame rules (.html only, no dotfiles, at most 2 MB), or undefined. The fence on the frames dir applies it to the visualizer's write and edit. */
+export function frameWriteProblem(rel: string, bytes: number): string | undefined {
+  const problem = framePathProblem(rel);
+  if (problem) return `Refused: ${problem} (frame files are .html files in the frames dir).`;
+  if (bytes > FRAME_MAX_BYTES) return `Refused: the file would be ${bytes} bytes, over the ${FRAME_MAX_BYTES}-byte frame limit. Make the page smaller.`;
+  return undefined;
+}
+
 export interface FrameStat {
   /** The file's realpath, inside the frames dir. */
   path: string;
   size: number;
   dev: number;
   ino: number;
+  mtimeMs: number;
 }
 
 const errno = (e: unknown): string | undefined => (e as NodeJS.ErrnoException | null)?.code;
@@ -72,7 +81,7 @@ export async function statFrame(wolfHome: string, rel: string | null): Promise<F
   }
   if (!st.isFile()) throw new HttpError("forbidden", "not a regular file");
   if (st.size > FRAME_MAX_BYTES) throw new HttpError("too_large", `frame file is over ${FRAME_MAX_BYTES} bytes`);
-  return { path: real, size: st.size, dev: st.dev, ino: st.ino };
+  return { path: real, size: st.size, dev: st.dev, ino: st.ino, mtimeMs: st.mtimeMs };
 }
 
 /** The file's bytes, or an HttpError: 400 bad path / extension, 403 refused, 404 missing, 413 too large. */

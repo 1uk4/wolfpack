@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fenceRoot, safeReadRoots } from "../engine/fence.js";
-import { frameProblem, framesRoot } from "./frames.js";
+import { frameProblem, frameWriteProblem, framesRoot } from "./frames.js";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
 import { effectiveConsolidationInterval, applyWolfMemoryModel, applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
@@ -219,6 +219,7 @@ async function startConfigured(
   const kbDomains = env.KB_BASE ?? (opts.home ? join(opts.home, ".wolfpack", "workerd", "kb-mirror", "domains") : undefined);
   const unreadable = [dirname(config.file), homedir(), join(homedir(), ".wolfpack"), ...(opts.home ? [opts.home, join(opts.home, ".wolfpack")] : [])];
   fenceRoot(framesRoot(dirname(config.file)), [], {
+    rule: frameWriteProblem,
     readRoots: safeReadRoots([config.capability.workspace, kbDomains], unreadable, (r) => log(`warning: visualizer read root ${r} not allowed (it would include the wolf home or $HOME)`)),
   });
   const askBridge = new AskBridge();

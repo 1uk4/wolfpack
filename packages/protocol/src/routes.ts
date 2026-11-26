@@ -453,7 +453,7 @@ export const ROUTES = {
    * whose real path leaves the directory, or a non-regular file; 404 `not_found` when the file is missing; 413 `too_large`
    * over 2 MB.
    */
-  getFrameFile: { method: "GET", path: "/v1/wolves/:name/frame-file", response: { kind: "bytes" }, status: [200], error: err },
+  getFrameFile: { method: "GET", path: "/v1/wolves/:name/frame-file", response: { kind: "bytes" }, status: [200, 304], error: err },
   /**
    * One den or session topic with its body. `?scope=den|session` picks the store (default: den, then session).
    * 400 `invalid_request` for a malformed id or scope, 404 `not_found` for an unknown topic,

@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempRepo, type TempRepo } from "@wolfpack/workspaces";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "./scripted-model.js";
-import { bashViolation, fenceRoot, fenceViolation, isSubagentConversation, unfenceRoot } from "../engine/fence.js";
+import { bashViolation, fenceRoot, fenceViolation, fenceWriteTool, isSubagentConversation, unfenceRoot } from "../engine/fence.js";
+import { frameWriteProblem } from "./frames.js";
 import { rewriteBrief } from "./subagents.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 
@@ -356,6 +357,34 @@ describe("review follow-ups", () => {
     expect(existsSync(join(outside, "via-link.html"))).toBe(false);
     expect(readFileSync(join(frames, "ok.html"), "utf8")).toBe("<p>fine</p>");
     rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("holds the visualizer's frames dir to the frame rules: .html only, at most 2 MB after a write or an edit", async () => {
+    // (at the fence seam: a 2 MB tool call in a scripted child's context ends its turn before the later steps run)
+    const frames = mkdtempSync(join(tmpdir(), "viz-rules-"));
+    const other = mkdtempSync(join(tmpdir(), "viz-other-"));
+    fenceRoot(frames, [], frameWriteProblem);
+    fenceRoot(other);
+    const ran: string[] = [];
+    const tool = (name: string) => fenceWriteTool({ name, execute: async (a: { path: string }) => void ran.push(`${name}:${a.path}`) });
+    const call = async (name: string, root: string, args: Record<string, unknown>) => (tool(name).execute as (a: unknown, api: unknown, c: unknown) => Promise<unknown>)(args, { env: { cwd: root } }, {});
+    try {
+      writeFileSync(join(frames, "near.html"), "<p>start</p>" + "a".repeat(1536 * 1024));
+      await expect(call("write", frames, { path: "notes.txt", content: "x" })).rejects.toThrow("only .html");
+      await expect(call("write", frames, { path: "big.html", content: "a".repeat(2 * 1024 * 1024 + 1) })).rejects.toThrow("2097152-byte");
+      await expect(call("edit", frames, { path: "near.html", edits: [{ oldText: "<p>start</p>", newText: "b".repeat(600 * 1024) }] })).rejects.toThrow("2097152-byte");
+      expect(ran).toEqual([]);
+      await call("write", frames, { path: "fine.html", content: "<p>fine</p>" });
+      await call("edit", frames, { path: "near.html", edits: [{ oldText: "<p>start</p>", newText: "<p>done</p>" }] });
+      // (another fenced root keeps its own rules: a .txt is fine there)
+      await call("write", other, { path: "notes.txt", content: "x" });
+      expect(ran).toEqual(["write:fine.html", "edit:near.html", "write:notes.txt"]);
+    } finally {
+      unfenceRoot(frames);
+      unfenceRoot(other);
+      rmSync(frames, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 
   it("still isolates a writer whose profile pins a cwd inside a git repo that is not a fenced root", async () => {

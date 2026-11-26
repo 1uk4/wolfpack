@@ -68,6 +68,7 @@ import { actorOf, createTokenStore, type AuthIdentity } from "./auth.js";
 import { createEventBus } from "./events.js";
 import { createMemoryBus, guardBus, type ActivityBus } from "./activity/bus.js";
 import { createPresenceStore } from "./activity/presence.js";
+import { createActivityDeriver } from "./activity/derive.js";
 import { ACTIVITY_BODY_LIMIT, createActivityIngest } from "./activity/ingest.js";
 import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
 import { createKbRevisions, type KbRetention } from "./kb-revisions.js";
@@ -390,6 +391,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   const packOf = (_identity: AuthIdentity): string => packId;
   const activityBus = guardBus(opts.activityBus ?? createMemoryBus()); // every user of the bus (ingest, SSE attach) goes through the guard
   const presence = createPresenceStore({ now: opts.now });
+  const derive = createActivityDeriver({ bus: activityBus, presence, pack: packId, now: opts.now, domainOf: (id) => domainCache.get(id) });
   const bus = createEventBus({
     bufferSize: opts.eventBufferSize,
     maxStreams: opts.maxEventStreams,
@@ -420,6 +422,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       for (const e of events) if (e.type === "work.deleted") domainCache.delete(e.id); // after emit: the event still reports its domain
     }
   });
+  writer.onAppended((b) => derive.onLedger(b)); // activity events: after the write landed, never throws
   writer.onAppendFailed(() => bus.broadcastResync());
   const readBody = (req: IncomingMessage) => readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
   const writeWork = writer.write;
@@ -464,7 +467,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   try {
     let packSummary: PackSummary | undefined; // built once the link exists (below)
     health = createHubHealth(() => packSummary?.hosts() ?? []);
-    kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => bus.emitKbChanged(ids, domain), faults: opts.kbFaults, onCommitted: (out) => revisions.record(out) });
+    kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => { bus.emitKbChanged(ids, domain); derive.onKb(ids, domain); }, faults: opts.kbFaults, onCommitted: (out) => revisions.record(out) });
     // Startup scan after KB recovery, before listening: records edits made while the hub was down (and the first-ever baseline).
     await kbWriter.exclusive(() => revisions.init());
     // Failed-redeem limiter, in memory, keyed by the socket peer address (behind a reverse proxy every client shares the proxy's
@@ -761,6 +764,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         if (!id) throw new HubError("unauthorized", "missing or invalid bearer token");
         tokenId = id.tokenId;
         identity = id;
+        derive.setWorker(id.kind === "worker");
       }
       if (m === undefined) throw new HubError("not_found", `no route ${url.pathname}`);
       if (m === "method") throw new HubError("invalid_request", `method ${req.method} not allowed`);
@@ -1183,7 +1187,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     }
 
     server = createServer((req, res) => {
-      dispatch(req, res).catch((e: unknown) => {
+      derive.run(req.headers, () => dispatch(req, res)).catch((e: unknown) => {
         if (!(e instanceof HubError)) console.error(`hubd: ${req.method} ${req.url} failed:`, e); // detail stays server-side
         const err = e instanceof HubError ? e : new HubError("engine_error", "internal hub error");
         const env: ErrorEnvelope = { code: err.code, message: err.message, retryable: retryable(err.code), ...(err.details ? { details: err.details } : {}) };

@@ -1,0 +1,105 @@
+/** Hub-derived activity (activity/derive.ts): Work ledger appends and KB commits publish contribution / shipped / kb-write events. */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { contentHash } from "@wolfpack/kb/shared";
+import { afterEach, describe, expect, it } from "vitest";
+import type { ActivityEvent } from "@wolfpack/protocol";
+import { createMemoryBus, type ActivityBus } from "./activity/bus.js";
+import { createHubServer, type HubServer } from "./server.js";
+import { OP, seedTokens, workerTokenFor } from "./testing/tokens.js";
+
+const tmp: string[] = [];
+const servers: HubServer[] = [];
+afterEach(async () => {
+  while (servers.length) await servers.pop()!.close();
+  while (tmp.length) rmSync(tmp.pop()!, { recursive: true, force: true });
+});
+
+async function rig(wrap?: (b: ActivityBus) => ActivityBus) {
+  const dataDir = mkdtempSync(join(tmpdir(), "hubd-derive-"));
+  tmp.push(dataDir);
+  seedTokens(dataDir, ["hA"]);
+  const base = join(dataDir, "kb", "base");
+  mkdirSync(base, { recursive: true });
+  writeFileSync(join(base, "domains.yaml"), "domains:\n  personal:\n    label: Personal\n");
+  const inner = createMemoryBus();
+  const seen: ActivityEvent[] = [];
+  inner.subscribe("default", (e) => seen.push(e));
+  const hub = await createHubServer({ dataDir, activityBus: wrap ? wrap(inner) : inner });
+  servers.push(hub);
+  const reg = (p: string, b: unknown) => fetch(hub.url + p, { method: "POST", headers: { "Content-Type": "application/json", ...OP }, body: JSON.stringify(b) });
+  await reg("/v1/registry/domains", { name: "personal" });
+  await reg("/v1/registry/hosts", { name: "hA" });
+  await reg("/v1/registry/wolves", { name: "wa", host: "hA", domains: ["personal"] });
+  const A = workerTokenFor("hA");
+  const wolf = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${hub.url}/v1/workapi/work${path}`, { method, headers: { "X-API-Key": A, "X-Wolf": "wa", ...(body ? { "Content-Type": "application/json" } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined });
+  const owner = (method: string, path: string, body?: unknown) =>
+    fetch(`${hub.url}/v1/work${path}`, { method, headers: { ...OP, ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const settle = () => new Promise((r) => setTimeout(r, 50));
+  return { hub, seen, wolf, owner, settle };
+}
+const feature = { kind: "feature", domain: "personal", title: "Derive me", assignee: "wa", body: "x" };
+const create = async (r: Awaited<ReturnType<typeof rig>>, headers: Record<string, string> = {}) =>
+  ((await (await r.wolf("POST", "", feature, headers)).json()) as { id: string }).id;
+
+describe("hub-derived activity", () => {
+  it("a Work write with thread headers publishes a contribution by that thread, on the bus and on SSE", async () => {
+    const r = await rig();
+    const ctl = new AbortController();
+    const res = await fetch(r.hub.url + "/v1/events", { headers: OP, signal: ctl.signal });
+    const reader = res.body!.getReader();
+    let buf = "";
+    void (async () => { try { for (;;) { const x = await reader.read(); if (x.done) return; buf += new TextDecoder().decode(x.value); } } catch { /* aborted */ } })();
+    const id = await create(r, { "x-wolfpack-thread-id": "t-9", "x-wolfpack-subagent": "scout" });
+    await r.settle();
+    ctl.abort();
+    expect(r.seen).toHaveLength(1);
+    expect(r.seen[0]).toMatchObject({ verb: "contribution", actor: { kind: "subagent", wolf: "wa", threadId: "t-9", subagent: "scout" }, target: { kind: "work-item", id, title: "Derive me" } });
+    expect(buf).toContain('"type":"pack.activity"');
+    expect(buf).toContain('"threadId":"t-9"');
+  });
+
+  it("without headers the actor is the wolf alone, and an owner write is an owner actor", async () => {
+    const r = await rig();
+    const id = await create(r);
+    await r.owner("PATCH", `/${id}`, { ops: [{ note: "hi" }] });
+    expect(r.seen.map((e) => e.actor)).toEqual([{ kind: "wolf", wolf: "wa" }, { kind: "owner" }]);
+  });
+
+  it("a stage move to shipped publishes shipped, not contribution", async () => {
+    const r = await rig();
+    const id = await create(r);
+    r.seen.length = 0;
+    expect((await r.owner("PATCH", `/${id}`, { ops: [{ stage: "shipped" }] })).status).toBe(200);
+    expect(r.seen.map((e) => e.verb)).toEqual(["shipped"]);
+    expect(r.seen[0]!.target!.id).toBe(id);
+  });
+
+  it("a failed write publishes nothing", async () => {
+    const r = await rig();
+    const res = await r.wolf("PATCH", "/work-personal-Zzzzzzz", { ops: [{ note: "x" }] });
+    expect(res.status).toBe(404);
+    expect(r.seen).toEqual([]);
+  });
+
+  it("a throwing bus does not fail the write", async () => {
+    const r = await rig((b) => ({ publish: () => { throw new Error("boom"); }, subscribe: b.subscribe.bind(b) }));
+    const res = await r.wolf("POST", "", feature);
+    expect(res.status).toBe(201);
+  });
+
+  it("a KB commit publishes kb-write for the entry; the hub's own writes publish nothing", async () => {
+    const r = await rig();
+    const content = '---\nid: kb-personal-aaaaaaa\ntitle: "Hello"\ndomain: personal\n---\n\n# Hello\n\nBody.\n';
+    const res = await fetch(r.hub.url + "/v1/kb/commits", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...OP },
+      body: JSON.stringify({ changes: [{ op: "create", domain: "personal", path: "entries/kb-personal-aaaaaaa.md", content, contentHash: contentHash(content), prevHash: null }] }),
+    });
+    expect(res.status).toBeLessThan(300);
+    expect(r.seen).toHaveLength(1);
+    expect(r.seen[0]).toMatchObject({ verb: "kb-write", actor: { kind: "owner" }, target: { kind: "kb-entry", id: "kb-personal-aaaaaaa", domain: "personal" } });
+  });
+});

@@ -30,6 +30,7 @@ import { setVizMode, useVizActive } from "@/components/viewer/viz-mode";
 import { useFrameBadges } from "@/components/viewer/frame-store";
 import { FrameBadges } from "@/components/viewer/frame-badges";
 import { BarIcon } from "@/components/chat-bar/bar-icon";
+import { BarSettings } from "@/components/chat-bar/bar-settings";
 import { useThreadColor } from "@/components/thread/use-thread-color";
 import { useBarCards, type BarCards } from "@/components/chat-bar/chat-bar-cards";
 import type { Answering } from "@/components/ask/ask-sheet";
@@ -652,9 +653,12 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 								<ChevronUpIcon className="size-5" />
 							</button>
 						)}
-						<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className={tap}>
-							<ChevronDownIcon className="size-4" />
-						</button>
+						<BarSettings wolf={target.wolf} slug={target.slug} phone buttonClass={tap} />
+						<Hint label="Minimize">
+							<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className={tap}>
+								<ChevronDownIcon className="size-4" />
+							</button>
+						</Hint>
 					</div>
 				</div>
 				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} onSending={setSending} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
@@ -677,11 +681,16 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}
 					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
-					{!swap && (
-						<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="ml-auto rounded-md p-1 text-muted-foreground hover:bg-accent">
-							<ChevronDownIcon className="size-4" />
-						</button>
-					)}
+					<div className="ml-auto flex items-center gap-0.5">
+						<BarSettings wolf={target.wolf} slug={target.slug} phone={false} buttonClass="rounded-md p-1 text-muted-foreground hover:bg-accent" />
+						{!swap && (
+							<Hint label="Minimize">
+								<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="rounded-md p-1 text-muted-foreground hover:bg-accent">
+									<ChevronDownIcon className="size-4" />
+								</button>
+							</Hint>
+						)}
+					</div>
 				</div>
 				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} onSending={setSending} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />}
 				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}

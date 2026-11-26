@@ -137,7 +137,7 @@ describe("first-run setup", () => {
       // The wolf-named default domain ("retry") is created on the hub after the start, for its work items.
       expect(reg.domains.map((d: { name: string }) => d.name)).toEqual(["personal", "recipes", "retry"]);
       // The app is its own hub's owner: the hub token (creates that domain) and the console token (key acks, approvals) are owner devices.
-      const listed = spawnSync(nodeBin, [join(runtimeDir, "hubd.mjs"), "tokens", "list", "--data-dir", join(stateDir, "hub")], { encoding: "utf8" }).stdout;
+      const listed = spawnSync(nodeBin, [join(runtimeDir, "hubd.mjs"), "tokens", "list", "--data-dir", join(stateDir, "hub")], { encoding: "utf8", timeout: 30_000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } }).stdout; // without ELECTRON_RUN_AS_NODE the Electron binary opens the app instead of running hubd, and never exits
       const ownerLabels = listed.split("\n").filter((l) => /isOwner=true/.test(l)).map((l) => l.split(/\s+/)[2]);
       expect(ownerLabels).toEqual(["wolf", "console"]);
     } finally {

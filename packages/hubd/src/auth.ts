@@ -351,6 +351,18 @@ export function createTokenStore(dataDir: string, now: () => number = Date.now, 
         else delete t.isOwner;
       });
     },
+    /** Make the token whose secret is `secret` an owner (found by its sha256, never by label; host CLI only). "already" when it was one. Throws for an unknown or worker token. */
+    setOwnerBySecret(secret: string): "promoted" | "already" {
+      const h = sha256(secret);
+      return mutate((s) => {
+        const t = s.tokens.find((x) => eq(x.hash, h));
+        if (!t) throw new HubError("not_found", "no token with that secret in this hub");
+        if (t.kind === "worker") throw new HubError("invalid_request", "a worker token cannot be an owner");
+        if (t.isOwner) return "already" as const;
+        t.isOwner = true;
+        return "promoted" as const;
+      });
+    },
     /**
      * Revoke a device (and with `cascade` every device it added, transitively through `mintedBy`), atomically under the lock. Refuses
      * (`conflict`, 409) when that would leave NO console-kind token: a stray tap must never need the host CLI to recover. Returns the

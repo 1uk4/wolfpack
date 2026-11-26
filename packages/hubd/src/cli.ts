@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** hubd CLI: `hubd serve` and `hubd dev`. Clients authenticate with device tokens (`hubd pair`); the old HUBD_API_KEY is no longer supported (serve/dev refuse to start while it is set). */
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createTokenStore, PAIRING_TTL_MS } from "./auth.js";
 import { cleanOrphans, overLimit } from "./work-orphans.js";
@@ -56,6 +56,8 @@ export interface CliArgs {
   unset?: boolean;
   /** tokens revoke: the token id. */
   tokenId?: string;
+  /** tokens owner --token-file <path>: a JSON file with the token's `token` secret; that token (found by hash) becomes an owner. */
+  tokenFile?: string;
   /** export: output tar. import: input tar. */
   out?: string;
   in?: string;
@@ -105,6 +107,7 @@ const USAGE = `usage:
                                                               KB section rebuild through the RUNNING hub (no stop needed): preview writes a plan file, apply commits exactly that plan under the hub's KB lock, restore undoes an apply. See the RUNBOOK for the flags.
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens owner <id> [--unset] --data-dir <dir>           mark a console/browser token as the hub owner (may revoke any device); --unset clears it (allowed even for the last owner, from the host CLI). 'hubd pair --owner' mints one directly. Host CLI only
+  hubd tokens owner --token-file <file> --data-dir <dir>      make the token whose secret is in <file> (JSON {"token":...}) an owner; found by hash, never by label. Prints promoted or already
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
 env: HUBD_CURATOR=1 (run the KB sweep in the hub; default off) / HUBD_CURATOR_POLL_MS (default 60000) / HUBD_CURATOR_MODELS (models.json path) / HUBD_EMBED_URL / HUBD_EMBED_MODEL
      HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; not together with --port/--host)
@@ -122,7 +125,9 @@ export function parseArgs(argv: string[]): CliArgs {
     if (rest[0] !== "list" && rest[0] !== "revoke" && rest[0] !== "owner") throw new Error(`tokens needs list, revoke or owner\n${USAGE}`);
     sub = rest[0];
     rest = rest.slice(1);
-    if (sub === "revoke" || sub === "owner") {
+    if (sub === "owner" && rest[0] === "--token-file") {
+      // by secret: no id; the file path is the flag's value, parsed below
+    } else if (sub === "revoke" || sub === "owner") {
       if (!rest[0] || rest[0].startsWith("--")) throw new Error(`tokens ${sub} needs a token id`);
       tokenId = rest[0];
       rest = rest.slice(1);
@@ -168,6 +173,7 @@ export function parseArgs(argv: string[]): CliArgs {
     if (command === "work-orphans" && flag === "--force") { out.force = true; continue; }
     if (command === "pair" && flag === "--owner") { out.owner = true; continue; }
     if (command === "tokens" && out.sub === "owner" && flag === "--unset") { out.unset = true; continue; }
+    if (command === "tokens" && out.sub === "owner" && flag === "--token-file") { out.tokenFile = val0(); continue; }
     if (command === "pair" && flag === "--label") {
       out.label = val0().slice(0, 64);
       continue;
@@ -227,6 +233,7 @@ export function parseArgs(argv: string[]): CliArgs {
   if (command === "kb-rehome" && !out.moves?.length && !out.removeSections?.length) throw new Error("kb-rehome needs at least one --move or --remove-section");
   if (command === "kb-backfill" && !out.aliases && (!out.receipts || !out.inbox)) throw new Error("kb-backfill requires --receipts and --inbox");
   if (command === "kb-backfill" && out.aliases && !out.deweyLedger) throw new Error("kb-backfill --aliases requires --dewey-ledger");
+  if (command === "tokens" && out.tokenFile && out.tokenId) throw new Error("tokens owner takes a token id or --token-file, not both");
   if (command === "serve" && !out.dataDir) throw new Error("serve requires --data-dir");
   if (out.socket !== undefined) {
     if (out.tcpExplicit) throw new Error("--socket cannot be combined with --port/--host: pick TCP or a unix socket");
@@ -303,7 +310,20 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
       log(`revoked ${args.tokenId}`);
       return;
     }
+    if (args.sub === "owner" && args.tokenFile) {
+      if (args.unset) throw new Error("tokens owner --token-file only promotes; use the token id with --unset");
+      let secret: unknown;
+      try {
+        secret = JSON.parse(readFileSync(args.tokenFile, "utf8")).token;
+      } catch {
+        throw new Error(`cannot read a token from ${args.tokenFile}`);
+      }
+      if (typeof secret !== "string" || !secret) throw new Error(`${args.tokenFile} has no token`);
+      log(`token in ${args.tokenFile}: ${store.setOwnerBySecret(secret)}`);
+      return;
+    }
     if (args.sub === "owner") {
+      if (!args.tokenId) throw new Error("tokens owner needs a token id or --token-file");
       store.setOwner(args.tokenId!, !args.unset);
       log(`${args.tokenId} ${args.unset ? "is no longer an owner" : "is now an owner"}`);
       return;

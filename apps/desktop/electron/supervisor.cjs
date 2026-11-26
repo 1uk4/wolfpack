@@ -278,6 +278,24 @@ function createSupervisor(opts) {
 		return m[1];
 	}
 
+	/**
+	 * Make the app's OWN hub tokens owner devices, matched by their secret (the token in hub-token.json / console-token.json against the hash in the hub's
+	 * token store, via `hubd tokens owner --token-file`), never by label: a phone paired as "wolf phone" must stay a plain device. An app first started at 0.4.0
+	 * minted these two without --owner and keeps them in state/ (mintHubToken skips a stored token), so hubd answers 403 to the wolf-named domain create
+	 * (server.ts registryDispatch: domains need an owner device) and work items never start. Host CLI, hubd not up yet. Idempotent. A first-ever start
+	 * (no token files, no token store yet) does nothing and creates nothing; a failure is logged and the start carries on.
+	 */
+	function promoteAppTokens(hubDir) {
+		if (!fs.existsSync(path.join(hubDir, "auth", "tokens.json"))) return;
+		for (const [fileName, label] of [[HUB_TOKEN_FILE, "wolf"], [CONSOLE_TOKEN_FILE, "console"]]) {
+			const file = path.join(stateDir, fileName);
+			if (!fs.existsSync(file)) continue;
+			const r = spawnSync(nodeBin, [path.join(runtimeDir, "hubd.mjs"), "tokens", "owner", "--token-file", file, "--data-dir", hubDir], { env: base({}), encoding: "utf8" });
+			if (r.error || r.status !== 0) log(`could not make the app's ${label} hub token an owner device: ${redact(String(r.error?.message || r.stderr || r.stdout).split("\n")[0])}`);
+			else if (/promoted/.test(String(r.stdout))) log(`the app's ${label} hub token is now an owner device (it was minted without that at 0.4.0)`);
+		}
+	}
+
 	/** Trade the code for the token (once) and keep it in a 0600 file; later starts read it back. */
 	async function redeemHubToken(hubUrl, code, fileName = HUB_TOKEN_FILE, label = "wolf") {
 		const file = path.join(stateDir, fileName);
@@ -387,6 +405,7 @@ function createSupervisor(opts) {
 		if (!curatorOn) log(modelDir ? `KB curation is off: no model.onnx in ${modelDir}` : "KB curation is off: no embedding model dir (WOLFPACK_APP_EMBED_MODEL_DIR)");
 		// Half the cores for the embedder, so the laptop stays responsive.
 		embedEnv = curatorOn ? { WOLFPACK_EMBED_PROVIDER: "onnx", WOLFPACK_EMBED_MODEL_DIR: modelDir, WOLFPACK_EMBED_THREADS: String(opts.embedThreads ?? Math.max(1, Math.floor(os.cpus().length / 2))) } : {};
+		promoteAppTokens(hubDir);
 		const pairCode = mintHubToken(hubDir);
 		const consoleCode = mintHubToken(hubDir, CONSOLE_TOKEN_FILE, "console");
 		await startHubd();

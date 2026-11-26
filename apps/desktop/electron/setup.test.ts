@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const { createSupervisor } = createRequire(import.meta.url)("./supervisor.cjs");
 const { resolveWolvesDir, checkKey, needsSetup, resolveFinishKey, runSetup } = createRequire(import.meta.url)("./setup.cjs");
 const runtimeDir = join(here, "..", "runtime");
 
@@ -143,6 +144,70 @@ describe("first-run setup", () => {
     } finally {
       await sup.stop();
     }
+  }, 120_000);
+
+  it("an app first started at 0.4.0 (non-owner hub tokens, no wolf-named domain) is repaired on the next start: the domain is created and the wolf gets WORK_*", async () => {
+    const stateDir = join(root, "upgrade-state");
+    const wolvesDir = join(root, "upgrade-wolves");
+    const opts = { stateDir, wolvesDir, runtimeDir, nodeBin, modelBaseUrl: fakeUrl };
+    const hubDir = join(stateDir, "hub");
+    const hubd = (...args: string[]) => spawnSync(nodeBin, [join(runtimeDir, "hubd.mjs"), ...args, "--data-dir", hubDir], { encoding: "utf8", timeout: 30_000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } }).stdout;
+    const first = await runSetup({ apiKey: "sk-ok", wolfName: "Upgrade", domains: [] }, opts);
+    await first.stop();
+    // What 0.4.0 left behind: tokens that are not owners (hubd answers 403 to a domain create), and a registry without the wolf-named domain.
+    for (const l of hubd("tokens", "list").split("\n").filter((x) => /isOwner=true/.test(x))) hubd("tokens", "owner", l.split(/\s+/)[0], "--unset");
+    expect(hubd("tokens", "list")).not.toContain("isOwner=true");
+    const regFile = join(hubDir, "registry", "registry.json");
+    const reg = JSON.parse(readFileSync(regFile, "utf8"));
+    reg.domains = reg.domains.filter((d: { name: string }) => d.name !== "upgrade");
+    reg.wolves = reg.wolves.map((w: { domains?: string[] }) => ({ ...w, domains: (w.domains ?? []).filter((d) => d !== "upgrade") }));
+    writeFileSync(regFile, JSON.stringify(reg));
+    rmSync(join(wolvesDir, "upgrade", ".env"), { force: true });
+
+    const sup = createSupervisor({ ...opts, wolfName: "upgrade", domains: [{ name: "personal", description: "" }] });
+    try {
+      await sup.start();
+      const after = JSON.parse(readFileSync(regFile, "utf8"));
+      expect(after.domains.map((d: { name: string }) => d.name)).toContain("upgrade");
+      expect(after.wolves.find((w: { name: string }) => w.name === "upgrade").domains).toContain("upgrade");
+      expect(readFileSync(join(wolvesDir, "upgrade", ".env"), "utf8")).toMatch(/^WORK_TOKEN=.{10,}$/m);
+    } finally {
+      await sup.stop();
+    }
+  }, 120_000);
+
+  it("the upgrade repair promotes only the app's own tokens: a paired device labelled \"wolf phone\" or exactly \"wolf\" stays a plain console token", async () => {
+    const stateDir = join(root, "strangers-state");
+    const wolvesDir = join(root, "strangers-wolves");
+    const opts = { stateDir, wolvesDir, runtimeDir, nodeBin, modelBaseUrl: fakeUrl };
+    const hubDir = join(stateDir, "hub");
+    const hubd = (...args: string[]) => spawnSync(nodeBin, [join(runtimeDir, "hubd.mjs"), ...args, "--data-dir", hubDir], { encoding: "utf8", timeout: 30_000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } }).stdout;
+    const rows = () => hubd("tokens", "list").split("\n").filter(Boolean).map((l) => ({ id: l.split(/\s+/)[0], label: /^\S+\s+\S+\s+(.*?)(?:\s{2}|$)/.exec(l)?.[1] ?? "", owner: /isOwner=true/.test(l) }));
+    const first = await runSetup({ apiKey: "sk-ok", wolfName: "Strangers", domains: [] }, opts);
+    try {
+      for (const label of ["wolf phone", "wolf"]) {
+        const code = /pairing code: (\S+)/.exec(hubd("pair", "--kind", "console", "--label", label))![1];
+        const res = await fetch(`${first.urls.hubd}/v1/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, label }) });
+        expect(res.status).toBe(200);
+      }
+    } finally {
+      await first.stop();
+    }
+    const own = rows().filter((r) => r.owner).map((r) => r.id);
+    expect(own).toHaveLength(2);
+    for (const id of own) hubd("tokens", "owner", id, "--unset"); // as 0.4.0 left them
+    const strangers = rows().filter((r) => ["wolf phone", "wolf"].includes(r.label) && !own.includes(r.id)).map((r) => r.id);
+    expect(strangers).toHaveLength(2);
+
+    const sup = createSupervisor({ ...opts, wolfName: "strangers", domains: [{ name: "personal", description: "" }] });
+    try {
+      await sup.start();
+    } finally {
+      await sup.stop();
+    }
+    const after = rows();
+    expect(after.filter((r) => r.owner).map((r) => r.id).sort()).toEqual([...own].sort());
+    for (const id of strangers) expect(after.find((r) => r.id === id)?.owner).toBe(false);
   }, 120_000);
 
   it("reuses a wolf folder: the domains its wolf.yaml already lists are kept and seeded with the chosen ones", async () => {

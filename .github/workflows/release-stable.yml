@@ -53,6 +53,8 @@ jobs:
   desktop:
     needs: tag
     uses: ./.github/workflows/desktop.yml
+    # A called workflow sees no secrets unless the caller passes them, even the desktop-release environment's own (CSC_*, APPLE_API_*).
+    secrets: inherit
     permissions:
       contents: write
 

@@ -452,7 +452,7 @@ export class LiveOverlay {
 			if (v.kind === "thread") {
 				const key = ownerThreadKey(s);
 				const t = key ? s.threads[key] : null;
-				const it = t ? this.threadItems.get(`${t.wolf}/${t.id}`) : null;
+				const it = t ? (this.threadItems.get(`${t.wolf}/${t.id}`) ?? this.wolfItems.get(t.wolf)) : null; // zoomed out the thread dot is hidden: link the wolf
 				if (it) out.push({ x: it.x, y: it.y });
 			} else {
 				const id = targetNodeId(v, (n) => host.hasNode(n));
@@ -605,7 +605,7 @@ export class LiveOverlay {
 			EFFECTS.pulse!({ ctx, x: at.x, y: at.y, r: PULSE_R * m, k, t: Math.min(1, (wall - p.at) / DEFAULT_LIVE_OPTIONS.pulseMs), color: w?.color ?? host.colors.node, intensity: I, reduced });
 		}
 		// Links: wolf -> its thread dots, thread -> bound work item (faint), subagent -> parent.
-		ctx.lineWidth = 0.8 / k;
+		ctx.lineWidth = 1.2 / k;
 		for (const it of items) {
 			if (it.kind === "thread") {
 				const wolf = this.wolfItems.get(it.wolf);
@@ -616,7 +616,7 @@ export class LiveOverlay {
 					const p = id ? host.nodePos(id) : null;
 					if (p) {
 						ctx.setLineDash([2 / k, 3 / k]);
-						this.line(ctx, it, p, rgba(it.color, 0.28));
+						this.line(ctx, it, p, rgba(it.color, 0.6 * it.alpha));
 						ctx.setLineDash([]);
 					}
 				}
@@ -625,13 +625,26 @@ export class LiveOverlay {
 				if (parent) this.line(ctx, parent, it, rgba(it.color, 0.2 * it.alpha));
 			}
 		}
+		// Zoomed out the thread dots are hidden: the link to the bound work item leaves the wolf itself.
+		if (scaleFor(k).compact) {
+			for (const id in s.threads) {
+				const t = s.threads[id]!;
+				const wolf = this.wolfItems.get(t.wolf);
+				const tid = t.bound ? targetNodeId(t.bound, (n) => host.hasNode(n)) : null;
+				const p = tid ? host.nodePos(tid) : null;
+				if (!wolf || !p || threadAlpha(s, t, wall, this.settings.subagentFadeSec) <= 0) continue;
+				ctx.setLineDash([2 / k, 3 / k]);
+				this.line(ctx, wolf, p, rgba(wolf.color, 0.6));
+				ctx.setLineDash([]);
+			}
+		}
 		// The you-node's dashed links.
 		const last = items[items.length - 1];
 		const you = last?.kind === "you" ? last : undefined;
 		if (you) {
 			const links = this.youLinks(host);
 			ctx.setLineDash([3 / k, 3 / k]);
-			links.forEach((p, i) => this.line(ctx, you, p, rgba(host.colors.hoverText, i === 0 ? 0.45 : 0.22)));
+			links.forEach((p, i) => this.line(ctx, you, p, rgba(host.colors.hoverText, i === 0 ? 0.75 : 0.4)));
 			ctx.setLineDash([]);
 		}
 		// Glyphs.

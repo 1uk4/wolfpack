@@ -51,26 +51,28 @@ export const sizeMul = (i: number) => 0.8 + 0.2 * clampI(i);
 export const alphaMul = (i: number) => 0.35 + 0.13 * clampI(i);
 
 const pulse: EffectDrawer = ({ ctx, x, y, r, k, t, color, intensity, reduced, alpha = 1 }) => {
-	const a = alphaMul(intensity) * alpha;
+	// The arrival ring reads on the dark graph even at intensity 1 (alphaMul alone left it about 0.3).
+	const a = Math.min(1, alphaMul(intensity) * 1.7) * alpha;
 	const rr = reduced ? r * 1.8 * sizeMul(intensity) : r * (1 + t * 2.4 * sizeMul(intensity));
 	const fade = reduced ? 0.7 : 1 - t;
 	ctx.beginPath();
 	ctx.arc(x, y, rr, 0, Math.PI * 2);
-	ctx.fillStyle = rgba(color, 0.08 * a * fade);
+	ctx.fillStyle = rgba(color, 0.14 * a * fade);
 	ctx.fill();
-	ctx.lineWidth = 1.2 / k;
-	ctx.strokeStyle = rgba(color, 0.6 * a * fade);
+	ctx.lineWidth = 1.8 / k;
+	ctx.strokeStyle = rgba(color, 0.9 * a * fade);
 	ctx.stroke();
 };
 
 const trail: EffectDrawer = ({ ctx, x, y, toX, toY, k, t, color, intensity, alpha = 1 }) => {
 	if (toX === undefined || toY === undefined) return;
-	const a = (1 - t) * 0.55 * alphaMul(intensity) * alpha;
+	// Starts near-opaque (0.7 at intensity 1, 0.9 at 5) and fades linearly over trailSec; about 2 screen px wide.
+	const a = (1 - t) * Math.min(0.95, 0.65 + 0.05 * clampI(intensity)) * alpha;
 	if (a <= 0.01) return;
 	ctx.beginPath();
 	ctx.moveTo(x, y);
 	ctx.lineTo(toX, toY);
-	ctx.lineWidth = (0.9 + 0.1 * sizeMul(intensity)) / k;
+	ctx.lineWidth = (1.8 + 0.2 * sizeMul(intensity)) / k;
 	ctx.strokeStyle = rgba(color, a);
 	ctx.stroke();
 };

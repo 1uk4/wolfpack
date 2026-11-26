@@ -34,6 +34,18 @@ describe("owner presence API", () => {
 		assert.equal(n, 0);
 	});
 
+	it("answers 204 without calling the hub for a body over 4 KB or one that is not JSON", async () => {
+		let n = 0;
+		const fetchStub = (async () => (n++, new Response(null, { status: 202 }))) as unknown as typeof fetch;
+		const api = createPresenceApi({ env, fetch: fetchStub });
+		const big = new Request("http://c/api/activity/presence", { method: "POST", headers: { authorization: "Bearer t", "content-length": "5000" }, body: JSON.stringify({ kind: "thread", id: "t" }) });
+		assert.equal((await api.publish(big)).status, 204);
+		const bad = new Request("http://c/api/activity/presence", { method: "POST", headers: { authorization: "Bearer t" }, body: "not json" });
+		assert.equal((await api.publish(bad)).status, 204);
+		assert.equal(n, 0);
+		assert.equal(big.bodyUsed, false);
+	});
+
 	it("swallows a hub error and a hub that never answers (short timeout)", async () => {
 		const boom = (async () => Response.json({ error: "x" }, { status: 500 })) as unknown as typeof fetch;
 		assert.equal((await createPresenceApi({ env, fetch: boom }).publish(req({ kind: "thread", id: "t" }))).status, 204);

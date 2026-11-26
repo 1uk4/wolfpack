@@ -18,6 +18,7 @@ export interface PresenceApiDeps {
 }
 
 const NO_CONTENT = () => new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+const MAX_BODY_BYTES = 4096;
 const KINDS: ReadonlySet<string> = new Set(["thread", "work-item", "kb-entry"]);
 
 export function createPresenceApi(d: PresenceApiDeps = {}) {
@@ -29,6 +30,8 @@ export function createPresenceApi(d: PresenceApiDeps = {}) {
 				const base = env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "");
 				const token = bearerOf(req.headers.get("authorization"));
 				if (!base || !token) return NO_CONTENT();
+				// A real presence body is ~200 bytes: refuse a big one on its declared length, without reading it.
+				if (Number(req.headers.get("content-length")) > MAX_BODY_BYTES) return NO_CONTENT();
 				const b = (await req.json()) as Record<string, unknown>;
 				const str = (v: unknown, max = 200) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : undefined);
 				const kind = str(b.kind);

@@ -1,7 +1,7 @@
 /**
  * Write fence for worktree sub-agents. A child in a worktree may only write inside it; `write` and `edit` refuse a path
  * that resolves (through `..` and symlinks) outside. The tools are shared by every conversation, so the fence is keyed
- * by the call's working directory: a call whose cwd is inside a fenced root is held to that root. Reads are not fenced.
+ * by the call's working directory: a call whose cwd is inside a fenced root is held to that root. Reads are not fenced unless the fence was given `readRoots` (the visualizer's is).
  * `bash` cannot be fenced, only checked on a best-effort basis: a command whose text names one of the root's off-limits
  * paths (main checkout, feature worktree; realpath, `~`, `$HOME` and `${HOME}` forms) is refused. A command that builds
  * the path some other way (variables, `cd ..`, a script) gets through; the brief rewrite, the prompt section and the
@@ -15,6 +15,8 @@ interface Fence {
   /** The root as given (not resolved through symlinks). */
   lexical: string;
   offLimits: string[];
+  /** Realpaths a call from inside this fence may read (besides the fence root itself). Undefined: reads are not fenced. */
+  readRoots?: string[];
 }
 
 const fenced = new Map<string, Fence>();
@@ -56,8 +58,24 @@ const inside = (root: string, p: string): boolean => {
 };
 
 /** Fence a worktree: calls running in it (or below it) may only write inside it. `offLimits` are the paths bash may not name. */
-export function fenceRoot(root: string, offLimits: string[] = []): void {
-  fenced.set(real(root), { lexical: resolve(root), offLimits });
+export function fenceRoot(root: string, offLimits: string[] = [], opts: { readRoots?: string[] } = {}): void {
+  fenced.set(real(root), { lexical: resolve(root), offLimits, ...(opts.readRoots ? { readRoots: opts.readRoots.map(real) } : {}) });
+}
+
+/**
+ * The read roots to hand to `fenceRoot`, minus any that would widen access to what must stay unreadable: a root that is
+ * (or contains) one of `protectedPaths` (the wolf home, `$HOME`, `~/.wolfpack`) is dropped and reported through `onDrop`.
+ */
+export function safeReadRoots(roots: Array<string | undefined>, protectedPaths: string[], onDrop?: (root: string) => void): string[] {
+  const prot = protectedPaths.map(real);
+  const out: string[] = [];
+  for (const r of roots) {
+    if (!r) continue;
+    const rr = real(r);
+    if (prot.some((p) => inside(rr, p))) onDrop?.(rr);
+    else out.push(rr);
+  }
+  return out;
 }
 
 /** The worktree is gone (merged, abandoned, rolled back): its fence goes with it. */
@@ -115,6 +133,19 @@ export function fenceViolation(cwd: string, path: string): string | undefined {
   return `Refused: ${path} resolves to ${target}, outside your working copy. Your allowed root is ${root}; edit and write files only there (use a path relative to it). The repository's main checkout and the feature worktree are off-limits.`;
 }
 
+/** The error for a read of `path` made from `cwd` inside a fence that has read roots, or undefined when it is allowed (or the fence does not limit reads). */
+export function readViolation(cwd: string, path: string): string | undefined {
+  const home = cwd ? real(cwd) : "";
+  const hit = [...fenced].find(([r, f]) => home && f.readRoots && inside(r, home));
+  if (!hit) return undefined;
+  const [root, f] = hit;
+  const expanded = path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+  const target = real(isAbsolute(expanded) ? expanded : resolve(cwd, expanded));
+  const allowed = [root, ...(f.readRoots ?? [])];
+  if (allowed.some((r) => inside(r, target))) return undefined;
+  return `Refused: ${path} resolves to ${target}, outside what you may read. You may read only: ${allowed.join(", ")}. Configuration, keys and the rest of the wolf's home are off-limits; never copy them into your output.`;
+}
+
 interface Executable {
   name: string;
   execute: (args: never, api: never, context: never) => unknown;
@@ -129,6 +160,22 @@ export function fenceWriteTool<T extends Executable>(tool: T): T {
       const cwd = api.env?.cwd;
       if (cwd && typeof args?.path === "string") {
         const refused = fenceViolation(cwd, args.path);
+        if (refused) throw new Error(refused);
+      }
+      return inner(args, api, context);
+    },
+  } as unknown as T;
+}
+
+/** `read`, `ls`, `grep` or `find` that refuses a path outside the read roots of the call's fence (no path means the cwd, which is allowed). */
+export function fenceReadTool<T extends Executable>(tool: T): T {
+  const inner = tool.execute as (args: { path?: unknown }, api: { env?: { cwd?: string } }, context: unknown) => unknown;
+  return {
+    ...tool,
+    execute: (args: { path?: unknown }, api: { env?: { cwd?: string } }, context: unknown) => {
+      const cwd = api.env?.cwd;
+      if (cwd && typeof args?.path === "string") {
+        const refused = readViolation(cwd, args.path);
         if (refused) throw new Error(refused);
       }
       return inner(args, api, context);

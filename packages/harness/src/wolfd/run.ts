@@ -15,7 +15,8 @@
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fenceRoot } from "../engine/fence.js";
+import { homedir } from "node:os";
+import { fenceRoot, safeReadRoots } from "../engine/fence.js";
 import { frameProblem, framesRoot } from "./frames.js";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
@@ -213,7 +214,13 @@ async function startConfigured(
   const loaded = await loadConfiguredExtensions(config, env, memoryTable, extra, log, sweep, cardGuard.register);
   // The frames dir: the visualizer's cwd (profile `cwd: ../frames`), so the write fence keeps its write/edit inside it.
   mkdirSync(framesRoot(dirname(config.file)), { recursive: true });
-  fenceRoot(framesRoot(dirname(config.file)));
+  // Its reads are fenced too: the repo it works in, the KB mirror and the frames dir. A frame can navigate to an outside
+  // URL, so what the visualizer can read must not include keys or config. A root that would widen to the wolf home or $HOME is dropped.
+  const kbDomains = env.KB_BASE ?? (opts.home ? join(opts.home, ".wolfpack", "workerd", "kb-mirror", "domains") : undefined);
+  const unreadable = [dirname(config.file), homedir(), join(homedir(), ".wolfpack"), ...(opts.home ? [opts.home, join(opts.home, ".wolfpack")] : [])];
+  fenceRoot(framesRoot(dirname(config.file)), [], {
+    readRoots: safeReadRoots([config.capability.workspace, kbDomains], unreadable, (r) => log(`warning: visualizer read root ${r} not allowed (it would include the wolf home or $HOME)`)),
+  });
   const askBridge = new AskBridge();
   const ask = adaptToDurable(createAskExtension(askBridge, { diagramCheck: (id) => diagramProblem(config.den, id, env) }), { wolfDen: config.den, wolfName: config.identity.name, onCardTool: cardGuard.register });
   // The card guard ends a whole round that contains a card-raising call (see engine/cards.ts). Tools adapted through

@@ -6,7 +6,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkWorkerCommand, routeTestCommand } from "@wolfpack/agents";
-import { bashViolation, fenceWriteTool, isSubagentConversation } from "./fence.js";
+import { bashViolation, fenceReadTool, fenceWriteTool, isSubagentConversation } from "./fence.js";
 import { READONLY_TOOL_NAMES, ReadOnlyTools } from "./readonly-tools.js";
 
 interface RegistryEntry {
@@ -157,7 +157,7 @@ export function withoutGitHubCredentials(execution: BashExecution, base: NodeJS.
 const CodingTools = defineExtension({
   name: "coding-tools",
   tools: [
-    createReadTool({ images: lazyImageProcessor() }),
+    fenceReadTool(createReadTool({ images: lazyImageProcessor() })),
     fenceWriteTool(createWriteTool()),
     fenceWriteTool(createEditTool()),
     createBashTool({ prepare: (execution, api) => prepareCodingBash(execution, api) }),

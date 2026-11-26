@@ -11,6 +11,7 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { getOrThrow, type ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { createBashTool, type BashExecution } from "@earendil-works/pi-durable/tools";
 import type { Extension } from "@earendil-works/pi-durable";
+import { fenceReadTool } from "./fence.js";
 import { checkReadOnlyCommand, routeTestCommand } from "@wolfpack/agents";
 
 export const READONLY_TOOL_NAMES = ["ls", "grep", "find", "guarded_bash"] as const;
@@ -279,7 +280,7 @@ const guardedBash = (() => {
   };
 })();
 
-const ALL_TOOLS = [lsTool, grepTool, findTool, guardedBash];
+const ALL_TOOLS = [fenceReadTool(lsTool), fenceReadTool(grepTool), fenceReadTool(findTool), guardedBash];
 
 /** `ls`, `grep`, `find` and `guarded_bash` as one extension. */
 export const ReadOnlyTools = defineExtension({ name: "wolfd-readonly-tools", tools: ALL_TOOLS }) as unknown as Extension;

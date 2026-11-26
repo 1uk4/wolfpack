@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { NotFoundError, ProtocolError } from "@wolfpack/client";
+import { fenceRoot, readViolation, unfenceRoot } from "../engine/fence.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 
 let tw: TestWolf | undefined;
@@ -41,6 +42,18 @@ describe("frame-file route", () => {
     expect(res.headers.get("content-security-policy")).toBe("sandbox");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("fences the visualizer's reads (frames dir) to its roots, and leaves a worker's worktree fence unlimited", async () => {
+    const w = await boot();
+    const frames = join(w.root, "frames");
+    expect(readViolation(frames, join(w.root, "wolf.yaml"))).toMatch(/^Refused: /);
+    expect(readViolation(frames, join(w.root, "models.json"))).toMatch(/^Refused: /);
+    expect(readViolation(frames, join(w.root, "work", "src.ts"))).toBeUndefined(); // the wolf's workspace
+    const worker = mkdtempSync(join(tmpdir(), "worker-wt-"));
+    fenceRoot(worker);
+    expect(readViolation(worker, join(w.root, "wolf.yaml"))).toBeUndefined();
+    unfenceRoot(worker);
   });
 
   it("refuses traversal and absolute paths with 400", async () => {

@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic"; // like the other data pages: the produc
  */
 export default function WorkPage() {
 	return (
-		<PageViewer scope="work" allowedKinds={["work", "kb"]}>
+		<PageViewer scope="work" allowedKinds={["work", "kb", "graduation"]}>
 			<Suspense fallback={null}>
 				<WorkList />
 			</Suspense>

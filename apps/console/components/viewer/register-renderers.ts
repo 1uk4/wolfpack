@@ -1,5 +1,6 @@
 import { registerViewRenderer } from "./registry";
 import { FrameViewRenderer } from "./renderers/frame-view";
+import { GraduationViewRenderer } from "./renderers/graduation-view";
 import { KbEntryViewRenderer } from "./renderers/kb-entry-view";
 import { PromptViewRenderer } from "./renderers/prompt-view";
 import { WorkItemViewRenderer } from "./renderers/work-item-view";
@@ -8,3 +9,4 @@ registerViewRenderer("work", WorkItemViewRenderer);
 registerViewRenderer("kb", KbEntryViewRenderer);
 registerViewRenderer("prompt", PromptViewRenderer);
 registerViewRenderer("frame", FrameViewRenderer);
+registerViewRenderer("graduation", GraduationViewRenderer);

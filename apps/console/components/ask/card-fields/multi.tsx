@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { multiInBounds } from "@/src/core";
 import type { CardField } from "@wolfpack/client";
 import { isSameOriginPath } from "@wolfpack/protocol";
+import { openGraduationLink, useOpenView } from "@/components/viewer/viewer-context";
 import { CardTextInput, Indicator, OPTION_ROW } from "./shared";
 import type { FieldRendererProps } from "./types";
 
@@ -21,6 +22,7 @@ export function MultiRenderer({
 	error,
 	dictation,
 }: FieldRendererProps<Extract<CardField, { kind: "multi" }>>) {
+	const openView = useOpenView();
 	const picked = Array.isArray(value?.value) ? value.value : [];
 	const custom = value && "other" in value && Array.isArray(value.other) ? value.other : [];
 	const atMax = field.max !== undefined && picked.length >= field.max;
@@ -69,7 +71,7 @@ export function MultiRenderer({
 				return (
 					<div key={o.value} className="flex items-start gap-2">
 						{row}
-						<a href={link} target="_blank" rel="noopener" data-testid="card-option-link" onClick={(e) => e.stopPropagation()} className="shrink-0 self-center whitespace-nowrap text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+						<a href={link} target="_blank" rel="noopener" data-testid="card-option-link" onClick={(e) => (e.stopPropagation(), openGraduationLink(e, openView, link))} className="shrink-0 self-center whitespace-nowrap text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
 							more details
 						</a>
 					</div>

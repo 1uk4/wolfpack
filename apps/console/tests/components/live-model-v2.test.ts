@@ -101,7 +101,7 @@ describe("live map model v2", () => {
 		run(0.1);
 		const hub = of("feature");
 		assert.ok(dist(hub, nodes.get("work:ELzLSkV")!) < 30, `hub ${hub.x},${hub.y} is beside work:ELzLSkV`);
-		assert.ok(dist(hub, of("wolf")) > 200, "and far from the wolf");
+		assert.ok(dist(hub, of("wolf")) > 100, "and clear of the wolf, which only settles partway toward it");
 		assert.equal(items().filter((i) => i.kind === "thread").length, 1, "only the home thread stays a dot");
 	});
 
@@ -324,7 +324,7 @@ describe("live map model v2", () => {
 		assert.equal(items().some((i) => i.kind === "feature"), false);
 	});
 
-	it("the wolf floats free: feature and subagent targets only ease its anchor a little toward the work, never onto it", () => {
+	it("the wolf floats free: its feature hub settles it about halfway toward the work, never onto it", () => {
 		const big: OverlayHost = { ...host, extentRadius: () => 600 };
 		const b = new LiveOverlay(() => {});
 		b.configure(LIVE_DEFAULTS);
@@ -342,7 +342,29 @@ describe("live map model v2", () => {
 		const wolfA = items().find((i) => i.kind === "wolf")!;
 		const wolfB = b.items(host, 1, Date.now()).find((i) => i.kind === "wolf")!;
 		const moved = dist(wolfA, wolfB);
-		assert.ok(moved > 1 && moved < 0.4 * dist(wolfB, nodes.get("work:ELzLSkV")!), `eased partway toward the work (${moved})`);
+		const d = dist(wolfB, nodes.get("work:ELzLSkV")!);
+		assert.ok(Math.abs(moved - 0.5 * d) < 0.02 * d, `one hub pulls the wolf half of the way to the work: moved ${moved} of ${d}`);
+		b.stop();
+	});
+
+	it("a wolf with feature hubs settles: against the same wolf without hubs (same idle roam), the offset stops changing within 60 frames", () => {
+		const big: OverlayHost = { ...host, extentRadius: () => 600 };
+		const b = new LiveOverlay(() => {});
+		b.configure(LIVE_DEFAULTS);
+		send("thread-active", home);
+		send("thread-active", home, undefined, b);
+		send("thread-active", feature);
+		const off: { x: number; y: number }[] = [];
+		for (let i = 0; i < 60; i++) {
+			mock.timers.tick(50);
+			o.step(Date.now(), 0.05, big, 1);
+			b.step(Date.now(), 0.05, big, 1);
+			const a = items().find((it) => it.kind === "wolf")!;
+			const c = b.items(host, 1, Date.now()).find((it) => it.kind === "wolf")!;
+			off.push({ x: a.x - c.x, y: a.y - c.y });
+		}
+		assert.ok(Math.hypot(off[59]!.x, off[59]!.y) > 100, "the hubs do pull it away from its ring slot");
+		assert.ok(dist(off[58]!, off[59]!) < 0.5, `still settling: ${dist(off[58]!, off[59]!)} per frame`);
 		b.stop();
 	});
 

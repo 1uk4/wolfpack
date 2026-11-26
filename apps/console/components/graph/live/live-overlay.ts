@@ -24,7 +24,7 @@ import {
 	type LiveState,
 	type LiveTarget,
 } from "@/src/core";
-import { ownerThreadKey, targetNodeId, threadKey, threadSlugOf } from "@/src/core";
+import { wolfSpringAnchor, ownerThreadKey, targetNodeId, threadKey, threadSlugOf } from "@/src/core";
 import { separateSubs, stepSub, SUB_PHYSICS, tetherStrength, type SubBody } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba } from "./live-effects";
@@ -148,6 +148,10 @@ interface Body {
 	cx: number;
 	cy: number;
 	cn: number;
+	/** Sum and count of its feature hubs (the invisible wolf-to-hub springs). */
+	hx: number;
+	hy: number;
+	hn: number;
 	placed: boolean;
 	rt?: number;
 	rs?: number;
@@ -231,6 +235,7 @@ export class LiveOverlay {
 	private ringAng = new Map<string, number>();
 	private ringKey = "";
 	private workingSet = new Set<string>();
+	private springTmp = { x: 0, y: 0 };
 	/** Subagent bodies by key (spring-damper physics) and the list the frame steps; the items they draw as, by key. */
 	private subBodies = new Map<string, SubState>();
 	private subList: SubState[] = [];
@@ -466,13 +471,16 @@ export class LiveOverlay {
 			}
 			let b = this.bodies.get(w.name);
 			if (!b) {
-				b = { x: 0, y: 0, name: w.name, ax: 0, ay: 0, rx: 0, ry: 0, sx: 0, sy: 0, cx: 0, cy: 0, cn: 0, placed: false };
+				b = { x: 0, y: 0, name: w.name, ax: 0, ay: 0, rx: 0, ry: 0, sx: 0, sy: 0, cx: 0, cy: 0, cn: 0, hx: 0, hy: 0, hn: 0, placed: false };
 				this.bodies.set(w.name, b);
 				fresh = true;
 			}
 			b.cx = 0;
 			b.cy = 0;
 			b.cn = 0;
+			b.hx = 0;
+			b.hy = 0;
+			b.hn = 0;
 			bodies.push(b);
 		}
 		// Pass B: the centroid of each wolf's recent activity: its feature hubs and the targets of its trails in the last few minutes.
@@ -482,9 +490,9 @@ export class LiveOverlay {
 			const b = t.feature !== undefined ? this.bodies.get(t.wolf) : undefined;
 			if (!b) continue;
 			const p = this.hubPos(t, host, m, this.anchorTmp);
-			b.cx += p.x;
-			b.cy += p.y;
-			b.cn++;
+			b.hx += p.x;
+			b.hy += p.y;
+			b.hn++;
 		}
 		for (const t of s.trails) {
 			const b = wall - t.at < ACTIVITY_MS ? this.bodies.get(t.wolf) : undefined;
@@ -503,8 +511,10 @@ export class LiveOverlay {
 			const w = s.wolves[b.name]!;
 			const h = this.hashOf(w.name);
 			const ang = this.ringAng.get(w.name) ?? 0;
-			let tx = center.x + Math.cos(ang) * ringR;
-			let ty = center.y + Math.sin(ang) * ringR;
+			// The ring slot, then the invisible springs to its feature hubs settle it near their rough centre (no hubs: the slot).
+			const sp = wolfSpringAnchor(center.x + Math.cos(ang) * ringR, center.y + Math.sin(ang) * ringR, b.hx, b.hy, b.hn, this.springTmp);
+			let tx = sp.x;
+			let ty = sp.y;
 			if (b.cn > 0) {
 				tx += (b.cx / b.cn - tx) * ACTIVITY_BIAS;
 				ty += (b.cy / b.cn - ty) * ACTIVITY_BIAS;

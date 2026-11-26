@@ -4,7 +4,8 @@
  *
  *  - `read` of `<kb-mirror>/domains/<d>/entries/<id>.md` -> kb-entry; of `INDEX.md` / `_digest.json` -> the domain.
  *  - `bash` whose command has a read verb (cat grep rg find head tail sed awk less ls jq) and no output redirect, naming
- *    kb-mirror paths: an entry path -> kb-entry, any other path under a domain -> the domain (at most MAX_BASH_TARGETS).
+ *    kb-mirror paths (and no write verb: sed -i, tee, cp, mv, rm, dd): an entry path -> kb-entry, any other path under a domain -> the domain (at most MAX_BASH_TARGETS).
+ *  - `guarded_bash` (sub-agents) is `bash`; `grep` / `find` / `ls` (sub-agents) take their `path` arg: an entry path -> kb-entry, else the domain.
  *  - `kb_*` tools (none exist today; kept for when one does): args `entryId` / `sectionId` / `domain`.
  */
 import { kbEntryOfPath } from "./activity-publisher.js";
@@ -15,6 +16,8 @@ const MAX_BASH_TARGETS = 3;
 const DOMAIN_FILE = /(?:^|[\\/])kb-mirror[\\/]domains[\\/]([^\\/\s'"]+)[\\/](?:INDEX\.md|_digest\.json)$/;
 const KB_PATH = /[^\s'"`;|&<>()]*kb-mirror[\\/]domains[\\/][^\s'"`;|&<>()]*/g;
 const READ_VERB = /(?:^|[\s;|&(])(?:cat|grep|egrep|rg|find|head|tail|sed|awk|less|ls|jq)(?=\s)/;
+/** A command that writes or removes (sed -i, tee, cp, mv, rm, dd) is not a read, even when it also names a read verb: denied. cp reads its source, but denying is the safe side. */
+const WRITE_VERB = /(?:^|[\s;|&(])(?:tee|cp|mv|rm|dd|install|truncate)(?=\s)|(?:^|[\s;|&(])sed\s+(?:[^|;&]*\s)?(?:-[A-Za-z]*i|--in-place)/;
 const SAFE_ID = /^[A-Za-z0-9_.-]{1,64}$/;
 
 function ofPath(p: string): KbTarget | undefined {
@@ -39,9 +42,9 @@ export function kbTargetsOfTool(toolName: string, args: unknown): KbTarget[] {
       const t = typeof a.path === "string" ? ofPath(a.path) : undefined;
       return t ? [t] : [];
     }
-    if (toolName === "bash") {
+    if (toolName === "bash" || toolName === "guarded_bash") {
       const cmd = a.command;
-      if (typeof cmd !== "string" || cmd.length > 4000 || !READ_VERB.test(cmd) || /(?:^|[^<>-])>{1,2}\s*\S*kb-mirror/.test(cmd)) return [];
+      if (typeof cmd !== "string" || cmd.length > 4000 || !READ_VERB.test(cmd) || WRITE_VERB.test(cmd) || /(?:^|[^<>-])>{1,2}\s*\S*kb-mirror/.test(cmd)) return [];
       const out: KbTarget[] = [];
       const seen = new Set<string>();
       for (const m of cmd.matchAll(KB_PATH)) {
@@ -52,6 +55,10 @@ export function kbTargetsOfTool(toolName: string, args: unknown): KbTarget[] {
         if (out.length >= MAX_BASH_TARGETS) break;
       }
       return out;
+    }
+    if (toolName === "grep" || toolName === "find" || toolName === "ls") {
+      const t = typeof a.path === "string" && a.path.length <= 1000 ? ofBashPath(a.path) : undefined;
+      return t ? [t] : [];
     }
     if (toolName.startsWith("kb_")) {
       const s = (v: unknown) => (typeof v === "string" && SAFE_ID.test(v) ? v : undefined);

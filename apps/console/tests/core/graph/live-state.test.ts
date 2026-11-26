@@ -204,4 +204,14 @@ describe("live overlay reducer", () => {
 		s = reduceLive(s, { type: "resync", now: 60 });
 		assert.deepEqual([Object.keys(s.threads).length, s.wolves.hal!.online], [0, false]);
 	});
+
+	it("a subagent kb-read arriving before its subagent-spawned draws from the subagent and creates it under its parent", () => {
+		const a = { kind: "subagent", wolf: "hal", subagent: "w1", parentThreadId: "t1", threadId: "hal/sub-1" };
+		let s = feed(emptyLiveState(), ev("kb-read", { actor: a, target: kb }), 10);
+		const [key] = Object.keys(s.subagents);
+		assert.deepEqual(Object.values(s.subagents).map((x) => [x.name, x.parentThreadId]), [["w1", "t1"]]);
+		assert.equal((s.trails[0] as unknown as { subagentKey?: string }).subagentKey, key);
+		s = feed(s, ev("subagent-spawned", { actor: a }), 20);
+		assert.deepEqual(Object.keys(s.subagents), [key]);
+	});
 });

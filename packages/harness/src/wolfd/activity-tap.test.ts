@@ -135,7 +135,29 @@ describe("ActivityTap", () => {
     tap.onToolStart("t1", "bash", { command: "ls /h/src && cat README.md" });
     tap.onToolStart("t1", "bash", { command: "echo hi > /h/kb-mirror/domains/wolfpack/entries/Zz.md" });
     tap.onToolStart("t1", "kb_access", { note: "no ids" });
+    const kb = "/h/kb-mirror/domains/wolfpack/entries/Zz.md";
+    for (const command of [`rm ${kb}`, `sed -i 's/a/b/' ${kb}`, `cat x | tee ${kb}`, `cp /tmp/a ${kb}`, `mv ${kb} /tmp/b`, `grep a ${kb} && rm ${kb}`]) {
+      tap.onToolStart("t1", "bash", { command });
+      tap.onToolStart("c1", "guarded_bash", { command });
+    }
     expect(emitted).toEqual([]);
+  });
+
+  it("a sub-agent's read-only tools (guarded_bash, grep, find, ls) emit kb-read with the subagent actor; non-KB paths emit nothing", () => {
+    const { tap, emitted } = setup();
+    const kb = "/h/kb-mirror/domains/wolfpack";
+    tap.onToolStart("c1", "guarded_bash", { command: `cat ${kb}/entries/X.md` });
+    tap.onToolStart("c1", "grep", { pattern: "graph", path: "/h/kb-mirror/domains/spot/entries" });
+    tap.onToolStart("c1", "find", { pattern: "*.md", path: "/h/kb-mirror/domains/personal" });
+    tap.onToolStart("c1", "ls", { path: `${kb}/entries` });
+    tap.onToolStart("c1", "grep", { pattern: "x", path: "/h/src" });
+    tap.onToolStart("c1", "ls", {});
+    expect(emitted.map((e) => [e.verb, e.actor.kind, e.target!.kind, e.target!.id, e.target!.domain])).toEqual([
+      ["kb-read", "subagent", "kb-entry", "X", "wolfpack"],
+      ["kb-read", "subagent", "domain", "spot", "spot"],
+      ["kb-read", "subagent", "domain", "personal", "personal"],
+      ["kb-read", "subagent", "domain", "wolfpack", "wolfpack"],
+    ]);
   });
 
   it("the same target is sent once per 30 s per thread, and a turn sends at most 10 kb-reads", () => {

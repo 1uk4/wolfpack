@@ -10,6 +10,7 @@ export function targetNodeId(target: { kind: string; id: string; domain?: string
 	const cands: string[] = [];
 	if (target.kind === "kb-entry") cands.push(`ent:${target.id}`);
 	else if (target.kind === "kb-section") cands.push(`sec:${target.id}`);
+	else if (target.kind === "domain") cands.push(`dom:${target.id}`);
 	else if (target.kind === "work-item") {
 		const m = /^work-[a-z0-9]+-(.+)$/i.exec(target.id);
 		cands.push(`work:${target.id}`);

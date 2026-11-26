@@ -10,7 +10,8 @@
  * Write, contribution and ship events are NOT emitted here: the hub derives them from its ledger.
  */
 import type { ActivityActor } from "@wolfpack/protocol";
-import { ACTIVITY_HEARTBEAT_MS, ACTIVITY_WOLF_BEAT_MS, kbEntryOfPath, type ActivityPublisher } from "./activity-publisher.js";
+import { KbReadThrottle, kbTargetsOfTool } from "./activity-kb.js";
+import { ACTIVITY_HEARTBEAT_MS, ACTIVITY_WOLF_BEAT_MS, type ActivityPublisher } from "./activity-publisher.js";
 
 /** The slice of a thread summary the tap needs. */
 export interface TapThread {
@@ -31,6 +32,7 @@ export class ActivityTap {
   private bound = new Map<string, string | undefined>();
   private seenChild = new Set<string>();
   private finishedChild = new Set<string>();
+  private throttle = new KbReadThrottle();
 
   constructor(
     private readonly pub: Pick<ActivityPublisher, "emit">,
@@ -62,6 +64,7 @@ export class ActivityTap {
           const id = String(ev.threadId);
           if (ev.status === "busy") {
             if (this.beats.has(id)) return;
+            this.throttle.newTurn(id);
             this.active(id);
             const h = setInterval(() => {
               try {
@@ -104,6 +107,7 @@ export class ActivityTap {
     this.bound.delete(id);
     this.seenChild.delete(id);
     this.finishedChild.delete(id);
+    this.throttle.forget(id);
   }
 
   private threadUpdated(t: TapThread | undefined): void {
@@ -136,14 +140,13 @@ export class ActivityTap {
     }
   }
 
-  /** A tool started in a thread. Only the `read` tool on a kb-mirror entry file counts; args are never kept. */
+  /** A tool started in a thread: KB reads (see activity-kb.ts) become kb-read, throttled per thread. Args are never kept. */
   onToolStart(threadId: string, toolName: string, args: unknown): void {
     try {
-      if (toolName !== "read") return;
-      const p = (args as { path?: unknown } | null)?.path;
-      const e = typeof p === "string" ? kbEntryOfPath(p) : undefined;
-      if (!e) return;
-      this.pub.emit({ verb: "kb-read", actor: this.actor(this.lookup(threadId), threadId), target: { kind: "kb-entry", id: e.id, domain: e.domain }, domain: e.domain });
+      for (const t of kbTargetsOfTool(toolName, args)) {
+        if (!this.throttle.allow(threadId, t)) continue;
+        this.pub.emit({ verb: "kb-read", actor: this.actor(this.lookup(threadId), threadId), target: t, ...(t.domain ? { domain: t.domain } : {}) });
+      }
     } catch { /* ignore */ }
   }
 

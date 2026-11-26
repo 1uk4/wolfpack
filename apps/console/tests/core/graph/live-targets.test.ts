@@ -31,5 +31,6 @@ describe("owner thread and target matching", () => {
 		assert.equal(targetNodeId({ kind: "kb-entry", id: "kb-1" }, has), "ent:kb-1");
 		assert.equal(targetNodeId({ kind: "kb-entry", id: "nope", domain: "wolfpack" }, has), "dom:wolfpack");
 		assert.equal(targetNodeId({ kind: "kb-entry", id: "nope" }, has), null);
+		assert.equal(targetNodeId({ kind: "domain", id: "wolfpack" }, has), "dom:wolfpack");
 	});
 });

@@ -108,12 +108,50 @@ describe("ActivityTap", () => {
     expect(emitted.map((e) => [e.verb, e.actor.threadId])).toEqual([["needs-you", "t1"], ["answered", "t1"]]);
   });
 
-  it("kb-read comes only from the read tool on a kb-mirror entry; bash is never inspected", () => {
+  it("each KB tool shape maps to its target: entry read, INDEX/_digest read and bash grep/cat give entry or domain; kb_* args name entry, section or domain", () => {
     const { tap, emitted } = setup();
-    tap.onToolStart("t1", "read", { path: "/h/kb-mirror/domains/wolfpack/entries/Ab12.md" });
-    tap.onToolStart("t1", "read", { path: "/h/kb-mirror/domains/wolfpack/INDEX.md" });
-    tap.onToolStart("t1", "bash", { command: "cat /h/kb-mirror/domains/wolfpack/entries/Zz.md" });
-    expect(emitted).toHaveLength(1);
-    expect(emitted[0]).toMatchObject({ verb: "kb-read", target: { kind: "kb-entry", id: "Ab12", domain: "wolfpack" } });
+    const kb = "/h/kb-mirror/domains/wolfpack";
+    tap.onToolStart("t1", "read", { path: `${kb}/entries/Ab12.md` });
+    tap.onToolStart("t1", "read", { path: `${kb}/INDEX.md` });
+    tap.onToolStart("t1", "read", { path: `${kb}/_digest.json` }); // same domain target within 30 s: deduped
+    tap.onToolStart("t1", "bash", { command: `cat ${kb}/entries/Zz.md | head -5` });
+    tap.onToolStart("t1", "bash", { command: `grep -ril "graph" ${kb}/entries/ | head` }); // domain again: deduped
+    tap.onToolStart("t1", "kb_access", { entryId: "E9", domain: "personal" });
+    tap.onToolStart("t1", "kb_access", { sectionId: "S1", domain: "personal" });
+    tap.onToolStart("t1", "kb_access", { domain: "spot" });
+    expect(emitted.map((e) => [e.verb, e.target!.kind, e.target!.id, e.target!.domain])).toEqual([
+      ["kb-read", "kb-entry", "Ab12", "wolfpack"],
+      ["kb-read", "domain", "wolfpack", "wolfpack"],
+      ["kb-read", "kb-entry", "Zz", "wolfpack"],
+      ["kb-read", "kb-entry", "E9", "personal"],
+      ["kb-read", "kb-section", "S1", "personal"],
+      ["kb-read", "domain", "spot", "spot"],
+    ]);
+  });
+
+  it("non-KB paths and commands emit nothing, and a bash command with no read verb or that redirects into the KB is ignored", () => {
+    const { tap, emitted } = setup();
+    tap.onToolStart("t1", "read", { path: "/h/src/entries/Ab12.md" });
+    tap.onToolStart("t1", "bash", { command: "ls /h/src && cat README.md" });
+    tap.onToolStart("t1", "bash", { command: "echo hi > /h/kb-mirror/domains/wolfpack/entries/Zz.md" });
+    tap.onToolStart("t1", "kb_access", { note: "no ids" });
+    expect(emitted).toEqual([]);
+  });
+
+  it("the same target is sent once per 30 s per thread, and a turn sends at most 10 kb-reads", () => {
+    const { tap, emitted } = setup();
+    const p = (id: string) => ({ path: `/h/kb-mirror/domains/d/entries/${id}.md` });
+    tap.onToolStart("t1", "read", p("A"));
+    tap.onToolStart("t1", "read", p("A"));
+    vi.advanceTimersByTime(31_000);
+    tap.onToolStart("t1", "read", p("A"));
+    expect(emitted).toHaveLength(2);
+    for (let i = 0; i < 25; i++) tap.onToolStart("t1", "read", p(`E${i}`));
+    expect(emitted).toHaveLength(10); // 2 above + 8 more: the turn's cap
+    tap.onWolfEvent({ type: "thread-status", threadId: "t1", status: "idle" });
+    tap.onWolfEvent({ type: "thread-status", threadId: "t1", status: "busy" }); // a new turn resets the cap
+    emitted.length = 0;
+    tap.onToolStart("t1", "read", p("Fresh"));
+    expect(emitted.map((e) => e.verb)).toEqual(["kb-read"]);
   });
 });

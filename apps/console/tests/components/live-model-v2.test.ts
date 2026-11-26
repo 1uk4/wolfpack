@@ -201,6 +201,32 @@ describe("live map model v2", () => {
 		assert.ok(hub.alpha > 0 && hub.alpha < 1, `dimmed (${hub.alpha})`);
 	});
 
+	it("an open feature thread in the thread roster is a dimmed hub with no presence; archiving or dropping it removes the hub", () => {
+		const row = { wolf: "1uk4", id: FEATURE, title: "Live pack map" };
+		o.dispatch({ type: "threads", threads: [row], now: Date.now() });
+		run(0.1);
+		const hub = of("feature");
+		assert.equal(hub.working, false);
+		assert.ok(hub.alpha > 0 && hub.alpha < 1, `dimmed (${hub.alpha})`);
+		assert.ok(near([hub.x, hub.y], nodes.get("work:ELzLSkV")!, 120), "at its work node");
+		mock.timers.tick(3 * 3_600_000); // no presence, hours later: the roster still holds it
+		o.dispatch({ type: "tick", now: Date.now() });
+		run(0.1);
+		assert.ok(items().some((i) => i.kind === "feature"));
+		send("thread-active", feature); // a live event upgrades it
+		run(0.1);
+		assert.equal(of("feature").working, true);
+		o.dispatch({ type: "threads", threads: [], now: Date.now() });
+		run(0.1);
+		assert.equal(items().some((i) => i.kind === "feature"), false, "dropped from the roster");
+	});
+
+	it("an archived feature thread in the roster gets no hub", () => {
+		o.dispatch({ type: "threads", threads: [{ wolf: "1uk4", id: FEATURE, title: "Live pack map", closed: true }], now: Date.now() });
+		run(0.1);
+		assert.equal(items().some((i) => i.kind === "feature"), false);
+	});
+
 	it("the wolf floats free: feature and subagent targets never move it", () => {
 		const big: OverlayHost = { ...host, extentRadius: () => 600 };
 		const b = new LiveOverlay(() => {});

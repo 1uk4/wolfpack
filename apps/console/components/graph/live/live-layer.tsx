@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BellIcon, ExternalLinkIcon, XIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
-import { kbdEventForAction } from "@/src/core";
+import { kbdEventForAction, featureOfThread, type RosterThread } from "@/src/core";
 import { talkToWolf } from "./live-talk";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
@@ -122,6 +122,18 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 		if (!renderer || !live.enabled || !names || !connected) return;
 		overlayRef.current?.dispatch({ type: "roster", wolves: names.split("\u0000"), now: Date.now() });
 	}, [renderer, live.enabled, names, connected]);
+
+	// Open feature threads from the console's own thread roster: idle ones stay on the map (dimmed) until archived. Re-sent only when that list changes (no polling of its own).
+	const rosterThreads = attachedApi?.threads;
+	const featureKey = Object.entries(rosterThreads ?? {})
+		.flatMap(([wolf, rows]) => (rows ?? []).filter((t) => featureOfThread(t.id) !== undefined).map((t) => `${wolf}\u0001${t.id}\u0001${t.closed ? 1 : 0}\u0001${t.title}`))
+		.join("\u0000");
+	useEffect(() => {
+		if (!renderer || !live.enabled || !connected || !rosterThreads) return;
+		const rows: RosterThread[] = [];
+		for (const [wolf, list] of Object.entries(rosterThreads)) for (const t of list ?? []) rows.push({ wolf, id: t.id, title: t.title, closed: t.closed });
+		overlayRef.current?.dispatch({ type: "threads", threads: rows, now: Date.now() });
+	}, [renderer, live.enabled, connected, featureKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// The you-node also links to the floating chat's attached thread.
 	const att = attachedApi?.attached ?? null;

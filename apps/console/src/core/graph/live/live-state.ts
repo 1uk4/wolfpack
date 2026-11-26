@@ -23,6 +23,8 @@ export const DEFAULT_LIVE_OPTIONS: LiveOptions = { subagentFadeSec: 15, trailSec
 /** Console-wide home-domain guesses, used until a wolf shows its real domain through its events. */
 export const HOME_DOMAIN_GUESS: Readonly<Record<string, string>> = { hal: "personal", jack: "snapjack", "1uk4": "wolfpack" };
 
+/** One row of the console's thread roster (every wolf's threads), as far as the map needs it. */
+export interface RosterThread { wolf: string; id: string; title?: string; closed?: boolean }
 export interface LiveTarget { kind: string; id: string; domain?: string; title?: string }
 
 export interface LiveWolf {
@@ -51,6 +53,8 @@ export interface LiveThread {
 	expiresAt: number;
 	/** The full work id (`work-<domain>-<id>`) when this thread is a feature thread: it is drawn as a badge at that work item, not as a dot. */
 	feature?: string;
+	/** Seeded from the console's thread roster: stays (dimmed) until the roster drops or archives the thread, whatever the presence says. */
+	seeded?: true;
 }
 export interface LiveSubagent {
 	key: string;
@@ -98,13 +102,14 @@ export type LiveAction =
 	| { type: "event"; event: ActivityEvent; now: number }
 	| { type: "snapshot"; snapshot: PresenceSnapshot; now: number }
 	| { type: "roster"; wolves: readonly string[]; now: number }
+	| { type: "threads"; threads: readonly RosterThread[]; now: number }
 	| { type: "resync"; now: number }
 	| { type: "tick"; now: number };
 
 /** Trail/pulse origin name for hub-side writes (curator, system). Not a wolf: it never gets a body. */
 export const HUB_WOLF = "@hub";
 
-/** An idle feature thread stays on the map this long after it went idle (the hub keeps idle presence for only 60 s; there is no archive event). */
+/** Fallback when the thread roster is unavailable: an idle feature thread stays on the map this long after it went idle (the hub keeps idle presence for only 60 s; there is no archive event). Roster-seeded features do not expire. */
 export const FEATURE_IDLE_MS = 30 * 60_000;
 
 /**
@@ -362,10 +367,40 @@ export function reduceLive(s: LiveState, a: LiveAction, o: LiveOptions = DEFAULT
 			for (const name of a.wolves) if (!wolves[name]) wolves = { ...wolves, [name]: wolfEntry(s, name) };
 			return wolves === s.wolves ? s : { ...s, wolves };
 		}
+		case "threads": {
+			// The roster is the truth for open feature threads: seed the missing, drop the seeded that left, and any that were archived.
+			const open = new Map<string, RosterThread>();
+			const closed = new Set<string>();
+			for (const r of a.threads) {
+				const k = `${r.wolf}/${r.id}`;
+				if (r.closed) closed.add(k);
+				else if (featureOfThread(r.id) !== undefined) open.set(k, r);
+			}
+			let threads = s.threads;
+			let wolves = s.wolves;
+			for (const [k, t] of Object.entries(s.threads)) {
+				if ((t.seeded && !open.has(k)) || (closed.has(k) && !t.active)) {
+					if (threads === s.threads) threads = { ...s.threads };
+					delete threads[k];
+				}
+			}
+			for (const [k, r] of open) {
+				const cur = threads[k];
+				if (cur?.seeded) {
+					if (r.title !== undefined && r.title !== cur.title) threads = { ...threads, [k]: { ...cur, title: r.title } };
+					continue;
+				}
+				const base: LiveThread = cur ?? { id: r.id, wolf: r.wolf, active: false, needsYou: false, idleAt: a.now, expiresAt: Infinity, feature: featureOfThread(r.id) };
+				threads = { ...threads, [k]: { ...base, seeded: true, expiresAt: Infinity, title: cur?.title ?? r.title } };
+				if (!wolves[r.wolf]) wolves = { ...wolves, [r.wolf]: wolfEntry(s, r.wolf) }; // a hub hangs off its wolf's body (offline until presence says otherwise)
+			}
+			return threads === s.threads && wolves === s.wolves ? s : { ...s, threads, wolves };
+		}
 		case "resync": {
-			// Frames may have been missed: forget everything event-derived (wolves stay, offline) until a snapshot rebuilds it.
+			// Frames may have been missed: forget everything event-derived (wolves stay, offline; roster-seeded features stay, idle) until a snapshot rebuilds it.
 			const wolves = Object.fromEntries(Object.entries(s.wolves).map(([k, w]) => [k, { ...w, online: false, expiresAt: 0, needsYou: false, needsYouThreadless: false, activeThreadId: undefined }]));
-			return { ...emptyLiveState(a.now), wolves };
+			const threads = Object.fromEntries(Object.entries(s.threads).filter(([, t]) => t.seeded).map(([k, t]) => [k, { id: t.id, wolf: t.wolf, title: t.title, feature: t.feature, seeded: true as const, active: false, needsYou: false, idleAt: a.now, expiresAt: Infinity }]));
+			return { ...emptyLiveState(a.now), wolves, threads };
 		}
 		case "snapshot": {
 			// Rebuild from the snapshot: threads, subagents, owner and wolf state come from it alone; known wolves stay on the roster.

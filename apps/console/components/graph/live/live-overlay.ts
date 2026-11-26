@@ -98,13 +98,41 @@ const FAST_MS = 16;
 const FAST_MOBILE_MS = 30;
 const SLOW_MS = 100;
 /** Roam: the wolf wanders freely over this fraction of the whole graph's extent (it belongs to no domain). */
-const ROAM_FRAC = 0.55;
+const ROAM_FRAC = 0.3;
+/** Each wolf's anchor sits on a ring of this fraction of the extent radius around the centre, evenly spread by name order from a fixed rotation. */
+const ANCHOR_FRAC = 0.4;
+const RING_ROTATION = -Math.PI / 2;
+/** The anchor eases this far (0..1) toward the centroid of the wolf's recent activity, at this rate (1/s), over the last ACTIVITY_MS. */
+const ACTIVITY_BIAS = 0.35;
+const ANCHOR_EASE = 0.4;
+const ACTIVITY_MS = 3 * 60_000;
+/** Soft separation: wolves closer than this many wolf diameters are pushed apart at this rate (1/s); the offset relaxes home at SEP_RELAX (1/s). */
+const SEP_DIAMETERS = 2.5;
+const SEP_RATE = 2;
+const SEP_RELAX = 0.15;
 /** Roam clock speed: a working wolf roams at 1x, an idle one slower, an offline one nearly still (eased, so a change never jumps). */
 const ROAM_SPEED_WORKING = 1;
 const ROAM_SPEED_IDLE = 0.55;
 const ROAM_SPEED_OFFLINE = 0.08;
 /** A wolf body: the roam position plus the roam clock (ms) and its eased speed. */
-interface Body { x: number; y: number; rt?: number; rs?: number }
+interface Body {
+	x: number;
+	y: number;
+	name: string;
+	/** The eased anchor (ring slot biased toward recent activity), the roam offset, the separation offset, and the activity accumulators. */
+	ax: number;
+	ay: number;
+	rx: number;
+	ry: number;
+	sx: number;
+	sy: number;
+	cx: number;
+	cy: number;
+	cn: number;
+	placed: boolean;
+	rt?: number;
+	rs?: number;
+}
 /** A subagent body: spring-damper physics, when it was first seen (browser ms), the target event it last answered, and its tug target's offset angle. */
 interface SubState extends SubBody { born: number; seen: number; lastPull: number; ang: number }
 const FLOAT_MS = 40;
@@ -171,6 +199,9 @@ export class LiveOverlay {
 	private state: LiveState = emptyLiveState(Date.now());
 	private bodies = new Map<string, Body>();
 	private roamTmp = { dx: 0, dy: 0 };
+	/** Ring angle per wolf, recomputed only when the set of wolf names changes. */
+	private ringAng = new Map<string, number>();
+	private ringKey = "";
 	private workingSet = new Set<string>();
 	/** Subagent bodies by key (spring-damper physics) and the list the frame steps; the items they draw as, by key. */
 	private subBodies = new Map<string, SubState>();
@@ -344,6 +375,16 @@ export class LiveOverlay {
 	}
 	private youMoving = false;
 
+	/** Spread the wolves evenly on the anchor ring in name order; a no-op while the set of wolves is unchanged. */
+	private layoutRing(wolves: Record<string, LiveWolf>): void {
+		const names = Object.keys(wolves).sort();
+		const key = names.join("\0");
+		if (key === this.ringKey) return;
+		this.ringKey = key;
+		this.ringAng.clear();
+		names.forEach((n, i) => this.ringAng.set(n, RING_ROTATION + (Math.PI * 2 * i) / names.length));
+	}
+
 	private hashOf(name: string): number {
 		let h = this.hashes.get(name);
 		if (h === undefined) {
@@ -379,30 +420,123 @@ export class LiveOverlay {
 		this.markWorking();
 		const center = host.center();
 		const extent = host.extentRadius?.() ?? 0;
+		const { wolfPx } = scaleFor(k);
+		this.layoutRing(s.wolves);
+		const ringR = extent > 0 ? extent * ANCHOR_FRAC : HOME_ORBIT * m;
+		let fresh = false;
+		// Pass A: a body per wolf (a new one is placed at its anchor at once, below) and the activity accumulators cleared.
 		for (const name in s.wolves) {
 			const w = s.wolves[name]!;
-			// A wolf belongs to no domain: it floats over the whole graph. Its home angle (from the name hash) keeps several wolves apart at the centre.
 			let meta = this.wolfMeta.get(w.name);
 			if (!meta || meta.w !== w) {
 				meta = { w, dom: homeDomainOf(w, w.name), ang: (this.hashOf(w.name) % 360) * (Math.PI / 180) };
 				this.wolfMeta.set(w.name, meta);
 			}
-			const h = this.hashOf(w.name);
 			let b = this.bodies.get(w.name);
+			if (!b) {
+				b = { x: 0, y: 0, name: w.name, ax: 0, ay: 0, rx: 0, ry: 0, sx: 0, sy: 0, cx: 0, cy: 0, cn: 0, placed: false };
+				this.bodies.set(w.name, b);
+				fresh = true;
+			}
+			b.cx = 0;
+			b.cy = 0;
+			b.cn = 0;
+			bodies.push(b);
+		}
+		// Pass B: the centroid of each wolf's recent activity: its feature hubs and the targets of its trails in the last few minutes.
+		const wall = Date.now();
+		for (const id in s.threads) {
+			const t = s.threads[id]!;
+			const b = t.feature !== undefined ? this.bodies.get(t.wolf) : undefined;
+			if (!b) continue;
+			const p = this.hubPos(t, host, m, this.anchorTmp);
+			b.cx += p.x;
+			b.cy += p.y;
+			b.cn++;
+		}
+		for (const t of s.trails) {
+			const b = wall - t.at < ACTIVITY_MS ? this.bodies.get(t.wolf) : undefined;
+			if (!b) continue;
+			const nid = targetNodeId(t.target, (n) => host.hasNode(n));
+			const p = nid ? host.nodePos(nid) : null;
+			if (!p) continue;
+			b.cx += p.x;
+			b.cy += p.y;
+			b.cn++;
+		}
+		// Pass C: anchor (ring slot eased toward the activity), roam around it, and the separation offset relaxing home.
+		const dt = Math.min(Math.max(dtSec, 0), 0.25);
+		const ease = 1 - Math.exp(-dt * ANCHOR_EASE);
+		for (const b of bodies) {
+			const w = s.wolves[b.name]!;
+			const h = this.hashOf(w.name);
+			const ang = this.ringAng.get(w.name) ?? 0;
+			let tx = center.x + Math.cos(ang) * ringR;
+			let ty = center.y + Math.sin(ang) * ringR;
+			if (b.cn > 0) {
+				tx += (b.cx / b.cn - tx) * ACTIVITY_BIAS;
+				ty += (b.cy / b.cn - ty) * ACTIVITY_BIAS;
+			}
+			if (!b.placed || reduced) {
+				b.ax = tx;
+				b.ay = ty;
+			} else {
+				b.ax += (tx - b.ax) * ease;
+				b.ay += (ty - b.ay) * ease;
+			}
 			const target = !w.online ? ROAM_SPEED_OFFLINE : this.workingSet.has(w.name) ? ROAM_SPEED_WORKING : ROAM_SPEED_IDLE;
 			// The roam clock advances at an eased speed; the offset itself is a pure function of that clock (no drift to accumulate).
-			const rs = (b?.rs ?? target) + (target - (b?.rs ?? target)) * (1 - Math.exp(-dtSec * 2));
-			const rt = (b?.rt ?? (h % 90_000)) + Math.min(Math.max(dtSec, 0), 0.25) * 1000 * rs;
+			const rs = (b.rs ?? target) + (target - (b.rs ?? target)) * (1 - Math.exp(-dtSec * 2));
+			const rt = (b.rt ?? (h % 90_000)) + dt * 1000 * rs;
 			const ro = roamOffset(h, rt, extent * ROAM_FRAC, reduced, this.roamTmp);
-			if (!b) {
-				b = { x: 0, y: 0 };
-				this.bodies.set(w.name, b);
-			}
 			b.rs = rs;
 			b.rt = rt;
-			b.x = center.x + Math.cos(meta.ang) * HOME_ORBIT * m + ro.dx;
-			b.y = center.y + Math.sin(meta.ang) * HOME_ORBIT * m + ro.dy;
-			bodies.push(b);
+			b.rx = ro.dx;
+			b.ry = ro.dy;
+			if (!reduced && b.placed) {
+				const f = Math.exp(-dt * SEP_RELAX);
+				b.sx *= f;
+				b.sy *= f;
+			}
+		}
+		// Pass D: soft separation. A first appearance and reduced motion settle it at once (static); otherwise a light push per frame.
+		const settle = fresh || reduced;
+		const minD = SEP_DIAMETERS * (wolfPx / k);
+		const rate = settle ? 1 : 1 - Math.exp(-dt * SEP_RATE);
+		for (let pass = settle ? 12 : 1; pass > 0; pass--) {
+			let moved = false;
+			for (let i = 0; i < bodies.length; i++) {
+				const a = bodies[i]!;
+				for (let j = i + 1; j < bodies.length; j++) {
+					const c = bodies[j]!;
+					let dx = a.ax + a.rx + a.sx - (c.ax + c.rx + c.sx);
+					let dy = a.ay + a.ry + a.sy - (c.ay + c.ry + c.sy);
+					let d = Math.hypot(dx, dy);
+					if (d >= minD) continue;
+					if (d < 1e-6) {
+						// Exactly stacked: split along a stable direction from the name.
+						const an = (this.hashOf(a.name) % 360) * (Math.PI / 180);
+						dx = Math.cos(an);
+						dy = Math.sin(an);
+						d = 0;
+					} else {
+						dx /= d;
+						dy /= d;
+					}
+					const push = (minD - d) * 0.5 * rate;
+					a.sx += dx * push;
+					a.sy += dy * push;
+					c.sx -= dx * push;
+					c.sy -= dy * push;
+					moved = true;
+				}
+			}
+			if (!moved) break;
+		}
+		for (const b of bodies) {
+			b.x = b.ax + b.rx + b.sx;
+			b.y = b.ay + b.ry + b.sy;
+			b.placed = true;
 		}
 		if (this.bodies.size > bodies.length) for (const name of [...this.bodies.keys()]) if (!s.wolves[name]) (this.bodies.delete(name), this.wolfMeta.delete(name));
 		this.stepSubs(now, dtSec, host, k, m, reduced);

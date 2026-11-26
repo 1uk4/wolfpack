@@ -68,8 +68,8 @@ describe("live overlay fade clock", () => {
 	const grad = { addColorStop: () => undefined };
 	const ctx = new Proxy({}, { get: (_t, p) => (p === "measureText" ? () => ({ width: 1 }) : p === "createRadialGradient" || p === "createLinearGradient" ? () => grad : () => undefined), set: () => true }) as unknown as CanvasRenderingContext2D;
 	const alphaOf = (o: LiveOverlay, kind: string): number | undefined => {
-		for (let y = -40; y <= 40; y += 2) {
-			for (let x = -40; x <= 40; x += 2) {
+		for (let y = -100; y <= 100; y += 2) {
+			for (let x = -100; x <= 100; x += 2) {
 				const hit = o.hitTest(x, y, { x: 0, y: 0, k: 1 }, 1e6);
 				if (hit?.item.kind === kind) return hit.item.alpha;
 			}

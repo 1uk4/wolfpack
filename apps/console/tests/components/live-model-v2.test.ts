@@ -227,7 +227,7 @@ describe("live map model v2", () => {
 		assert.equal(items().some((i) => i.kind === "feature"), false);
 	});
 
-	it("the wolf floats free: feature and subagent targets never move it", () => {
+	it("the wolf floats free: feature and subagent targets only ease its anchor a little toward the work, never onto it", () => {
 		const big: OverlayHost = { ...host, extentRadius: () => 600 };
 		const b = new LiveOverlay(() => {});
 		b.configure(LIVE_DEFAULTS);
@@ -244,7 +244,8 @@ describe("live map model v2", () => {
 		}
 		const wolfA = items().find((i) => i.kind === "wolf")!;
 		const wolfB = b.items(host, 1, Date.now()).find((i) => i.kind === "wolf")!;
-		assert.ok(dist(wolfA, wolfB) < 1e-6, `the wolf is on the same roam path (${dist(wolfA, wolfB)})`);
+		const moved = dist(wolfA, wolfB);
+		assert.ok(moved > 1 && moved < 0.4 * dist(wolfB, nodes.get("work:ELzLSkV")!), `eased partway toward the work (${moved})`);
 		b.stop();
 	});
 

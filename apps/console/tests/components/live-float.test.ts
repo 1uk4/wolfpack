@@ -146,3 +146,93 @@ describe("floating wolves in the overlay", () => {
 		assert.equal(o.minFrameMs, 40);
 	});
 });
+
+describe("wolf spacing: ring anchors, activity bias, soft separation", () => {
+	const g = globalThis as unknown as { Path2D?: unknown; window?: unknown };
+	const nodes = new Map<string, { x: number; y: number }>();
+	const mk = (extent: number) => ({
+		nodePos: (id: string) => nodes.get(id) ?? null,
+		hasNode: (id: string) => nodes.has(id),
+		nodeColor: () => undefined,
+		center: () => ({ x: 0, y: 0 }),
+		extentRadius: () => extent,
+		colors: { node: "#888", edge: "#444", label: "#fff", hoverText: "#fff" },
+		fontFamily: "sans-serif",
+	});
+	const ev = (verb: string, actor: Record<string, unknown>): ActivityEvent => ({ v: 1, id: `s${Math.random()}`, pack: "p", ts: 0, ttlMs: 600_000, actor, verb }) as unknown as ActivityEvent;
+	const T0 = 5_000_000_000_000;
+	const DIAM = 34; // wolf diameter in world units at k=1
+	let o: LiveOverlay;
+	const spawn = (names: string[]) => {
+		for (const n of names) o.dispatch({ type: "event", event: ev("thread-active", { kind: "thread", wolf: n, threadId: `${n}/home` }), now: Date.now() });
+	};
+	const wolves = (host: ReturnType<typeof mk>, t = T0) => o.items(host, 1, t).filter((i) => i.kind === "wolf");
+	const gap = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
+	const reduce = () => {
+		g.window = { matchMedia: () => ({ matches: true }), innerWidth: 1280 };
+	};
+	beforeEach(() => {
+		g.Path2D = class {};
+		nodes.clear();
+		mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now: T0 });
+		o = new LiveOverlay(() => {});
+		o.configure(LIVE_DEFAULTS);
+	});
+	afterEach(() => {
+		delete g.Path2D;
+		delete g.window;
+		o.stop();
+		mock.timers.reset();
+	});
+
+	it("three wolves seeded at t=0 start at least two wolf-diameters apart", () => {
+		const host = mk(1000);
+		spawn(["1uk4", "hal", "jack"]);
+		o.step(0, 0.016, host, 1);
+		const w = wolves(host);
+		assert.equal(w.length, 3);
+		for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) assert.ok(gap(w[i]!, w[j]!) >= 2 * DIAM, `${w[i]!.key} vs ${w[j]!.key}`);
+	});
+
+	it("reduced motion: no float, anchors are stable across frames, and the spacing stays", () => {
+		reduce();
+		const host = mk(1000);
+		spawn(["1uk4", "hal", "jack"]);
+		o.step(0, 0.016, host, 1);
+		const first = wolves(host, T0).map((i) => [i.key, i.x, i.y]);
+		for (let t = 40; t < 20_000; t += 40) o.step(t, 0.04, host, 1);
+		const later = wolves(host, T0 + 17_000).map((i) => [i.key, i.x, i.y]);
+		assert.deepEqual(later, first);
+		const w = wolves(host);
+		for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) assert.ok(gap(w[i]!, w[j]!) >= 2 * DIAM);
+	});
+
+	it("two wolves whose anchors coincide are pushed apart over a few steps", () => {
+		reduce();
+		const host = mk(10); // a ring of radius 4: the anchors coincide to within a fraction of a wolf
+		spawn(["hal", "jack"]);
+		o.step(0, 0.016, host, 1);
+		for (let t = 40; t < 6000; t += 40) o.step(t, 0.04, host, 1);
+		const w = wolves(host);
+		assert.ok(gap(w[0]!, w[1]!) >= 2 * DIAM, `pushed apart (${gap(w[0]!, w[1]!)})`);
+	});
+
+	it("recent feature activity eases the anchor part of the way toward the hub, never all the way", () => {
+		reduce();
+		const host = mk(1000);
+		const pos = (threadId: string) => {
+			o.stop();
+			o = new LiveOverlay(() => {});
+			o.configure(LIVE_DEFAULTS);
+			o.dispatch({ type: "event", event: ev("thread-active", { kind: "thread", wolf: "hal", threadId, title: "f" }), now: Date.now() });
+			for (let t = 0; t <= 20_000; t += 40) o.step(t, 0.04, host, 1);
+			return wolves(host)[0]!;
+		};
+		const plain = pos("hal/home");
+		nodes.set("work:ELzLSkV", { x: -900, y: 700 });
+		const hub = nodes.get("work:ELzLSkV")!;
+		const biased = pos("hal/feature-work-wolfpack-ELzLSkV");
+		const frac = 1 - gap(biased, hub) / gap(plain, hub);
+		assert.ok(frac > 0.2 && frac < 0.5, `moved ${(frac * 100).toFixed(0)}% toward the hub`);
+	});
+});

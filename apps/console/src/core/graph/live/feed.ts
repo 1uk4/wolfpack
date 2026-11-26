@@ -4,6 +4,7 @@
  * into one line carrying the latest time. Also: relative time, a stable wolf colour and the collapsed "N new" counter reducer.
  */
 import type { ActivityEvent, PresenceSnapshot } from "@wolfpack/protocol";
+import { featureOfThread } from "./live-state.ts";
 
 export interface FeedEvent {
 	id: string;
@@ -97,7 +98,9 @@ export function formatFeed(events: readonly FeedEvent[], opts: { private?: boole
 		else {
 			const p = hub && e.verb === "kb-write" ? "updated" : PHRASE[e.verb];
 			if (!p) continue;
-			phrase = sa ? `${sa} ${p}` : p;
+			// A feature thread is named by its title (hidden in private view); a subagent by its name.
+			const feat = !sa && e.actor.title && featureOfThread(e.actor.threadId ?? "") ? (opts.private ? "feature" : e.actor.title) : undefined;
+			phrase = sa ? `${sa} ${p}` : feat ? `${feat} ${p}` : p;
 			if (!opts.private && e.target) name = e.target.title ?? shortId(e.target.id);
 		}
 		const threadId = e.actor.threadId ?? e.actor.parentThreadId;

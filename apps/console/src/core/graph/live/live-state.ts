@@ -49,6 +49,8 @@ export interface LiveThread {
 	bound?: LiveTarget;
 	needsYou: boolean;
 	expiresAt: number;
+	/** The full work id (`work-<domain>-<id>`) when this thread is a feature thread: it is drawn as a badge at that work item, not as a dot. */
+	feature?: string;
 }
 export interface LiveSubagent {
 	key: string;
@@ -59,6 +61,11 @@ export interface LiveSubagent {
 	/** Set when `subagent-finished` arrived (fades from there). */
 	finishedAt?: number;
 	expiresAt: number;
+	/** The subagent's own wolfd thread id (the join key between wolfd's events and the hub's derived ones, which carry no parent). */
+	ownThreadId?: string;
+	/** The last thing it touched, and when that event arrived (browser ms): the map sends the subagent there. */
+	target?: LiveTarget;
+	targetAt?: number;
 }
 export interface LiveTrail {
 	id: string;
@@ -67,8 +74,11 @@ export interface LiveTrail {
 	target: LiveTarget;
 	verb: string;
 	at: number;
+	/** Where the line starts: a subagent (its key), a feature thread (its thread key), else the wolf. */
+	subagentKey?: string;
+	featureKey?: string;
 }
-export interface LivePulse { id: string; wolf: string; target: LiveTarget; verb: string; at: number }
+export interface LivePulse { id: string; wolf: string; target: LiveTarget; verb: string; at: number; subagentKey?: string; featureKey?: string }
 export interface LiveOwner {
 	viewing?: LiveTarget;
 	expiresAt: number;
@@ -94,6 +104,24 @@ export type LiveAction =
 /** Trail/pulse origin name for hub-side writes (curator, system). Not a wolf: it never gets a body. */
 export const HUB_WOLF = "@hub";
 
+/** An idle feature thread stays on the map this long after it went idle (the hub keeps idle presence for only 60 s; there is no archive event). */
+export const FEATURE_IDLE_MS = 30 * 60_000;
+
+/**
+ * The feature (full work id) a thread stands for: its slug `feature-work-<domain>-<id>`; else a `feature-*` slug bound to a work item.
+ * The home thread and other threads are not features, even when bound to a work item (they stay dots and link to the feature).
+ */
+export function featureOfThread(threadId: string, bound?: { kind: string; id: string }): string | undefined {
+	const slug = threadId.slice(threadId.lastIndexOf("/") + 1);
+	const m = /^feature-(work-[a-z0-9]+-[a-z0-9]+)$/i.exec(slug);
+	if (m) return m[1];
+	if (/^feature-/i.test(slug) && bound?.kind === "work-item") return bound.id;
+	return undefined;
+}
+
+/** The short work id the graph keys its `work:` nodes by. */
+export const workShortId = (id: string): string => /^work-[a-z0-9]+-(.+)$/i.exec(id)?.[1] ?? id;
+
 export const emptyLiveState = (now = 0): LiveState => ({ wolves: {}, threads: {}, subagents: {}, trails: [], pulses: [], owner: null, now });
 
 const TRAIL_VERBS = new Set(["kb-read", "kb-write", "contribution", "shipped", "bound"]);
@@ -118,7 +146,7 @@ export function homeDomainOf(w: LiveWolf | undefined, name: string): string | un
  * over the fade window, counted from the later of going idle and its last subagent finishing.
  */
 export function threadAlpha(s: LiveState, t: LiveThread, now: number, fadeSec: number, subs?: readonly LiveSubagent[]): number {
-	if (t.active || t.bound !== undefined || t.needsYou) return 1;
+	if (t.active || t.bound !== undefined || t.needsYou || t.feature !== undefined) return 1; // a feature stays until its (long) expiry
 	let from = t.idleAt;
 	// `subs` (this thread's subagents, when the caller has them indexed) saves a scan of every subagent per thread.
 	for (const a of subs ?? Object.values(s.subagents)) {
@@ -192,21 +220,27 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 	let wolf: LiveWolf = { ...w0, online: true, expiresAt: Math.max(w0.expiresAt, expiresAt), domainCounts: counts };
 	// A subagent's own thread id is not a thread on the map: it hangs off its parent thread.
 	const isSub = e.actor.kind === "subagent";
-	const threadId = isSub ? e.actor.parentThreadId : (e.actor.threadId ?? e.actor.parentThreadId);
+	// A subagent is joined by its own thread id: wolfd's events name its title and parent, the hub's derived ones its agent and no parent.
+	let prevSub: LiveSubagent | undefined;
+	if (isSub && e.actor.threadId) for (const a of Object.values(st.subagents)) if (a.wolf === wolfName && a.ownThreadId === e.actor.threadId) { prevSub = a; break; }
+	const threadId = isSub ? (e.actor.parentThreadId ?? prevSub?.parentThreadId) : (e.actor.threadId ?? e.actor.parentThreadId);
+	const subKey = (name: string) => prevSub?.key ?? `${wolfName}/${threadId ?? ""}/${name}`;
+	const ownThreadId = isSub ? e.actor.threadId : undefined;
 	const tKey = threadId ? `${wolfName}/${threadId}` : undefined;
 	const thread0 = tKey ? st.threads[tKey] : undefined;
 	const mkThread = (): LiveThread => thread0 ?? { id: threadId!, wolf: wolfName, active: false, needsYou: false, expiresAt };
 	const putThread = (t: LiveThread) => {
-		st = { ...st, threads: { ...st.threads, [tKey!]: { ...t, expiresAt: Math.max(t.expiresAt, expiresAt), title: e.actor.title ?? t.title } } };
+		st = { ...st, threads: { ...st.threads, [tKey!]: { ...t, feature: featureOfThread(t.id, t.bound), expiresAt: Math.max(t.expiresAt, expiresAt), title: e.actor.title ?? t.title } } };
 	};
 
 	// Any non-finishing event from a subagent (an old hub overwrites its spawn with thread-active heartbeats) creates or refreshes it.
 	if (isSub && e.actor.subagent && e.verb !== "subagent-finished") {
 		const name = e.actor.subagent;
-		const key = `${wolfName}/${threadId ?? ""}/${name}`;
+		const key = subKey(name);
 		const prev = st.subagents[key];
 		const keep = prev && prev.finishedAt === undefined ? prev : undefined;
-		st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, title: e.actor.title ?? keep?.title, expiresAt: Math.max(keep?.expiresAt ?? 0, expiresAt) } } };
+		const touched = fresh && target !== undefined && TRAIL_VERBS.has(e.verb);
+		st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, ownThreadId: ownThreadId ?? keep?.ownThreadId, title: e.actor.title ?? keep?.title, expiresAt: Math.max(keep?.expiresAt ?? 0, expiresAt), target: touched ? target : keep?.target, targetAt: touched ? now : keep?.targetAt } } };
 		if (e.verb === "thread-active" || e.verb === "thread-idle" || e.verb === "subagent-spawned") {
 			st = { ...st, wolves: { ...st.wolves, [wolfName]: wolf } };
 			return withWolfNeeds(st);
@@ -231,29 +265,31 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 				// An idle thread lives only for its fade (bound or waiting ones keep their event life).
 				const cur = st.threads[tKey]!;
 				const keep = cur.bound !== undefined || cur.needsYou;
-				st = { ...st, threads: { ...st.threads, [tKey]: { ...cur, expiresAt: keep ? cur.expiresAt : now + o.subagentFadeSec * 1000 } } };
+				// A feature outlives its idle: it is dimmed on the map for FEATURE_IDLE_MS (a plain idle thread fades out in the fade window).
+				const until = cur.feature !== undefined ? Math.max(cur.expiresAt, now + FEATURE_IDLE_MS) : keep ? cur.expiresAt : now + o.subagentFadeSec * 1000;
+				st = { ...st, threads: { ...st.threads, [tKey]: { ...cur, expiresAt: until } } };
 			}
 			if (wolf.activeThreadId === threadId) wolf = { ...wolf, activeThreadId: undefined };
 			break;
 		case "bound":
-			if (tKey && target) putThread({ ...mkThread(), bound: target });
+			if (tKey && target && !isSub) putThread({ ...mkThread(), bound: target }); // a subagent's bind is its own touch, not its parent's
 			if (target) wolf = { ...wolf, lastTarget: target };
 			break;
 		case "unbound":
-			if (tKey && thread0) putThread({ ...thread0, bound: undefined });
+			if (tKey && thread0 && !isSub) putThread({ ...thread0, bound: undefined });
 			break;
 		case "subagent-spawned": {
 			const name = e.actor.subagent;
 			if (!name) break;
-			const key = `${wolfName}/${threadId ?? ""}/${name}`;
-			st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, title: e.actor.title, expiresAt } } };
+			const key = subKey(name);
+			st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, ownThreadId, title: e.actor.title, expiresAt } } };
 			break;
 		}
 		case "subagent-finished": {
 			const name = e.actor.subagent;
 			if (!name) break;
-			const key = `${wolfName}/${threadId ?? ""}/${name}`;
-			const prev = st.subagents[key] ?? { key, name, wolf: wolfName, parentThreadId: threadId, title: e.actor.title, expiresAt };
+			const key = subKey(name);
+			const prev = st.subagents[key] ?? { key, name, wolf: wolfName, parentThreadId: threadId, ownThreadId, title: e.actor.title, expiresAt };
 			const fadeMs = o.subagentFadeSec * 1000;
 			// A snapshot entry keeps its real remaining life: back-date finishedAt by the part of the fade already spent.
 			const finishedAt = snapshotLife === undefined ? now : now - Math.max(0, fadeMs - snapshotLife);
@@ -274,8 +310,9 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 	}
 	st = { ...st, wolves: { ...st.wolves, [wolfName]: wolf } };
 	if (fresh && target && TRAIL_VERBS.has(e.verb)) {
-		const tr: LiveTrail = { id: e.id, wolf: wolfName, threadId, target, verb: e.verb, at: now };
-		st = addTrail(st, tr, { id: e.id, wolf: wolfName, target, verb: e.verb, at: now }, o);
+		const origin = isSub && e.actor.subagent ? { subagentKey: subKey(e.actor.subagent) } : !isSub && tKey && (st.threads[tKey]?.feature ?? featureOfThread(threadId!)) !== undefined ? { featureKey: tKey } : {};
+		const tr: LiveTrail = { id: e.id, wolf: wolfName, threadId, target, verb: e.verb, at: now, ...origin };
+		st = addTrail(st, tr, { id: e.id, wolf: wolfName, target, verb: e.verb, at: now, ...origin }, o);
 	}
 	return withWolfNeeds(st);
 }

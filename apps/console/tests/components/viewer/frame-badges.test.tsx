@@ -135,6 +135,18 @@ describe("frame badges", () => {
 		assert.deepEqual(labels(), ["New", "plan"]);
 	});
 
+	it("a long title is clipped to two words / 16 characters on the chip, with the full title as its accessible name", async () => {
+		await mount([framePart("f1", 1, "a.html", "Pack health and sync flow"), framePart("f2", 1, "b.html", "Internationalization"), framePart("f3", 1, "c.html", "Live map")]);
+		assert.deepEqual(labels(), ["Pack health", "Internationaliz…", "Live map"]);
+		assert.deepEqual(qa('[data-testid="frame-badge-open"]').map((b) => b.getAttribute("aria-label")), ["Pack health and sync flow", "Internationalization", "Live map"]);
+	});
+
+	it("a blank title falls back to the file name, and an emoji title is clipped without splitting a character", async () => {
+		const party = "\u{1F389}".repeat(18);
+		await mount([framePart("f1", 1, "plan.html", "   "), framePart("f2", 1, "b.html", party)]);
+		assert.deepEqual(labels(), ["plan", "\u{1F389}".repeat(15) + "\u2026"]);
+	});
+
 	it("the row sits directly above the page composer", async () => {
 		await mount([framePart("f1", 1, "a.html", "A")]);
 		const row = q('[data-testid="thread-main"] [data-testid="frame-badges"]')!;

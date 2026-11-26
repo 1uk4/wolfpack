@@ -39,8 +39,8 @@ export function liveSettingsOf(settings: unknown): OverlaySettings {
 	return {
 		enabled: typeof l.enabled === "boolean" ? l.enabled : LIVE_DEFAULTS.enabled,
 		intensity: num(l.intensity, LIVE_DEFAULTS.intensity, 1, 5),
-		trailSec: num(l.trailSec, LIVE_DEFAULTS.trailSec, 2, 120),
-		subagentFadeSec: num(l.subagentFadeSec, LIVE_DEFAULTS.subagentFadeSec, 1, 120),
+		trailSec: num(l.trailSec, LIVE_DEFAULTS.trailSec, 0, 300),
+		subagentFadeSec: num(l.subagentFadeSec, LIVE_DEFAULTS.subagentFadeSec, 0, 300),
 	};
 }
 
@@ -89,12 +89,14 @@ export class LiveOverlay {
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private lastSig = "";
 	readonly mobile: boolean;
-	readonly reduced: boolean;
+	/** Read live, so a change of the OS setting applies without a reload. */
+	get reduced(): boolean {
+		return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+	}
 
 	constructor(private readonly requestFrame: () => void) {
 		const mq = (q: string) => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(q).matches;
 		this.mobile = mq("(pointer: coarse)") || (typeof window !== "undefined" && window.innerWidth < 700);
-		this.reduced = mq("(prefers-reduced-motion: reduce)");
 	}
 
 	/** About 30 fps on phones. */

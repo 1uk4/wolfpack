@@ -116,7 +116,7 @@ describe("live settings", () => {
 		assert.deepEqual(sanitizeRenderSettings({ live: { enabled: false, intensity: 9, trailSec: -3 } }).live, {
 			enabled: false,
 			subagentFadeSec: 15,
-			trailSec: 1,
+			trailSec: 0,
 			intensity: 5,
 		});
 	});

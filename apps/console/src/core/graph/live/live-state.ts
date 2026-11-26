@@ -114,12 +114,12 @@ export function visibleThreads(s: LiveState): LiveThread[] {
 /** 0..1 opacity of a subagent: 1 while running, linear fade to 0 over the fade window after it finished. */
 export function subagentAlpha(a: LiveSubagent, now: number, fadeSec: number): number {
 	if (a.finishedAt === undefined) return 1;
-	return Math.max(0, 1 - (now - a.finishedAt) / (fadeSec * 1000));
+	return fadeSec <= 0 ? 0 : Math.max(0, 1 - (now - a.finishedAt) / (fadeSec * 1000));
 }
 
 /** 0..1 opacity of a trail over its life. */
 export function trailAlpha(t: LiveTrail, now: number, trailSec: number): number {
-	return Math.max(0, 1 - (now - t.at) / (trailSec * 1000));
+	return trailSec <= 0 ? 0 : Math.max(0, 1 - (now - t.at) / (trailSec * 1000));
 }
 
 function withWolfNeeds(s: LiveState): LiveState {
@@ -230,7 +230,7 @@ function tick(s: LiveState, now: number, o: LiveOptions): LiveState {
 		wolves[k] = online === w.online ? w : { ...w, online, activeThreadId: online ? w.activeThreadId : undefined, needsYou: online ? w.needsYou : false };
 	}
 	const threads = Object.fromEntries(Object.entries(s.threads).filter(([, t]) => t.expiresAt > now));
-	const subagents = Object.fromEntries(Object.entries(s.subagents).filter(([, a]) => a.expiresAt > now));
+	const subagents = Object.fromEntries(Object.entries(s.subagents).filter(([, a]) => (a.finishedAt === undefined ? a.expiresAt > now : now < a.finishedAt + o.subagentFadeSec * 1000)));
 	return withWolfNeeds({
 		wolves,
 		threads,

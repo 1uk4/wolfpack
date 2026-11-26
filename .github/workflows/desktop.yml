@@ -1,9 +1,18 @@
 # Desktop app (work-wolfpack-07v3AmE): build the arm64 Mac app with the runtime inside (hubd, workerd, wolfd, memory, onnx natives, embedding model).
 #   build   : pull requests that touch apps/desktop, and manual runs. UNSIGNED, read-only token, no secrets. Uploads the dmg + zip + latest-mac.yml as a CI artifact.
-#   release : manual runs only, in the protected environment `desktop-release` (the owner creates it and holds the secrets there).
+#   release : in the protected environment `desktop-release` (the owner creates it and holds the secrets there).
+#             Runs on manual dispatch and, for stable, automatically on every merge into stable: release-stable.yml calls this
+#             workflow (workflow_call) after its `tag` job, so the component tags exist when the notes are written.
 #             Tag pushes do not trigger this. Two channels, chosen by the `channel` input:
-#             stable (default, ref stable only): signs, notarises, staples and uploads a DRAFT release desktop/vX.Y.Z; the owner publishes it.
-#               Feed file latest-mac.yml.
+#             stable (default, ref stable only): the runner computes the next patch (scripts/desktop-release.mjs: highest desktop/vX.Y.Z
+#               tag or release + 1, never below apps/desktop/package.json), stamps it into package.json on the runner only (stable is
+#               PR-only, nothing is committed), signs, notarises, staples, and publishes desktop/vX.Y.Z at the merge commit (not a draft,
+#               --latest=false so releases/latest stays a component release). Notes list the bundled console/wolfd and the hubd/workerd versions.
+#               Then refreshes the rolling `desktop-latest` feed: binaries first, latest-mac.yml last. Feed file latest-mac.yml.
+#               Release runs of both channels share one concurrency group (`desktop-feed`, they all write desktop-latest) and are never
+#               cancelled. GitHub keeps only ONE pending run per group, so with several quick merges a middle run can be dropped; the last
+#               one still builds the newest commit. When called from release-stable.yml, that workflow's own `release-stable` group is held
+#               through the desktop build (up to 90 min), so the next stable merge's tagging waits for it. Accepted.
 #             main (ref stable or wolf/1uk4): the runner sets the version to X.Y.Z-main.<run_number> (nothing committed), so electron-builder
 #               writes main-mac.yml (channel from the semver prerelease tag). Publishes automatically as a PRE-RELEASE desktop/vX.Y.Z-main.N
 #               (never a draft, never releases/latest) and refreshes the rolling `desktop-latest` feed with main-mac.yml in the same run.
@@ -16,21 +25,25 @@ name: desktop
 on:
   pull_request:
     paths: ['apps/desktop/**', '.github/workflows/desktop.yml', 'scripts/fetch-embed-model.mjs']
+  workflow_call:   # release-stable.yml, after the component tags are pushed (channel is always stable there)
   workflow_dispatch:
     inputs:
       channel:
-        description: 'Channel of the signed release job: stable (draft, from stable) or main (auto pre-release X.Y.Z-main.N, from stable or wolf/1uk4)'
+        description: 'Channel of the signed release job: stable (published X.Y.Z+1, from stable) or main (auto pre-release X.Y.Z-main.N, from stable or wolf/1uk4)'
         type: choice
         options: [stable, main]
         default: stable
 permissions:
   contents: read
-concurrency:
-  group: desktop-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# No workflow-level concurrency: when called from release-stable.yml it would collide with that workflow's own group.
+# The build job (pull requests) and the release job each set theirs.
 
 jobs:
   build:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    concurrency:
+      group: desktop-build-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     # Apple silicon. macos-26, not macos-15: on macos-15 (Xcode 26.3 on macOS 15.8) actool's
     # AssetCatalogAgent crashed compiling build/icon.icon from 2026-11-12, same image and commit that passed earlier.
     runs-on: macos-26
@@ -73,10 +86,15 @@ jobs:
           retention-days: 14
 
   release:
+    # workflow_call (from release-stable.yml, ref stable) has no channel input: it is the stable channel.
     if: >-
-      github.event_name == 'workflow_dispatch' && (
-      (inputs.channel == 'stable' && github.ref == 'refs/heads/stable') ||
+      github.event_name != 'pull_request' && (
+      ((inputs.channel || 'stable') == 'stable' && github.ref == 'refs/heads/stable') ||
       (inputs.channel == 'main' && (github.ref == 'refs/heads/stable' || github.ref == 'refs/heads/wolf/1uk4')))
+    # One group for every release run: stable and main both rewrite the desktop-latest feed. Never cancelled; one pending run at most.
+    concurrency:
+      group: desktop-feed
+      cancel-in-progress: false
     runs-on: macos-26   # same as build: actool needs Xcode 26 on macOS 26 to compile build/icon.icon
     timeout-minutes: 90
     environment: desktop-release
@@ -86,6 +104,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          fetch-depth: 0   # full history and all tags: the version and the notes read the component and desktop tags
+          fetch-tags: true
       - name: select Xcode 26 (actool >= 26 compiles build/icon.icon)
         run: |
           xc=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
@@ -103,17 +123,23 @@ jobs:
           key: embed-model-${{ hashFiles('scripts/fetch-embed-model.mjs') }}
       - name: fetch the embedding model (pinned, checksummed)
         run: node scripts/fetch-embed-model.mjs "$RUNNER_TEMP/embed-model"
-      - name: version (main channel only; runner-local, nothing committed)
+      - name: version (runner-local, nothing committed; stable is PR-only)
         id: ver
         env:
-          CHANNEL: ${{ inputs.channel }}
+          CHANNEL: ${{ inputs.channel || 'stable' }}
           RUN_NUMBER: ${{ github.run_number }}
-        working-directory: apps/desktop
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$CHANNEL" = main ]; then
-            node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json","utf8"));p.version=p.version.replace(/-.*$/,"")+"-main."+process.env.RUN_NUMBER;fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")'
+            V=$(node -p 'require("./apps/desktop/package.json").version.replace(/-.*$/,"")+"-main."+process.env.RUN_NUMBER')
+          else
+            # A draft release has no git tag, so the release list counts as well as the tags; a draft aimed at this commit is reused.
+            gh release list --limit 200 --json tagName,isDraft,targetCommitish > "$RUNNER_TEMP/releases.json"
+            V=$(node scripts/desktop-release.mjs version --releases "$RUNNER_TEMP/releases.json")
           fi
-          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          V="$V" node -e 'const fs=require("fs");const f="apps/desktop/package.json";const p=JSON.parse(fs.readFileSync(f,"utf8"));p.version=process.env.V;fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")'
+          echo "desktop version $V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
       - name: signed + notarised build + app check (dist.mjs --ci)
         env:
           WOLFPACK_EMBED_MODEL_SRC: ${{ runner.temp }}/embed-model
@@ -130,24 +156,26 @@ jobs:
       - name: delete the API key file
         if: always()
         run: rm -f "$RUNNER_TEMP/AuthKey.p8"
-      - name: upload the DRAFT release (stable; no signing secrets in this step)
-        if: inputs.channel == 'stable'
+      - name: publish desktop/vX.Y.Z and refresh the desktop-latest feed (stable; no signing secrets in this step)
+        if: (inputs.channel || 'stable') == 'stable'
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ steps.ver.outputs.version }}
+          SHA: ${{ github.sha }}
         working-directory: apps/desktop
         run: |
-          gh release view "desktop/v$V" >/dev/null 2>&1 || gh release create "desktop/v$V" --draft --title "Desktop $V" --notes "Signed, notarised Mac app $V."
-          gh release upload "desktop/v$V" dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml --clobber
-      - name: refresh the rolling desktop-latest updater feed (stable)
-        if: inputs.channel == 'stable'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        working-directory: apps/desktop
-        run: |
+          node ../../scripts/desktop-release.mjs notes "$V" "$SHA" > "$RUNNER_TEMP/notes.md"
+          # Draft first, publish after the upload, so nobody sees a release without its files. Publishing creates the tag desktop/vX.Y.Z at the
+          # merge commit (--target). --latest=false: releases/latest must stay a component release (see electron-builder.yml publish).
+          gh release view "desktop/v$V" >/dev/null 2>&1 || gh release create "desktop/v$V" --draft --target "$SHA" --title "Desktop $V" --notes-file "$RUNNER_TEMP/notes.md"
+          # Binaries first, the feed file last: a client that sees the new latest-mac.yml finds the zip already there.
+          gh release upload "desktop/v$V" dist/*.dmg dist/*.zip dist/*.blockmap --clobber
+          gh release upload "desktop/v$V" dist/latest-mac.yml --clobber
+          gh release edit "desktop/v$V" --draft=false --latest=false --notes-file "$RUNNER_TEMP/notes.md"
           # Pre-release so it never becomes the repo's releases/latest; the runtime stable manifest only matches component tag patterns.
           gh release view desktop-latest >/dev/null 2>&1 || gh release create desktop-latest --prerelease --title "Desktop (rolling updater feed)" --notes "Assets replaced by every desktop release; the app's updater reads latest-mac.yml (stable) or main-mac.yml (main) here."
-          gh release upload desktop-latest dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml --clobber
+          gh release upload desktop-latest dist/*.dmg dist/*.zip dist/*.blockmap --clobber
+          gh release upload desktop-latest dist/latest-mac.yml --clobber
       - name: publish the main PRE-RELEASE and refresh the feed (main; no signing secrets in this step)
         if: inputs.channel == 'main'
         env:
@@ -162,7 +190,7 @@ jobs:
           gh release upload desktop-latest dist/*.dmg dist/*.zip dist/*.blockmap dist/main-mac.yml --clobber
       - uses: actions/upload-artifact@v4
         with:
-          name: wolfpack-desktop-arm64-signed-${{ inputs.channel }}
+          name: wolfpack-desktop-arm64-signed-${{ inputs.channel || 'stable' }}
           path: |
             apps/desktop/dist/*.dmg
             apps/desktop/dist/*.zip

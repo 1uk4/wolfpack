@@ -728,6 +728,8 @@ export class GraphCanvasRenderer {
 	private regionMeta: { id: string; label: string | null; lines: string[] | null; cx: number; cy: number; color: string }[] = [];
 	private regionTuning: RegionTuning = DEFAULT_REGION_TUNING;
 	private physicsTuning: PhysicsTuning = DEFAULT_PHYSICS_TUNING;
+	/** Value key of the tuning the sim was built with. */
+	private physicsKey = JSON.stringify(DEFAULT_PHYSICS_TUNING);
 	/** Gravity center for the live sim (graph bbox centroid at setData). */
 	private simCenter: Pt = { x: 0, y: 0 };
 	private regionBuiltVersion = -1;
@@ -916,7 +918,14 @@ export class GraphCanvasRenderer {
 	 *  the new feel"). A mid-settle change re-anneals, which is the
 	 *  honest response to new physics. */
 	setPhysicsTuning(input: Partial<PhysicsTuning>): void {
-		this.physicsTuning = sanitizePhysicsTuning(input);
+		const next = sanitizePhysicsTuning(input);
+		// Compare by value: the settings object is swapped (defaults, then the
+		// loaded copy) with equal contents on every mount; only a real change
+		// rebuilds and re-anneals the layout.
+		const key = JSON.stringify(next);
+		if (key === this.physicsKey) return;
+		this.physicsKey = key;
+		this.physicsTuning = next;
 		this.buildSim();
 		// Reheat: a tuning change re-anneals the layout from its current
 		// state, so mode toggles (off/vertical/radial) visibly RE-FORM the

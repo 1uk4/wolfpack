@@ -62,6 +62,8 @@ export interface ThreadHost {
   readonly settleMs: number;
   closing(): boolean;
   emitWolf(draft: WolfEventDraft): void;
+  /** Observer for the live pack map: a tool started in a thread. Must not throw or block. */
+  toolStarted?(threadId: string, toolName: string, args: unknown): void;
   onError(error: unknown): void;
   /** Switch a conversation to a model tier (engine configure). Unset: tiers are not switchable on this wolf. */
   applyTier?(conv: EngineConversation, tier: ThreadTier): Promise<void>;
@@ -308,7 +310,10 @@ export class ThreadRuntime {
     // submission records and snapshots are not: an owner typing into a hung turn must not keep it alive.
     if (batch.some((e) => e.type !== "snapshot" && !(e.type === "submission" && (e as { record?: { status?: string } }).record?.status === "queued"))) this.lastActivity = Date.now();
     for (const ev of batch) {
-      if (ev.type === "tool_execution_start") this.toolsInFlight.add(String((ev as { toolCallId?: unknown }).toolCallId));
+      if (ev.type === "tool_execution_start") {
+        this.toolsInFlight.add(String((ev as { toolCallId?: unknown }).toolCallId));
+        try { const s = ev as { toolName?: string; args?: unknown; parentToolCallId?: string }; if (!s.parentToolCallId) this.host.toolStarted?.(this.summary.id, String(s.toolName), s.args); } catch { /* observer only */ }
+      }
       else if (ev.type === "tool_execution_end") this.toolsInFlight.delete(String((ev as { toolCallId?: unknown }).toolCallId));
       if (ev.type === "snapshot") this.resetMessages(ev.entries);
       else if (

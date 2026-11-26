@@ -89,6 +89,19 @@ describe("graph load and frame cost", () => {
 		r.destroy();
 	});
 
+	it("a refetch with identical content keeps the sim; a changed node rebuilds it", async () => {
+		const r = await setup(5);
+		const sim = r.sim;
+		const copy = JSON.parse(JSON.stringify(r.data));
+		r.setData(copy);
+		assert.equal(r.sim, sim, "equal payload: no rebuild");
+		const changed = JSON.parse(JSON.stringify(r.data));
+		changed.nodes[0].label = "renamed";
+		r.setData(changed);
+		assert.notEqual(r.sim, sim, "changed payload: rebuilt");
+		r.destroy();
+	});
+
 	it("settings that load with the same physics values neither rebuild the sim nor reheat it; a real change does", async () => {
 		const { DEFAULT_PHYSICS_TUNING } = await import("../../../src/core/graph/render-settings.ts");
 		const r = await setup();

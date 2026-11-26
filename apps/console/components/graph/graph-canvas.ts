@@ -304,6 +304,7 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
  *  offset polygons re-rasterized at DPR 2 (the old GPU coil-whine). */
 const LABEL_MIN_SCREEN_PX = 6; // labels smaller than this on screen are skipped
 const LABEL_CULL_MARGIN = 150; // screen px around the viewport that still draws labels
+const SIM_FIELDS = new Set(["x", "y", "vx", "vy", "fx", "fy", "index"]); // mutated by the sim; not content
 const TOUCH_MAX_DPR = 2; // coarse-pointer (touch) devices render at most 2x
 
 /** devicePixelRatio, capped at 2 on touch devices (a 3x phone canvas costs 2.25x the fill for no visible gain). */
@@ -743,6 +744,8 @@ export class GraphCanvasRenderer {
 	private regionBuiltVersion = -1;
 	private labelLines = new Map<string, string[]>();
 	private hasBlocked = false;
+	/** Content signature (no positions or sim state) of the data last applied. */
+	private dataKey = "";
 	private labelKey: { data: unknown; visible: unknown; font: string; maxW: number } | null = null;
 	private worldLabelFont = "";
 	private world: WorldSizes = { nodeR: 0, labelSize: 0, labelGap: 0 };
@@ -843,6 +846,15 @@ export class GraphCanvasRenderer {
 	// ── Public API ──
 
 	setData(data: CanvasData): void {
+		// A refetch that changed nothing (same ids, styles, links, and every node where the renderer has it) must not rebuild the sim.
+		const dataKey = JSON.stringify(data, (key, v) => (SIM_FIELDS.has(key) ? undefined : v));
+		if (this.data && dataKey === this.dataKey && data.nodes.every((n) => {
+			const cur = this.nodeById.get(n.id);
+			return !!cur && cur.x === n.x && cur.y === n.y;
+		})) {
+			return;
+		}
+		this.dataKey = dataKey;
 		// A rest state waiting out its debounce belongs to the OLD nodes:
 		// commit it before they are replaced.
 		this.flushCommit();

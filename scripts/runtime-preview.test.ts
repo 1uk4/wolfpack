@@ -50,7 +50,10 @@ beforeEach(() => {
 	featSha = g(main, "rev-parse", "HEAD");
 	g(main, "checkout", "-q", "main");
 	g(main, "push", "-q", "origin", "stable", "feat/x");
-	rtWt = path.join(tmp, "rt");
+	// Where the script looks for the runtime (WOLVES_DIR/runtime/wolfpack). Once a preview detaches the runtime, nothing else tells the script
+	// this repo is the wolfpack one, and it would fall back to the real checkout it runs from and match "feat/x" against the owner's worktrees.
+	rtWt = path.join(tmp, "wolves", "runtime", "wolfpack");
+	fs.mkdirSync(path.dirname(rtWt), { recursive: true });
 	g(main, "worktree", "add", "-q", rtWt, "stable");
 });
 /** Attempts by the code under test to touch port 3230 or an unregistered pid through the harness stubs; every test must end with none. */

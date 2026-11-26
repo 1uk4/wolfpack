@@ -190,13 +190,28 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 	const dom = target?.domain ?? e.domain;
 	if (dom && fresh) counts[dom] = (counts[dom] ?? 0) + 1;
 	let wolf: LiveWolf = { ...w0, online: true, expiresAt: Math.max(w0.expiresAt, expiresAt), domainCounts: counts };
-	const threadId = e.actor.threadId ?? e.actor.parentThreadId;
+	// A subagent's own thread id is not a thread on the map: it hangs off its parent thread.
+	const isSub = e.actor.kind === "subagent";
+	const threadId = isSub ? e.actor.parentThreadId : (e.actor.threadId ?? e.actor.parentThreadId);
 	const tKey = threadId ? `${wolfName}/${threadId}` : undefined;
 	const thread0 = tKey ? st.threads[tKey] : undefined;
 	const mkThread = (): LiveThread => thread0 ?? { id: threadId!, wolf: wolfName, active: false, needsYou: false, expiresAt };
 	const putThread = (t: LiveThread) => {
 		st = { ...st, threads: { ...st.threads, [tKey!]: { ...t, expiresAt: Math.max(t.expiresAt, expiresAt), title: e.actor.title ?? t.title } } };
 	};
+
+	// Any non-finishing event from a subagent (an old hub overwrites its spawn with thread-active heartbeats) creates or refreshes it.
+	if (isSub && e.actor.subagent && e.verb !== "subagent-finished") {
+		const name = e.actor.subagent;
+		const key = `${wolfName}/${threadId ?? ""}/${name}`;
+		const prev = st.subagents[key];
+		const keep = prev && prev.finishedAt === undefined ? prev : undefined;
+		st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, title: e.actor.title ?? keep?.title, expiresAt: Math.max(keep?.expiresAt ?? 0, expiresAt) } } };
+		if (e.verb === "thread-active" || e.verb === "thread-idle" || e.verb === "subagent-spawned") {
+			st = { ...st, wolves: { ...st.wolves, [wolfName]: wolf } };
+			return withWolfNeeds(st);
+		}
+	}
 
 	switch (e.verb) {
 		case "wolf-online":

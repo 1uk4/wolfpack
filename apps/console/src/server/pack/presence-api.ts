@@ -71,12 +71,20 @@ export function createPresenceApi(d: PresenceApiDeps = {}) {
 					verb: "owner-viewing",
 					target: { kind, id, ...(title ? { title } : {}), ...(domain ? { domain } : {}) },
 				};
-				const r = await doFetch(`${base}/v1/activity`, {
-					method: "POST",
-					headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-					body: JSON.stringify({ v: ACTIVITY_VERSION, events: [event] }),
-					signal: AbortSignal.timeout(d.timeoutMs ?? 2000),
-				});
+				// A ref'd timer (AbortSignal.timeout's is unref'd): the request is always bounded, in a server and in a test alike.
+				const abort = new AbortController();
+				const timer = setTimeout(() => abort.abort(), d.timeoutMs ?? 2000);
+				let r: Response;
+				try {
+					r = await doFetch(`${base}/v1/activity`, {
+						method: "POST",
+						headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+						body: JSON.stringify({ v: ACTIVITY_VERSION, events: [event] }),
+						signal: abort.signal,
+					});
+				} finally {
+					clearTimeout(timer);
+				}
 				await r.body?.cancel().catch(() => {});
 			} catch {
 				/* presence never errors */

@@ -435,6 +435,10 @@ export type Dictation = {
 	 * the keyless click leaves for the Pack and the surface must come
 	 * back clean. */
 	clearError: () => void;
+	/** The finals heard so far in the current run (finals only, never interims). The words still land in the field once, at the end of the run; this only shows them live (the phone's transcript area). Empty when idle. */
+	transcript: string;
+	/** The mount-time token pre-mint found no Deepgram key: the first press can already go to Pack → Keys instead of failing a run. */
+	keyMissing: boolean;
 };
 
 /**
@@ -448,6 +452,8 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 	enabled = enabled && !singleMac;
 	const [phase, setPhase] = useState<DictationPhase>("idle");
 	const [error, setError] = useState<string | null>(null);
+	const [transcript, setTranscript] = useState("");
+	const [keyMissing, setKeyMissing] = useState(false);
 	/** Latest RMS from the worklet — the meter samples this (dictate pattern). */
 	const levelRef = useRef(0);
 	/** The page's fallback append — kept fresh per render so a mid-recording
@@ -491,6 +497,7 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 	const cleanup = useCallback(() => {
 		genRef.current++;
 		dictationActiveFlag = false;
+		setTranscript("");
 		flush(); // the deferred transcript appears when the run ends (owner round 2)
 		if (safetyRef.current) {
 			clearTimeout(safetyRef.current);
@@ -555,7 +562,10 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 					// Only finals stream (interim_results=false). DEFERRED (owner
 					// round 2): they buffer here and reach the input once, at
 					// teardown — the meter is the only live feedback.
-					if (msg.is_final && text) bufferRef.current.push(text);
+					if (msg.is_final && text) {
+						bufferRef.current.push(text);
+						setTranscript(bufferRef.current.join(" "));
+					}
 				}
 			});
 			ws.addEventListener("close", (ev) => {
@@ -797,7 +807,15 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 	// page owns ONE hook instance, and only the mounted page's listener is
 	// attached.
 	useEffect(() => {
-		if (enabled) warmTokens.refresh(); // pre-mint at mount (mitigation D) — silent if keyless
+		if (!enabled) return;
+		warmTokens.refresh(); // pre-mint at mount (mitigation D) — silent if keyless
+		let live = true;
+		// The same cached mint says whether a key exists at all, so a keyless first press can open the Pack at once.
+		warmTokens.mint().then(
+			() => live && setKeyMissing(false),
+			(e: unknown) => live && setKeyMissing(e instanceof Error && e.message === DICTATION_KEYLESS),
+		);
+		return () => void (live = false);
 	}, [enabled]);
 	useEffect(() => {
 		const onToggle = () => {
@@ -838,6 +856,8 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 		finish,
 		cancel,
 		clearError: () => setError(null),
+		transcript,
+		keyMissing,
 	};
 }
 

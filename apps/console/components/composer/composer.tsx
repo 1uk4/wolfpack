@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpIcon, CornerDownLeftIcon, ImageIcon, Loader2Icon, MicIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, CornerDownLeftIcon, ImageIcon, KeyboardIcon, Loader2Icon, MicIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { endOnFocus, endOnOutsideMouseDown } from "@/components/composer/caret-end";
 import { Hint } from "@/components/ui/hint";
@@ -10,11 +10,32 @@ import { droppedFiles, pastedImages, PICKER_ACCEPT, type PendingAttachment } fro
 /** What the main button is. The whole dictation span is inert for the wolf's turn: while the run records it is Stop dictation
  *  (ends the run, the text stays); while its last words flush it is a disabled spinner. Otherwise Stop (square) only for a busy
  *  turn with nothing to send; else Send. */
-function mainButtonMode(state: { dictating: boolean; finishing: boolean; busy: boolean; canSend: boolean }): "stop-dictation" | "finishing" | "stop-wolf" | "send" {
+function mainButtonMode(state: { dictating: boolean; finishing: boolean; busy: boolean; canSend: boolean; voice?: boolean }): "stop-dictation" | "finishing" | "stop-wolf" | "send" | "dictate" {
 	if (state.finishing) return "finishing";
 	if (state.dictating) return "stop-dictation";
-	return state.busy && !state.canSend ? "stop-wolf" : "send";
+	// The phone's voice-first composer: with nothing to send the big button is the mic, even while the wolf works (a separate small Stop sits beside it).
+	if (state.voice && !state.canSend) return "dictate";
+	if (state.busy && !state.canSend) return "stop-wolf";
+	return "send";
 }
+
+/**
+ * The phone dock's voice-first layout (chat-bar only): a large mic in the middle with add-image and a keyboard toggle beside it.
+ * `field` says what stands where the text field is: the compact tap-to-type field (voice), the real textarea (text) or the live transcript (transcript).
+ */
+export type VoiceLayout = {
+	field: "voice" | "text" | "transcript";
+	onDictate: () => void;
+	/** Switch the field to the text input (the keyboard icon and the compact field). */
+	onOpenField: () => void;
+	/** The finals heard so far in the live run. */
+	transcript: string;
+	/** The text already in the field when the run started: shown dimmed and read-only above the transcript. */
+	draft: string;
+	/** The level meter shown beside the transcript. */
+	meter: React.ReactNode;
+	error?: string | null;
+};
 
 /**
  * The chat composer — content row ONLY (the persistent rounded shell lives in
@@ -90,7 +111,10 @@ export function Composer({
 	attachDisabled,
 	armed,
 	sendAriaLabel,
+	voice,
 }: {
+	/** Phone dock only: the voice-first layout. Absent: the classic composer row. */
+	voice?: VoiceLayout;
 	/** The questionnaire's "Send anyway?" state: the button widens and changes colour, a cancel × appears beside it and Esc cancels. */
 	armed?: { onCancel: () => void };
 	/** Accessible name of the send button when it differs from its visible label. */
@@ -135,21 +159,24 @@ export function Composer({
 	/** Per-thread controls (model tier, auto-ship), shown beside the send button. */
 	controls?: React.ReactNode;
 }) {
-	const mode = mainButtonMode({ dictating: dictating === true, finishing: finishing === true, busy, canSend });
+	const mode = mainButtonMode({ dictating: dictating === true, finishing: finishing === true, busy, canSend, voice: voice !== undefined });
 	const labelled = (mode === "send" || mode === "stop-wolf") && sendLabel !== undefined && (canSend || alwaysLabel === true);
 	const act = (viaEnter = false) => {
 		// Dictation phases never reach onStop: recording only finishes the run, flushing does nothing.
 		if (mode === "finishing") return;
 		if (mode === "stop-dictation") return onSend();
+		// Enter in the open field never starts the mic: with the wolf working it stays the stop shortcut.
+		if (mode === "dictate") return viaEnter ? (busy ? onStop() : undefined) : voice?.onDictate();
 		const action = viaEnter && enterSends ? "send" : enterAction({ busy, canSend });
 		if (action === "stop") onStop();
 		else if (action === "send") onSend();
 	};
 	const buttonLabel =
-		mode === "finishing" ? "Finishing dictation" : mode === "stop-dictation" ? "Stop dictation" : labelled ? (sendAriaLabel ?? sendLabel ?? "Send") : mode === "stop-wolf" ? "Stop" : "Send";
+		mode === "finishing" ? "Finishing dictation" : mode === "stop-dictation" ? "Stop dictation" : mode === "dictate" ? "Start dictation" : labelled ? (sendAriaLabel ?? sendLabel ?? "Send") : mode === "stop-wolf" ? "Stop" : "Send";
 	const mainButton = (
 		<button
 			type="submit"
+			data-testid={voice ? "voice-main" : undefined}
 			data-armed={armed ? "true" : undefined}
 			data-finishing={finishing ? "true" : undefined}
 			data-dictating={mode === "stop-dictation" ? "true" : undefined}
@@ -157,6 +184,8 @@ export function Composer({
 			disabled={mode === "finishing" || (mode === "send" && !canSend)}
 			className={cn(
 				"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors max-md:size-11 max-md:rounded-full",
+				voice && "max-md:size-14",
+				mode === "dictate" && "bg-(color:--thread-accent) text-(color:--thread-accent-foreground) hover:opacity-90",
 				labelled && "wp-send-label w-auto px-3 font-ui text-xs",
 				// Dictation modes win over the armed ("Send anyway?") look: while the mic is live the button must read as the mic.
 				mode === "finishing"
@@ -174,7 +203,9 @@ export function Composer({
 				<Loader2Icon className="size-5 animate-spin" />
 			) : mode === "stop-dictation" ? (
 				// Live indicator: a soft pulse while the mic records (off under prefers-reduced-motion).
-				<MicIcon className="size-5 motion-safe:animate-pulse" />
+				<MicIcon className={cn("size-5 motion-safe:animate-pulse", voice && "size-6")} />
+			) : mode === "dictate" ? (
+				<MicIcon className="size-6" />
 			) : labelled ? (
 				<span key={sendLabel} className="wp-swap-in whitespace-nowrap">{sendLabel}</span>
 			) : mode === "stop-wolf" ? (
@@ -192,12 +223,20 @@ export function Composer({
 		{chips}
 			<form
 				data-testid="composer"
-				className="flex items-end gap-1.5 p-1.5 max-md:flex-wrap"
+				data-field={voice?.field}
+				className={cn("flex items-end gap-1.5 p-1.5 max-md:flex-wrap", voice && "items-center justify-center gap-x-5")}
 				onSubmit={(e) => {
 					e.preventDefault();
 					act();
 				}}
 				onKeyDown={(e) => {
+					// Esc while the voice dock's transcript shows (focus anywhere in the form) cancels the run, like Esc in the field.
+					if (e.key === "Escape" && voice?.field === "transcript" && onEscape) {
+						e.preventDefault();
+						e.stopPropagation();
+						onEscape();
+						return;
+					}
 					// Esc while armed (focus on the button or the textarea) leaves the asking state.
 					if (e.key === "Escape" && armed) {
 						e.preventDefault();
@@ -227,13 +266,28 @@ export function Composer({
 							disabled={attachDisabled !== undefined}
 							title={attachDisabled}
 							onClick={(e) => (e.currentTarget.previousElementSibling as HTMLInputElement | null)?.click()}
-							className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground max-md:size-11 transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+							className={cn("flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground max-md:size-11 transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent", voice && "max-md:rounded-full")}
 						>
 							<PaperclipIcon className="size-4" />
 						</button>
 					</>
 				)}
-				<div className="relative flex min-w-0 flex-1 max-md:order-first max-md:basis-full">
+				{voice?.field === "voice" && (
+					<button type="button" data-testid="voice-field" onClick={voice.onOpenField} className="order-first flex min-h-11 w-full basis-full items-center truncate rounded-xl border bg-secondary/50 px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-secondary">
+						<span className="truncate">{voice.error ?? "Tap to type, or talk"}</span>
+					</button>
+				)}
+				{voice?.field === "transcript" && (
+					<div className="order-first flex w-full basis-full flex-col gap-1.5 rounded-xl border bg-secondary/50 px-3 py-2">
+						{voice.draft !== "" && <div data-testid="dictation-draft" aria-readonly="true" className="max-h-16 overflow-y-auto whitespace-pre-wrap text-sm text-muted-foreground/60">{voice.draft}</div>}
+						{/* Esc is caught on the form (focus stays on the mic button), so the log needs no tab stop. */}
+						<div data-testid="dictation-transcript" role="log" aria-atomic="false" className="max-h-32 min-h-8 overflow-y-auto text-sm">
+							{voice.transcript}
+						</div>
+						{voice.meter}
+					</div>
+				)}
+				<div className={cn("relative flex min-w-0 flex-1 max-md:order-first max-md:basis-full", voice && voice.field !== "text" && "hidden")}>
 				<textarea
 					ref={inputRef}
 					value={value}
@@ -287,6 +341,20 @@ export function Composer({
 				)}
 				{/* Always wrapped so a mode switch keeps the button mounted (focus stays). */}
 				<Hint label={buttonLabel}>{mainButton}</Hint>
+				{voice && busy && mode === "dictate" && (
+					<Hint label="Stop the wolf">
+						<button type="button" data-testid="voice-stop" aria-label="Stop the wolf" onClick={onStop} className="flex size-11 shrink-0 items-center justify-center rounded-full bg-secondary text-foreground transition-colors hover:bg-accent">
+							<SquareIcon className="size-4 fill-current" />
+						</button>
+					</Hint>
+				)}
+				{voice && (
+					<Hint label="Type a message">
+						<button type="button" data-testid="voice-keyboard" aria-label="Type a message" onClick={voice.onOpenField} disabled={voice.field !== "voice"} className="flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:invisible">
+							<KeyboardIcon className="size-5" />
+						</button>
+					</Hint>
+				)}
 			</form>
 		</>
 	);

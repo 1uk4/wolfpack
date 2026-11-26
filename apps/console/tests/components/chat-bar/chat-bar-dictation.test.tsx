@@ -99,12 +99,15 @@ const { AttachedThreadProvider, useAttachedThread } = await import("../../../com
 const { ChatBar } = await import("../../../components/chat-bar/chat-bar.tsx");
 const { useDictation, DictationBar, joinDictation, useBarShown } = await import("../../../components/composer/dictation.tsx");
 const { ATTACHED_KEY } = await import("../../../src/core/thread/chat-bar.ts");
+const { dataStore } = await import("../../../src/core/data-store.ts");
 
 let posts: string[] = [];
 let pagedAsk = false;
 let requiredAsk = false;
 let stops = 0;
 let tokenFetches = 0;
+let keylessToken = false;
+let busyA = false;
 const realFetch = globalThis.fetch;
 const fakeSource = () => ({ close() {}, onOpen() {}, onEvent() {} });
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -114,10 +117,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		return new Response("{}", { status: 200 });
 	}
 	if (url.includes("/api/stt/token")) tokenFetches++;
-	if (url.includes("/api/stt/token")) return new Response(JSON.stringify({ token: "tok" }), { status: 200 });
+	if (url.includes("/api/stt/token")) return keylessToken ? new Response(JSON.stringify({ message: "add a Deepgram key" }), { status: 503 }) : new Response(JSON.stringify({ token: "tok" }), { status: 200 });
 	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
 	if (pagedAsk && /^\/api\/wolves\/w\/threads\/a\?/.test(url)) return Response.json({ messages: [], pendingCards: [{ callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00Z", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why", ...(requiredAsk ? {} : { optional: true }) }], steps: [{ fields: ["q1"] }] } }] });
-	if (url === "/api/wolves/w/threads") return Response.json({ threads: [{ id: "w/a", title: "w/a", kind: "feature", status: "idle" }, { id: "w/b", title: "w/b", kind: "feature", status: "idle" }] });
+	if (url === "/api/wolves/w/threads") return Response.json({ threads: [{ id: "w/a", title: "w/a", kind: "feature", status: busyA ? "busy" : "idle" }, { id: "w/b", title: "w/b", kind: "feature", status: "idle" }, { id: "w/c", title: "w/c", kind: "feature", status: "idle" }] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
 
@@ -198,6 +201,9 @@ afterEach(async () => {
 	FakeWS.count = 0;
 	stops = 0;
 	tokenFetches = 0;
+	keylessToken = false;
+	busyA = false;
+	dataStore.clear(); // the thread list is cached client-side: the next test must not read this one's
 	focused = null;
 });
 after(() => void (globalThis.fetch = realFetch));
@@ -426,13 +432,166 @@ describe("floating chat dictation: docking details", () => {
 	});
 });
 
+describe("the phone dock dictates in place", () => {
+	it("the live transcript replaces the text field while dictating, and the words land in the field for review on finish, unsent", async () => {
+		const w = window as unknown as { matchMedia?: unknown };
+		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+		try {
+			await mount("/kb", A);
+			const form = () => q('[data-testid="chat-bar"] [data-testid="composer"]')!;
+			assert.equal(form().getAttribute("data-field"), "voice");
+			await fire(form(), "submit"); // the big mic starts the run
+			await wait();
+			const ws = await say("live words");
+			assert.equal(form().getAttribute("data-field"), "transcript");
+			assert.equal(q('[data-testid="dictation-transcript"]')!.textContent, "live words");
+			assert.ok(q('[data-testid="composer"][data-field="transcript"] [data-testid="dictation-meter"]'), "the level meter rides with the transcript");
+			await fire(form(), "submit"); // the same big button stops the run
+			await endRun(ws);
+			await wait();
+			assert.equal(form().getAttribute("data-field"), "text");
+			assert.equal(barTa()!.value, "live words");
+			assert.equal(q('[data-testid="dictation-transcript"]'), null);
+			assert.deepEqual(posts, []);
+		} finally {
+			delete w.matchMedia;
+		}
+	});
+});
+
+/** The phone dock: matchMedia says below md for the duration of `run`. */
+async function onPhone(run: () => Promise<void>) {
+	const w = window as unknown as { matchMedia?: unknown };
+	w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+	try {
+		await run();
+	} finally {
+		delete w.matchMedia;
+	}
+}
+const phoneForm = () => q('[data-testid="chat-bar"] [data-testid="composer"]')!;
+const mainBtn = () => q('[data-testid="voice-main"]')!;
+const reactProps = (el: Element) => (el as any)[Object.keys(el).find((k) => k.startsWith("__reactProps$"))!];
+const remount = async (stored: object | null) => {
+	await act(async () => root?.unmount());
+	root = null;
+	document.body.innerHTML = "";
+	dataStore.clear(); // re-read the thread list (its status changed)
+	await mount("/kb", stored);
+};
+
+describe("the phone dock's voice layout", () => {
+	it("the big button is the mic when idle and empty, Send with a draft, mic plus a small Stop while the wolf works, Stop dictation while recording and a spinner while flushing", async () => {
+		await onPhone(async () => {
+			await mount("/kb", A);
+			assert.equal(mainBtn().getAttribute("aria-label"), "Start dictation");
+			assert.equal(q('[data-testid="voice-stop"]'), null, "no Stop while the wolf is idle");
+			await typeInBar("a draft");
+			assert.equal(mainBtn().getAttribute("aria-label"), "Send");
+			busyA = true;
+			await remount(A);
+			await wait();
+			assert.equal(mainBtn().getAttribute("aria-label"), "Send", "a draft is still Send while the wolf works");
+			assert.equal(q('[data-testid="voice-stop"]'), null, "Send only, no Stop beside it");
+			await typeInBar("");
+			assert.equal(mainBtn().getAttribute("aria-label"), "Start dictation", "working and empty: the mic");
+			assert.equal(q('[data-testid="voice-stop"]')!.getAttribute("aria-label"), "Stop the wolf");
+			await fire(phoneForm(), "submit");
+			await wait();
+			const ws = await say("spoken");
+			assert.equal(mainBtn().getAttribute("aria-label"), "Stop dictation");
+			await fire(phoneForm(), "submit");
+			assert.equal(mainBtn().getAttribute("aria-label"), "Finishing dictation");
+			assert.equal(mainBtn().hasAttribute("disabled"), true);
+			await endRun(ws);
+		});
+	});
+
+	it("the small Stop aborts the working wolf's turn", async () => {
+		busyA = true;
+		await onPhone(async () => {
+			await mount("/kb", A);
+			await wait();
+			await act(async () => void reactProps(q('[data-testid="voice-stop"]')!).onClick());
+			await wait();
+			assert.equal(posts.filter((u) => /\/threads\/a\/abort$/.test(u)).length, 1);
+		});
+	});
+
+	it("the first press with no Deepgram key opens Pack → Keys at once, without starting a run", async () => {
+		const { setPackNavigator } = await import("../../../components/pack/pack-nav.ts");
+		const went: string[] = [];
+		setPackNavigator((href) => void went.push(href));
+		(window as any).location = { pathname: "/kb", search: "" };
+		keylessToken = true;
+		try {
+			await onPhone(async () => {
+				await mount("/kb", A);
+				await wait();
+				await fire(phoneForm(), "submit");
+				assert.deepEqual(went, ["/pack/keys"]);
+				assert.equal(FakeWS.count, 0);
+			});
+		} finally {
+			setPackNavigator(null);
+		}
+	});
+
+	it("a draft stays visible, dimmed, above the transcript while dictating; Esc cancels: no text lands, the transcript clears and the field is back to the draft", async () => {
+		mem.set("wolfpack:draft:w:w/a", "keep me");
+		await onPhone(async () => {
+			await mount("/kb", A);
+			assert.equal(phoneForm().getAttribute("data-field"), "text");
+			await key(); // with a draft the big button is Send, so the run starts by Cmd+D
+			await wait();
+			await say("thrown away");
+			assert.equal(phoneForm().getAttribute("data-field"), "transcript");
+			assert.equal(q('[data-testid="dictation-draft"]')!.textContent, "keep me");
+			assert.equal(q('[data-testid="dictation-transcript"]')!.textContent, "thrown away");
+			await act(async () => void reactProps(phoneForm()).onKeyDown({ key: "Escape", preventDefault() {}, stopPropagation() {} }));
+			await wait();
+			assert.equal(q('[data-testid="dictation-transcript"]'), null);
+			assert.equal(q('[data-testid="dictation-draft"]'), null);
+			assert.equal(phoneForm().getAttribute("data-field"), "text");
+			assert.equal(barTa()!.value, "keep me");
+		});
+	});
+
+	it("swapping threads during a voice run keeps the transcript until the run ends, then the new thread's field starts clean and the words are in the old thread's draft", async () => {
+		await onPhone(async () => {
+			await mount("/wolf/w/thread/c", A);
+			await fire(phoneForm(), "submit");
+			await wait();
+			const ws = await say("for a");
+			await fire(q('[data-testid="chat-bar-swap"]')!, "click");
+			assert.equal(phoneForm().getAttribute("data-field"), "transcript", "still showing the run");
+			assert.equal(q('[data-testid="dictation-transcript"]')!.textContent, "for a");
+			await endRun(ws);
+			await wait();
+			assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/c");
+			assert.equal(q('[data-testid="chat-bar"]'), null, "c's own page: the page composer is the chat");
+			await act(async () => go("/kb")); // the dock is back, now for c
+			await wait();
+			assert.equal(phoneForm().getAttribute("data-field"), "voice", "c has no draft");
+			assert.equal(q('[data-testid="dictation-transcript"]'), null);
+			assert.equal(mem.get("wolfpack:draft:w:w/a"), "for a");
+		});
+	});
+
+	it("on desktop the composer keeps the classic row: no voice layout and the dictation bar slot is still there", async () => {
+		await mount("/kb", A);
+		assert.equal(phoneForm().getAttribute("data-field"), null);
+		assert.ok(q('[data-testid="chat-bar"] [data-testid="dictation-slot"]'));
+	});
+});
+
 describe("a mounted composer keeps both the owner's edit and the dictated tail", () => {
 	it("phone (no dock on thread pages): an edited page composer ends with its text plus the tail, and the store keeps both after the next debounced write", async () => {
 		const w = window as unknown as { matchMedia?: unknown };
 		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
 		try {
 			await mount("/kb", A, <OnThreadA />);
-			await fire(barToggle(), "click", { detail: 1 });
+			await fire(q('[data-testid="chat-bar"] [data-testid="composer"]')!, "submit"); // the phone dock's big mic starts the run
 			await wait();
 			const ws = await say("the tail");
 			await act(async () => go("/wolf/w/thread/a"));

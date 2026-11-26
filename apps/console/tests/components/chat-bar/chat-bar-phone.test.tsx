@@ -205,12 +205,29 @@ describe("ChatBar on a phone", () => {
 		assert.match(q('[data-testid="bar-sheet-close"]')!.className, /min-h-11/);
 	});
 
-	it("puts attach before the input and send after it, in the dock and the wide panel", async () => {
+	it("puts attach before the input and send after it in the wide panel; the dock is voice-first with a large mic and add-image beside it", async () => {
 		const order = () => qa('[data-testid="composer"] button[aria-label="Attach images"], [data-testid="composer"] textarea, [data-testid="composer"] button[type="submit"]').map((e) => (e.tagName === "TEXTAREA" ? "input" : e.getAttribute("aria-label") === "Attach images" ? "attach" : "send"));
 		await mount();
-		assert.deepEqual(order(), ["attach", "input", "send"]);
+		const form = () => q('[data-testid="composer"]')!;
+		assert.equal(form().getAttribute("data-field"), "voice");
+		const main = q('[data-testid="voice-main"]')!;
+		assert.equal(main.getAttribute("aria-label"), "Start dictation");
+		assert.match(q('[data-testid="composer"] button[aria-label="Attach images"]')!.className, /size-11/); // 44px
+		assert.deepEqual(order().filter((x) => x !== "input"), ["attach", "send"], "add-image sits beside the mic");
+		// The text field is one tap away: the keyboard icon, or the compact field.
+		await click(q('[data-testid="voice-keyboard"]'));
+		assert.equal(form().getAttribute("data-field"), "text");
+		await type("hello");
+		assert.equal(q('[data-testid="voice-main"]')!.getAttribute("aria-label"), "Send", "with text the big button sends");
 		await resize(false);
+		assert.equal(q('[data-testid="voice-main"]'), null, "the wide panel keeps its classic composer");
 		assert.deepEqual(order(), ["attach", "input", "send"]);
+	});
+
+	it("the compact field opens the text input too", async () => {
+		await mount();
+		await click(q('[data-testid="voice-field"]'));
+		assert.equal(q('[data-testid="composer"]')!.getAttribute("data-field"), "text");
 	});
 
 	it("a pending card shows as a strip; tapping it opens the sheet with the card above the composer", async () => {
@@ -226,11 +243,12 @@ describe("ChatBar on a phone", () => {
 		assert.deepEqual(order, ["bar-card", "composer"]);
 	});
 
-	it("a paged ask opens the sheet full screen by itself, with the composer below it", async () => {
+	it("a paged ask renders inline in the dock's conversation area (not a full-screen sheet), with the composer below it", async () => {
 		bodies.a = { messages: [], pendingCards: [{ callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00Z", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why" }], steps: [{ fields: ["q1"] }] } }] };
 		await mount();
 		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
-		assert.equal(bar().getAttribute("data-state"), "sheet");
+		assert.equal(bar().getAttribute("data-state"), "open");
+		assert.doesNotMatch(bar().getAttribute("style")!, /100dvh/);
 		assert.ok(ta(), "the composer textarea is still mounted");
 		for (let el: Element | null = ta(); el; el = el.parentElement) {
 			assert.equal(el.hasAttribute("inert"), false);
@@ -238,6 +256,27 @@ describe("ChatBar on a phone", () => {
 		}
 		const order = qa('[data-testid="ask-sheet"], [data-testid="composer"]').map((e) => e.getAttribute("data-testid"));
 		assert.deepEqual(order, ["ask-sheet", "composer"]);
+	});
+
+	const ASK = { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00Z", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why" }], steps: [{ fields: ["q1"] }] } };
+
+	it("with only a pending ask (no other cards) the full-screen chevron still opens it full screen", async () => {
+		bodies.a = { messages: [], pendingCards: [ASK] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		assert.equal(q('[data-testid="bar-strip"]'), null, "no cards, so no strip");
+		await click(q('[data-testid="bar-sheet-open"]'));
+		assert.equal(bar().getAttribute("data-state"), "sheet");
+		assert.ok(q('[data-testid="ask-sheet"]'), "the ask is in the full-screen sheet");
+	});
+
+	it("an ask arriving while the owner types in the composer does not take the focus", async () => {
+		await mount();
+		ta().focus();
+		bodies.a = { messages: [], pendingCards: [ASK] };
+		await emit("thread-updated", { wolf: "w", thread: { id: "w/a", status: "needs-you" } });
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask to arrive");
+		assert.equal(document.activeElement, ta());
 	});
 
 	it("the chevron closes the sheet and the draft survives", async () => {

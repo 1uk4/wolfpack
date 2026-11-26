@@ -12,7 +12,8 @@ import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { threadBase } from "@/components/thread/thread-transport";
 import { newUploadState, startUploads } from "@/components/composer/attachment-upload";
 import { canSendWith, readyInfos, type PendingAttachment } from "@/components/composer/attachments";
-import { DictationBar, joinDictation, setDictationFocus, recordingAt, type Dictation } from "@/components/composer/dictation";
+import { DICTATION_KEYLESS, DictationBar, LiveMeter, joinDictation, openDeepgramKeyInPack, setDictationFocus, recordingAt, type Dictation } from "@/components/composer/dictation";
+import { useSingleMac } from "@/components/shell/single-mac";
 import { draftKey, readDraft, useComposerDraft } from "@/lib/composer-draft";
 import { abortThread, submitToThread } from "@/components/chat-bar/chat-bar-io";
 import { bindingForAction, formatBinding, type AttachedRef } from "@/src/core";
@@ -25,7 +26,7 @@ import { type AskSession, type NoteState } from "@/components/ask/ask-session";
  * phone is on a thread page, and a run keeps going while the owner browses). This component only shows its meter and
  * registers where the transcript lands while it is mounted; with no composer mounted ChatBar writes it to the draft store.
  */
-export default function ChatBarComposer({ target, title, cardOpen = false, askOpen = false, onReplied, onSending, dictation, registerAppend, session, registerNoteSink }: { /** True while a send's POST is in flight (the swap pill waits, so a failed send still has this composer to restore into). */ onSending?: (v: boolean) => void; session?: AskSession; registerNoteSink?: (fn: ((n: NoteState) => void) | null) => void; target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
+export default function ChatBarComposer({ phone = false, target, title, cardOpen = false, askOpen = false, onReplied, onSending, dictation, registerAppend, session, registerNoteSink }: { /** The phone dock: the voice-first layout (large mic, transcript in place of the field). */ phone?: boolean; /** True while a send's POST is in flight (the swap pill waits, so a failed send still has this composer to restore into). */ onSending?: (v: boolean) => void; session?: AskSession; registerNoteSink?: (fn: ((n: NoteState) => void) | null) => void; target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
 	const api = useAttachedThread()!;
 	const { working } = api;
 	// Attachments pending in the thread page's composer ride with the PAGE's next send, never this input's (Enter here sends text only).
@@ -44,6 +45,9 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 		return () => setDictationFocus(null);
 	}, []);
 	const [error, setError] = useState<string | null>(null);
+	// Phone: the field is a compact tap target until the owner asks for the keyboard; a draft or a finished dictation shows it open.
+	const [typing, setTyping] = useState(false);
+	const singleMac = useSingleMac();
 	const applyText = useCallback((v: string) => {
 		textRef.current = v;
 		setText(v);
@@ -136,6 +140,29 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 		void dictation.finish().finally(() => void (noteInFlight.current = false));
 	}, [dictation, session, sendNote]);
 
+	const voiceField = dictation.active ? "transcript" : typing || text !== "" ? "text" : "voice";
+	const openField = useCallback(() => {
+		setTyping(true);
+		requestAnimationFrame(() => inputRef.current?.focus());
+	}, []);
+	// A key known to be missing (the mount pre-mint said so) sends even the first press to Pack → Keys; a keyless error from a run does the same.
+	const keyless = dictation.error === DICTATION_KEYLESS || dictation.keyMissing;
+	// Note mode stays classic: the composer is the questionnaire's note box (Next / Submit), not a message field, so it keeps the labelled button.
+	const voice = phone && !noteMode && !singleMac ? {
+		field: voiceField as "voice" | "text" | "transcript",
+		onOpenField: openField,
+		onDictate: () => {
+			if (keyless) {
+				dictation.clearError();
+				openDeepgramKeyInPack();
+			} else dictation.toggle();
+		},
+		transcript: dictation.transcript,
+		draft: text,
+		meter: <LiveMeter dictation={dictation} />,
+		error: dictation.error,
+	} : undefined;
+
 	return (
 		<>
 			{noteMode && <p data-testid="ask-armed-live" aria-live="polite" className="sr-only">{session.action.armed ? session.action.ariaLabel : ""}</p>}
@@ -149,6 +176,7 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 			)}
 			{askOpen && !noteMode && text.trim() !== "" && <p data-testid="ask-replace-hint" className="px-3 pt-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
 			<Composer
+				{...(voice ? { voice } : {})}
 				busy={noteMode ? false : working}
 				{...(noteMode ? { sendLabel: session.action.label, alwaysLabel: true, ...(session.action.armed ? { sendAriaLabel: session.action.ariaLabel, armed: { onCancel: session.disarm } } : {}) } : cardOpen && canSendWith(text, attachments) ? { sendLabel: "Reply instead" } : {})}
 				value={noteMode ? session.note.text : text}
@@ -167,9 +195,11 @@ export default function ChatBarComposer({ target, title, cardOpen = false, askOp
 				onPickFiles={noteMode ? session.addNoteFiles : onFiles}
 				chips={<AttachmentChips items={noteMode ? session.note.atts : attachments} onRemove={noteMode ? session.removeNoteAtt : (k) => setAttachments((prev) => prev.filter((a) => a.key !== k))} />}
 			/>
-			<div className="px-3 pb-2" data-testid="dictation-slot">
-				<DictationBar dictation={dictation} />
-			</div>
+			{!voice && (
+				<div className="px-3 pb-2" data-testid="dictation-slot">
+					<DictationBar dictation={dictation} />
+				</div>
+			)}
 		</>
 	);
 }

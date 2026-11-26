@@ -406,9 +406,14 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 			noteSink.current?.(n);
 		},
 	});
+	// Phone only: the dock can expand into a full-screen sheet (chevron). A pending questionnaire does NOT open it: it renders inline in the dock, above the composer, as in the thread.
+	const [sheet, setSheet] = useState(false);
+	const inset = useKeyboardInset(phone);
+	// Inline, the ask scrolls inside the visible area: 55% of the viewport, less the iOS keyboard (the dock sits above it, `inset` is its height).
+	const inlineCap = `min(55dvh, 55vh, calc((100dvh - ${inset}px) * 0.55))`;
 	const sheetCard = askCard ? (
 		session.expanded ? (
-			<div data-testid="ask-sheet-host" data-composing={composing ? "true" : undefined} style={phone || composing ? undefined : { borderColor: color }} className={cn("flex min-h-0 flex-col overflow-hidden bg-card", phone ? "flex-1" : cn("rounded-t-2xl border border-b-0 shadow-lg", composing ? "max-h-[85vh]" : "max-h-[70vh]"))}>
+			<div data-testid="ask-sheet-host" data-composing={composing ? "true" : undefined} style={phone ? (sheet ? undefined : { maxHeight: inlineCap }) : composing ? undefined : { borderColor: color }} className={cn("flex min-h-0 flex-col overflow-hidden bg-card", phone ? (sheet ? "flex-1" : "shrink-0") : cn("rounded-t-2xl border border-b-0 shadow-lg", composing ? "max-h-[85vh]" : "max-h-[70vh]"))}>
 				<AskSheet key={askCard.callId} target={target} session={session} queue={queue} answering={answering} setAnswering={setAnswering} dictation={dictation} />
 			</div>
 		) : (
@@ -422,9 +427,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 	const approvals = useApprovalEntries(BAR_EXTRAS.badge && api.attached !== null);
 	const waiting = useMemo(() => (BAR_EXTRAS.badge ? oldestFirst(waitingElsewhere(api.threads, target), raised) : []), [api.threads, target, raised]);
 	const title = attachedThread ? (attachedThread.kind === "home" ? target.wolf : attachedThread.title) : target.slug;
-	// Phone only: the dock expands into a full-screen sheet. The composer stays at the same spot in the tree, so the draft survives both ways.
-	const [sheet, setSheet] = useState(false);
-	const inset = useKeyboardInset(phone);
+	// The composer stays at the same spot in the tree, so the draft survives both ways.
 	const swipeFrom = useRef<{ x: number; y: number } | null>(null);
 	const opener = useRef<"strip" | "chevron">("chevron");
 	const wasSheet = useRef(false);
@@ -488,12 +491,6 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 			first.focus();
 		}
 	};
-	// The questionnaire sheet opens by itself on a phone when an ask arrives.
-	const askId = askCard?.callId;
-	useEffect(() => {
-		if (askId && phone && !minimized) openSheet(true);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [askId, phone]);
 	const hasSurface = (BAR_EXTRAS.cards || BAR_EXTRAS.peek) && (cards.pending.length > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error);
 
 	// Visualization mode: chat and questionnaires only (no needs-you badge, no thread switcher), and on the phone the dock sits over the viewer's full-screen sheet (z-60).
@@ -601,6 +598,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 				onKeyDown={trapTab}
 			>
 				{!sheet && swapPill}
+				{!sheet && !minimized && sheetCard && <div data-testid="bar-ask-inline" className="flex min-h-0 shrink-0 flex-col px-2 pb-1 pt-2">{sheetCard}</div>}
 				{sheet && !minimized && (
 					<div
 						data-testid="bar-sheet-handle"
@@ -631,14 +629,14 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 						{hasSurface ? <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} /> : sheetCard ? null : BAR_EXTRAS.cards || BAR_EXTRAS.peek ? <p className="px-2 py-3 font-ui text-sm text-muted-foreground">Nothing waiting. Write a message below.</p> : null}
 					</div>
 				)}
-				{!sheet && !minimized && (hasSurface || askCard) && (
+				{!sheet && !minimized && hasSurface && (
 					<button
 						type="button"
 						data-testid="bar-strip"
-						onClick={() => openSheet(pendingCount > 0)}
+						onClick={() => openSheet(cards.pending.length > 0)}
 						className="flex min-h-11 w-full items-center justify-between gap-2 border-b px-3 text-left font-ui text-sm hover:bg-accent"
 					>
-						<span className="truncate">{pendingCount > 0 ? (pendingCount === 1 ? "1 card waiting" : `${pendingCount} cards waiting`) : cards.error ? "Could not send. Tap to see" : cards.superseded.length > 0 ? "Replied instead. Tap to see" : "New reply. Tap to read"}</span>
+						<span className="truncate">{cards.pending.length > 0 ? (cards.pending.length === 1 ? "1 card waiting" : `${cards.pending.length} cards waiting`) : cards.error ? "Could not send. Tap to see" : cards.superseded.length > 0 ? "Replied instead. Tap to see" : "New reply. Tap to read"}</span>
 						<ChevronUpIcon className="size-4 shrink-0 text-muted-foreground" />
 					</button>
 				)}
@@ -661,7 +659,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 						</Hint>
 					</div>
 				</div>
-				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} onSending={setSending} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
+				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer phone target={target} onSending={setSending} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
 				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 			</>

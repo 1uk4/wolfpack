@@ -30,16 +30,27 @@ export function liveFrameTransform(): TransformStream<Uint8Array, Uint8Array> {
 	const dec = new TextDecoder();
 	const enc = new TextEncoder();
 	let buf = "";
+	let dropping = false; // after a runaway frame: discard everything up to the next blank line
 	return new TransformStream({
 		transform(chunk, ctl) {
 			buf += dec.decode(chunk, { stream: true }).replace(/\r\n/g, "\n");
+			if (dropping) {
+				const end = buf.indexOf("\n\n");
+				if (end < 0) return void (buf = "");
+				buf = buf.slice(end + 2);
+				dropping = false;
+			}
 			let i: number;
 			while ((i = buf.indexOf("\n\n")) >= 0) {
 				const kept = liveFrameFilter(buf.slice(0, i));
 				buf = buf.slice(i + 2);
 				if (kept !== null) ctl.enqueue(enc.encode(`${kept}\n\n`));
 			}
-			if (buf.length > 1_000_000) buf = ""; // a runaway frame is dropped, never buffered forever
+			if (buf.length > 1_000_000) {
+				// A runaway frame is dropped, never buffered forever and never forwarded as garbage.
+				buf = "";
+				dropping = true;
+			}
 		},
 	});
 }
@@ -48,6 +59,8 @@ export interface LiveActivityDeps {
 	env?: Record<string, string | undefined>;
 	fetch?: typeof fetch;
 	timeoutMs?: number;
+	/** How long the hub may take to answer the stream request with headers (default 15 s); the open stream itself is not limited. */
+	connectTimeoutMs?: number;
 }
 
 export function createLiveActivityApi(d: LiveActivityDeps = {}) {
@@ -56,21 +69,27 @@ export function createLiveActivityApi(d: LiveActivityDeps = {}) {
 	const base = () => env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "");
 	const unauthorized = () => new Response(JSON.stringify({ error: "sign in on this device first", code: "unauthorized" }), { status: 401, headers: { ...NO_STORE, "Content-Type": "application/json", [HUB_AUTH_HEADER]: "required" } });
 
-	async function call(req: Request, path: string, headers: Record<string, string>, signal?: AbortSignal): Promise<Response> {
+	async function call(req: Request, path: string, headers: Record<string, string>, signal?: AbortSignal, connectMs?: number): Promise<Response> {
 		const b = base();
 		if (!b) return new Response(null, { status: 204, headers: NO_STORE });
 		const token = bearerOf(req.headers.get("authorization"));
 		if (!token) return unauthorized();
 		let r: Response;
+		// The connect timeout covers the headers phase only: it is cleared as soon as the hub answers, so a long stream is never cut.
+		const connect = connectMs ? new AbortController() : null;
+		const timer = connect ? setTimeout(() => connect.abort(), connectMs) : null;
+		const sig = connect && signal ? AbortSignal.any([signal, connect.signal]) : (connect?.signal ?? signal);
 		try {
-			r = await doFetch(`${b}${path}`, { headers: { Authorization: `Bearer ${token}`, ...headers }, ...(signal ? { signal } : {}) });
+			r = await doFetch(`${b}${path}`, { headers: { Authorization: `Bearer ${token}`, ...headers }, ...(sig ? { signal: sig } : {}) });
 		} catch {
 			return new Response(null, { status: 503, headers: NO_STORE });
+		} finally {
+			if (timer) clearTimeout(timer);
 		}
 		if (r.status === 401) return unauthorized();
 		// 403 (a token kind that gets no activity) and 404 (an older hub) both mean "no live data": an empty overlay, no error.
 		if (r.status === 403 || r.status === 404) return new Response(null, { status: 204, headers: NO_STORE });
-		if (!r.ok) return new Response(null, { status: r.status === 409 ? 409 : 502, headers: NO_STORE });
+		if (!r.ok) return new Response(null, { status: 502, headers: NO_STORE });
 		return r;
 	}
 
@@ -79,7 +98,7 @@ export function createLiveActivityApi(d: LiveActivityDeps = {}) {
 			const headers: Record<string, string> = { Accept: "text/event-stream" };
 			const last = req.headers.get("last-event-id");
 			if (last) headers["Last-Event-ID"] = last;
-			const r = await call(req, "/v1/events?activity=1", headers, req.signal); // the hub sends pack.activity only on ?activity=1 and only to device/owner tokens
+			const r = await call(req, "/v1/events?activity=1", headers, req.signal, d.connectTimeoutMs ?? 15_000); // the hub sends pack.activity only on ?activity=1 and only to device/owner tokens
 			if (r.status !== 200 || !r.body) return r;
 			return new Response(r.body.pipeThrough(liveFrameTransform()), {
 				status: 200,

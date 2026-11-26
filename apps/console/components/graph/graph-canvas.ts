@@ -302,6 +302,8 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
  *  the jagged close-up look), there is no border to lag behind, and a
  *  live-physics frame pays one tiny blit instead of 32 clusters × 4
  *  offset polygons re-rasterized at DPR 2 (the old GPU coil-whine). */
+const LABEL_MIN_SCREEN_PX = 6; // labels smaller than this on screen are skipped
+const LABEL_CULL_MARGIN = 150; // screen px around the viewport that still draws labels
 const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
 
 
@@ -2180,13 +2182,19 @@ export class GraphCanvasRenderer {
 		// 6. Node labels — one global gate (per-node gate multiplier: big
 		// nodes label later), faded together. World-scaled with the graph
 		// (they grow as you zoom in, Obsidian-style).
-		if (nodeAlpha > 0.01) {
+		// Labels off screen (plus a margin for their width) or too small to read are skipped.
+		if (nodeAlpha > 0.01 && this.world.labelSize * k >= LABEL_MIN_SCREEN_PX) {
+			const { x: ltx, y: lty } = this.transform;
+			const minX = (-LABEL_CULL_MARGIN - ltx) / k;
+			const maxX = (w + LABEL_CULL_MARGIN - ltx) / k;
+			const minY = (-LABEL_CULL_MARGIN - lty) / k;
+			const maxY = (h + LABEL_CULL_MARGIN - lty) / k;
 			ctx.save();
 			ctx.font = this.worldLabelFont;
 			if (settings.privateView) blurLabels(ctx, data.colors.label, this.world.labelSize * 0.45, k); // once for the whole batch
 			for (const [id, lines] of this.labelLines) {
 				const n = this.nodeById.get(id);
-				if (!n) continue;
+				if (!n || n.x < minX || n.x > maxX || n.y < minY || n.y > maxY) continue;
 				const routeDone = !!this.route?.nodes.has(id) && this.route.done.has(id);
 				const a = labelAlpha(ratio, settings.labelZoom * (n.labelGate ?? 1)) * (routeDone ? DEP_STYLE.routeDoneNodeAlpha : (n.dim ? DIM_LABEL_ALPHA : 1) * this.restDim(id));
 				if (a <= 0.01) continue;

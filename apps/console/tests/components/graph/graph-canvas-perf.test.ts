@@ -76,6 +76,19 @@ describe("graph load and frame cost", () => {
 		r.destroy();
 	});
 
+	it("labels are drawn only for nodes near the viewport", async () => {
+		// 20 nodes at world x -1200..1500 step 300 (two rows of 10 do not apply: y = 0 for all). View k=1 shows world x -400..400.
+		const r = await setup(10, { k: 1, x: 400, y: 300 });
+		counts.fillText = 0;
+		r.markDirty();
+		await pump(2);
+		const labels = counts.fillText;
+		assert.ok(labels > 0, "visible labels are drawn");
+		// nodes sit at x=-1200,-900,-600,-300,0,300,600,900,1200,1500; margin 150px keeps -600..600 at most (one node per line label)
+		assert.ok(labels <= 5, `only nearby labels drawn, got ${labels}`);
+		r.destroy();
+	});
+
 	it("settings that load with the same physics values neither rebuild the sim nor reheat it; a real change does", async () => {
 		const { DEFAULT_PHYSICS_TUNING } = await import("../../../src/core/graph/render-settings.ts");
 		const r = await setup();

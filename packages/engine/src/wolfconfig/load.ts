@@ -84,6 +84,10 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
     throw new WolfConfigError(`invalid wolf.yaml: ${issues}`, abs);
   }
 
+  if ((doc as Record<string, unknown>).runtime === "pi") {
+    throw new WolfConfigError('terminal pi runtime was removed; use pi-durable (or drop "runtime": durable is the engine)', abs);
+  }
+
   const warnings: string[] = [];
   for (const key of Object.keys(doc)) {
     if (!KNOWN_TOP_LEVEL_KEYS.includes(key)) {

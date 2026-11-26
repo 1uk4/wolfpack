@@ -1,0 +1,195 @@
+===== CALL 1: sectionSummary / SYSTEM =====
+You write the one-line summary for a section of the knowledge base.
+
+You will be given the entries filed in one section: each entry's title, and its
+summary when available. Write ONE sentence (at most 140 characters) that names
+what these entries are about, so a reader scanning an index can tell at a glance
+whether this section is relevant.
+
+Rules:
+- Name the subject directly. Do NOT open with "This section", "This collection",
+  "Covers", "Documentation of", or any other framing about the section itself.
+- Be specific: use the concrete systems, products, and terms the entries share
+  (e.g. "Glicko-2 player ratings, leaderboards, and season stats").
+- Synthesize the shared scope. Do NOT list every entry or restate their facts.
+- Do NOT add information that is not in the entries.
+- Plain text: no markdown, no headings, no bullets.
+
+Output valid JSON matching the schema.
+
+===== CALL 1: sectionSummary / PROMPT =====
+Entries in this section:
+
+1. Login sessions — How login works with server sessions and cookies.
+2. Cookie flags
+
+Write the section's one-line summary (one sentence, at most 140 characters).
+
+===== CALL 2: sectionSummary / SYSTEM =====
+You write the one-line summary for a section of the knowledge base.
+
+You will be given the entries filed in one section: each entry's title, and its
+summary when available. Write ONE sentence (at most 140 characters) that names
+what these entries are about, so a reader scanning an index can tell at a glance
+whether this section is relevant.
+
+Rules:
+- Name the subject directly. Do NOT open with "This section", "This collection",
+  "Covers", "Documentation of", or any other framing about the section itself.
+- Be specific: use the concrete systems, products, and terms the entries share
+  (e.g. "Glicko-2 player ratings, leaderboards, and season stats").
+- Synthesize the shared scope. Do NOT list every entry or restate their facts.
+- Do NOT add information that is not in the entries.
+- Plain text: no markdown, no headings, no bullets.
+
+Output valid JSON matching the schema.
+
+===== CALL 2: sectionSummary / PROMPT =====
+Entries in this section:
+
+1. Login sessions — How login works with server sessions and cookies.
+2. Cookie flags
+
+Write the section's one-line summary (one sentence, at most 140 characters).
+This is a TOP-LEVEL section. Write a BROAD, domain-level summary.
+
+===== CALL 3: sectionSummary / SYSTEM =====
+You write the one-line summary for a section of the knowledge base.
+
+You will be given the entries filed in one section: each entry's title, and its
+summary when available. Write ONE sentence (at most 140 characters) that names
+what these entries are about, so a reader scanning an index can tell at a glance
+whether this section is relevant.
+
+Rules:
+- Name the subject directly. Do NOT open with "This section", "This collection",
+  "Covers", "Documentation of", or any other framing about the section itself.
+- Be specific: use the concrete systems, products, and terms the entries share
+  (e.g. "Glicko-2 player ratings, leaderboards, and season stats").
+- Synthesize the shared scope. Do NOT list every entry or restate their facts.
+- Do NOT add information that is not in the entries.
+- Plain text: no markdown, no headings, no bullets.
+
+Output valid JSON matching the schema.
+
+===== CALL 3: sectionSummary / PROMPT =====
+Entries in this section:
+
+1. Login sessions — How login works with server sessions and cookies.
+2. Cookie flags
+
+Write the section's one-line summary (one sentence, at most 140 characters).
+This is a high-level grouping. Write a general thematic summary.
+
+===== CALL 4: labelSection / SYSTEM =====
+You name a section of the knowledge base with a short title.
+
+You will be given a section summary, and optionally its parent title, its sibling
+sections, the domain name, and a few member entry titles. Produce a SHORT, specific
+title that names this section's topic AND is distinct from its parent and siblings.
+
+Rules:
+- 2 to 6 words. Title Case. No trailing punctuation.
+- Name the TOPIC specifically. Do NOT use generic words like "Section" or "Overview".
+- NEVER prefix the title with the domain name. The domain is already implicit in
+  the tree — "Acme Platform Authentication" should just be "Platform Authentication".
+  Member entry titles often include the domain for provenance; strip it from your output.
+- If a parent title or sibling sections are given, make THIS title DISTINCT: do not
+  repeat the parent's wording wholesale — name what is specific to this subsection
+  versus its siblings.
+- Do NOT add new information. Derive the title only from what is given.
+- Use ONLY terms that appear in the entries. Never infer or add qualifiers
+  (e.g. "AI", "ML", "intelligent", "automated") that the entries do not use.
+
+Output valid JSON matching the schema.
+
+===== CALL 4: labelSection / PROMPT =====
+Section summary:
+Login and session handling.
+
+Produce a short, specific title that is distinct from the parent and siblings.
+
+===== CALL 5: labelSection / SYSTEM =====
+You name a section of the knowledge base with a short title.
+
+You will be given a section summary, and optionally its parent title, its sibling
+sections, the domain name, and a few member entry titles. Produce a SHORT, specific
+title that names this section's topic AND is distinct from its parent and siblings.
+
+Rules:
+- 2 to 6 words. Title Case. No trailing punctuation.
+- Name the TOPIC specifically. Do NOT use generic words like "Section" or "Overview".
+- NEVER prefix the title with the domain name. The domain is already implicit in
+  the tree — "Acme Platform Authentication" should just be "Platform Authentication".
+  Member entry titles often include the domain for provenance; strip it from your output.
+- If a parent title or sibling sections are given, make THIS title DISTINCT: do not
+  repeat the parent's wording wholesale — name what is specific to this subsection
+  versus its siblings.
+- Do NOT add new information. Derive the title only from what is given.
+- Use ONLY terms that appear in the entries. Never infer or add qualifiers
+  (e.g. "AI", "ML", "intelligent", "automated") that the entries do not use.
+
+Output valid JSON matching the schema.
+
+===== CALL 5: labelSection / PROMPT =====
+Domain: wolfpack (do NOT include this word as a prefix in the title)
+Parent section title: Auth
+Do NOT title this section anything like: "Misc". Name what is specific to this group.
+Sibling sections (make THIS title distinct from these):
+- Billing and invoices.
+
+Section summary:
+Login and session handling.
+
+Sample member titles:
+- Login sessions
+- Cookie flags
+
+Produce a short, specific title that is distinct from the parent and siblings.
+
+===== CALL 6: labelSection / SYSTEM =====
+You name a section of the knowledge base with a short title.
+
+You will be given a section summary, and optionally its parent title, its sibling
+sections, the domain name, and a few member entry titles. Produce a SHORT, specific
+title that names this section's topic AND is distinct from its parent and siblings.
+
+Rules:
+- 2 to 6 words. Title Case. No trailing punctuation.
+- Name the TOPIC specifically. Do NOT use generic words like "Section" or "Overview".
+- NEVER prefix the title with the domain name. The domain is already implicit in
+  the tree — "Acme Platform Authentication" should just be "Platform Authentication".
+  Member entry titles often include the domain for provenance; strip it from your output.
+- If a parent title or sibling sections are given, make THIS title DISTINCT: do not
+  repeat the parent's wording wholesale — name what is specific to this subsection
+  versus its siblings.
+- Do NOT add new information. Derive the title only from what is given.
+- Use ONLY terms that appear in the entries. Never infer or add qualifiers
+  (e.g. "AI", "ML", "intelligent", "automated") that the entries do not use.
+
+Output valid JSON matching the schema.
+
+===== CALL 6: labelSection / PROMPT =====
+Section summary:
+Login and session handling.
+
+Produce a BROAD, domain-level title (2-4 words). This is the top-level section.
+
+===== CALL 7: splitSection / SYSTEM =====
+You are organising a knowledge base. You are given the entries (id, title, summary) of one oversized section.
+
+Propose 2 to 5 sub-categories that a reader of this section would agree with, plus an explicit doesnt_fit bucket for entries that belong to no category.
+
+Rules:
+- Each category has a short, specific name (2 to 6 words, Title Case). Do NOT just restate the parent section's name.
+- Every entry id appears exactly once across the categories and doesnt_fit. Use the ids exactly as given.
+- A category needs at least 3 entries; put an entry in doesnt_fit rather than forcing it into a category it does not belong to.
+- Group by what the entries are ABOUT, not by their kind or date. Use only what the entries say.
+
+Output JSON only: {"categories":[{"name":"...","ids":["..."]}],"doesnt_fit":["id"]}.
+
+===== CALL 7: splitSection / PROMPT =====
+Parent section: "Auth"
+
+Entries:
+[{"id":"kb-a-1111111","title":"Login sessions","summary":""},{"id":"kb-a-2222222","title":"Cookie flags","summary":"Cookie settings."}]

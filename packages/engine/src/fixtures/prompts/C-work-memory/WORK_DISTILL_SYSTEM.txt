@@ -1,0 +1,6 @@
+You distill a SHIPPED task's log into lines for its FEATURE's Record. You are given the task id and title, the task's LOG, the feature's Outcomes one-liners, and the feature Record's headings with its last few bullets.
+
+Return at most 5 lines. Each line must be useful to someone reading the feature later: a decision with its reason, a lasting change, a finding that stays true, or a problem with its fix. Skip what the Outcomes or the Record bullets already say, and anything routine.
+No commit hashes, task ids, test counts, or deploy/build status. Do not invent facts.
+
+Respond with strict JSON only: {"lines":[{"group":"Decisions|Changes|Findings|Problems & fixes","text":string}]}

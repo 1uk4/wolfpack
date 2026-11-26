@@ -64,7 +64,8 @@ export const ENDING_TURN_GUIDANCE = `When the owner has to make a decision, supp
 - Ask only when you cannot proceed without the owner. Ordinary conversation stays plain chat: thinking out loud, status updates, small clarifications, and anything you can decide yourself and say so.
 - Don't ask what you can find out by looking, and don't repeat a question the owner already answered.
 - A finished result with nothing to decide is a normal message, not an ask.
-- After fire-and-forget tool results (a subagent launched or resumed, a note saved), still send the owner a short closing message: what started and what to expect.`;
+- Closing message: when no tool call is left, every turn ends with a message to the owner: what you did or found and what is pending. After fire-and-forget tool results (a subagent launched or resumed, a note saved) say what started and what to expect. Never end on an empty acknowledgement such as "No response requested".
+- Notices: a line starting "Context update:" or "Task update:" before the owner's text says that den topics, the KB outline or the bound task changed since this conversation started. Re-read what it names (topic files, the domain _digest.json, task_query {current: true}) when it matters.`;
 
 export interface FoundFile {
   path: string;

@@ -1,0 +1,78 @@
+===== CALL 1: workRecord / SYSTEM =====
+You maintain the RECORD of ONE work item: the curated knowledge produced while working on it. The item may be a feature: then the observations come from several of its tasks and subagents, and the Record covers the feature as a whole. You are given the item (title, done-when, plan), its CURRENT RECORD (may be empty) and NEW OBSERVATIONS from the working sessions. Return the complete rewritten Record.
+
+The Record is NOT a log. It is what a colleague needs to understand this work later, in four fixed groups:
+- decisions: what was decided AND why (the reason is required; a decision without a reason is not worth keeping). Say what was rejected only when that is the point.
+- changes: what is now different (files, modules, behaviours, interfaces, config), in present tense.
+- findings: facts learned about the system, the data or the problem that stay true.
+- problems: a problem hit and how it was fixed or worked around, as one item (problem, then fix). Include an open problem only when it is still unresolved.
+
+REWRITE, DO NOT APPEND:
+- Start from the CURRENT RECORD and fold the new observations in. When an observation changes or reverses a decision, REPLACE the old decision with the new one (say "was X, now Y because Z" in that single item only if the change itself matters). Never keep both versions.
+- Merge items about the same subject. Drop items the new observations show to be wrong or obsolete. Fold older detail into shorter lines to stay within about 3,500 characters in total.
+- Short bullets, at most two sentences each. Concrete names (paths, identifiers, error codes, numbers that are part of the design) stay.
+
+LEAVE OUT: session narrative ("we then", "the user asked"), test counts and "N tests pass", build/deploy/verified status, who did what, next-step lists, dates (except where a decision's timing is what matters), and anything the plan already says. A commit hash may be kept sparingly, only on a change that is hard to find otherwise.
+Do not invent facts that neither the current record nor the observations state. If nothing in the new observations is worth recording, return the current record unchanged.
+
+SOURCES: the CURRENT RECORD lines are numbered [r1], [r2]… and the NEW OBSERVATIONS [o1], [o2]…. For every item, list in "from" the observations it rests on and, when you keep or fold an existing line, that line: e.g. ["o2", "r3"]. An unchanged line keeps its own ref. Use only refs you were given; never put a ref in the text itself.
+
+Respond with valid JSON: {"decisions": [{"decision": string, "why": string, "from": [string]}], "changes": [{"text": string, "from": [string]}], "findings": [{"text": string, "from": [string]}], "problems": [{"text": string, "from": [string]}]}. An empty group is an empty array.
+
+===== CALL 1: workRecord / PROMPT =====
+WORK ITEM: Login feature (feature, in_build)
+DONE WHEN: Users can log in
+
+PLAN (the working document outside the Record):
+## Plan
+Use sessions.
+
+CURRENT RECORD (lines are numbered [r1], [r2]…):
+## Record
+### Decisions
+- [r1] Use cookies <!-- src:o0 -->
+
+NEW OBSERVATIONS (numbered [o1], [o2]…):
+- [o1] Decided to use sessions
+- [o2] Found a race in refresh
+
+
+===== CALL 2: workRecord / SYSTEM =====
+You maintain the RECORD of ONE work item: the curated knowledge produced while working on it. The item may be a feature: then the observations come from several of its tasks and subagents, and the Record covers the feature as a whole. You are given the item (title, done-when, plan), its CURRENT RECORD (may be empty) and NEW OBSERVATIONS from the working sessions. Return the complete rewritten Record.
+
+The Record is NOT a log. It is what a colleague needs to understand this work later, in four fixed groups:
+- decisions: what was decided AND why (the reason is required; a decision without a reason is not worth keeping). Say what was rejected only when that is the point.
+- changes: what is now different (files, modules, behaviours, interfaces, config), in present tense.
+- findings: facts learned about the system, the data or the problem that stay true.
+- problems: a problem hit and how it was fixed or worked around, as one item (problem, then fix). Include an open problem only when it is still unresolved.
+
+REWRITE, DO NOT APPEND:
+- Start from the CURRENT RECORD and fold the new observations in. When an observation changes or reverses a decision, REPLACE the old decision with the new one (say "was X, now Y because Z" in that single item only if the change itself matters). Never keep both versions.
+- Merge items about the same subject. Drop items the new observations show to be wrong or obsolete. Fold older detail into shorter lines to stay within about 3,500 characters in total.
+- Short bullets, at most two sentences each. Concrete names (paths, identifiers, error codes, numbers that are part of the design) stay.
+
+LEAVE OUT: session narrative ("we then", "the user asked"), test counts and "N tests pass", build/deploy/verified status, who did what, next-step lists, dates (except where a decision's timing is what matters), and anything the plan already says. A commit hash may be kept sparingly, only on a change that is hard to find otherwise.
+Do not invent facts that neither the current record nor the observations state. If nothing in the new observations is worth recording, return the current record unchanged.
+
+SOURCES: the CURRENT RECORD lines are numbered [r1], [r2]… and the NEW OBSERVATIONS [o1], [o2]…. For every item, list in "from" the observations it rests on and, when you keep or fold an existing line, that line: e.g. ["o2", "r3"]. An unchanged line keeps its own ref. Use only refs you were given; never put a ref in the text itself.
+
+Respond with valid JSON: {"decisions": [{"decision": string, "why": string, "from": [string]}], "changes": [{"text": string, "from": [string]}], "findings": [{"text": string, "from": [string]}], "problems": [{"text": string, "from": [string]}]}. An empty group is an empty array.
+
+===== CALL 2: workRecord / PROMPT =====
+WORK ITEM: Login feature (feature, in_build)
+DONE WHEN: Users can log in
+
+PLAN (the working document outside the Record):
+## Plan
+Use sessions.
+
+CURRENT RECORD (lines are numbered [r1], [r2]…):
+## Record
+### Decisions
+- [r1] Use cookies <!-- src:o0 -->
+
+NEW OBSERVATIONS (numbered [o1], [o2]…):
+- [o1] Decided to use sessions
+- [o2] Found a race in refresh
+
+Your previous answer rendered 9375 characters. Fold older detail so the Record stays under 3500 characters.

@@ -1,0 +1,18 @@
+## paged, with a note and a revise note
+Note: your earlier ask_revise was NOT applied: its pages changed
+The user submitted your ask questionnaire (call c1), 2 pages:
+Page 1 of 2 ("P1"):
+- Q1 Mode?: Yes (yes)
+Page 2 of 2 ("P2"):
+- Q2 Why?: (skipped)
+Note from the user: mind it [1 image attached below]
+The questionnaire is complete: you may proceed.
+
+## single card
+The user answered your show_decision question (call c2):
+- Pick one: A
+Reply to the owner or continue the work.
+
+## skipped card
+The user skipped your show_decision question (call c3).
+Reply to the owner or continue the work.

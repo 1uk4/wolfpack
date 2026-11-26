@@ -15,6 +15,8 @@ import {
   section,
   Type,
   type ExtensionContext,
+  type Section,
+  type SectionContext,
   type ToolContext,
   type ToolResult,
 } from "@wolfpack/harness/extension";
@@ -1005,11 +1007,11 @@ export default function createTasksExtension(
     lines.push(`**${task.kind === "feature" ? "Feature" : "Task"}:** [${task.id}] ${task.title} (kind: ${task.kind})`);
     if (task.kind !== "feature" && parent && (parent.kind === "feature" || parent.kind === "initiative")) lines.push(`**Part of ${parent.kind}:** [${parent.id}] ${parent.title}`);
     if (task.successCriteria) lines.push("", `**Success Criteria:** ${task.successCriteria}`);
-    lines.push("", "Call task_current for the plan, notes and current stage.");
+    lines.push("", "Call task_query {current: true} for the plan, notes and current stage.");
     return lines.join("\n");
   }
 
-  /** The full view task_current returns: stage, hierarchy with counts, criteria, the whole working document and the feature Record. */
+  /** The full view task_query {current: true} returns: stage, hierarchy with counts, criteria, the whole working document and the feature Record. */
   function renderFullTask(cached: TaskCache): string {
     const { task, parent, siblings } = cached;
     const lines: string[] = [];
@@ -1056,13 +1058,16 @@ export default function createTasksExtension(
         const quiet = isSubagent() || (await resolveBindingRoot({ wolfDen, conversationId: sc.conversationId ?? 1, conversation: sc.conversation })).readOnly;
         return `## Task Tools
 
-Available: task_query, task_bind, task_claim, task_release, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features
+Available: task_query, task_bind, task_claim, task_release, task_unbind, task_create, task_done, task_note, task_stage, task_graduate
 
 Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<id>\` (e.g. \`work-wolfpack-cEg92qS\`), never the bare short id (\`cEg92qS\`). The console renders each full ID as a chip with a hover card (title, stage, parent feature, Open thread), which is how the owner reads them. Write it as plain text or inline code. It is NOT linked inside a fenced code block, a markdown link, a URL or a file name (\`work-wolfpack-cEg92qS.md\`). Write every ID in full, even in lists of several items.${quiet ? "" : `\n\n${BINDING_RULES}\n\n${GRADUATION_RULES}`}`;
       }),
 
       // Active task section — shows current binding with feature context
-      section("active_task", async (sc) => {
+      ((): Section => {
+        // `peek` is the side-effect-free read the context notice uses between requests: it neither consumes the one-shot
+        // "item completed" notice nor fetches from the Work API. Only a real render (`peek` false) does.
+        const render = async (sc: SectionContext, peek: boolean): Promise<string> => {
         if (isSubagent()) return "";
         try {
           // Per conversation: a fork shows its lineage's binding, a task conversation its owner's (read-only).
@@ -1071,7 +1076,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             // Unbound because its item completed: say so once.
             const notice = readOnly ? null : peekUnboundNotice(wolfDen, root);
             const text = `## Active Task\n\n${notice ? `${unboundCompleteNotice(notice.title)}\n\n` : ""}${UNBOUND_CONTEXT}\nUse \`task_query\` to see available work.`;
-            if (notice) clearUnboundNotice(wolfDen, root); // shown once: removed only now that the text exists
+            if (notice && !peek) clearUnboundNotice(wolfDen, root); // shown once: removed only now that the text exists
             return text;
           }
 
@@ -1079,18 +1084,21 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           const cached = readCache(binding.taskId);
           if (!cached || cached.task.id !== binding.taskId) {
             // Bound without a tool call here (a feature thread is bound when it is created): fill the cache for the next render.
-            refreshCacheSoon({ task: { id: binding.taskId } });
+            if (!peek) refreshCacheSoon({ task: { id: binding.taskId } });
             return `## Active Task\n\nBound to ${binding.taskId} (loading...). Use \`task_query\` to refresh.`;
           }
 
           // Only what is fixed while bound: stage, counts and the Record change under us and would break prompt caching,
-          // so wolfd announces them as a short user-turn notice and task_current returns them in full.
-          refreshCacheSoon(cached);
+          // so wolfd announces them as a short user-turn notice and task_query {current: true} returns them in full.
+          if (!peek) refreshCacheSoon(cached);
           return renderStableHeader(cached.task, cached.parent);
         } catch (err) {
           return `## Active Task\n\nError: ${err instanceof Error ? err.message : err}`;
         }
-      }),
+        };
+        // Frozen: a rebind or unbind reaches the model as a "Context update" notice (call task_query {current: true}).
+        return section("active_task", (sc) => render(sc, false), { frozen: true, peek: (sc) => render(sc, true) });
+      })(),
     ],
 
     tools: [
@@ -1238,53 +1246,18 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
         },
       }),
 
-      // ─── task_current ────────────────────────────────────────────────────
-      defineTool({
-        name: "task_current",
-        description: "Get the currently bound task in full: its current stage, its feature's tasks and progress, success criteria, the whole working document (plan + Record) and the feature Record. The system prompt only names the task; changes to it arrive as short 'Task update' notices, so call this for the details.",
-        parameters: Type.Object({}),
-        async execute(_args: unknown, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx);
-          if (!binding) {
-            return {
-              content: [{ type: "text", text: "No task currently bound." }],
-            };
-          }
-
-          const found = await findItem(binding.taskId);
-          if (!found) {
-            return {
-              content: [{ type: "text", text: `Bound task ${binding.taskId} not found.` }],
-              isError: true,
-            };
-          }
-
-          const { item } = found;
-          // Fresh, not the section cache: this is the full current state.
-          try {
-            await writeCache(item);
-          } catch { /* fall through to whatever is cached */ }
-          const cached = readCache(item.id as string);
-          if (cached) return { content: [{ type: "text", text: `ID: ${item.id}\n${renderFullTask(cached)}` }] };
-          return {
-            content: [{
-              type: "text",
-              text: `ID: ${item.id}\nTitle: ${item.title}\nKind: ${item.kind}\nStage: ${item.stage}\nDomain: ${binding.domain}\n${item.successCriteria ? `Success: ${item.successCriteria}` : ""}`,
-            }],
-          };
-        },
-      }),
-
       // ─── task_query ──────────────────────────────────────────────────────
       defineTool({
         name: "task_query",
-        description: "Query work items across subscribed domains. Returns hierarchical view with parents and children.",
+        description: "Query work items across subscribed domains (parents and children). current: true returns the bound task in full (stage, hierarchy, criteria, plan, Record). kind: \"feature\" with open: true lists the open features to pick a partOf parent.",
         parameters: Type.Object({
           domain: Type.Optional(Type.String({ description: "Filter to specific domain" })),
           kind: Type.Optional(Type.String({ description: "Filter by kind: initiative, feature, task, issue, spike" })),
           stage: Type.Optional(Type.String({ description: "Filter by stage" })),
           id: Type.Optional(Type.String({ description: "Get specific item with its context" })),
           depth: Type.Optional(Type.Number({ description: "Include children to this depth (default: 1)" })),
+          current: Type.Optional(Type.Boolean({ description: "Return the bound task in full; other filters are ignored" })),
+          open: Type.Optional(Type.Boolean({ description: "Leave out finished items" })),
         }),
         async execute(args: {
           domain?: string;
@@ -1292,7 +1265,39 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           stage?: string;
           id?: string;
           depth?: number;
+          current?: boolean;
+          open?: boolean;
         }, ctx: ToolContext): Promise<ToolResult> {
+          if (args.current) {
+            const binding = await readBinding(ctx);
+            if (!binding) {
+              return {
+                content: [{ type: "text", text: "No task currently bound." }],
+              };
+            }
+
+            const found = await findItem(binding.taskId);
+            if (!found) {
+              return {
+                content: [{ type: "text", text: `Bound task ${binding.taskId} not found.` }],
+                isError: true,
+              };
+            }
+
+            const { item } = found;
+            // Fresh, not the section cache: this is the full current state.
+            try {
+              await writeCache(item);
+            } catch { /* fall through to whatever is cached */ }
+            const cached = readCache(item.id as string);
+            if (cached) return { content: [{ type: "text", text: `ID: ${item.id}\n${renderFullTask(cached)}` }] };
+            return {
+              content: [{
+                type: "text",
+                text: `ID: ${item.id}\nTitle: ${item.title}\nKind: ${item.kind}\nStage: ${item.stage}\nDomain: ${binding.domain}\n${item.successCriteria ? `Success: ${item.successCriteria}` : ""}`,
+              }],
+            };
+          }
           const targetDomains = args.domain ? [args.domain] : domains;
           const depth = args.depth ?? 1;
           const results: string[] = [];
@@ -1339,11 +1344,12 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
                 continue;
               }
 
-              const items = await client.query({
+              const queried = await client.query({
                 domain,
                 ...(args.kind ? { kind: args.kind } : {}),
                 ...(args.stage ? { stage: args.stage } : {}),
               });
+              const items = args.open ? queried.filter(i => !isComplete(i)) : queried;
 
               if (items.length === 0) continue;
 
@@ -1386,31 +1392,43 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       defineTool({
         name: "task_create",
         description:
-          "Create a new work item. Tasks/issues/spikes default to the bound task's feature if partOf is not specified. " +
+          "Create a work item, or several with items (created in order, nothing bound, one reply line each; partOf \"$0\" names an earlier item). Tasks/issues/spikes default to the bound task's feature if partOf is not specified. " +
           "PARENT MUST BE IN THE SAME DOMAIN as the new item — a task in one domain cannot sit under a feature in another. " +
           "If no fitting feature exists in that domain, OMIT partOf and the item lands in the domain's Inbox. " +
           "Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else. " +
           "Under a feature the item always takes the feature's assignee (an `assignee` that differs is ignored, and the reply says so). A loose item (no partOf, or the Inbox) can be created only for yourself; only the owner can give one to another wolf.",
         parameters: Type.Object({
-          kind: Type.String({ description: "Type: initiative, feature, task, issue, spike" }),
+          kind: Type.Optional(Type.String({ description: "Type: initiative, feature, task, issue, spike" })),
           assignee: Type.Optional(Type.String({ description: "Wolf to assign a loose item to (default: you). Ignored under a feature for a wolf (the feature's assignee wins); the owner can create for anyone." })),
-          domain: Type.String({ description: `Domain: ${formatDomainChoices(listSubscribedDomains())}` }),
-          title: Type.String({ description: "Short title" }),
+          domain: Type.Optional(Type.String({ description: `Domain: ${formatDomainChoices(listSubscribedDomains())}` })),
+          title: Type.Optional(Type.String({ description: "Short title" })),
           partOf: Type.Optional(Type.String({ description: "Parent work item ID" })),
           successCriteria: Type.Optional(Type.String({ description: "Done condition (required for tasks)" })),
           standing: Type.Optional(Type.Boolean({ description: "Initiatives only: never completes; it keeps gaining features (e.g. a new week each week)" })),
           bind: Type.Optional(Type.Boolean({ description: "Bind the new item (task/issue/spike) so what you learn goes to its Record. Default: true when nothing is bound and the item is assigned to you, else false." })),
+          items: Type.Optional(Type.Array(Type.Object({
+            kind: Type.String(),
+            domain: Type.String(),
+            title: Type.String(),
+            assignee: Type.Optional(Type.String()),
+            partOf: Type.Optional(Type.String({ description: "Parent ID, or \"$0\", \"$1\"... for an earlier item of this batch" })),
+            successCriteria: Type.Optional(Type.String()),
+            standing: Type.Optional(Type.Boolean()),
+          }), { description: "Batch: create several items in order instead of the top-level fields. Binds nothing; one reply line per item; a failure keeps the earlier items." })),
         }),
         async execute(args: {
-          kind: string;
-          domain: string;
-          title: string;
+          kind?: string;
+          domain?: string;
+          title?: string;
           partOf?: string;
           successCriteria?: string;
           standing?: boolean;
           bind?: boolean;
           assignee?: string;
+          items?: Array<{ kind: string; domain: string; title: string; assignee?: string; partOf?: string; successCriteria?: string; standing?: boolean }>;
         }, ctx: ToolContext): Promise<ToolResult> {
+          type One = { kind: string; domain: string; title: string; partOf?: string; successCriteria?: string; standing?: boolean; bind?: boolean; assignee?: string };
+          const createOne = async (args: One, batch: boolean): Promise<ToolResult> => {
           if (!domains.includes(args.domain)) {
             return {
               content: [{ type: "text", text: `Not subscribed to domain: ${args.domain}` }],
@@ -1467,7 +1485,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             if (result.assignedTo) reply += handoffText([{ id: result.item.id as string, from: null, to: result.assignedTo }]);
             reply += overrideNote(args.assignee, result.item.assignee as string | undefined, ctx.wolfName, result.assignedTo);
             // One at a time, reading the binding file inside: parallel creates see each other's binding.
-            reply += await bindSerial(async () => {
+            if (!batch) reply += await bindSerial(async () => {
               const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx)), bind: args.bind };
               if (isSubagent()) return ""; // a subagent never binds
               if ((await resolveBindingRoot(ctx)).readOnly) return `\nNot bound: ${TASK_CONV_NO_BIND}`;
@@ -1484,6 +1502,29 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             if (err instanceof WorkQueuedError) return { content: [{ type: "text", text: `${err.message} The new item has no ID until then and is not bound; find it with task_query once the hub is back.` }] };
             return failed(err, "Failed to create");
           }
+          };
+
+          if (!args.items) {
+            if (!args.kind || !args.domain || !args.title) return { content: [{ type: "text", text: "kind, domain and title are required (or pass items)." }], isError: true };
+            return createOne(args as One, false);
+          }
+          const ids: Array<string | undefined> = [];
+          const lines: string[] = [];
+          for (const [i, raw] of args.items.entries()) {
+            const ref = raw.partOf?.match(/^\$(\d+)$/);
+            const parent = ref ? ids[Number(ref[1])] : raw.partOf;
+            if (ref && !parent) {
+              ids.push(undefined);
+              lines.push(`${i + 1}. Error: partOf ${raw.partOf} was not created`);
+              continue;
+            }
+            const res = await createOne({ ...raw, partOf: parent }, true);
+            const text = res.content[0].text as string;
+            const made = text.match(/^Created: \[([^\]]+)\] (.*)/);
+            ids.push(made?.[1]);
+            lines.push(made && !res.isError ? `${i + 1}. Created ${made[1]} ${made[2]}` : `${i + 1}. ${res.isError ? "Error: " : ""}${text.split("\n")[0]}`);
+          }
+          return { content: [{ type: "text", text: lines.join("\n") }], isError: lines.every((l) => l.includes(". Error: ")) || undefined };
         },
       }),
 
@@ -1698,92 +1739,41 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
       // ─── task_link ───────────────────────────────────────────────────────
       defineTool({
         name: "task_link",
-        description: "Add a dependency link between work items. Uses the active task if no id provided.",
+        description: "Add dependency links between work items, or remove them with remove:true. Pass rel + target, or several in links. A link's source is its own id, else id, else the active task.",
         parameters: Type.Object({
-          rel: Type.String({ description: "Relation: depends_on or blocks" }),
-          target: Type.String({ description: "Target work item ID" }),
+          rel: Type.Optional(Type.String({ description: "Relation: depends_on or blocks" })),
+          target: Type.Optional(Type.String({ description: "Target work item ID" })),
           id: Type.Optional(Type.String({ description: "Source work item ID (defaults to active task)" })),
+          links: Type.Optional(Type.Array(Type.Object({
+            id: Type.Optional(Type.String()),
+            rel: Type.String(),
+            target: Type.String(),
+          }), { description: "Several links in one call" })),
+          remove: Type.Optional(Type.Boolean({ description: "Remove the links instead of adding them" })),
         }),
-        async execute(args: { rel: string; target: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
-          let sourceId = args.id;
-          let domain: string | undefined;
-
-          if (!sourceId) {
-            const binding = await readBinding(ctx);
-            if (!binding) {
-              return {
-                content: [{ type: "text", text: "No active task and no id provided." }],
-                isError: true,
-              };
+        async execute(args: { rel?: string; target?: string; id?: string; links?: Array<{ id?: string; rel: string; target: string }>; remove?: boolean }, ctx: ToolContext): Promise<ToolResult> {
+          const links = args.links ?? (args.rel && args.target ? [{ rel: args.rel, target: args.target }] : []);
+          if (links.length === 0) return { content: [{ type: "text", text: "Pass rel and target, or links." }], isError: true };
+          const lines: string[] = [];
+          let failures = 0;
+          for (const link of links) {
+            let sourceId = link.id ?? args.id;
+            if (!sourceId) sourceId = (await readBinding(ctx))?.taskId;
+            if (!sourceId) {
+              lines.push("Error: No active task and no id provided.");
+              failures++;
+              continue;
             }
-            sourceId = binding.taskId;
-            domain = binding.domain;
-          }
-
-          if (!domain) {
-            const match = sourceId.match(/^work-(\w+)-/);
-            domain = match?.[1];
-          }
-          if (!domain) {
-            return { content: [{ type: "text", text: "Cannot determine domain from item ID." }], isError: true };
-          }
-
-          
-          
-          try {
-            await client.link(sourceId, args.rel, args.target);
-            return {
-              content: [{ type: "text", text: `${sourceId} ${args.rel} ${args.target}` }],
-            };
-          } catch (err) {
-            return failed(err);
-          }
-        },
-      }),
-
-      // ─── task_unlink ─────────────────────────────────────────────────────
-      defineTool({
-        name: "task_unlink",
-        description: "Remove a dependency link between work items. Uses the active task if no id provided.",
-        parameters: Type.Object({
-          rel: Type.String({ description: "Relation: depends_on or blocks" }),
-          target: Type.String({ description: "Target work item ID" }),
-          id: Type.Optional(Type.String({ description: "Source work item ID (defaults to active task)" })),
-        }),
-        async execute(args: { rel: string; target: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
-          let sourceId = args.id;
-          let domain: string | undefined;
-
-          if (!sourceId) {
-            const binding = await readBinding(ctx);
-            if (!binding) {
-              return {
-                content: [{ type: "text", text: "No active task and no id provided." }],
-                isError: true,
-              };
+            try {
+              if (args.remove) await client.unlink(sourceId, link.rel, link.target);
+              else await client.link(sourceId, link.rel, link.target);
+              lines.push(`${args.remove ? "Removed: " : ""}${sourceId} ${link.rel} ${link.target}`);
+            } catch (err) {
+              failures++;
+              lines.push(`Error: ${sourceId} ${link.rel} ${link.target}: ${err instanceof Error ? err.message : err}`);
             }
-            sourceId = binding.taskId;
-            domain = binding.domain;
           }
-
-          if (!domain) {
-            const match = sourceId.match(/^work-(\w+)-/);
-            domain = match?.[1];
-          }
-          if (!domain) {
-            return { content: [{ type: "text", text: "Cannot determine domain from item ID." }], isError: true };
-          }
-
-          
-          
-          try {
-            await client.unlink(sourceId, args.rel, args.target);
-            return {
-              content: [{ type: "text", text: `Removed: ${sourceId} ${args.rel} ${args.target}` }],
-            };
-          } catch (err) {
-            return failed(err);
-          }
+          return { content: [{ type: "text", text: lines.join("\n") }], isError: failures === links.length || undefined };
         },
       }),
 
@@ -1852,40 +1842,6 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
             }
           }
           return graduateMany(ctx, wanted, new Set([...(args.named ?? []), ...(args.id ? [args.id] : [])]), args.reconcile === true);
-        },
-      }),
-
-      // ─── task_features ───────────────────────────────────────────────────
-      defineTool({
-        name: "task_features",
-        description: "List open features in a domain. Useful for showing parent options when creating tasks.",
-        parameters: Type.Object({
-          domain: Type.String({ description: "Domain to list features from" }),
-        }),
-        async execute(args: { domain: string }): Promise<ToolResult> {
-          if (!domains.includes(args.domain)) {
-            return {
-              content: [{ type: "text", text: `Not subscribed to domain: ${args.domain}` }],
-              isError: true,
-            };
-          }
-
-          const items = await getItems(args.domain);
-          const features = items.filter(i => 
-            i.kind === "feature" && 
-            !isComplete(i)
-          );
-
-          if (features.length === 0) {
-            return {
-              content: [{ type: "text", text: "No open features. Tasks will go to Inbox." }],
-            };
-          }
-
-          const lines = features.map(f => `${f.id} | ${f.title}`);
-          return {
-            content: [{ type: "text", text: `Open features:\n${lines.join("\n")}` }],
-          };
         },
       }),
     ],

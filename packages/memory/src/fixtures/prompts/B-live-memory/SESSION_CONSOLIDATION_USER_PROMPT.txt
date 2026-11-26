@@ -1,0 +1,10 @@
+===== OBSERVATIONS TO CONSOLIDATE =====
+{{obsLines}}
+===== END OBSERVATIONS =====
+
+===== EXISTING SESSION TOPICS =====
+{{existingSection}}
+===== END SESSION TOPICS =====
+
+{{journeyBlock}}
+Fold the observations into session topics. For each group of related observations, decide MERGE, CREATE, or SKIP.

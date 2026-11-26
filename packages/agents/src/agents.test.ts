@@ -92,13 +92,9 @@ describe("roster order", () => {
 });
 
 describe("orchestrator work-id rule", () => {
-  it("tells agents to write full work ids", async () => {
+  it("does not restate the work-id rule: the task_tools section carries it", async () => {
     const { orchestratorRules } = await import("./orchestrator.js");
-    expect(orchestratorRules({ opsRef: "x", surface: "wolfd" })).toMatch(/full `work-<domain>-<id>`/);
-    const rules = orchestratorRules({ opsRef: "x", surface: "wolfd" });
-    expect(rules).toContain("chip with a hover card");
-    expect(rules).toContain("NOT linked inside a fenced code block");
-    expect(rules).toContain("even in lists of several items");
+    expect(orchestratorRules({ opsRef: "x", surface: "wolfd" })).not.toContain("work-<domain>-<id>");
   });
 });
 
@@ -133,6 +129,7 @@ describe("standards", () => {
     put(dir, "testing.md", `${MARK}\nrules\n`);
     put(dir, "git.md", `${GIT_MARK}\nrules\n`);
     put(dir, "extra.md", "# Extra standard\n");
+    put(dir, "reading.md", "# Fixture reading standard\n");
     return dir;
   };
 
@@ -140,7 +137,7 @@ describe("standards", () => {
     const standardsDir = fixtureStandards();
     const agentDir = tmp();
     const cwd = tmp();
-    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\n---\nmy worker");
+    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\nstandards: testing, git, testing\n---\nmy worker");
     put(join(cwd, ".pi", "agents"), "planner.md", "---\nname: planner\nstandards: testing\n---\nmy planner");
     const opts = { cwd, agentDir, standardsDir };
     const expected = {
@@ -161,8 +158,8 @@ describe("standards", () => {
     const standardsDir = fixtureStandards();
     const agentDir = tmp();
     const otherAgentDir = tmp();
-    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\n---\nmy worker");
-    put(join(otherAgentDir, "agents"), "worker.md", "---\nname: worker\n---\nmy worker");
+    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\nstandards: testing, git, testing\n---\nmy worker");
+    put(join(otherAgentDir, "agents"), "worker.md", "---\nname: worker\nstandards: testing, git, testing\n---\nmy worker");
     const opts = { cwd: tmp(), agentDir, standardsDir };
     expect(count(loadAgent("worker", opts)?.body, MARK)).toBe(1);
     put(join(agentDir, "standards"), "testing.md", "# Wolf testing\n");
@@ -175,13 +172,11 @@ describe("standards", () => {
     expect(count(loadAgent("worker", { ...opts, agentDir: otherAgentDir })?.body, MARK)).toBe(1);
   });
 
-  it("matches the always-on names case-insensitively, by frontmatter name and by the requested name", () => {
+  it("appends nothing from code: a worker override without a standards line gets no standards", () => {
     const agentDir = tmp();
-    put(join(agentDir, "agents"), "worker.md", "---\nname: Worker\n---\nbody");
-    put(join(agentDir, "agents"), "planner.md", "---\nname: Helper\n---\nbody");
+    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\n---\nbody");
     const opts = { cwd: tmp(), agentDir, standardsDir: fixtureStandards() };
-    expect(count(loadAgent("worker", opts)?.body, MARK)).toBe(1);
-    expect(count(loadAgent("planner", opts)?.body, MARK)).toBe(1);
+    expect(loadAgent("worker", opts)?.body).toBe("body");
   });
 
   it("gives any other profile only the standards its frontmatter names", () => {
@@ -195,7 +190,7 @@ describe("standards", () => {
   it("loads an agent without a standard it cannot read, and logs an error naming the file, once per process", () => {
     const standardsDir = tmp();
     const agentDir = tmp();
-    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\n---\nmy worker");
+    put(join(agentDir, "agents"), "worker.md", "---\nname: worker\nstandards: testing, git, testing\n---\nmy worker");
     const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       const opts = { cwd: tmp(), agentDir, standardsDir };

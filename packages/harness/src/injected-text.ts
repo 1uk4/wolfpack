@@ -5,7 +5,7 @@
  * check below use the same constants, so a changed wording cannot silently leave the net behind. A genuine owner message
  * is none of these: the prefixes are the exact wolfd forms, not loose words like "merge:".
  */
-import { SUPERSEDED_NOTE_LINE, TASK_NOTICE_HEAD } from "./superseded-note.js";
+import { CONTEXT_NOTICE_HEAD, SUPERSEDED_NOTE_LINE, TASK_NOTICE_HEAD } from "./superseded-note.js";
 
 export const ANSWER_SUBMITTED = "The user submitted your ";
 export const ANSWER_SKIPPED = "The user skipped your ";
@@ -32,5 +32,5 @@ const SUBAGENT_RE = new RegExp(`^Sub-agent "[^"\\n]*" (?:${Object.values(SUBAGEN
 export function isInjectedUserText(text: string): boolean {
   const t = text.trimStart();
   return t.startsWith(ANSWER_SUBMITTED) || t.startsWith(ANSWER_SKIPPED) || t.startsWith(ANSWER_ANSWERED) || t.startsWith(REVISE_NOT_APPLIED)
-    || SUPERSEDED_NOTE_LINE.test(t) || TASK_NOTICE_HEAD.test(t) || SUBAGENT_RE.test(t);
+    || SUPERSEDED_NOTE_LINE.test(t) || TASK_NOTICE_HEAD.test(t) || CONTEXT_NOTICE_HEAD.test(t) || SUBAGENT_RE.test(t);
 }

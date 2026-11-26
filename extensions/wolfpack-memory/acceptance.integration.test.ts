@@ -232,7 +232,7 @@ describe("durable memory: sandbox acceptance", { timeout: 60_000 }, () => {
     // [D2] a second root conversation binds the snapshot task via the scripted task_bind tool call, then talks
     const h = t.wolf.engine.harness;
     const agent = { model: { provider: t.scripted.provider, modelId: t.scripted.modelId }, tools: [] as never[] };
-    const created = await t.wolf.engine.conversations.create({ model: agent.model, tools: ["task_bind", "task_current"] });
+    const created = await t.wolf.engine.conversations.create({ model: agent.model, tools: ["task_bind", "task_query"] });
     const boundId = Number(created.id);
     const bound = (await h.conversation(boundId as never, ctx))!;
     await runOn(bound, "bind the acceptance task and talk");

@@ -160,7 +160,7 @@ export class WolfManager {
     const config: WolfConfig = {
       id,
       name: req.name,
-      runtime: req.runtime ?? "pi",
+      runtime: req.runtime ?? "pi-durable",
       profile: req.profile,
       role: req.role,
       specialty: req.specialty,
@@ -175,7 +175,7 @@ export class WolfManager {
     await this.writeEnv(home, id, req);
 
     // 6. Launcher + systemd unit.
-    await this.writeLauncher(home, id, req.runtime === "wolfd" ? "wolfd" : "pi");
+    await this.writeLauncher(home, id, req.runtime === "wolfd" ? "wolfd" : "pi-durable");
     await this.installService(config);
 
     // 7. Ownership (everything the wolf owns).
@@ -212,11 +212,9 @@ export class WolfManager {
   }
 
   /**
-   * Write the per-wolf launcher. Runs `pi --mode rpc` with a held-open FIFO as
-   * stdin so systemd's null stdin can't EOF-shut-down pi. The same FIFO is the
-   * future injection point for the (deferred) agent→wolf RPC bridge.
+   * Write the per-wolf launcher: the pi-durable harness, or the wolfd release's launch.sh.
    */
-  private async writeLauncher(home: string, id: string, runtime: WolfRuntime = "pi"): Promise<void> {
+  private async writeLauncher(home: string, id: string, runtime: WolfRuntime): Promise<void> {
     let script: string;
     
     if (runtime === "pi-durable") {
@@ -237,21 +235,7 @@ export WOLF_HOME="${home}"
 exec "${home}/release/launch.sh"
 `;
     } else {
-      script = `#!/usr/bin/env bash
-# wolf-${id} launcher — headless pi (RPC mode) with a persistent stdin FIFO.
-set -u
-
-RUNTIME="${home}/.run"
-mkdir -p "$RUNTIME"
-FIFO="$RUNTIME/rpc.in"
-[ -p "$FIFO" ] || mkfifo "$FIFO"
-
-sleep infinity > "$FIFO" &
-KEEPALIVE=$!
-trap 'kill "$KEEPALIVE" 2>/dev/null' EXIT INT TERM
-
-exec pi --mode rpc < "$FIFO"
-`;
+      throw new Error(`no launcher for runtime ${runtime}`);
     }
     
     const launchPath = path.join(home, "agent", "launch.sh");
@@ -591,7 +575,7 @@ WantedBy=multi-user.target
         name: config.name,
         active: serviceState === "active",
         restarts,
-        runtime: config.runtime ?? "pi",
+        runtime: config.runtime ?? "pi-durable",
         profile: config.profile,
         serviceState,
         since,
@@ -605,7 +589,7 @@ WantedBy=multi-user.target
         id,
         name: config.name,
         active: false,
-        runtime: config.runtime ?? "pi",
+        runtime: config.runtime ?? "pi-durable",
         profile: config.profile,
         serviceState: "unknown",
         bundle: config.bundle,
@@ -641,7 +625,7 @@ WantedBy=multi-user.target
     // replacing. A null value clears: the key is deleted (top level or one
     // level down, e.g. `models: { fast: null }`), and a nested object left
     // empty is dropped, so wolf.yaml never carries `null`.
-    const runtime = ((updates as Record<string, unknown>).runtime ?? config.runtime ?? "pi") as WolfConfig["runtime"];
+    const runtime = ((updates as Record<string, unknown>).runtime ?? config.runtime ?? "pi-durable") as WolfConfig["runtime"];
     const merged: Record<string, unknown> = { ...config as unknown as Record<string, unknown> };
     for (const [key, value] of Object.entries(updates as Record<string, unknown>)) {
       if (value === null) {

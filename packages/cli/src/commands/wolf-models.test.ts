@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
 import { resolveModelTable, type PackModels } from "@wolfpack/engine";
-import { agentsForWolf, modelRows, parseBridgeModels, readEnvValue, readRepoAgents } from "./wolf-models.js";
+import { agentsForWolf, modelRows, readEnvValue, readRepoAgents } from "./wolf-models.js";
 import { deepMerge, remoteModelUpdates, setTierOverride } from "./wolf-config.js";
 import { defaultPackModels } from "./setup.js";
 import { savePackModels } from "../config.js";
@@ -28,8 +28,8 @@ describe("modelRows", () => {
 
   it("lists main, every engine step and every agent with tier and source", () => {
     const rows = modelRows(table, [
-      { name: "scout", extension: "wolfpack-subagents", model: "fast" },
-      { name: "worker", extension: "wolfpack-subagents", model: "smart" },
+      { name: "scout", extension: "fx-ext", model: "fast" },
+      { name: "worker", extension: "fx-ext", model: "smart" },
     ]);
     const byUse = Object.fromEntries(rows.map((r) => [r.use, r]));
     expect(byUse.main).toEqual({ use: "main", tier: "main", model: "claude-opus-5-5", thinking: "—", source: "pack" });
@@ -71,12 +71,12 @@ describe("shadowed agents", () => {
     const ext = path.join(root, "ext");
     const wolf = path.join(root, "wolf-agent");
     const proj = path.join(root, "proj");
-    for (const d of [path.join(ext, "wolfpack-subagents", "agents"), path.join(wolf, "agents"), path.join(proj, ".pi", "agents")]) {
+    for (const d of [path.join(ext, "fx-ext", "agents"), path.join(wolf, "agents"), path.join(proj, ".pi", "agents")]) {
       fs.mkdirSync(d, { recursive: true });
     }
     const w = (f: string, body: string) => fs.writeFileSync(f, body);
-    w(path.join(ext, "wolfpack-subagents", "agents", "scout.md"), "---\nname: scout\nmodel: fast\n---\n");
-    w(path.join(ext, "wolfpack-subagents", "agents", "worker.md"), "---\nname: worker\nmodel: smart\n---\n");
+    w(path.join(ext, "fx-ext", "agents", "scout.md"), "---\nname: scout\nmodel: fast\n---\n");
+    w(path.join(ext, "fx-ext", "agents", "worker.md"), "---\nname: worker\nmodel: smart\n---\n");
     w(path.join(wolf, "agents", "scout.md"), "---\nname: scout\nmodel: smart\n---\n");
     w(path.join(wolf, "agents", "mine.md"), "---\nname: mine\nmodel: fast\n---\n");
     w(path.join(proj, ".pi", "agents", "worker.md"), "---\nname: worker\nmodel: claude-x\n---\n");
@@ -88,7 +88,7 @@ describe("shadowed agents", () => {
     const agents = agentsForWolf(readRepoAgents(ext), wolf, proj);
     const rows = Object.fromEntries(modelRows(table, agents).map((r) => [r.use, r]));
     expect(rows["agent:scout"]!.tier).toBe("smart");
-    expect(rows["agent:scout"]!.source).toContain(`⚠ shadows repo agent (${path.join(ext, "wolfpack-subagents", "agents", "scout.md")})`);
+    expect(rows["agent:scout"]!.source).toContain(`⚠ shadows repo agent (${path.join(ext, "fx-ext", "agents", "scout.md")})`);
     expect(rows["agent:worker"]!.model).toBe("claude-x (not a tier)");
     expect(rows["agent:worker"]!.source).toContain("⚠ shadows repo agent");
     expect(rows["agent:mine"]!.source).toContain("wolf agent (");
@@ -102,16 +102,6 @@ describe("shadowed agents", () => {
 });
 
 describe("live model list helpers", () => {
-  it("takes only claude-bridge rows from pi --list-models", () => {
-    const out = [
-      "provider       model                     context  max-out  thinking  images",
-      "claude-bridge  claude-opus-5-5           1M       128K     yes       yes",
-      "claude-bridge  claude-haiku-5-5          200K     128K     yes       yes",
-      "openai         gpt-5                     400K     128K     yes       yes",
-    ].join("\n");
-    expect(parseBridgeModels(out)).toEqual(["claude-opus-5-5", "claude-haiku-5-5"]);
-  });
-
   it("reads a key from a dotenv file", () => {
     const file = path.join(tmpDir(), ".env");
     fs.writeFileSync(file, "# c\nOTHER=1\nexport ANTHROPIC_API_KEY=\"sk-test\"\n");

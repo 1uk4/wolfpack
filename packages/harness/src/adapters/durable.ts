@@ -11,9 +11,11 @@ import {
   GenerationTask,
   CompactionTask,
   type Extension as PiDurableExtension,
+  type PromptInput,
   type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import type { AssistantMessage as PiAssistantMessage } from "@earendil-works/pi-ai";
+import { freezeSection } from "../context-notice.js";
 import { cardResult } from "../engine/cards.js";
 import { conversationReaderFor, onEngineCloseFor, onEngineReadyFor } from "../engine/conversation-reader.js";
 import type {
@@ -100,11 +102,14 @@ export function adaptToDurable(
 
   // Adapt sections
   const sections = (ext.sections ?? []).map((sec) =>
-    piSection(sec.name, (input) => {
+    piSection(sec.name, (input: PromptInput) => {
       // pi-durable renders sections per request with PromptInput.conversationId: the conversation being prompted.
       const conversationId = Number(input.conversationId);
       const context: SectionContext = { wolfDen, wolfName, conversationId, ...readsFor(conversationId) };
-      return sec.render(context);
+      const fresh = sec.render(context);
+      if (!sec.frozen) return fresh;
+      // Frozen: the conversation keeps the text it already shows; a change is announced by a notice (context-notice.ts).
+      return Promise.resolve(fresh).then((text) => freezeSection(wolfDen, conversationId, sec.name, text, input.shown[sec.name], () => (sec.peek ?? sec.render)(context)));
     })
   );
 

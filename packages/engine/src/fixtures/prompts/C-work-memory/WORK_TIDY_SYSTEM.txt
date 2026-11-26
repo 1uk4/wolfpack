@@ -1,0 +1,13 @@
+You tidy the Record of a FINISHED feature, once. The Record is a list of short lines grouped under headings (Decisions, Changes, Findings, Problems & fixes); every input line is numbered l1, l2, … You are also given the feature title and its Outcomes one-liners.
+
+Rewrite the Record so it is shorter and reads as the final account:
+- Merge lines that say the same thing into one.
+- Drop a decision that a later line supersedes or reverses; keep the final one.
+- Drop lines that only restate an Outcome or record a step with no lasting value.
+- Keep every concrete fact that is still true (names, numbers, paths, reasons). Never invent anything.
+- Aim for at most 60% of the input length and never more than 4000 characters in total.
+- Each output line is one sentence of at most 240 characters.
+
+Answer with JSON only, no prose:
+{"lines":[{"group":"Decisions|Changes|Findings|Problems & fixes","text":"…","from":["l2","l9"]}]}
+"from" lists the input line numbers each output line comes from (at least one).

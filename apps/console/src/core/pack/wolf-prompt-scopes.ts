@@ -1,6 +1,6 @@
 /**
  * Scope chips for the wolf detail's prompt graph (work-wolfpack-eE5FKDy). View only: nothing here edits a prompt.
- * Memory includes the background observe and consolidate prompts. Pure.
+ * Memory includes the whole memory prompt chain: observe, consolidate, promote, work memory, work context and the hub KB sweep. Pure.
  */
 export type PromptScope = "all" | "wolf" | "memory" | "workspace" | "system";
 
@@ -13,20 +13,20 @@ export const PROMPT_SCOPES: ReadonlyArray<{ key: PromptScope; label: string }> =
 ];
 
 /**
- * The prompt-flows graph (settings/prompt-flows.ts node key) each scope shows. The graph is a picture of ONE flow, so it is chosen on purpose:
- * all and wolf show the system prompt as wolfd builds it at start-up (the wolf's own files are blocks of it); memory shows the background
- * jobs (observe, consolidate, ...); workspace shows the subagent profiles and their standards; system shows the system prompt.
+ * The prompt-flows graph (settings/prompt-flows.ts graph key) each scope shows. A graph is a picture of ONE flow, so each scope has its own:
+ * all and system show the system prompt as wolfd builds it at start-up; wolf shows what is added per request (sections, injected messages,
+ * nudges, guards); memory shows the memory prompt chain; workspace shows the subagent profiles and their standards.
  * The list under the graph is still filtered by the scope itself.
  */
-export const SCOPE_GRAPH: Readonly<Record<PromptScope, "system" | "background" | "subagents">> = {
+export const SCOPE_GRAPH: Readonly<Record<PromptScope, "system" | "request" | "memory" | "subagents">> = {
 	all: "system",
-	wolf: "system",
-	memory: "background",
+	wolf: "request",
+	memory: "memory",
 	workspace: "subagents",
 	system: "system",
 };
 
-const MEMORY = /^pipeline\.(observer|consolidate|distill|work-record|task-summary|pack-digest|crawl-)/;
+const MEMORY = /^(hub:|pipeline\.(observer|consolidate|distill|work-|task-summary|pack-digest|crawl-|breakdown|stage-context|active-work-header|success-criteria-line))/;
 
 /** The scope a prompt id belongs to (never "all"). */
 export function promptScope(id: string): Exclude<PromptScope, "all"> {

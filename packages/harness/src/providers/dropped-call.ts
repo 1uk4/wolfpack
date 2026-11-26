@@ -10,9 +10,9 @@ export const EMPTY_ACK_MESSAGE = "The model answered with an empty acknowledgeme
  * acknowledgement-only results (launched, resumed, saved) and answered "No response requested." Passed to the bridge as
  * its `continuePrompt` option;.
  */
-export const CONTINUE_PROMPT = "If more work remains, call the next tool. Otherwise write your closing message to the owner: what you did and what is pending. Never reply with 'No response requested' or an empty acknowledgement.";
+export const CONTINUE_PROMPT = "If more work remains, call the next tool; otherwise send your closing message: what you did and what is pending (see Ending a turn). Never reply 'No response requested' or an empty acknowledgement.";
 /** Appended inside the last message of an empty-ack retry. Differs from CONTINUE_PROMPT on purpose: the model already ignored that one. */
-export const EMPTY_ACK_NUDGE = "Your previous reply was empty. Reply to the owner now: what you did, what you found, what is pending; or call the next tool.";
+export const EMPTY_ACK_NUDGE = "Your previous reply was empty. Send your closing message to the owner now: what you did, what you found, what is pending (see Ending a turn), or call the next tool.";
 export const NO_TERMINAL_MESSAGE = "The model stream ended without a result";
 
 /**

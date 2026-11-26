@@ -1,0 +1,47 @@
+## buildWorkLogPrompt
+TASK: Fix the login bug
+
+RECENT LOG LINES (do not repeat):
+- Earlier line one
+- Earlier line two
+
+NEW OBSERVATIONS:
+[o1] Decided to use sessions
+[o2] Found a race in refresh
+
+## buildWorkCompactPrompt
+TARGET: at most 1200 characters of text in total.
+
+LINES:
+[l1] (decision) Use sessions
+[l2] (problem) Race in refresh
+
+## buildWorkDistillPrompt
+TASK: work-d-T1 — Login fix
+
+TASK LOG:
+- Used sessions
+
+FEATURE OUTCOMES:
+- Login works
+
+FEATURE RECORD HEADINGS:
+- Decisions
+- Changes
+
+FEATURE RECORD, LAST BULLETS:
+- b1
+- b2
+
+## buildWorkTidyPrompt
+FEATURE: Login feature
+
+OUTCOMES:
+- Login works
+
+RECORD:
+### Decisions
+[l1] Use sessions
+
+### Changes
+[l2] Added a cookie

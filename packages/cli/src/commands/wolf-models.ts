@@ -12,8 +12,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { parse as yamlParse } from "yaml";
 import {
   KNOWN_MODELS,
@@ -31,14 +29,12 @@ import { extensionsDir } from "../extensions.js";
 import { resolveLocalWolfModels, resolveRemoteWolfModels } from "../models.js";
 import { c, table as renderTable } from "../render.js";
 
-const execFileAsync = promisify(execFile);
-
 // ── Rows ─────────────────────────────────────────────────────────────────────
 
 /** A subagent definition in the repo and the raw value of its `model:` key. */
 export interface AgentModelRef {
   name: string;
-  /** Extension package the agent file lives in (e.g. wolfpack-subagents). */
+  /** Extension package the agent file lives in (or "agents" for the shared roster). */
   extension: string;
   model: string | undefined;
   /** The agent file. */
@@ -94,7 +90,7 @@ export function readAgentsDir(dir: string, origin: AgentOrigin): AgentModelRef[]
 
 /**
  * The agents a wolf actually gets: repo agents, overridden by same-named wolf
- * agents, overridden by same-named project agents (the subagents extension's
+ * agents, overridden by same-named project agents (wolfd's subagent
  * precedence). An override records the lower-precedence file it shadows.
  */
 export function effectiveAgents(repo: AgentModelRef[], wolf: AgentModelRef[], project: AgentModelRef[]): AgentModelRef[] {
@@ -321,20 +317,6 @@ export interface ModelList {
   reason?: string;
 }
 
-/**
- * Model IDs on the Claude subscription, from `pi --list-models` output. A pi CLI lists them under `claude-bridge` (the
- * machine-local pi-claude-bridge package, same model ids); `claude-stateless` is registered in-process by wolfd only, but
- * is accepted too in case a pi build lists it.
- */
-export function parseBridgeModels(output: string): string[] {
-  const ids: string[] = [];
-  for (const line of output.split("\n")) {
-    const [provider, model] = line.trim().split(/\s+/);
-    if ((provider === "claude-bridge" || provider === "claude-stateless") && model) ids.push(model);
-  }
-  return ids;
-}
-
 /** Value of KEY in a dotenv file (undefined if the file or key is absent). */
 export function readEnvValue(file: string, key: string): string | undefined {
   let raw: string;
@@ -352,40 +334,8 @@ export function readEnvValue(file: string, key: string): string | undefined {
   return undefined;
 }
 
-async function fetchBridgeModels(): Promise<string[]> {
-  // pi-claude-bridge is installed per wolf (its agent dir), not in ~/.pi/agent, so a
-  // plain `pi` from the user's shell lists no subscription models.
-  const agentDir = bridgeAgentDir();
-  const { stdout } = await execFileAsync("pi", ["--list-models"], {
-    timeout: 60_000,
-    maxBuffer: 8 * 1024 * 1024,
-    env: agentDir ? { ...process.env, PI_CODING_AGENT_DIR: agentDir } : process.env,
-  });
-  const ids = parseBridgeModels(stdout);
-  if (ids.length === 0) throw new Error("`pi --list-models` listed no claude subscription models");
-  return ids;
-}
-
-/** Agent dir of the first local wolf whose pi settings install pi-claude-bridge (the provider pi subagent children use). */
-function bridgeAgentDir(): string | undefined {
-  if (process.env.PI_CODING_AGENT_DIR) return process.env.PI_CODING_AGENT_DIR;
-  const localRoot = path.join(loadConfig().wolvesRoot, LOCAL_HOST);
-  let names: string[] = [];
-  try {
-    names = fs.readdirSync(localRoot);
-  } catch {
-    return undefined;
-  }
-  for (const name of names) {
-    const agentDir = path.join(localRoot, name, "agent");
-    try {
-      const settings = fs.readFileSync(path.join(agentDir, "settings.json"), "utf8");
-      if (settings.includes("pi-claude-bridge")) return agentDir;
-    } catch {
-      /* not a wolf with pi settings */
-    }
-  }
-  return undefined;
+async function fetchSubscriptionModels(): Promise<string[]> {
+  throw new Error("the subscription transport has no live model list");
 }
 
 async function fetchApiModels(): Promise<string[]> {
@@ -417,7 +367,8 @@ const fallbackNoticed = new Set<Transport>();
 export function liveModels(transport: Transport): Promise<ModelList> {
   let cached = listCache.get(transport);
   if (!cached) {
-    const fetcher = transport === "subscription" ? fetchBridgeModels : fetchApiModels;
+    // The subscription transport has no list endpoint (the list used to come from the terminal pi CLI): fall back to KNOWN_MODELS.
+    const fetcher = transport === "subscription" ? fetchSubscriptionModels : fetchApiModels;
     cached = fetcher().then(
       (ids): ModelList => ({ ids, live: true }),
       (err): ModelList => ({ ids: [...KNOWN_MODELS], live: false, reason: err instanceof Error ? err.message : String(err) }),

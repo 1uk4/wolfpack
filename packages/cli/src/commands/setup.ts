@@ -132,8 +132,8 @@ async function setupLibrarian(config: CliConfig, opts: { yes?: boolean }): Promi
   const interactive = !opts.yes && process.stdin.isTTY;
   if (!interactive) {
     console.log(c.yellow("  No librarian configured. Re-run interactively, or add one:"));
-    console.log(c.dim("    local:  wolfpack add wolf <name> --ext memory,subagents,kb"));
-    console.log(c.dim("    remote: wolfpack add wolf <name> --host <h> --ext memory,subagents,kb"));
+    console.log(c.dim("    local:  wolfpack add wolf <name> --ext memory,kb"));
+    console.log(c.dim("    remote: wolfpack add wolf <name> --host <h> --ext memory,kb"));
     return;
   }
 

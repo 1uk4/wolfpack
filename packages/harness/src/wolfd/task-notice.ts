@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { pendingContextNotice } from "../context-notice.js";
 import { fetchWorkItem } from "./memory-read.js";
 
 export interface TaskSnapshot {
@@ -159,6 +160,36 @@ export async function pendingTaskNotice(den: string, conversationId: string, rea
   const text = describeChange(prev, next);
   if (!text) return none;
   return { text, commit: () => write(next) };
+}
+
+/**
+ * Everything wolfd prepends to the next user message: the task update (needs the Work API) and the context update (a frozen
+ * prompt section changed, context-notice.ts), as separate paragraphs in that order. One commit marks both delivered.
+ * The context update is local (the sections re-render from files) and never waits on the Work API: only the task update
+ * races the deadline, and a slow or failing Work API drops just that part.
+ */
+export async function pendingNotices(den: string, conversationId: string, reader?: TaskNoticeReader, deadlineMs = 1500): Promise<PendingNotice> {
+  const none: PendingNotice = { text: "", commit() {} };
+  const context = await pendingContextNotice(den, conversationId).catch(() => none);
+  let task = none;
+  if (reader) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      task = await Promise.race([
+        pendingTaskNotice(den, conversationId, reader).catch(() => none),
+        new Promise<PendingNotice>((r) => { timer = setTimeout(() => r(none), deadlineMs); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return {
+    text: [task.text, context.text].filter(Boolean).join("\n\n"),
+    commit() {
+      task.commit();
+      context.commit();
+    },
+  };
 }
 
 export { withTaskNotice, stripTaskNotice } from "../superseded-note.js";

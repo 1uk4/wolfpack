@@ -48,6 +48,7 @@ import type { PendingNotice } from "./task-notice.js";
 import { withTaskNotice } from "./task-notice.js";
 import { ATTACHMENT_MAX_PER_SUBMIT, askSupersedeDetail, pageCard, stepsKey, visibleFields, type CardNoteBody, type SaveCardPageBody, type SubmitCardBody } from "@wolfpack/protocol";
 import { isImageOnly } from "./card-kinds/types.js";
+import { excludeFromFreeze, forgetContext } from "../context-notice.js";
 import { CardTracker, sourceOf, answerText, attachmentIds, questionNumbers, type ReadyAnswer, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
 import { HttpError } from "./http-error.js";
 import { readBindingFile } from "@wolfpack/memory";
@@ -65,7 +66,7 @@ export interface ThreadHost {
   /** Switch a conversation to a model tier (engine configure). Unset: tiers are not switchable on this wolf. */
   applyTier?(conv: EngineConversation, tier: ThreadTier): Promise<void>;
   /** The task-update notice due for a conversation (bound item changed since the last one). Unset: no notices. */
-  taskNotice?(conversationId: string): Promise<PendingNotice>;
+  taskNotice?(conversationId: string, deadlineMs?: number): Promise<PendingNotice>;
   /** How long a submit waits for the notice before sending without it. Default 1500. */
   taskNoticeDeadlineMs?: number;
   /**
@@ -158,6 +159,8 @@ export class ThreadRuntime {
   ) {
     this.cards = new CardTracker(summary.id, (card) => sourceOf(card, this.summary));
     this.settings = summary.settings ?? { ...DEFAULT_THREAD_SETTINGS };
+    // A subagent child is short-lived: its prompt sections are not frozen and it gets no context notices.
+    if (summary.kind === "subagent" && host.den) excludeFromFreeze(host.den, conv.id);
   }
 
   /**
@@ -199,6 +202,8 @@ export class ThreadRuntime {
     this.disarmWatchdog();
     await this.watch?.stop().catch(() => {});
     await this.pump?.catch(() => {});
+    // The conversation is gone (deleted, closed or shutting down): free its frozen-section memory.
+    if (this.host.den) forgetContext(this.host.den, this.conv.id);
   }
 
   /**
@@ -702,14 +707,16 @@ export class ThreadRuntime {
     const before = this.turnStarts;
     const textOnly = text;
     // At a turn boundary (nothing running) an operator/card message carries one coalesced notice of what changed on the
-    // bound item. Machine submits (subagent deliveries) leave it for the next one. A slow Work API means no notice.
+    // bound item. Machine submits (subagent deliveries) leave it for the next one. A slow Work API drops only the task part (the deadline is applied inside taskNotice).
     let notice: PendingNotice | undefined;
     if (!this.running && !this.isChild && !opts.internal && !opts.resubmit && this.host.taskNotice) {
+      const deadline = this.host.taskNoticeDeadlineMs ?? 1500;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        // taskNotice applies the deadline to the Work API part itself; this is only a backstop for a host that hangs.
         notice = await Promise.race([
-          this.host.taskNotice(String(this.conv.id)),
-          new Promise<undefined>((r) => { timer = setTimeout(() => r(undefined), this.host.taskNoticeDeadlineMs ?? 1500); }),
+          this.host.taskNotice(String(this.conv.id), deadline),
+          new Promise<undefined>((r) => { timer = setTimeout(() => r(undefined), deadline + 500); }),
         ]);
       } catch {
         notice = undefined;

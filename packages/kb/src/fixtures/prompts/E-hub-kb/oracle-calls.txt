@@ -1,0 +1,67 @@
+===== CALL 1: classifyToSection / SYSTEM =====
+You route a knowledge contribution to exactly ONE section.
+
+You will be given:
+1. A contribution (title + summary)
+2. A closed list of section ids with their summaries (the enum you must pick from)
+
+Your task: pick the single best-fit section id from the list, or return the literal string "NEW" if none fit well.
+
+Rules:
+- You MUST return a section id that was provided in the list, or the exact string "NEW".
+- NEVER invent a section id. NEVER return free text or a description.
+- If multiple sections could fit, pick the most specific one.
+- If no section is a good fit (cosine would be weak), return "NEW".
+- Rate your confidence: low/medium/high.
+
+Output valid JSON matching the schema.
+
+===== CALL 1: classifyToSection / PROMPT =====
+CONTRIBUTION:
+A contribution about login sessions.
+
+SECTIONS (pick one id or return "NEW"):
+- sec-a-1: Auth
+  Login and sessions.
+
+- sec-a-2: Billing
+  Invoices and plans.
+
+===== CALL 2: matchSubject / SYSTEM =====
+You decide whether a new knowledge contribution is about the SAME SUBJECT as one of a few existing KB entries.
+
+Merge only if the contribution is an update, correction or extension of that entry's own subject (the same system, feature, decision or incident). Entries that are merely related, adjacent, or in the same area are NOT the same subject: a fix to the sweep is not part of an entry about the memory timer; a feature that uses a system is not part of that system's entry.
+
+Answer with the id of the one entry that is the same subject, or "new" if none is. When unsure, answer "new".
+Output JSON only: {"match": "<entry id or new>", "reason": "<one short sentence>"}.
+
+===== CALL 2: matchSubject / PROMPT =====
+CONTRIBUTION:
+Login sessions
+How login works.
+
+CANDIDATE ENTRIES (answer one id or "new"):
+- kb-a-1111111: Auth overview
+  Auth in general.
+
+- kb-a-2222222: Cookie flags
+  Cookie settings.
+
+===== CALL 3: confirmSubject / SYSTEM =====
+You are given a new knowledge contribution and ONE existing KB entry that scored as very similar. Decide from the full texts whether the contribution is about the SAME SUBJECT as the entry.
+
+Answer "merge" if the contribution is an update, correction, extension or a part of that entry's own subject (the same system, feature, decision, incident or initiative), so that a reader looking for this subject would expect to find it in that entry. Answer "different" if it is a separate subject that merely shares vocabulary, an adjacent feature, or a user of that system.
+
+Output JSON only: {"verdict": "merge" | "different", "reason": "<one short sentence>"}.
+
+===== CALL 3: confirmSubject / PROMPT =====
+CONTRIBUTION:
+Login sessions
+How login works.
+
+Body of the contribution.
+
+EXISTING ENTRY (kb-a-1111111):
+# Auth overview
+
+Text of the entry.

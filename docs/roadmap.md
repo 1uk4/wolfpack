@@ -96,10 +96,6 @@ Wolves become ephemeral containers managed by the Wolfpack CLI.
 *Milestone:* `wolfpack launch dev-wolf` gives you a containerized dev environment wired to
 the VPS KB; VPS daemon wolves run as containers.
 
-**Known unknown (pi-runtime daemon wolves only):** headless Telegram auto-connect without
-tmux pane-scraping. Does not affect the interactive dev wolf. Dissolved entirely if daemon
-wolves move to Phase 4.
-
 ---
 
 ## Phase 4 — Pi Durable for the 24/7 daemon wolves ⬜ · the bet, last

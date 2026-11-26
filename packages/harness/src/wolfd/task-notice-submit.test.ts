@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { Card } from "@wolfpack/protocol";
 import { CARD_DETAILS_KEY } from "../engine/index.js";
 import { EngineBusyError } from "../engine/index.js";
+import { adaptToDurable } from "../adapters/durable.js";
+import { pendingContextNotice } from "../context-notice.js";
+import { section } from "../extension-api.js";
 import { stripSupersededNotes } from "../superseded-note.js";
 import { messagesFromEntries } from "./messages.js";
 import { ThreadRuntime } from "./thread.js";
@@ -26,6 +29,40 @@ function rig(opts: { kind?: string; notice?: () => Promise<{ text: string; commi
   const rt = new ThreadRuntime({ id: "w/home", ...(opts.kind ? { kind: opts.kind } : {}) } as never, conv as never, host);
   return { rt, inputs, commit, taskNotice, conv };
 }
+
+describe("ThreadRuntime wiring of the frozen prompt sections", () => {
+  const ctx = { abortSignal: undefined } as never;
+  const tagged = (t: string) => ({ kb_access: `<kb_access>\n${t}\n</kb_access>` });
+  const thread = (id: string, kind?: string) => {
+    const host = { name: "w", den: "/den-wiring", settleMs: 1, closing: () => false, emitWolf() {}, onError() {} } as never;
+    return new ThreadRuntime({ id: `w/${id}`, ...(kind ? { kind } : {}) } as never, { id } as never, host);
+  };
+  const kb = (text: { v: string }) => {
+    const ext = adaptToDurable({ name: "t", sections: [section("kb_access", () => text.v, { frozen: true })] } as never, { wolfDen: "/den-wiring", wolfName: "w" });
+    return (ext.sections as unknown as Array<{ render(i: unknown, c: unknown): Promise<string | undefined> }>)[0]!;
+  };
+
+  it("a subagent thread's sections render fresh each request (not frozen)", async () => {
+    thread("81", "subagent");
+    const text = { v: "- a (1)" };
+    const sec = kb(text);
+    await sec.render({ conversationId: "81", shown: {} }, ctx);
+    text.v = "- a (1)\n- b (1)";
+    expect(await sec.render({ conversationId: "81", shown: tagged("- a (1)") }, ctx)).toBe(text.v);
+  });
+
+  it("closing a thread frees its context state", async () => {
+    const rt = thread("82");
+    const text = { v: "- a (1)" };
+    const sec = kb(text);
+    await sec.render({ conversationId: "82", shown: {} }, ctx);
+    text.v = "- a (1)\n- b (1)";
+    await sec.render({ conversationId: "82", shown: tagged("- a (1)") }, ctx);
+    expect((await pendingContextNotice("/den-wiring", "82")).text).not.toBe("");
+    await rt.close();
+    expect((await pendingContextNotice("/den-wiring", "82")).text).toBe("");
+  });
+});
 
 describe("ThreadRuntime.submit task notice", () => {
   it("prepends the notice and commits after the engine accepted the message", async () => {

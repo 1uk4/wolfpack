@@ -39,6 +39,7 @@ let status: "idle" | "busy" = "idle";
 let bNeedsYou = false; // thread w/b waits on the owner
 let holdSubmit: Promise<void> | null = null; // a send's POST stays in flight until this settles
 let archived = false;
+let kids: object[] = [];
 let gets: string[] = [];
 const handlers = new Map<string, (d: string) => void>();
 const fakeSource = () => ({ close() {}, onOpen() {}, onEvent: (n: string, cb: (d: string) => void) => void handlers.set(n, cb) });
@@ -53,6 +54,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		return new Response("{}", { status: 200 });
 	}
 	if (init?.method !== "POST") gets.push(url);
+	if (url.endsWith("/threads/a/children")) return Response.json({ threads: kids });
 	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
 	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a", archived ? { closed: true } : {}), th("w/b", bNeedsYou ? { status: "needs-you" } : {})] });
 	return new Response("{}", { status: 404 });
@@ -106,6 +108,7 @@ afterEach(async () => {
 	bNeedsYou = false;
 	holdSubmit = null;
 	archived = false;
+	kids = [];
 	gets = [];
 	handlers.clear();
 });
@@ -160,6 +163,20 @@ describe("ChatBar", () => {
 		await act(async () => go("/kb"));
 		await wait();
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
+	});
+
+	it("the chip row shows the attached thread's running sub-agents (count, names in the tooltip), and nothing when none run", async () => {
+		kids = [{ id: "w/k1", title: "t1", agent: "scout", state: "running", parentThreadId: "w/a" }, { id: "w/k2", title: "t2", agent: "coder", state: "running", parentThreadId: "w/a" }, { id: "w/k3", title: "t3", agent: "old", state: "done", parentThreadId: "w/a" }];
+		await mount("/kb", A);
+		const chip = q('[data-testid="chat-bar-subagents"]')!;
+		assert.equal(chip.getAttribute("aria-label"), "2 sub-agents running");
+		assert.equal(chip.textContent?.trim().endsWith("2"), true);
+		assert.ok(chip.closest('[data-testid="chat-bar"]'), "inside the bar surface");
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		kids = [];
+		await mount("/kb", A);
+		assert.equal(q('[data-testid="chat-bar-subagents"]'), null);
 	});
 
 	it("has no pop-out/dock button", async () => {

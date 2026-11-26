@@ -25,6 +25,10 @@ import { useAttachedStripRow } from "@/components/chat-bar/attached-strip-row";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/thread/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/shell/panel-host";
 import { ViewerPanel } from "@/components/viewer/viewer-panel";
+import { useViewer } from "@/components/viewer/viewer-store";
+import { setVizActive, useVizMode } from "@/components/viewer/viz-mode";
+import { FrameBadges } from "@/components/viewer/frame-badges";
+import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { ViewHostContext, useViewObjectArrivals } from "@/components/viewer/use-view-objects";
 import { ViewerProvider } from "@/components/viewer/viewer-context";
 import { AttachmentChips, Composer } from "@/components/composer/composer";
@@ -486,6 +490,49 @@ function ThreadChatInner({
 	const barOwnsInput = !!attachedApi?.attached && attachedApi.attached.wolf === wolf && attachedApi.attached.threadId === threadId && barShown;
 	const ownedByBar = useRef(false);
 	ownedByBar.current = barOwnsInput;
+
+	// Visualization mode: the owner's per-thread choice (localStorage `wolfpack:viz:<wolf>:<threadId>`) while a view is open. The transcript
+	// and the page composer hide, the viewer fills the width, and the floating chat bar attaches to this thread and shows over it. The
+	// bar owning the input is the existing draft handoff (inert draft hook + re-read on dock). A closing view leaves the mode.
+	const [vizChoice, setVizChoice] = useVizMode(wolf, threadId);
+	const viewerState = useViewer(wolf, threadId);
+	const viewOpen = viewerState.open && viewerState.stack.length > 0;
+	const viz = vizChoice && viewOpen;
+	const vizAttach = attachedApi?.attach;
+	const vizDock = attachedApi?.dock;
+	const vizWasOn = useRef(false);
+	// Only a real open -> closed transition clears the stored choice: on a reload the viewer hydrates after this effect first runs.
+	const prevViewOpen = useRef(viewOpen);
+	useEffect(() => {
+		const wasOpen = prevViewOpen.current;
+		prevViewOpen.current = viewOpen;
+		if (wasOpen && !viewOpen && vizChoice) setVizChoice(false);
+	}, [vizChoice, viewOpen, setVizChoice]);
+	const vizDockRef = useRef(vizDock);
+	vizDockRef.current = vizDock;
+	useEffect(() => {
+		if (viz) {
+			vizWasOn.current = true;
+			setVizActive({ wolf, threadId });
+			vizAttach?.({ wolf, threadId, slug });
+		} else if (vizWasOn.current) {
+			vizWasOn.current = false;
+			setVizActive(null);
+			vizDock?.();
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- attach/dock identities change with the attached state; the mode flip is the trigger
+	}, [viz, wolf, threadId, slug]);
+	// Leaving the page while the mode is on: the bar must not stay attached to this thread on other pages.
+	useEffect(
+		() => () => {
+			setVizActive(null);
+			if (vizWasOn.current) {
+				vizWasOn.current = false;
+				vizDockRef.current?.();
+			}
+		},
+		[],
+	);
 	const draftSchedule = useComposerDraft(
 		wolf,
 		threadId,
@@ -740,7 +787,7 @@ function ThreadChatInner({
 				(getInlineDropSink() ?? (noteMode ? session.addNoteFiles : onFiles))(droppedFiles(e.dataTransfer));
 			}}
 		>
-			<div className="flex min-w-0 flex-1 flex-col">
+			<div className={viz ? "hidden" : "flex min-w-0 flex-1 flex-col"} data-testid="thread-main">
 				<TopBar>
 					<span className="min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl">{title}</span>
 					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
@@ -769,10 +816,14 @@ function ThreadChatInner({
 				)}
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />
-				<div className="relative flex min-h-0 flex-1" data-testid="thread-tint" data-thread-color={tintHex}>
-					<Conversation className="h-full min-w-0 flex-1" initial="instant">
+				<div className="relative flex min-h-0 flex-1 max-md:flex-col" data-testid="thread-tint" data-thread-color={tintHex}>
+					{/* One flex column for everything pinned: checklist / feature progress, then the decision and graph pins. The pins sit below whichever panel is open, at its real height; the column's max height (the thread area minus the composer reserve) caps what is open. On phones it is a flow sibling above the transcript scroller, so it never scrolls away; from md up it overlays the scroller's top. */}
+					<div className="pointer-events-none z-10 flex min-h-0 flex-col max-md:relative max-md:[--pin-max:40%] md:absolute md:inset-x-0 md:top-0 md:[--pin-max:var(--pin-desk)]" style={{ "--pin-desk": `max(6rem, calc(100% - ${dockHeight ?? 160}px))`, maxHeight: "var(--pin-max)" } as React.CSSProperties} data-testid="pinned-column" ref={pinnedColumnRef}>
+						<PinnedStrip wolf={wolf} threadId={threadId} objects={stripObjects} task={featureProgress.state.phase === "ready" ? { model: featureProgress.state.model, busy } : undefined} onDismiss={() => inputRef.current?.focus()} />
+					</div>
+					<Conversation className="h-full min-w-0 flex-1 max-md:h-auto max-md:min-h-0" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
-							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${pinnedHeight > 0 ? "" : "pt-4 max-md:pt-14"}`} style={pinnedHeight > 0 ? { paddingTop: `${pinnedHeight + 8}px` } : undefined} data-testid="transcript-column">
+							<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4 md:pt-[var(--pin-pt)]`} style={{ "--pin-pt": pinnedHeight > 0 ? `${pinnedHeight + 8}px` : "1rem" } as React.CSSProperties} data-testid="transcript-column">
 								{messages.length === 0 && !busy && (
 									<ConversationEmptyState title={title} description="Say something to start a turn." />
 								)}
@@ -945,6 +996,7 @@ function ThreadChatInner({
 										</div>
 									) : barOwnsInput ? null : (
 									<>
+									<FrameBadges wolf={wolf} threadId={threadId} vizOn={viz} />
 									{ask.sheet}
 									{ask.pending && isSupersedable(session.pc) && !noteMode && !ask.composing && text.trim() !== "" && <p data-testid="ask-replace-hint" className="pointer-events-auto px-1 pb-1 font-ui text-xs text-muted-foreground">{session.pc.source?.kind === "tool" ? "Sending a message cancels this confirmation." : "Sending a message replaces the open questions."}</p>}
 									{!ask.composing && (
@@ -993,13 +1045,28 @@ function ThreadChatInner({
 							</div>
 						</div>
 					</Conversation>
-					{/* One flex column for everything pinned: checklist / feature progress, then the decision and graph pins. The pins sit below whichever panel is open, at its real height; the column's max height (the thread area minus the composer reserve) caps what is open. */}
-					<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-h-0 flex-col" style={{ maxHeight: `max(6rem, calc(100% - ${dockHeight ?? 160}px))` }} data-testid="pinned-column" ref={pinnedColumnRef}>
-						<PinnedStrip wolf={wolf} threadId={threadId} objects={stripObjects} task={featureProgress.state.phase === "ready" ? { model: featureProgress.state.model, busy } : undefined} onDismiss={() => inputRef.current?.focus()} />
-					</div>
 				</div>
 			</div>
-			<ViewerPanel wolf={wolf} threadId={threadId} />
+			<ViewerPanel
+				wolf={wolf}
+				threadId={threadId}
+				fill={viz}
+				headerExtra={
+					viewerState.stack[viewerState.stack.length - 1]?.kind === "frame" ? null : (
+					<button
+						type="button"
+						data-testid="viz-toggle"
+						aria-pressed={viz}
+						aria-label={viz ? "Leave visualization mode" : "Visualization mode"}
+						title={viz ? "Show the transcript again" : "Visualization mode: full-width viewer and the chat bar"}
+						onClick={() => setVizChoice(!viz)}
+						className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent max-md:size-11"
+					>
+						{viz ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
+					</button>
+					)
+				}
+			/>
 			<RightPanelHost />
 		</div>
 	);

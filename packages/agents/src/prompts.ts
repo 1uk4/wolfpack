@@ -49,6 +49,8 @@ const STANDARDS: Array<[string, string]> = [
   ["git", "worker and reviewer subagents (and any profile naming it)"],
   ["testing", "worker, planner and reviewer subagents (and any profile naming it)"],
   ["verify-ui", "any profile that names it in its frontmatter `standards:` line"],
+  ["reading", "any profile that names it in its frontmatter `standards:` line (scout points to it)"],
+  ["routine-brief", "read by the orchestrator when briefing fast-tier workers"],
 ];
 
 export const PROMPTS: readonly PromptDef[] = [
@@ -169,7 +171,7 @@ function profileProblem(name: string, text: string): string | undefined {
   const def = parseAgentDefinition(text, "");
   if (!def || def.name !== name) return `frontmatter name must be "${name}" (found "${def?.name ?? ""}")`;
   try {
-    standardsFor(def.name, def.standards);
+    standardsFor(def.standards);
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
   }

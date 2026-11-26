@@ -1,0 +1,6 @@
+
+
+## ACTIVE WORK CONTEXT
+You are bound to: {{title}} [{{kind}}]
+Stage: {{stage}}
+

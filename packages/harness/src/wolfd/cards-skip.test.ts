@@ -39,7 +39,7 @@ describe("skip a card", () => {
     const ack = await tw.client.skipCard!(tw.home, p.callId);
     expect(ack.disposition).toBe("started");
     await drain(tw);
-    expect(seen).toBe(`The user skipped your plain_card question (call ${p.callId}).`);
+    expect(seen).toBe(`The user skipped your plain_card question (call ${p.callId}).\nReply to the owner or continue the work.`);
     const d = await tw.client.getThread(tw.home);
     expect(d.status).toBe("idle");
     expect(d.pendingCards).toBeUndefined();
@@ -88,7 +88,7 @@ describe("skip a card", () => {
     expect(mid.pendingCards!.map((p) => p.heldSkip)).toEqual([true, undefined]);
     expect((await answerPaged(tw.client, tw.home, cards[1].callId, { answer: { value: "two" } })).disposition).toBe("started");
     await drain(tw);
-    expect(seen).toBe(`The user skipped your plain_card question (call ${cards[0].callId}).\nThe user answered your plain_card question (call ${cards[1].callId}):\n- Q2: two`);
+    expect(seen).toBe(`The user skipped your plain_card question (call ${cards[0].callId}).\nThe user answered your plain_card question (call ${cards[1].callId}):\n- Q2: two\nReply to the owner or continue the work.`);
     const calls = await callsOf(tw);
     expect(calls.map((c) => c.closed)).toEqual(["skipped", "answered"]);
     expect((await tw.client.getThread(tw.home)).status).toBe("idle");
@@ -176,7 +176,7 @@ describe("superseding message with an attachment", () => {
 describe("unit", () => {
   it("answerText / superseded notes round-trip", () => {
     const card = { tool: "t", fields: [{ id: "a", kind: "free-text" as const, label: "A" }] };
-    expect(answerText([{ callId: "c1", card, answers: {}, skipped: true }])).toBe("The user skipped your t question (call c1).");
+    expect(answerText([{ callId: "c1", card, answers: {}, skipped: true }])).toBe("The user skipped your t question (call c1).\nReply to the owner or continue the work.");
     const notes = supersededNotes([{ callId: "c1", tool: "t" }, { callId: "c2", tool: "t" }]);
     expect(stripSupersededNotes(`${notes}hello\n\nworld`)).toBe("hello\n\nworld");
     expect(stripSupersededNotes(`${notes}hello`, [{ callId: "c1", tool: "t" }, { callId: "c2", tool: "t" }])).toBe("hello");

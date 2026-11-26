@@ -342,6 +342,9 @@ export class StubServer {
         const status: MemoryStatus = { state: "off", reason: "memory is not loaded on this wolf", pool: null, sessionTopics: [], denTopics: [], lastPromote: null, bound: null };
         return this.json(res, 200, status);
       }
+      case "getFrameFile":
+        this.wolf(params.name);
+        throw new HttpError("not_found", "no frame file");
       case "getMemoryTopic":
         this.wolf(params.name);
         throw new HttpError("memory_unavailable", "memory is not loaded on this wolf");

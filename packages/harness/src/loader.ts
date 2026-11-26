@@ -14,7 +14,6 @@ import { adaptToDurable } from "./adapters/durable.js";
 // Name aliases — wolf.yaml uses short names
 const ALIASES: Record<string, string> = {
   memory: "wolfpack-memory",
-  subagents: "wolfpack-subagents",
   telegram: "wolfpack-telegram",
   tasks: "wolfpack-tasks",
   browser: "wolfpack-browser",
@@ -166,7 +165,7 @@ export async function loadExtensions(
       }
 
       // Adapt to runtime
-      if (runtime === "pi-durable") {
+      {
         const adapted = adaptToDurable(ext, { wolfDen, wolfName, onCardTool });
         result.extensions.push(adapted);
         // Read from the original: the adapter's copy doesn't carry lifecycle
@@ -178,12 +177,6 @@ export async function loadExtensions(
             lifecycle: ext.lifecycle,
           });
         }
-      } else {
-        // Pi runtime extensions are loaded by pi CLI, not the harness
-        result.failed.push({ 
-          name, 
-          error: "Pi runtime extensions should be loaded by pi CLI" 
-        });
       }
     } catch (err) {
       result.failed.push({

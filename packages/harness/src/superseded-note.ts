@@ -4,6 +4,8 @@
  * history and the memory observer both strip it. Notes are added only when the message is built, i.e. for a submit that
  * finds cards pending; a steer/followUp during a run has none (the run's own first message already superseded them).
  */
+import { CONTEXT_NOTICE_HEAD } from "./context-notice.js";
+
 export interface SupersededCard {
   tool: string;
   callId: string;
@@ -24,6 +26,8 @@ export function supersededNotes(cards: readonly SupersededCard[]): string {
   return cards.length ? `${cards.map(noteLine).join("\n")}\n\n` : "";
 }
 
+/** The head of one superseded-note line (what injected-text.ts checks). */
+export const SUPERSEDED_NOTE_LINE = /^\(Your pending [^\n]*? question \(call [^\n]*?\) was superseded by this message\.\)/;
 const ANY_NOTE_HEAD = /^(?:\(Your pending [^\n]*? question \(call [^\n]*?\) was superseded by this message\.\)\n)+\n/;
 
 /**
@@ -53,6 +57,8 @@ export function stripSupersededNotes(text: string, cards?: readonly SupersededCa
  * that starts with "Task update:" survives.
  */
 const PART = String.raw`(?:stage \S+ → \S+|\d+/\d+ tasks shipped|feature tasks changed|Record updated)`;
-const NOTICE_HEAD = new RegExp(String.raw`^Task update: ${PART}(?:; ${PART})*\n\n`);
+export const TASK_NOTICE_HEAD = new RegExp(String.raw`^Task update: ${PART}(?:; ${PART})*\n\n`);
 export const withTaskNotice = (notice: string, text: string): string => (notice ? `${notice}\n\n${text}` : text);
-export const stripTaskNotice = (text: string): string => text.replace(NOTICE_HEAD, "");
+/** The context-update line (context-notice.ts) has one exact grammar, shared with injected-text; operator text that merely starts with "Context update:" survives. */
+export { CONTEXT_NOTICE_HEAD };
+export const stripTaskNotice = (text: string): string => text.replace(TASK_NOTICE_HEAD, "").replace(CONTEXT_NOTICE_HEAD, "");

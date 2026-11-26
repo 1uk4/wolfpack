@@ -1,0 +1,3 @@
+General flag:
+- Set "general": true only for: an owner preference (e.g. "never run gh pr merge; the owner merges"), a standing rule, or an environment or tooling fact that holds beyond this task (e.g. "workers can't run turbo; use npx turbo").
+- Everything else is "general": false, which is the default. When unsure, false.

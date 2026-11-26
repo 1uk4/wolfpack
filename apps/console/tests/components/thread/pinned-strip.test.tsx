@@ -161,6 +161,16 @@ describe("bound task chip", () => {
 		assert.deepEqual(keys(), []);
 	});
 
+	it("a task chip whose item is not the bound task any more opens that work item in the viewer", async () => {
+		ps.pin("t1", { kind: "task", id: "task", title: "work-w-Old", pinnedBy: "agent" });
+		await mount(<PinnedStrip wolf="hal" threadId="t1" objects={objects} />);
+		await click(q(`${chip("task:task")} [data-testid="pinned-chip-open"]`));
+		const s = vs.getViewerState("hal", "t1");
+		assert.equal(s.open, true);
+		assert.deepEqual(s.stack.at(-1), { kind: "work", id: "work-w-Old" });
+		assert.equal(qa(`${chip("task:task")} [data-testid="pinned-chip-dismiss"]`).length, 1, "keeps its x");
+	});
+
 	it("x hides the chip without touching the binding, a re-sync keeps it hidden, and the header toggle shows it again", async () => {
 		tp.syncTaskPin("t1", "work-w-F");
 		await mount(withTask(<tp.TaskPinToggle threadId="t1" bound="work-w-F" />));

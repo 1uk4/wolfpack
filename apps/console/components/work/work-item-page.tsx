@@ -2,26 +2,29 @@
 
 /** A work item page body (/kb/work/[id]): header facts, links to parent / dependencies, plan and Record. */
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { XIcon } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { TaskGraph } from "@/components/work/task-graph";
 import { KbMarkdown } from "@/components/kb/kb-markdown";
-import { fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb/kb-client";
+import { fetchWolves, fetchWorkList, fetchWorkRecord } from "@/components/kb/kb-client";
 import { openReaderLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { TopBar } from "@/components/shell/top-bar";
 import { WorkBadges } from "@/components/work/work-badges";
 import { PendingApprovalBlock } from "@/components/work/approval-request";
+import { GraduateButton } from "@/components/work/graduate-button";
+import { GraduationDetails } from "@/components/work/graduation-details";
 import { useLibrarian } from "@/components/kb/use-librarian";
-import { buildTaskGraph, featureThreadWolves, resolveWork, threadHref, workHref, composeItemDocument, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
+import { loadThreadButtons, runThreadButton } from "@/components/work/feature-thread-actions";
+import { graduateState, buildTaskGraph, featureThreadWolves, resolveWork, threadButtonLabel, workHref, composeItemDocument, workRecordView, workWolfCandidates, type FeatureThreadButton, type WorkRecordResponse } from "@/src/core";
 
 export type WorkPageState =
 	| { kind: "loading" }
 	| { kind: "unavailable" }
 	| { kind: "not_found" }
 	| { kind: "error"; message: string }
-	| { kind: "ready"; item: WorkRecordResponse; parent: WorkRecordResponse | null; /** Wolves a feature thread can open on (features only). */ threadWolves?: string[] };
+	| { kind: "ready"; item: WorkRecordResponse; parent: WorkRecordResponse | null; /** Wolves a feature thread can open on (features only). */ threadWolves?: string[]; /** Per-wolf thread state (none / open / closed); without it every wolf offers "Open thread". */ threadButtons?: FeatureThreadButton[]; /** Set when the item is ready to graduate (features and initiatives): the Graduate button shows, run on the assignee wolf. */ graduate?: { assignee?: string; ready: boolean; reason: string } };
 
 export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id: string; /** "none" hides the page top bar (title, Full page, close) when a shell hosts the page. Default "full". */ chrome?: "full" | "none"; /** Called with the item title once loaded, and again if it changes. */ onTitle?: (title: string) => void; /** Reader-panel mode: draws a close button and fills its container. */ onClose?: () => void; /** Overrides the default navigation to the full page (the reader switches item in place). */ onOpenTask?: (id: string) => void }) {
 	const { librarian, loading } = useLibrarian();
@@ -49,7 +52,18 @@ export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id:
 				const p = await fetchWorkRecord(hit.wolf, item.partOf);
 				if (p.ok) parent = p.data;
 			}
-			done({ kind: "ready", item, parent, threadWolves: item.kind === "feature" && w.ok ? featureThreadWolves(w.data.wolves) : [] });
+			const threadWolves = item.kind === "feature" && w.ok ? featureThreadWolves(w.data.wolves) : [];
+			const threadButtons = threadWolves.length > 0 && !item.container ? await loadThreadButtons(item.id, threadWolves) : undefined;
+			let graduate: { assignee?: string; ready: boolean; reason: string } | undefined;
+			if ((item.kind === "feature" || item.kind === "initiative") && item.domain) {
+				const list = await fetchWorkList(hit.wolf, item.domain, true, 30_000);
+				const rows = list.ok ? list.data.items : null;
+				const self = rows?.find((r) => r.id === item.id);
+				const kids = rows ? rows.filter((r) => r.partOf === item.id).map((r) => ({ stage: r.stage, kind: r.kind, graduated: !!r.graduated })) : null;
+				const gs = self ? graduateState({ kind: item.kind, stage: item.stage, graduated: !!self.graduated, standing: self.standing }, kids) : null;
+				if (self && gs?.show) graduate = { ...(self.assignee ? { assignee: self.assignee } : {}), ready: gs.ready, reason: gs.reason };
+			}
+			done({ kind: "ready", item, parent, threadWolves, threadButtons, ...(graduate ? { graduate } : {}) });
 		})();
 		return () => {
 			cancelled = true;
@@ -58,10 +72,10 @@ export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id:
 
 	const state: WorkPageState = fetched?.id === id && !loading ? fetched.state : { kind: "loading" };
 	const [threadError, setThreadError] = useState<string | null>(null);
-	const openThread = async (wolf: string) => {
+	const openThread = async (b: FeatureThreadButton) => {
 		setThreadError(null);
-		const r = await openFeatureThread(wolf, id);
-		if (r.ok) router.push(threadHref(wolf, r.data.id));
+		const r = await runThreadButton(b, id);
+		if (r.ok) router.push(r.href);
 		else setThreadError(r.message);
 	};
 	return <WorkItemView id={id} state={state} onOpenTask={onOpenTask ?? openWork} onOpenThread={openThread} threadError={threadError} onClose={onClose} chrome={chrome} onTitle={onTitle} />;
@@ -70,7 +84,7 @@ export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id:
 const LABEL = "font-mono text-[11px] uppercase tracking-wide text-muted-foreground";
 
 /** Presentational half (SSR-testable). */
-export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError, onClose, chrome = "full", onTitle }: { id: string; chrome?: "full" | "none"; onTitle?: (title: string) => void; onClose?: () => void; state: WorkPageState; onOpenTask?: (id: string) => void; onOpenThread?: (wolf: string) => void; threadError?: string | null }) {
+export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError, onClose, chrome = "full", onTitle }: { id: string; chrome?: "full" | "none"; onTitle?: (title: string) => void; onClose?: () => void; state: WorkPageState; onOpenTask?: (id: string) => void; onOpenThread?: (b: FeatureThreadButton) => void; threadError?: string | null }) {
 	const item = state.kind === "ready" ? state.item : null;
 	const title = item?.title;
 	const titleRef = useRef(onTitle);
@@ -111,14 +125,17 @@ export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError,
 							Could not load this work item: {state.message}
 						</p>
 					)}
-					{state.kind === "ready" && <WorkBody item={state.item} parent={state.parent} onOpenTask={onOpenTask} threadWolves={state.threadWolves} onOpenThread={onOpenThread} threadError={threadError} />}
+					{state.kind === "ready" && <WorkBody item={state.item} parent={state.parent} onOpenTask={onOpenTask} threadWolves={state.threadWolves} threadButtons={state.threadButtons} graduate={state.graduate} onOpenThread={onOpenThread} threadError={threadError} />}
 				</div>
 			</div>
 		</div>
 	);
 }
 
-function WorkBody({ item, parent, onOpenTask, threadWolves = [], onOpenThread, threadError }: { item: WorkRecordResponse; parent: WorkRecordResponse | null; onOpenTask?: (id: string) => void; threadWolves?: string[]; onOpenThread?: (wolf: string) => void; threadError?: string | null }) {
+function WorkBody({ item, parent, onOpenTask, threadWolves = [], threadButtons, graduate, onOpenThread, threadError }: { graduate?: { assignee?: string; ready: boolean; reason: string }; item: WorkRecordResponse; parent: WorkRecordResponse | null; onOpenTask?: (id: string) => void; threadWolves?: string[]; threadButtons?: FeatureThreadButton[]; onOpenThread?: (b: FeatureThreadButton) => void; threadError?: string | null }) {
+	// Exactly `?view=graduation&wolf=<name>` (the batch card's "More details" link) shows the prepared graduation on top.
+	const params = useSearchParams();
+	const graduationWolf = params?.get("view") === "graduation" ? params.get("wolf") : null;
 	const record = workRecordView(item, parent);
 	const doc = composeItemDocument(item, { record: record.markdown, inheritedFrom: record.fromParent });
 	const graph = item.kind === "feature" ? buildTaskGraph(item, item) : null;
@@ -126,8 +143,14 @@ function WorkBody({ item, parent, onOpenTask, threadWolves = [], onOpenThread, t
 	return (
 		<article>
 			<WorkBadges kind={item.kind} stage={item.stage} domain={item.domain} className="mb-4" />
+			{graduationWolf && <GraduationDetails itemId={item.id} wolf={graduationWolf} assignee={graduate?.assignee} ready={!!graduate?.ready} reason={graduate?.reason ?? "this item cannot be graduated"} />}
 			<PendingApprovalBlock workId={item.id} />
-			{item.kind === "feature" && !item.container && threadWolves.length > 0 && <OpenThread wolves={threadWolves} onOpen={onOpenThread} error={threadError} />}
+			{graduate?.ready && (
+				<div className="mb-4" data-testid="work-page-graduate">
+					<GraduateButton itemId={item.id} assignee={graduate.assignee} via="work" title={item.title} />
+				</div>
+			)}
+			{item.kind === "feature" && !item.container && threadWolves.length > 0 && <OpenThread buttons={threadButtons ?? threadWolves.map((wolf): FeatureThreadButton => ({ wolf, state: "none" }))} onOpen={onOpenThread} error={threadError} />}
 			<dl className="mb-6 flex flex-wrap gap-x-6 gap-y-2 text-sm">
 				{item.partOf && (
 					<div data-fact="parent">
@@ -175,18 +198,19 @@ function WorkBody({ item, parent, onOpenTask, threadWolves = [], onOpenThread, t
 
 
 /** "Open thread": a thread on a wolf bound to this feature (one wolf: a button; several: a button per wolf). */
-function OpenThread({ wolves, onOpen, error }: { wolves: string[]; onOpen?: (wolf: string) => void; error?: string | null }) {
+function OpenThread({ buttons, onOpen, error }: { buttons: FeatureThreadButton[]; onOpen?: (b: FeatureThreadButton) => void; error?: string | null }) {
 	return (
 		<div className="mb-4 flex flex-wrap items-center gap-2" data-testid="open-feature-thread">
-			{wolves.map((w) => (
+			{buttons.map((b) => (
 				<button
-					key={w}
+					key={b.wolf}
 					type="button"
-					data-wolf={w}
-					onClick={() => onOpen?.(w)}
+					data-wolf={b.wolf}
+					data-thread-state={b.state}
+					onClick={() => onOpen?.(b)}
 					className="rounded-md border border-border px-3 py-1 text-sm hover:bg-accent"
 				>
-					{wolves.length > 1 ? `Open thread on ${w}` : "Open thread"}
+					{threadButtonLabel(b, buttons.length > 1)}
 				</button>
 			))}
 			{error && (

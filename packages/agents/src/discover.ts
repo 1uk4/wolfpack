@@ -18,7 +18,7 @@ const reportedUnreadable = new Set<string>();
 
 /**
  * The standards shipped with wolfpack. From source and dist this is `packages/agents/standards`; in the den extension bundle
- * (discover.ts inlined into `wolfpack-subagents/index.js`) it is the `standards` folder copied next to the bundle (`wolfpack.assets`).
+ * (discover.ts inlined into an extension bundle) it is the `standards` folder copied next to the bundle (`wolfpack.assets`).
  */
 export function bundledStandardsDir(): string {
   if (standardsDir === undefined) {
@@ -31,20 +31,12 @@ export function bundledStandardsDir(): string {
 
 const STANDARD_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-// Profiles that always get these standards, whichever directory they come from, so an override cannot drop them by omitting the frontmatter line.
-const ALWAYS_STANDARDS = new Map<string, string[]>([
-  ["worker", ["testing", "git"]],
-  ["planner", ["testing"]],
-  ["reviewer", ["testing", "git"]],
-]);
-
 /**
- * The standards a profile gets: the ones its frontmatter names plus the always-on ones for its name (matched case-insensitively
- * against both the frontmatter name and the name it was requested by), each once. Throws on an invalid standard name.
+ * The standards a profile gets: exactly the ones its frontmatter `standards:` line names, each once. Nothing is appended
+ * from code, so the profile view shows what a child receives. Throws on an invalid standard name.
  */
-export function standardsFor(agentName: string, declared: readonly string[] = [], requestedName?: string): string[] {
-  const always = [agentName, requestedName].flatMap((n) => (n === undefined ? [] : (ALWAYS_STANDARDS.get(n.toLowerCase()) ?? [])));
-  const names = [...new Set([...declared, ...always])];
+export function standardsFor(declared: readonly string[] = []): string[] {
+  const names = [...new Set(declared)];
   for (const name of names) {
     if (!STANDARD_NAME.test(name)) throw new Error(`Invalid standard name "${name}" (letters, digits, "-" and "_" only)`);
   }
@@ -80,8 +72,8 @@ function readStandard(agent: string, name: string, opts: DiscoverOptions): strin
  * Append the profile's standards to its body, so they reach the prompt whichever directory the profile came from.
  * An invalid standard name throws; a standard that cannot be read is logged and left out (the agent still loads).
  */
-function withStandards<T extends AgentDefinition>(def: T, opts: DiscoverOptions, requestedName?: string): T {
-  const names = standardsFor(def.name, def.standards, requestedName);
+function withStandards<T extends AgentDefinition>(def: T, opts: DiscoverOptions): T {
+  const names = standardsFor(def.standards);
   if (!names.length) return def;
   const texts = names.map((n) => readStandard(def.name, n, opts)).filter((t): t is string => t !== undefined);
   return { ...def, body: [def.body, ...texts].filter(Boolean).join("\n\n---\n\n") };
@@ -140,7 +132,7 @@ export function loadAgent(name: string, opts: DiscoverOptions): AgentDefinition 
     const parsed = parseAgentDefinition(readFileSync(p, "utf8"), name);
     if (!parsed) continue;
     try {
-      return withStandards(parsed, opts, name);
+      return withStandards(parsed, opts);
     } catch (err) {
       if (source === "package") throw err;
       console.warn(`Skipping agent profile ${p}: ${err instanceof Error ? err.message : String(err)}`);

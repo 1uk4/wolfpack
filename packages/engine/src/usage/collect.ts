@@ -21,7 +21,7 @@ export interface CollectOptions {
   /** Only this wolf. */
   wolf?: string;
   /**
-   * Read just these dens' engine usage logs and nothing else (no wolvesRoot
+   * Read just these dens' own session.sqlite and engine usage logs and nothing else (no wolvesRoot
    * scan). Lets a running wolf ingest its own den.
    */
   dens?: { den: string; wolf: string; host: string }[];
@@ -37,6 +37,8 @@ export interface SourceFile {
   watch: string[];
   /** pi: `main`, `subagent` or `subagent:<agent>`. */
   use?: string;
+  /** durable: the wolf's own store, read in place from a high-water mark instead of copied. */
+  live?: boolean;
 }
 
 export interface SourceReport {
@@ -81,7 +83,13 @@ export function listSources(opts: CollectOptions): { sources: SourceFile[]; skip
   };
 
   if (opts.dens) {
-    for (const d of opts.dens) engine(d.den, d.host, d.wolf);
+    for (const d of opts.dens) {
+      const store = path.join(d.den, "session.sqlite");
+      if (fs.existsSync(store)) {
+        sources.push({ kind: "durable", wolf: d.wolf, host: d.host, file: store, watch: [store, `${store}-wal`], live: true });
+      }
+      engine(d.den, d.host, d.wolf);
+    }
     return { sources, skipped };
   }
 
@@ -100,6 +108,9 @@ export function listSources(opts: CollectOptions): { sources: SourceFile[]; skip
   }
 
   for (const host of opts.hosts) {
+    // The local host's own dens are read by their wolfd (host label `local`); reading one here under
+    // another namespace would count it twice.
+    if (host === localHost) continue;
     const hostDir = path.join(opts.wolvesRoot, host);
     if (!fs.existsSync(hostDir)) {
       skipped.push(`no mirror for host ${host}`);

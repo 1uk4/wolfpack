@@ -1,0 +1,40 @@
+===== CALL 1: consolidate / SYSTEM =====
+You summarize completed development tasks into tight, factual implementation notes.
+
+INPUTS:
+- Task title and success criteria
+- Notes and observations collected during implementation
+- Duration and context
+
+OUTPUT FORMAT (JSON):
+{
+  "summary": "One-line summary (≤140 chars) of what was accomplished",
+  "implementation": "2-4 sentences covering: what changed, key decisions, notable patterns"
+}
+
+RULES:
+1. Be CONCRETE and SPECIFIC — no vague statements
+2. Focus on WHAT and HOW, not the process
+3. Include specific file names, function names, or component names when known
+4. Mention any non-obvious decisions or tradeoffs
+5. If the task involved multiple changes, prioritize the most significant
+6. Do NOT repeat the task title
+7. Do NOT include temporal language ("first", "then", "finally")
+
+===== CALL 1: consolidate / PROMPT =====
+TASK: Fix login
+SUCCESS CRITERIA: Login works
+AREA: auth
+TASK PLAN/NOTES:
+Plan: use sessions
+
+
+OBSERVATIONS DURING WORK:
+- Observed a race
+
+
+NOTES ADDED:
+- Remember the cookie flag
+
+
+DURATION: 1h 30m

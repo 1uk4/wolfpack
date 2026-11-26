@@ -1,6 +1,6 @@
 /**
  * Seams: the main-side first-run setup (electron/setup.cjs), driven from Node with temp dirs and a fake Anthropic server on 127.0.0.1.
- * Needs `node apps/desktop/scripts/build-runtime.mjs` first; WOLFPACK_DESKTOP_TEST_NODE=1 runs the children under this Node (see supervisor.test.ts).
+ * Needs `node apps/desktop/scripts/build-runtime.mjs` first; WOLFPACK_DESKTOP_TEST_NODE=1 runs the children under this Node, and so does a checkout with no Electron binary (see supervisor.test.ts).
  */
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -75,7 +75,15 @@ describe("key check", () => {
   });
 });
 
-const nodeBin = process.env.WOLFPACK_DESKTOP_TEST_NODE === "1" ? process.execPath : "";
+/** Children run under this Node when WOLFPACK_DESKTOP_TEST_NODE=1 (CI), else under the Electron binary as supervisor.test.ts does; with no Electron installed, under this Node. */
+function pickNodeBin(): string {
+  if (process.env.WOLFPACK_DESKTOP_TEST_NODE === "1") return process.execPath;
+  const electronDir = join(here, "..", "node_modules", "electron");
+  const pathTxt = join(electronDir, "path.txt");
+  if (!existsSync(pathTxt)) return process.execPath;
+  return join(electronDir, "dist", readFileSync(pathTxt, "utf8"));
+}
+const nodeBin = pickNodeBin();
 
 describe("wolves folder", () => {
   it("offers ~/Wolves/local to a new install, keeps ~/Wolves for an older one, and a recorded path or the env wins", () => {
@@ -129,7 +137,7 @@ describe("first-run setup", () => {
       // The wolf-named default domain ("retry") is created on the hub after the start, for its work items.
       expect(reg.domains.map((d: { name: string }) => d.name)).toEqual(["personal", "recipes", "retry"]);
       // The app is its own hub's owner: the hub token (creates that domain) and the console token (key acks, approvals) are owner devices.
-      const listed = spawnSync(nodeBin, [join(runtimeDir, "hubd.mjs"), "tokens", "list", "--data-dir", join(stateDir, "hub")], { encoding: "utf8" }).stdout;
+      const listed = spawnSync(nodeBin, [join(runtimeDir, "hubd.mjs"), "tokens", "list", "--data-dir", join(stateDir, "hub")], { encoding: "utf8", timeout: 30_000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } }).stdout; // without ELECTRON_RUN_AS_NODE the Electron binary opens the app instead of running hubd, and never exits
       const ownerLabels = listed.split("\n").filter((l) => /isOwner=true/.test(l)).map((l) => l.split(/\s+/)[2]);
       expect(ownerLabels).toEqual(["wolf", "console"]);
     } finally {

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeftIcon, PinIcon, XIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowLeftIcon, PinIcon, RotateCwIcon, XIcon } from "lucide-react";
+import { ViewerActionsContext } from "./viewer-actions";
 import { pinView, unpinView, usePinnedViews } from "@/components/thread/pin-store";
 import { viewKey, type ViewDescriptor } from "./view-descriptor";
 import { Button } from "@/components/ui/button";
@@ -39,7 +40,7 @@ export function PinViewButton({ threadId, descriptor, title }: { threadId: strin
  * The thread page's right-hand viewer: a 480px column on md+, a full-screen sheet below. One right column at a time:
  * opening it closes the status (memory) panel, and opening that panel closes the viewer (the stack is kept).
  */
-export function ViewerPanel(props: { wolf: string; threadId: string } | { host: ViewerHost }) {
+export function ViewerPanel(props: ({ wolf: string; threadId: string } | { host: ViewerHost }) & { fill?: boolean; headerExtra?: ReactNode }) {
 	const viewerHost = "host" in props ? props.host : threadHost(props.wolf, props.threadId);
 	const [wolf, threadId] = hostStoreArgs(viewerHost);
 	const v = useViewer(wolf, threadId);
@@ -50,6 +51,10 @@ export function ViewerPanel(props: { wolf: string; threadId: string } | { host: 
 	const shown = v.open && !!top;
 	const [titles, setTitles] = useState<Record<string, string>>({});
 	const closeViewer = v.closeViewer;
+	// A renderer (frame) registers a reload action; the header shows Reload and a pull-down on the header/grab area calls it.
+	const [reload, setReloadFn] = useState<(() => void) | null>(null);
+	const actions = useMemo(() => ({ setReload: (fn: (() => void) | null) => setReloadFn(() => fn) }), []);
+	const pullStart = useRef<{ x: number; y: number } | null>(null);
 
 	// Exclusivity. The viewer opening closes the panel; the panel opening while the viewer is open closes the viewer.
 	const prev = useRef({ shown: false, panelOpen });
@@ -109,12 +114,13 @@ export function ViewerPanel(props: { wolf: string; threadId: string } | { host: 
 	const title = top.title ?? titles[key] ?? top.id;
 	return (
 		<aside
-			className="relative flex w-[480px] shrink-0 flex-col border-l border-border bg-background text-sm max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full max-md:border-l-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]"
+			className={`relative flex ${props.fill ? "min-w-0 flex-1" : "w-[480px] shrink-0"} flex-col border-l border-border bg-background text-sm max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full max-md:border-l-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]`}
 			data-testid="viewer-panel"
 			data-kind={top.kind}
-			style={desktop ? { width } : undefined}
+			data-fill={props.fill ? "true" : undefined}
+			style={desktop && !props.fill ? { width } : undefined}
 		>
-			{desktop && (
+			{desktop && !props.fill && (
 				<div
 					role="separator"
 					aria-orientation="vertical"
@@ -137,20 +143,42 @@ export function ViewerPanel(props: { wolf: string; threadId: string } | { host: 
 					}}
 				/>
 			)}
-			<div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
+			<div
+				className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2"
+				data-testid="viewer-header"
+				onTouchStart={(e) => {
+					const t = e.touches[0];
+					pullStart.current = reload && t ? { x: t.clientX, y: t.clientY } : null;
+				}}
+				onTouchEnd={(e) => {
+					const p0 = pullStart.current;
+					pullStart.current = null;
+					const t = e.changedTouches[0];
+					// A pull: more than 60px down and more than twice the sideways drift.
+					if (reload && p0 && t && t.clientY - p0.y > 60 && t.clientY - p0.y > 2 * Math.abs(t.clientX - p0.x)) reload();
+				}}
+			>
 				{v.stack.length > 1 && (
 					<Button variant="ghost" size="icon" aria-label="Back" data-testid="viewer-back" onClick={v.backView}>
 						<ArrowLeftIcon />
 					</Button>
 				)}
 				<span className="min-w-0 flex-1 truncate font-medium" data-testid="viewer-title">{title}</span>
+				{props.headerExtra}
+				{reload && (
+					<Button variant="ghost" size="icon" aria-label="Reload" data-testid="viewer-reload" onClick={reload}>
+						<RotateCwIcon />
+					</Button>
+				)}
 				{viewerHost.pins && <PinViewButton threadId={threadId} descriptor={top} title={title} />}
 				<Button variant="ghost" size="icon" aria-label="Close viewer" data-testid="viewer-close" onClick={closeViewer}>
 					<XIcon />
 				</Button>
 			</div>
-			<div className="min-h-0 flex-1 overflow-y-auto" data-testid="viewer-body">
-				<Renderer key={key} descriptor={top} onPush={v.pushView} onTitle={(t) => onTitle(key, t)} onClose={closeViewer} />
+			<div className="min-h-0 flex-1 overflow-y-auto" data-testid="viewer-body" style={props.fill ? { paddingBottom: "calc(var(--chat-bar-h, 0px) + 1rem)" } : undefined}>
+				<ViewerActionsContext.Provider value={actions}>
+					<Renderer key={key} descriptor={top} wolf={viewerHost.id.startsWith("thread:") ? wolf : undefined} onPush={v.pushView} onTitle={(t) => onTitle(key, t)} onClose={closeViewer} />
+				</ViewerActionsContext.Provider>
 			</div>
 		</aside>
 	);

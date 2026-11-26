@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { resolveWork, workRecordView, workWolfCandidates, type WorkLookup } from "../../../src/core/work/work-view.ts";
+import { featureThreadButtons, resolveWork, workRecordView, workWolfCandidates, type WorkLookup } from "../../../src/core/work/work-view.ts";
 
 describe("workWolfCandidates", () => {
 	const wolves = [
@@ -55,5 +55,21 @@ describe("resolveWork", () => {
 		const { r, asked } = await run({ a: nf, b: { ok: true, data: item } }, ["a", "b"]);
 		assert.deepEqual(r, { kind: "hit", wolf: "a", result: nf });
 		assert.deepEqual(asked, ["a"]);
+	});
+});
+
+describe("featureThreadButtons", () => {
+	const F = "work-x-F";
+	it("labels each wolf by its thread state and lists the wolf with the live thread first", () => {
+		const out = featureThreadButtons(F, ["hal", "lib", "bob"], {
+			hal: [{ id: "t-old", kind: "feature", boundItem: F, closed: true, closedReason: "Closed by you" }],
+			lib: [{ id: "t-live", kind: "feature", boundItem: F }],
+			bob: [{ id: "other", kind: "feature", boundItem: "work-x-G" }],
+		});
+		assert.deepEqual(out, [
+			{ wolf: "lib", state: "open", threadId: "t-live" },
+			{ wolf: "hal", state: "closed", threadId: "t-old" },
+			{ wolf: "bob", state: "none" },
+		]);
 	});
 });

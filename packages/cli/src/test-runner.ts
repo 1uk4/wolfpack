@@ -10,6 +10,15 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node
 import { createRequire } from "node:module";
 import { setPriority, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+/** True when the repo's vitest config (or a workspace file) defines projects, so `--project default` can match. */
+function configDefinesProjects(root: string): boolean {
+  for (const ext of ["ts", "mts", "js", "mjs", "cts", "cjs"]) {
+    if (existsSync(join(root, `vitest.workspace.${ext}`))) return true;
+    const f = join(root, `vitest.config.${ext}`);
+    if (existsSync(f) && /\bprojects\s*:/.test(readFileSync(f, "utf8"))) return true;
+  }
+  return false;
+}
 import { openCache, cacheKey } from "./test-cache.js";
 import { formatWait, openQueue, QueueCancelled, QUEUE_TIMEOUT_MS, type Ticket } from "./test-queue.js";
 
@@ -279,7 +288,7 @@ export async function runTests(o: RunOptions): Promise<number> {
     } catch {
       /* best effort */
     }
-    // `--project default` keeps *.live.* and *.eval.* files out even when named by path (vitest.config.ts).
+    // `--project default` (only where the config has projects; elsewhere vitest fails with "No projects matched") keeps *.live.* and *.eval.* files out even when named by path (vitest.config.ts).
     const args =
       plan.kind === "console"
         ? [
@@ -290,7 +299,7 @@ export async function runTests(o: RunOptions): Promise<number> {
             ...(plan.namePattern !== undefined ? [`--test-name-pattern=${plan.namePattern}`] : []),
             ...consoleFiles.map((f) => relative(CONSOLE, f)),
           ]
-        : [resolved.bin, ...o.args, "--project", "default", `--maxWorkers=${o.settings.workersPerRun}`, ...(cache ? ["--reporter=default", "--reporter=json", `--outputFile.json=${reportFile}`] : [])];
+        : [resolved.bin, ...o.args, ...(configDefinesProjects(o.root) ? ["--project", "default"] : []), `--maxWorkers=${o.settings.workersPerRun}`, ...(cache ? ["--reporter=default", "--reporter=json", `--outputFile.json=${reportFile}`] : [])];
     const child =
       plan.kind === "console"
         ? spawn(process.execPath, args, { cwd: join(o.root, CONSOLE), env: { ...env, NODE_ENV: "test" }, stdio: ["ignore", "pipe", o.stdio === "ignore" ? "ignore" : "inherit"], detached: true })

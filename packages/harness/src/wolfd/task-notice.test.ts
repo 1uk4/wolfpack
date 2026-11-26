@@ -2,7 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { pendingTaskNotice, stripTaskNotice, withTaskNotice, type TaskNoticeReader, type WorkItemLite } from "./task-notice.js";
+import { section } from "../extension-api.js";
+import { adaptToDurable } from "../adapters/durable.js";
+import { pendingNotices, pendingTaskNotice, stripTaskNotice, withTaskNotice, type TaskNoticeReader, type WorkItemLite } from "./task-notice.js";
 
 let den: string;
 let items: Map<string, { item: WorkItemLite; body: string }>;
@@ -116,5 +118,53 @@ describe("task-update notice", () => {
     expect(text).toBe("Task update: Record updated\n\nhello");
     expect(stripTaskNotice(text)).toBe("hello");
     expect(stripTaskNotice("hello")).toBe("hello");
+  });
+});
+
+describe("context update line", () => {
+  const ctx = { abortSignal: undefined } as never;
+  const memory = { v: "- a.md [x] -- one" };
+  const CTX = "Context update: wolf_memory changed (+1: b.md [x] -- two); read the topic files";
+  /** The frozen wolf_memory section, driven the way pi-durable drives it: render per request with the transcript's text as `shown`. */
+  const render = async (cid: string, shown: string | undefined) => {
+    const ext = adaptToDurable({ name: "t", sections: [section("wolf_memory", () => memory.v, { frozen: true })] } as never, { wolfDen: den, wolfName: "w" });
+    const [sec] = ext.sections as unknown as Array<{ render(i: unknown, c: unknown): Promise<string | undefined> }>;
+    return sec!.render({ conversationId: cid, shown: shown === undefined ? {} : { wolf_memory: `<wolf_memory>\n${shown}\n</wolf_memory>` } }, ctx);
+  };
+  const changeMemory = async (cid: string) => {
+    const first = await render(cid, undefined);
+    memory.v = "- a.md [x] -- one\n- b.md [x] -- two";
+    await render(cid, first);
+  };
+  beforeEach(() => { memory.v = "- a.md [x] -- one"; });
+
+  it("rides after the task update, one commit marks both delivered, and the history strips both", async () => {
+    await boundary(); // baseline for the bound task
+    items.get("T1")!.item.stage = "shipped";
+    await changeMemory("1");
+    const n = await pendingNotices(den, "1", reader);
+    expect(n.text).toBe(`Task update: stage in_build → shipped; 1/3 tasks shipped\n\n${CTX}`);
+    n.commit();
+    expect((await pendingNotices(den, "1", reader)).text).toBe("");
+    expect(stripTaskNotice(stripTaskNotice(withTaskNotice(n.text, "hello")))).toBe("hello");
+  });
+
+  it("still carries the context update on a wolf with no Work API", async () => {
+    await changeMemory("2");
+    expect((await pendingNotices(den, "2")).text).toBe(CTX);
+  });
+
+  it("a slow Work API drops only the task part", async () => {
+    await boundary();
+    items.get("T1")!.item.stage = "shipped";
+    await changeMemory("1");
+    const slow: TaskNoticeReader = { ...reader, get: () => new Promise(() => {}) };
+    expect((await pendingNotices(den, "1", slow, 20)).text).toBe(CTX);
+  });
+
+  it("strips only the generated line: operator text that starts like it survives", () => {
+    expect(stripTaskNotice("Context update: kb_access changed the plan\n\nhi")).toBe("Context update: kb_access changed the plan\n\nhi");
+    expect(stripTaskNotice("Context update: is a phrase I use\n\nhello")).toBe("Context update: is a phrase I use\n\nhello");
+    expect(stripTaskNotice('Context update: active_task changed (now work-wolfpack-AbC1234 "T"); call task_query {current: true}\n\nhi')).toBe("hi");
   });
 });

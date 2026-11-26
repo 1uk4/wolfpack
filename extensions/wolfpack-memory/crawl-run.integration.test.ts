@@ -150,7 +150,7 @@ describe("crawl run wizard as a stepped card (/v1, scripted model)", { timeout: 
     const [p1] = (await b.client.getThread(b.home)).pendingCards!;
     expect((await b.client.skipCard!(b.home, p1.callId)).disposition).toBe("started");
     await b.drain();
-    expect(reply).toBe(`The user skipped your crawl_run question (call ${p1.callId}).`);
+    expect(reply).toBe(`The user skipped your crawl_run question (call ${p1.callId}).\nReply to the owner or continue the work.`);
     const d = await b.client.getThread(b.home);
     expect(d.status).toBe("idle");
     expect(d.messages.flatMap((m) => m.tools ?? []).find((t) => t.callId === p1.callId)).toMatchObject({ closed: "skipped", dismissed: true });

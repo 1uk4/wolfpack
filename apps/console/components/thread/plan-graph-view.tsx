@@ -157,12 +157,12 @@ export function PlanGraphView({
 	};
 	const above = toolbarAbove && draggable && fill;
 	const bar = draggable ? (
-	<div className={above ? "flex items-center justify-end gap-1 p-1" : "absolute right-1 top-1 z-10 flex items-center gap-1"} data-testid="graph-toolbar" onPointerDown={(e) => e.stopPropagation()}>
+	<div className={above ? "flex min-w-0 items-center justify-end gap-1 p-1" : "absolute right-1 top-1 z-10 flex items-center gap-1"} data-testid="graph-toolbar" onPointerDown={(e) => e.stopPropagation()}>
 					{toolbar}
 					{zoomable && (
 						<>
-							<button type="button" data-testid="graph-zoom-out" aria-label="Zoom out" title="Zoom out" onClick={() => zoomBy(0.8)} className="inline-flex size-6 max-md:size-11 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><MinusIcon className="size-3.5" aria-hidden /></button>
-							<button type="button" data-testid="graph-zoom-in" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(1.25)} className="inline-flex size-6 max-md:size-11 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><PlusIcon className="size-3.5" aria-hidden /></button>
+							<button type="button" data-testid="graph-zoom-out" aria-label="Zoom out" title="Zoom out" onClick={() => zoomBy(0.8)} className="inline-flex shrink-0 size-6 max-md:size-11 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><MinusIcon className="size-3.5" aria-hidden /></button>
+							<button type="button" data-testid="graph-zoom-in" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(1.25)} className="inline-flex shrink-0 size-6 max-md:size-11 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><PlusIcon className="size-3.5" aria-hidden /></button>
 						</>
 					)}
 					<button
@@ -171,7 +171,7 @@ export function PlanGraphView({
 						aria-label={zoomable ? "Fit graph to view" : "Re-center graph"}
 						title={zoomable ? "Fit to view" : "Re-center graph"}
 						onClick={recenter}
-						className="inline-flex size-6 max-md:size-11 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+						className="inline-flex shrink-0 size-6 max-md:size-11 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
 					>
 						<FocusIcon className="size-3.5" aria-hidden />
 					</button>

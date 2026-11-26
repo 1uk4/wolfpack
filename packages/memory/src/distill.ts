@@ -65,6 +65,8 @@ export const DistillOutputSchema = z.object({
     )
     .min(1)
     .max(5),
+  /** Graduation only: what the KB gains from this item, 1-2 sentences for the owner (the preview and the approval card). */
+  summary: z.string().nullish().transform((t) => t?.replace(/\s+/g, " ").trim() || undefined),
 });
 
 export interface DistilledContribution {
@@ -164,6 +166,8 @@ export interface DistillResult {
   missingTotals: string[];
   /** Graduation: non-blocking problems for the preview (no History line, no initiative entry…). */
   warnings: string[];
+  /** Graduation: the model's own owner-facing summary of what the KB gains (absent when it gave none). Not capped here. */
+  summary?: string;
 }
 
 function buildPrompt(input: DistillInput, failures?: LintFinding[], missing: string[] = [], noInitiative = false, noFeature = false): string {
@@ -216,13 +220,16 @@ export async function distillTopic(engine: Engine, input: DistillInput): Promise
   const grad = input.graduation;
   const standing = grad?.standingFeature;
   const system = grad ? `${DISTILL_SYSTEM}\n\n${DISTILL_GRADUATION}${standing ? `\n\n${DISTILL_GRADUATION_STANDING}` : ""}` : DISTILL_SYSTEM;
+  let itemSummary: string | undefined;
   const run = async (failures?: LintFinding[], missing: string[] = [], noInitiative = false, noFeature = false) => {
     const raw = await engine.call("distill", DistillOutputSchema, {
       system,
       prompt: buildPrompt(input, failures, missing, noInitiative, noFeature),
     });
     // Commit hashes are scrubbed deterministically, before the lint ever sees them.
-    const all = DistillOutputSchema.parse(raw).contributions.map((c) => ({ ...c, summary: scrubCommitHashes(c.summary), body: scrubCommitHashes(c.body) }));
+    const parsed = DistillOutputSchema.parse(raw);
+    itemSummary = parsed.summary ? scrubCommitHashes(parsed.summary) : undefined;
+    const all = parsed.contributions.map((c) => ({ ...c, summary: scrubCommitHashes(c.summary), body: scrubCommitHashes(c.body) }));
     return grad ? all : all.slice(0, 4).map((c) => ({ ...c, initiative: undefined, feature: undefined }));
   };
   /** The standing feature's contribution: flagged, or slugged "feature". */
@@ -295,7 +302,7 @@ export async function distillTopic(engine: Engine, input: DistillInput): Promise
   const after = outputs.flatMap((o) => lintKnowledge({ title: o.title, summary: o.summary, body: o.feature ? "-" : o.body.replace(/^# [^\n]*\n+/, ""), workIds: grad ? "history" : "none" }));
   const heldCodes = [...new Set(hardFindings(after).map((f) => f.code))];
   const heldDetail = describeFindings(hardFindings(after));
-  return { outputs, retried, before, after, heldCodes, heldDetail, missingTotals: missing, warnings };
+  return { outputs, retried, before, after, heldCodes, heldDetail, missingTotals: missing, warnings, ...(grad && itemSummary ? { summary: itemSummary } : {}) };
 }
 
 const WORK_ID_ANY = /\bwork-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7}\b/g;

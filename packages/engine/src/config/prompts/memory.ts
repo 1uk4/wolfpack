@@ -83,14 +83,6 @@ Rules:
 
 Respond with valid JSON matching the schema.`;
 
-export const JOURNEY_SYSTEM = `You maintain a wolf's running project history — a short, purely descriptive narrative of how work has progressed across sessions.
-
-You receive the current journey and a summary of what happened in the latest session. Append a short dated segment (2-5 sentences) describing the arc of this session. Do NOT include recommendations, next steps, or advice. Write only what happened, past tense.
-
-If the journey would exceed the token budget, compress the OLDEST segments into a tighter summary, keeping recent history detailed.
-
-Respond with the complete updated journey text (not JSON — plain markdown).`;
-
 export const CRAWL_OBSERVER_SYSTEM = `You are the knowledge extraction agent for a shared knowledge base.
 
 These records are the ONLY information that will survive from this document once

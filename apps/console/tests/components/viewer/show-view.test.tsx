@@ -20,7 +20,7 @@ Object.assign(globalThis, {
 	localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) },
 });
 
-const { shouldOpenOnArrival, viewArrivals, ViewHostContext } = await import("../../../components/viewer/use-view-objects.ts");
+const { shouldOpenOnArrival, viewArrivals, viewPinChanges, ViewHostContext } = await import("../../../components/viewer/use-view-objects.ts");
 const { lookupCard } = await import("../../../components/thread/card-registry.tsx");
 const { collapseObjects } = await import("../../../src/core/index.ts");
 const vs = await import("../../../components/viewer/viewer-store.ts");
@@ -75,6 +75,18 @@ describe("view objects", () => {
 	});
 });
 
+describe("pin tool on view objects", () => {
+	const frame = { type: "object", objectId: "usage-frame", objectType: "view", rev: 1, data: { kind: "frame", path: "usage-frame", title: "Usage" } };
+	it("a later pinned:false or pinned:true from the pin tool is reported once per pinRev, only while live", () => {
+		const applied = new Map<string, number>();
+		const msgs = (extra: Record<string, unknown>) => [{ role: "assistant", parts: [{ ...frame, ...extra }] }] as never[];
+		assert.deepEqual(viewPinChanges(msgs({ pinned: true, pinRev: 1 }), applied, true, "w"), [{ descriptor: { kind: "frame", id: "usage-frame", wolf: "w", title: "Usage", rev: 1 }, pinned: true }]);
+		assert.deepEqual(viewPinChanges(msgs({ pinned: false, pinRev: 2 }), applied, true, "w"), [{ descriptor: { kind: "frame", id: "usage-frame", wolf: "w", title: "Usage", rev: 1 }, pinned: false }]);
+		assert.deepEqual(viewPinChanges(msgs({ pinned: false, pinRev: 2 }), applied, true, "w"), []);
+		assert.deepEqual(viewPinChanges(msgs({ pinned: true, pinRev: 3 }), applied, false, "w"), [], "history replay changes nothing");
+	});
+});
+
 describe("open on arrival", () => {
 	it("opens only for a new view on the visible thread on a wide screen", () => {
 		assert.equal(shouldOpenOnArrival({ isNew: true, onScreen: true, viewportWide: true }), true);
@@ -87,11 +99,11 @@ describe("open on arrival", () => {
 		const seen = new Set<string>();
 		const msgs = (rev: number, id: string, extra = {}) => [{ role: "assistant", parts: [viewPart(rev, id, extra)] }] as never[];
 		// history replay (not streaming): marked seen, nothing reported
-		assert.deepEqual(viewArrivals(msgs(1, "a"), seen, false), []);
+		assert.deepEqual(viewArrivals(msgs(1, "a"), seen, false, "w"), []);
 		// same rev again while streaming: still seen
-		assert.deepEqual(viewArrivals(msgs(1, "a"), seen, true), []);
+		assert.deepEqual(viewArrivals(msgs(1, "a"), seen, true, "w"), []);
 		// a revision streams in: reported, pinned carried
-		assert.deepEqual(viewArrivals(msgs(2, "b", { pinned: true }), seen, true), [{ descriptor: { kind: "work", id: "b", title: "T-b" }, pinned: true }]);
-		assert.deepEqual(viewArrivals(msgs(2, "b", { pinned: true }), seen, true), []);
+		assert.deepEqual(viewArrivals(msgs(2, "b", { pinned: true }), seen, true, "w"), [{ descriptor: { kind: "work", id: "b", title: "T-b" }, pinned: true }]);
+		assert.deepEqual(viewArrivals(msgs(2, "b", { pinned: true }), seen, true, "w"), []);
 	});
 });

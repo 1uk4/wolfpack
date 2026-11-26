@@ -42,6 +42,10 @@ const firstLine = (s: string) => s.split("\n").find((l) => l.trim())?.trim() ?? 
 /** What the request asks for: kind, who and when, the whole stored contribution set (graduate) or the target (reassign). */
 export function ApprovalSummary({ request, compact = false }: { request: ApprovalRequest; compact?: boolean }) {
 	const set = request.preview?.contributions ?? [];
+	const summary = request.preview?.summary?.trim();
+	// With a summary the contributions sit behind "Show details"; an older request without one shows them as before.
+	const [open, setOpen] = useState(false);
+	const showSet = !summary || open;
 	return (
 		<div className="space-y-1 text-sm" data-testid="approval-summary" data-kind={request.kind}>
 			<p>
@@ -49,7 +53,17 @@ export function ApprovalSummary({ request, compact = false }: { request: Approva
 				<span className="text-muted-foreground">{time(request.requestedAt)}</span>
 			</p>
 			{request.kind === "reassign" && request.target && <p>Assign to <span className="font-medium">{request.target}</span></p>}
-			{request.kind === "graduate" && (
+			{request.kind === "graduate" && summary && (
+				<p className="font-medium" data-testid="approval-request-summary">
+					{summary}
+				</p>
+			)}
+			{request.kind === "graduate" && summary && (
+				<button type="button" onClick={() => setOpen((o) => !o)} className="text-xs text-primary underline" aria-expanded={open}>
+					{open ? "Hide details" : "Show details"}
+				</button>
+			)}
+			{request.kind === "graduate" && showSet && (
 				<div>
 					<p className="text-muted-foreground">{set.length} {set.length === 1 ? "contribution" : "contributions"} will be sent:</p>
 					<ul className={compact ? "max-h-40 list-disc space-y-0.5 overflow-y-auto pl-5" : "list-disc space-y-0.5 pl-5"}>

@@ -85,6 +85,20 @@ describe("completing a work item unbinds its conversations", () => {
     expect(await sectionText("active_task", 2)).not.toContain("Your previous work item"); // once
   });
 
+  it("the notice's side-effect-free peek leaves the one-shot completed notice for the next real render", async () => {
+    const f = add({ kind: "feature", title: "F" });
+    const t1 = add({ kind: "task", title: "One", partOf: f.id });
+    add({ kind: "task", title: "Two", partOf: f.id });
+    bind(1, t1.id, f.id);
+    bind(2, t1.id, f.id);
+    await run("task_done", { confirm: false }, 1);
+    const active = ext.sections!.find((s) => s.name === "active_task")!;
+    const peeked = await active.peek!({ wolfDen: den, wolfName: "1uk4", conversationId: 2 } as any);
+    expect(peeked).toContain(NOTICE("One")); // the peek shows it...
+    expect(await sectionText("active_task", 2)).toContain(NOTICE("One")); // ...without consuming it
+    expect(await sectionText("active_task", 2)).not.toContain("Your previous work item");
+  });
+
   it("a shipper that binds nothing next is told and unbound on ship", async () => {
     const f = add({ kind: "feature", title: "F" });
     const a = add({ kind: "task", title: "A", partOf: f.id });

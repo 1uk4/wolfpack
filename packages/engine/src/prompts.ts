@@ -37,16 +37,13 @@
  *        [JOURNEY] (appended, simple v1)
  *   buildJourneyPrompt: not yet wired to LLM
  *              │
- *              ├─ JOURNEY_SYSTEM: reserved for future LLM call
- *              │  in: session summary + journey → out: updated journey
- *              │
  *              ▼
  *   ┌──────────────────────────────────────────────────────────┐
  *   │ Den topics + den journey (wolf persistent memory)        │
  *   └──────────────────────────────────────────────────────────┘
  *
  *
- *   KB SWEEP PIPELINE (route → contradict → produce; reorg maintains sections):
+ *   KB SWEEP PIPELINE (route → produce; reorg maintains sections):
  *   ┌──────────────────────────────────────────────────────────┐
  *   │ Contribution (wolf den topic or emitted delta)           │
  *   └──────────┬───────────────────────────────────────────────┘
@@ -55,12 +52,6 @@
  *              │
  *              ├─ SECTION_PICK_SYSTEM: pick ONE section id or NEW
  *              │  in: contribution + digest sections (enum) → out: section
- *              │
- *              ▼
- *   [CONTRADICT] (fast model, conditional)
- *              │
- *              ├─ CONTRADICT_SYSTEM: compare with existing entry
- *              │  in: new text + existing text + dates → out: winner
  *              │
  *              ▼
  *        [PRODUCE] (smart model)
@@ -130,7 +121,6 @@ export {
   OBSERVER_SYSTEM,
   OBSERVER_GENERAL_FLAG,
   CONSOLIDATE_SYSTEM,
-  JOURNEY_SYSTEM,
   CRAWL_OBSERVER_SYSTEM,
   CRAWL_CONSOLIDATE_SYSTEM,
   CRAWL_JOURNEY_SYSTEM,
@@ -174,7 +164,6 @@ export {
  * This prompt is reserved for future LLM-based implementation.
  * Dynamic builder: buildJourneyPrompt (in packages/memory/src/prompts.ts; template in packages/memory/src/config/prompts).
  */
-// JOURNEY_SYSTEM is exported from ./config/prompts/memory.js.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // KB HIERARCHY: SECTION PICK
@@ -287,14 +276,6 @@ Output JSON only: {"categories":[{"name":"...","ids":["..."]}],"doesnt_fit":["id
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * stage: contradict (KB sweep) · model: fast · in: new text + existing text + dates · out: winner
- *
- * Compare a contribution against an existing entry to detect contradictions
- * and determine which should take precedence.
- */
-export const CONTRADICT_SYSTEM = `You compare a NEW knowledge contribution against an EXISTING KB entry. Decide only whether they factually conflict, and if so which should win. Base 'winner' on recency and specificity of evidence, using the supplied dates. IMPORTANT: if the NEW contribution is marked currency=archived and its date is older than the existing entry, prefer 'existing' and treat the new material as historical context, NOT a correction. Also: origin=crawl means the NEW material was bulk-ingested from old documents (a wolf acting as a scribe), not lived/curated knowledge — do not let it overwrite a current entry unless it is clearly more recent AND more specific. Output JSON only.`;
-
-/**
  * stage: matchSubject (KB sweep) · model: fast · in: contribution title+summary + up to 3 candidate entries · out: entry id | "new"
  *
  * Subject check for an uncertain embedding match: is the contribution about the
@@ -324,6 +305,17 @@ Output JSON only: {"verdict": "merge" | "different", "reason": "<one short sente
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
+ * The shared "no progress noise" rule for prompts whose output reaches the KB or a feature Record.
+ * Enforced after the fact by knowledgeLint (commit-hash, work-id, test-count, deploy-status) and
+ * scrubCommitHashes; keep the wording here and the lint codes in step. Work ids get their own rule per prompt
+ * (a History line's closing citation); the den and Record prompts that may keep ids do not use this.
+ */
+export const KB_NO_NOISE = "commit hashes, task ids, test counts, or deploy/build status";
+
+/** Longest KB entry or section title, in characters. One limit for the produce prompt, its lint (long-title) and section labels. */
+export const KB_TITLE_MAX = 70;
+
+/**
  * stage: distill (promote) · model: smart · in: one den topic (+ previous slugs) · out: 1-4 KB contributions
  *
  * A den topic is private working memory: it may carry status, task ids, commit
@@ -344,7 +336,7 @@ CONVERT, DO NOT LOG:
 - When the topic records that a fact CHANGED (it says what was before and what is now, or when it was changed), write the new fact in the body and add one line to a final "## History" section:
   - Until <YYYY-MM-DD>: <old fact>. Now <new fact>, because <why, if the topic says>.
   Use the date the topic gives for the change; if it gives none, use the TOPIC DATE. Each line at most two sentences, dated, with a reason only when known. A line keeps the dated substance (what the old fact was, when, why it changed), never a vague "updated". When History would pass about 15 lines, fold the oldest lines into one summary line saying the full earlier text is in versions/, for example "- Earlier history (before <YYYY-MM-DD>): <summary>; see versions/ for prior text." Omit the section when nothing changed.
-- LEAVE OUT, entirely: commit hashes, task ids, work ids (except the closing citation of a graduation History line, see GRADUATION INPUT), "N tests pass" lines, "deployed" / "verified" / "shipped" status, "unverified live" notes, who did what in which session, next-step lists, what is pending. These stay in the wolf's private notes.
+- LEAVE OUT, entirely: ${KB_NO_NOISE}; also work ids (except the closing citation of a graduation History line, see GRADUATION INPUT), "shipped" status, "unverified live" notes, who did what in which session, next-step lists, what is pending. These stay in the wolf's private notes.
 - Never put a date in a heading or in the body outside History. Never put a hash or id in History (the graduation citation excepted).
 - Do not add facts the topic does not state.
 
@@ -374,7 +366,8 @@ export const DISTILL_GRADUATION = `GRADUATION INPUT. When the input is headed "G
 - TOTALS: when the input lists TOTALS, every value (digits and unit) must appear unchanged in the contribution that reports the outcomes, in its body or History.
 - INITIATIVE: when the input has an INITIATIVE section, add exactly one more contribution about the initiative, with "initiative": true and slug "initiative". Its body is present tense: the initiative's goal and scope, the decisions that span its features, and what this work delivered, as part of the current state. Link to subject entries with [[kb-...]] ONLY for ids listed under KNOWN ENTRIES; with none listed, describe the subjects in words. When the INITIATIVE section says THIS ITEM, the graduating item is the initiative itself: write ONLY the initiative contribution. If the INITIATIVE is marked COMPLETE, say in the body that it is complete and what it achieved overall. A standing initiative never completes: its entry is a live page of the area. Its History line says what this work added, with the same work id. Every other contribution omits "initiative".
 - RECORD LINES: the Record's lines are numbered [r1], [r2]…. For each contribution, list in "recordLines" the numbers of the Record lines it draws on, e.g. ["r2","r5"]. Never write [rN] in a title, summary or body.
-Respond with the same JSON, where a contribution may carry "initiative": true and "recordLines": [string].`;
+- SUMMARY: add a top-level "summary" next to "contributions": ONE or TWO plain sentences, at most 160 characters in all, telling the owner what the knowledge base gains if this work graduates (the subjects it now explains or the decision it records). No ids, hashes, task counts or status words; do not start with "This work".
+Respond with the same JSON plus the top-level "summary", where a contribution may carry "initiative": true and "recordLines": [string].`;
 
 /**
  * stage: distill (graduation of a feature of a STANDING initiative) · appended after DISTILL_GRADUATION
@@ -453,7 +446,7 @@ Respond with strict JSON only: {"lines":[{"kind":"decision|change|finding|proble
 export const WORK_DISTILL_SYSTEM = `You distill a SHIPPED task's log into lines for its FEATURE's Record. You are given the task id and title, the task's LOG, the feature's Outcomes one-liners, and the feature Record's headings with its last few bullets.
 
 Return at most 5 lines. Each line must be useful to someone reading the feature later: a decision with its reason, a lasting change, a finding that stays true, or a problem with its fix. Skip what the Outcomes or the Record bullets already say, and anything routine.
-No commit hashes, task ids, test counts, or deploy/build status. Do not invent facts.
+No ${KB_NO_NOISE}. Do not invent facts.
 
 Respond with strict JSON only: {"lines":[{"group":"Decisions|Changes|Findings|Problems & fixes","text":string}]}`;
 
@@ -513,12 +506,12 @@ WRITING RULES:
   kind "decision" (the pipeline keeps the old one and links the new one to it).
   Otherwise leave "supersedesDecision" false; your output is then discarded and
   the decision stays as it is.
+- TITLE: a noun phrase naming the subject, at most ${KB_TITLE_MAX} characters, never a sentence or a clause with a verb. Put the facts in the summary.
 - LAYOUT: the entry is rendered as "# <title>", then the summary as the lede,
   then the detail. The summary is the whole lede (one paragraph, however many
   sentences it needs). Start the detail at its first "## " section: do NOT
   repeat the title as a "# " heading, do NOT repeat the summary at its top.
-- Never write commit hashes, task ids, "N tests pass" lines, or
-  "deployed"/"verified" status lines anywhere in the entry, and never repeat
+- Never write ${KB_NO_NOISE} anywhere in the entry, and never repeat
   the summary in the detail. A work id appears only as a History line's closing
   citation, never in the title, summary, body or properties. Leave out progress notes; keep only what is true
   of the subject.

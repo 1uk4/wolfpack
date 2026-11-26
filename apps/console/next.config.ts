@@ -5,6 +5,11 @@ const nextConfig: NextConfig = {
 	// scripts/build-server.mjs copies public/ and .next/static next to it.
 	output: "standalone",
 
+	// Agent-assisted Next.js upgrades: security releases only.
+	experimental: {
+		agentUpgrade: "security",
+	},
+
 	// No framing on any route: the console acts with the paired browser's hub token.
 	// tests/next-config.test.ts pins both headers.
 	async headers() {

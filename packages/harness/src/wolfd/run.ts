@@ -15,6 +15,9 @@
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { fenceRoot, safeReadRoots } from "../engine/fence.js";
+import { frameProblem, framesRoot } from "./frames.js";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
 import { effectiveConsolidationInterval, applyWolfMemoryModel, applyWolfTierOverrides, assertSandboxed, loadModelTable, regenerateWolfModelsFile, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
@@ -209,6 +212,15 @@ async function startConfigured(
   const memoryTable = applyWolfMemoryModel(table, config, log);
   const sweep = config.memory.librarian ? librarianSweepFor(config, env, memoryTable, log, opts.sweepTick) : undefined;
   const loaded = await loadConfiguredExtensions(config, env, memoryTable, extra, log, sweep, cardGuard.register);
+  // The frames dir: the visualizer's cwd (profile `cwd: ../frames`), so the write fence keeps its write/edit inside it.
+  mkdirSync(framesRoot(dirname(config.file)), { recursive: true });
+  // Its reads are fenced too: the repo it works in, the KB mirror and the frames dir. A frame can navigate to an outside
+  // URL, so what the visualizer can read must not include keys or config. A root that would widen to the wolf home or $HOME is dropped.
+  const kbDomains = env.KB_BASE ?? (opts.home ? join(opts.home, ".wolfpack", "workerd", "kb-mirror", "domains") : undefined);
+  const unreadable = [dirname(config.file), homedir(), join(homedir(), ".wolfpack"), ...(opts.home ? [opts.home, join(opts.home, ".wolfpack")] : [])];
+  fenceRoot(framesRoot(dirname(config.file)), [], {
+    readRoots: safeReadRoots([config.capability.workspace, kbDomains], unreadable, (r) => log(`warning: visualizer read root ${r} not allowed (it would include the wolf home or $HOME)`)),
+  });
   const askBridge = new AskBridge();
   const ask = adaptToDurable(createAskExtension(askBridge, { diagramCheck: (id) => diagramProblem(config.den, id, env) }), { wolfDen: config.den, wolfName: config.identity.name, onCardTool: cardGuard.register });
   // The card guard ends a whole round that contains a card-raising call (see engine/cards.ts). Tools adapted through
@@ -223,7 +235,7 @@ async function startConfigured(
   // only get them when wolf.yaml `tools:` names "readonly" (the terminal pi does not enable them by default either).
   // A tool another extension already defines keeps that definition.
   const readonlyOptIn = config.capability.tools.includes("readonly");
-  const others = [...toolExtensions.filter((e) => e !== ReadOnlyTools), createObjectsExtension(config.den), ask, cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
+  const others = [...toolExtensions.filter((e) => e !== ReadOnlyTools), createObjectsExtension(config.den, { wolf: config.identity.name, check: (p) => frameProblem(dirname(config.file), p) }), ask, cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
   const taken = new Set(others.flatMap((e) => (e.tools ?? []).map((t) => t.name)));
   const readonlyExt = readOnlyToolsExcluding(taken, (m) => log(`warning: ${m}`));
   const ownReadonly = new Set((readonlyExt?.tools ?? []).map((t) => t.name));

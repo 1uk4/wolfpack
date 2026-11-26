@@ -417,9 +417,21 @@ export function holdUnits({ statusFile, lockFile, units, component, currentVersi
  * for the asset on upload. deploy-release.sh then checks the downloaded tarball against that same .sha256 before installing.
  * `assets` = scripts/release-components.json; `fetch` is injectable.
  */
-export function createReleaseVerifier({ assets, fetch: f = fetch, repo = REPO, timeoutMs = 20_000, channel = "stable" } = {}) {
+export function createReleaseVerifier({ assets, fetch: f = fetch, repo = REPO, timeoutMs = 20_000, channel = "stable", sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+	// A network error (fetch threw, no HTTP response) is retried twice (1s, 3s) on a fresh request: after a long gap the process's
+	// keep-alive connection to GitHub is often closed, and the first fetch throws a bare "fetch failed". HTTP errors are not retried.
+	const backoff = [1000, 3000];
 	const get = async (url, accept) => {
-		const res = await f(url, { headers: { accept, "user-agent": "wolfpack-auto-update" }, signal: AbortSignal.timeout(timeoutMs) });
+		let res;
+		for (let attempt = 0; ; attempt++) {
+			try {
+				res = await f(url, { headers: { accept, "user-agent": "wolfpack-auto-update" }, signal: AbortSignal.timeout(timeoutMs) });
+				break;
+			} catch (e) {
+				if (attempt >= backoff.length) throw e;
+				await sleep(backoff[attempt]);
+			}
+		}
 		if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} for ${url}`), { status: res.status });
 		return res;
 	};

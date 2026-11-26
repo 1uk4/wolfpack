@@ -26,7 +26,7 @@ import { RemoveThreadDialog, ThreadActionsMenu, closedByOwner, slugOfHref, threa
 import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, startVisibleTimer, type WolfStatus, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
 import { settingsUrl } from "@/components/thread/thread-transport";
 import { useServerEvent, useServerResync } from "@/components/shell/server-events";
-import { THREAD_COLORS, threadColor, threadColorIndex, threadAccentStyle, threadSlug, isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread, workHref } from "@/src/core";
+import { THREAD_COLORS, threadColor, threadColorIndex, threadAccentStyle, threadSlug, isChildThread, isLive, rowWolf, sidebarLayout, partitionWolves, togglePinned, toggleHidden, loadWolfPrefs, saveWolfPrefs, type WolfPrefs, stateLabel, threadListItem, type ChatListItem, type ChildThread, workHref } from "@/src/core";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
@@ -368,7 +368,10 @@ export function SessionRow({
 	wolfStatus,
 	onRemoved,
 	dotColor,
+	wolfMenu,
 }: {
+	/** Pin / Hide for the wolf, on its Home row. */
+	wolfMenu?: WolfMenuProps;
 	chat: SessionItem;
 	/** The thread's color (hex) for the dot: its override, else the id's, a subagent's = its parent's. */
 	dotColor?: string;
@@ -454,7 +457,7 @@ export function SessionRow({
 				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
 				indented && "ml-4 w-[calc(100%-1rem)] border-l border-border rounded-l-none",
 				// Phones show the ⋯ button always, pinned at the right: keep the title's ellipsis clear of it.
-				tref && "max-md:pr-12",
+				(tref || (home && wolfMenu)) && "max-md:pr-12",
 				active && "bg-accent shadow-[inset_2px_0_0_var(--thread-accent)]",
 				kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 			)}
@@ -491,6 +494,7 @@ export function SessionRow({
 			{home && wolfStatus && <WolfBadge wolf={wolfStatus} />}
 		</button>
 		{tref && <SessionRowActions tref={tref} chat={chat} onRemoved={onRemoved} />}
+		{home && wolfMenu && <WolfPrefsMenu {...wolfMenu} />}
 		</div>
 	);
 }
@@ -544,11 +548,38 @@ export function WolfBadge({ wolf }: { wolf: WolfStatus }) {
 	);
 }
 
+type WolfMenuProps = { pinned: boolean; hidden: boolean; onPin: () => void; onHide: () => void };
+
+/** The wolf's ⋯ menu: Pin / Hide (per browser). Hover-revealed on desktop, always visible on phones. */
+function WolfPrefsMenu({ pinned, hidden, onPin, onHide }: WolfMenuProps) {
+	const [open, setOpen] = useState(false);
+	const item = (id: string, label: string, fn: () => void) => (
+		<button type="button" role="menuitem" data-testid={`wolf-menu-${id}`} onClick={() => { setOpen(false); fn(); }} className="block w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-accent max-md:min-h-11">
+			{label}
+		</button>
+	);
+	return (
+		<span className="absolute right-1 top-1 inline-flex shrink-0 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100 max-md:opacity-100" onClick={(e) => e.stopPropagation()}>
+			<span className="relative inline-flex">
+				<button type="button" data-testid="wolf-menu-button" aria-label="Wolf actions" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)} className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground max-md:size-11">
+					⋯
+				</button>
+				{open && (
+					<div role="menu" data-testid="wolf-menu" className="absolute right-0 top-full z-40 mt-1 min-w-36 rounded-md border bg-card p-1 shadow-lg">
+						{!hidden && item("pin", pinned ? "Unpin" : "Pin", onPin)}
+						{item("hide", hidden ? "Unhide" : "Hide", onHide)}
+					</div>
+				)}
+			</span>
+		</span>
+	);
+}
+
 /** Header for a known wolf with no Home thread held (zero threads, or only features): same look as the Home row. */
-export function WolfHeaderRow({ wolf }: { wolf: WolfStatus }) {
+export function WolfHeaderRow({ wolf, wolfMenu }: { wolf: WolfStatus; wolfMenu?: WolfMenuProps }) {
 	const wolfHex = wolf.color ? (THREAD_COLORS as Record<string, string>)[wolf.color] : undefined;
 	return (
-		<div data-testid="wolf-header" data-wolf={wolf.name} className={cn("mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2", !wolf.online && "opacity-50")}>
+		<div data-testid="wolf-header" data-wolf={wolf.name} className={cn("group/row relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2", !wolf.online && "opacity-50")}>
 			<span className="min-w-0 flex-1">
 				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--wp-prose-size)">
 					<span data-testid="orchestrator-icon" role="img" aria-label="Orchestrator" className={cn("inline-flex size-[1em] shrink-0", !wolfHex && "text-muted-foreground")} style={wolfHex ? { color: wolfHex } : undefined}>
@@ -559,6 +590,7 @@ export function WolfHeaderRow({ wolf }: { wolf: WolfStatus }) {
 				<span className="block truncate text-xs text-muted-foreground">orchestrator</span>
 			</span>
 			<WolfBadge wolf={wolf} />
+			{wolfMenu && <WolfPrefsMenu {...wolfMenu} />}
 		</div>
 	);
 }
@@ -628,7 +660,23 @@ export function SessionsSidebar() {
 	const searching = query.trim() !== "";
 	const archivedRunning = archived.reduce((n, g) => n + g.kids.filter(isLive).length, 0);
 	const flat = (gs: readonly { top: SessionItem; kids: SessionItem[] }[]) => gs.flatMap((g) => [g.top, ...g.kids]);
-	const shown = useMemo(() => (groups ? [...flat(groups), ...(archivedOpen ? flat(archived) : [])] : null), [groups, archived, archivedOpen]);
+	/* Pin / Hide per wolf, per browser (localStorage; presentation only). Hidden and Archived are small collapsed sections; a search shows everything. */
+	const [prefs, setPrefs] = useState<WolfPrefs>({ pinned: [], hidden: [] });
+	const [showHidden, setShowHidden] = useState(false);
+	useEffect(() => {
+		setPrefs(loadWolfPrefs(typeof localStorage === "undefined" ? undefined : localStorage));
+	}, []);
+	const updatePrefs = (next: WolfPrefs) => {
+		setPrefs(next);
+		saveWolfPrefs(typeof localStorage === "undefined" ? undefined : localStorage, next);
+	};
+	const parts = useMemo(() => (groups ? (searching ? { pinned: [], main: groups, hidden: [] } : partitionWolves(groups, prefs)) : null), [groups, prefs, searching]);
+	const hiddenWolfNames = new Set(searching ? [] : prefs.hidden);
+	const hiddenHeaders = roster.filter((w) => !homeWolves.has(w.name) && hiddenWolfNames.has(w.name));
+	const hiddenCount = new Set([...(parts?.hidden ?? []).map((g) => rowWolf(g.top)), ...hiddenHeaders.map((w) => w.name)]).size;
+	const hiddenOpen = showHidden && !searching;
+	const shown = useMemo(() => (parts ? [...flat(parts.pinned), ...flat(parts.main), ...(showHidden && !searching ? flat(parts.hidden) : []), ...(archivedOpen ? flat(archived) : [])] : null), [parts, archived, archivedOpen, showHidden, searching]);
+	const menuFor = (wolf: string): WolfMenuProps => ({ pinned: prefs.pinned.includes(wolf), hidden: prefs.hidden.includes(wolf), onPin: () => updatePrefs(togglePinned(prefs, wolf)), onHide: () => updatePrefs(toggleHidden(prefs, wolf)) });
 
 	const renderGroup = (g: { top: SessionItem; kids: SessionItem[] }, indented: boolean) => {
 							const row = (c: SessionItem, nested: boolean, indented = false) => {
@@ -642,6 +690,7 @@ export function SessionsSidebar() {
 										indented={indented}
 										offline={offlineWolves.has(rowWolf(c))}
 										wolfStatus={rosterByName.get(rowWolf(c))}
+										wolfMenu={c.kind === "home" && !searching ? menuFor(rowWolf(c)) : undefined}
 										onRemoved={(t) => { if (pathname.endsWith(`/thread/${t.slug}`)) router.push(`/wolf/${encodeURIComponent(t.wolf)}/thread/home`); void refresh(); }}
 										active={pathname === itemHref(c)}
 										kbdSelected={at === kbdIndex}
@@ -975,9 +1024,34 @@ export function SessionsSidebar() {
 						</div>
 					) : (
 						[
-							...groups!.flatMap((g) => renderGroup(g, g.top.kind !== "home" && homeWolves.has(rowWolf(g.top)))),
-							...(searching ? [] : roster.filter((w) => !homeWolves.has(w.name)).map((w) => <WolfHeaderRow key={`wolf-header-${w.name}`} wolf={w} />)),
+							...(parts!.pinned.length > 0 || prefs.pinned.some((n) => roster.some((w) => w.name === n && !homeWolves.has(n)))
+								? [
+										<div key="pinned-label" data-testid="pinned-label" className="px-3 py-1 text-xs uppercase tracking-widest text-muted-foreground/70">Pinned</div>,
+										...parts!.pinned.flatMap((g) => renderGroup(g, g.top.kind !== "home" && homeWolves.has(rowWolf(g.top)))),
+										...prefs.pinned.flatMap((n) => roster.filter((w) => w.name === n && !homeWolves.has(n)).map((w) => <WolfHeaderRow key={`wolf-header-${w.name}`} wolf={w} wolfMenu={menuFor(w.name)} />)),
+									]
+								: []),
+							...parts!.main.flatMap((g) => renderGroup(g, g.top.kind !== "home" && homeWolves.has(rowWolf(g.top)))),
+							...(searching ? [] : roster.filter((w) => !homeWolves.has(w.name) && !prefs.pinned.includes(w.name) && !prefs.hidden.includes(w.name)).map((w) => <WolfHeaderRow key={`wolf-header-${w.name}`} wolf={w} wolfMenu={menuFor(w.name)} />)),
 						]
+					)}
+					{hiddenCount > 0 && (
+						<>
+							<button
+								type="button"
+								data-testid="hidden-toggle"
+								aria-expanded={hiddenOpen}
+								onClick={() => setShowHidden((v) => !v)}
+								className="mt-2 flex w-full items-center gap-1 rounded-lg px-3 py-1 text-left text-xs uppercase tracking-widest text-muted-foreground/70 hover:bg-accent"
+							>
+								{hiddenOpen ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
+								Hidden ({hiddenCount})
+							</button>
+							{hiddenOpen && [
+								...parts!.hidden.flatMap((g) => renderGroup(g, g.top.kind !== "home" && homeWolves.has(rowWolf(g.top)))),
+								...hiddenHeaders.map((w) => <WolfHeaderRow key={`wolf-header-${w.name}`} wolf={w} wolfMenu={menuFor(w.name)} />),
+							]}
+						</>
 					)}
 					{archived.length > 0 && (
 						<>

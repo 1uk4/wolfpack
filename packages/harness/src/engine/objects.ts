@@ -27,7 +27,9 @@ const DESCRIPTIONS: Record<ObjectToolName, string> = {
     "with the same objectId as work progresses to update statuses in place; each revision must resend the full graph, not a diff.",
   show_view:
     "Open a work item (kind work-item) or a KB entry (kind kb-entry) in the owner's viewer panel and leave a small card in the " +
-    "transcript. Pass the full id. Calling it again with the same objectId revises it in place; pinned: true also pins it as a chip.",
+    "transcript. Pass the full id. Calling it again with the same objectId revises it in place; pinned: true also pins it as a chip. Do not pin frames unless the owner asks. " +
+    "Kind frame shows an HTML file the visualizer wrote in your frames dir: pass wolf (your own name) and path (relative to the frames dir, e.g. pack-health.html). " +
+    "For visuals, delegate to the visualizer, then call show_view with kind frame and the path it returns; after it rewrites the file, call again with the same objectId to reload.",
 };
 
 const NAMES = Object.keys(OBJECT_TOOL_PARAMS) as ObjectToolName[];
@@ -102,7 +104,30 @@ const PIN_DESCRIPTION =
   "pinned false hides it, true shows it again (the binding never changes; errors when no task is bound).";
 
 /** `den` is the wolf's den: where the engine registers the conversation reader the pin tool uses to find the object. */
-export function createObjectsExtension(den: string) {
+/** Frame support: the wolf's name and a check of a frame path against its frames dir (an error message, or undefined when the file is fine). */
+export interface FrameOptions {
+  wolf: string;
+  check(path: string): string | undefined | Promise<string | undefined>;
+}
+
+/** Why a frame view cannot be shown (wrong wolf, missing or oversize file), or undefined. Other view kinds pass. */
+async function frameRefusal(data: unknown, frames: FrameOptions | undefined): Promise<string | undefined> {
+  const v = data as { kind?: string; path?: string; wolf?: string };
+  if (v.kind !== "frame") return undefined;
+  if (!frames) return "This wolf has no frames dir, so it cannot show frames.";
+  if (v.wolf !== frames.wolf) return `wolf must be your own name, "${frames.wolf}".`;
+  return frames.check(v.path ?? "");
+}
+
+/** "Invalid arguments." plus the schema's own issue messages (e.g. "path must not contain .."), so the model can correct the call. */
+function invalidArguments(name: string, args: unknown): string {
+  if (!isObjectTool(name)) return "Invalid arguments.";
+  const r = OBJECT_TOOL_PARAMS[name].schema.safeParse(args);
+  if (r.success) return "Invalid arguments.";
+  return `Invalid arguments: ${r.error.issues.map((i) => (i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message)).join("; ")}.`;
+}
+
+export function createObjectsExtension(den: string, frames?: FrameOptions) {
   return defineExtension({
     name: "wolfpack-objects",
     tools: [
@@ -113,9 +138,11 @@ export function createObjectsExtension(den: string) {
           parameters: objectToolJsonSchema(name) as never,
           async execute(args: unknown) {
             const o = objectFromCall(name, args);
+            const refused = o && name === "show_view" ? await frameRefusal(o.data, frames) : undefined;
+            if (refused) return { output: [{ type: "text" as const, text: refused }], isError: true };
             return o
               ? { output: [{ type: "text" as const, text: `Shown ${o.type} "${o.objectId}".` }] }
-              : { output: [{ type: "text" as const, text: "Invalid arguments." }], isError: true };
+              : { output: [{ type: "text" as const, text: invalidArguments(name, args) }], isError: true };
           },
         }),
       ),

@@ -108,6 +108,20 @@ describe("PendingApprovalBlock", () => {
 		assert.deepEqual(posts, ["/api/work/requests/rq1/approve", "/api/work/requests/rq1/reject"]);
 	});
 
+	it("shows the summary on top and keeps the contributions behind Show details; an old request without a summary still renders them", async () => {
+		pending = [{ ...graduate, preview: { ...graduate.preview, summary: "Moves caching docs into the KB." } }];
+		await mount(<PendingApprovalBlock workId="f1" />);
+		assert.equal(q("approval-request-summary")!.textContent, "Moves caching docs into the KB.");
+		assert.doesNotMatch(q("approval-summary")!.textContent!, /Alpha entry/);
+		await click(button("Show details"));
+		assert.match(q("approval-summary")!.textContent!, /Alpha entry/);
+		pending = [graduate];
+		document.body.innerHTML = "";
+		await mount(<PendingApprovalBlock workId="f1" />);
+		assert.equal(q("approval-request-summary"), null);
+		assert.match(q("approval-summary")!.textContent!, /Alpha entry/);
+	});
+
 	it("shows a reassign request's target and no contributions", async () => {
 		pending = [reassign];
 		await mount(<PendingApprovalBlock workId="f1" />);

@@ -52,7 +52,7 @@ describe("CardTracker", () => {
 describe("answerText / validateAnswers", () => {
   it("includes each field's label for every card", () => {
     const text = answerText([{ callId: "a", card: card("Which?"), answers: { answer: { value: "main" } } }]);
-    expect(text).toBe("The user answered your ask question (call a):\n- Which?: main");
+    expect(text).toBe("The user answered your ask question (call a):\n- Which?: main\nReply to the owner or continue the work.");
   });
 
   it("validates single options, other, and unknown fields", () => {

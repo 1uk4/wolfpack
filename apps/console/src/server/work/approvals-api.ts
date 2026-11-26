@@ -36,7 +36,7 @@ async function hubFailure(r: Response): Promise<Response> {
 export function createApprovalsApi(d: ApprovalsApiDeps) {
 	const env = d.env ?? process.env;
 	const doFetch = d.fetch ?? fetch;
-	const call = async (req: Request, method: string, path: string): Promise<Response> => {
+	const call = async (req: Request, method: string, path: string, body?: string): Promise<Response> => {
 		const g = await d.gate(req);
 		if (g instanceof Response) return g;
 		const base = env.WOLFPACK_HUB_URL?.trim().replace(/\/+$/, "");
@@ -50,7 +50,7 @@ export function createApprovalsApi(d: ApprovalsApiDeps) {
 		// An approve is a synchronous multi-item archive on the hub: a short timeout would report a slow success as a failure.
 		const timeoutMs = d.timeoutMs ?? (method === "POST" ? 30_000 : 5000);
 		try {
-			const r = await doFetch(`${base}${path}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(timeoutMs) });
+			const r = await doFetch(`${base}${path}`, { method, headers: { Authorization: `Bearer ${token}`, ...(body !== undefined ? { "content-type": "application/json" } : {}) }, ...(body !== undefined ? { body } : {}), signal: AbortSignal.timeout(timeoutMs) });
 			logApprove(String(r.status));
 			if (!r.ok) return await hubFailure(r);
 			return new Response(await r.text(), { status: r.status, headers: { "content-type": "application/json", ...NO_STORE } });
@@ -65,6 +65,8 @@ export function createApprovalsApi(d: ApprovalsApiDeps) {
 		get: (req: Request, id: string) => call(req, "GET", `/v1/work/requests/${rid(id)}`),
 		approve: (req: Request, id: string) => call(req, "POST", `/v1/work/requests/${rid(id)}/approve`),
 		reject: (req: Request, id: string) => call(req, "POST", `/v1/work/requests/${rid(id)}/reject`),
+		/** Direct graduation by the owner's console login (work-wolfpack-F85qPOc): the body goes to the hub untouched; hubd checks the owner token. */
+		graduateDirect: async (req: Request, id: string) => call(req, "POST", `/v1/work/${rid(id)}/graduate-direct`, await req.text()),
 	};
 }
 

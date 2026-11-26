@@ -7,12 +7,12 @@ import { createHealthApi } from "../../../src/server/pack/health-api.ts";
 import { createApprovalsApi } from "../../../src/server/work/approvals-api.ts";
 import { createSessionWitness } from "../../../src/server/thread/session-witness.ts";
 
-type Call = { method: string; url: string; auth: string | null };
+type Call = { method: string; url: string; auth: string | null; body?: string };
 
 function setup(reply: { status: number; body: unknown } = { status: 200, body: { requests: [] } }) {
 	const calls: Call[] = [];
 	const hubFetch = (async (url: string, init?: RequestInit) => {
-		calls.push({ method: init?.method ?? "GET", url, auth: new Headers(init?.headers).get("authorization") });
+		calls.push({ method: init?.method ?? "GET", url, auth: new Headers(init?.headers).get("authorization"), body: typeof init?.body === "string" ? init.body : undefined });
 		return Response.json(reply.body, { status: reply.status });
 	}) as unknown as typeof fetch;
 	const witness = createSessionWitness({ file: undefined });
@@ -53,6 +53,24 @@ describe("work approvals API", () => {
 		assert.equal(((await res.json()) as { code: string }).code, "forbidden");
 		const done = setup({ status: 409, body: { code: "conflict", message: "already decided", retryable: false } });
 		assert.equal((await done.api.approve(req("POST"), "r1")).status, 409);
+	});
+
+	it("graduate-direct: 401 without a session, body passed through with the caller's bearer, hub 403 and 400 mapped", async () => {
+		const ok = setup({ status: 200, body: { itemId: "i1", sent: 1 } });
+		const payload = JSON.stringify({ contributions: [], via: "card" });
+		const mk = (token: string | null) => new Request("http://c/api/work/i1/graduate-direct", { method: "POST", headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), "content-type": "application/json" }, body: payload });
+		assert.equal((await ok.api.graduateDirect(mk(null), "i1")).status, 401);
+		assert.equal(ok.calls.length, 0);
+		assert.equal((await ok.api.graduateDirect(mk("owner"), "i1")).status, 200);
+		assert.equal(ok.calls[0]?.url, "http://hub.test:3150/v1/work/i1/graduate-direct");
+		assert.equal(ok.calls[0]?.auth, "Bearer owner");
+		assert.equal(ok.calls[0]?.body, payload);
+		const denied = setup({ status: 403, body: { code: "forbidden", message: "owner only" } });
+		assert.equal((await denied.api.graduateDirect(mk("owner"), "i1")).status, 403);
+		const done = setup({ status: 400, body: { code: "invalid_request", message: "item is already graduated" } });
+		const r = await done.api.graduateDirect(mk("owner"), "i1");
+		assert.equal(r.status, 400);
+		assert.deepEqual(await r.json(), { error: "item is already graduated", code: "invalid_request" });
 	});
 
 	it("logs one line per approve relay with the request id and status, and reads a single request", async () => {

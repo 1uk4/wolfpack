@@ -195,7 +195,7 @@ describe("per-conversation binding", () => {
     const fork = await root.fork(newest.id, { ownership: { kind: "ownerless" }, agent }, ctx);
     const forkId = Number(fork.id);
     expect(await reader.classify(forkId)).toMatchObject({ kind: "fork", lineageRoot: 1 });
-    expect((await tool(s, forkId, "task_current")).text).toContain(s.taskA);
+    expect((await tool(s, forkId, "task_query", { current: true })).text).toContain(s.taskA);
     await runOn(fork, say("MARK_FORK"));
     await observed(tw!, forkId);
     expect(pool(den).filter((o) => o.content.includes("MARK_FORK"))).toMatchObject([{ work: s.taskA }]);
@@ -227,7 +227,7 @@ describe("per-conversation binding", () => {
     const taskId = await h.commit((tx) => tx.createTask(Park, {}, { ownership: { kind: "conversation" }, conversationId: 1 as never }), ctx);
     const sub = await h.createConversation({ ownership: { kind: "task", taskId }, agent }, ctx);
     const sid = Number(sub.id);
-    expect((await tool(s, sid, "task_current")).text).toContain(s.taskA);
+    expect((await tool(s, sid, "task_query", { current: true })).text).toContain(s.taskA);
     for (const [name, args] of [["task_bind", { id: s.taskB }], ["task_unbind", {}]] as const) {
       const r = await tool(s, sid, name, args);
       expect(r.isError).toBe(true);
@@ -243,7 +243,7 @@ describe("per-conversation binding", () => {
 
     // (e) unbind takes effect on the very next turn (nothing cached), for the whole lineage.
     expect((await tool(s, 1, "task_unbind")).isError).toBe(false);
-    expect((await tool(s, forkId, "task_current")).text).not.toContain(s.taskA);
+    expect((await tool(s, forkId, "task_query", { current: true })).text).not.toContain(s.taskA);
     await tw!.submit(say("MARK_AFTER"));
     await observed(tw!, 1);
     const after = pool(den).filter((o) => o.content.includes("MARK_AFTER"));
@@ -260,7 +260,7 @@ describe("per-conversation binding", () => {
     const s = await setup(1);
     mkdirSync(join(s.den, "tasks"), { recursive: true });
     writeFileSync(join(s.den, "tasks", "active.json"), JSON.stringify({ taskId: s.taskB, domain: "wolfpack", boundAt: "2026-10-01T00:00:00Z", featureId: s.featureId }));
-    const cur = await tool(s, 1, "task_current");
+    const cur = await tool(s, 1, "task_query", { current: true });
     expect(cur.text).toContain(s.taskB);
     expect(readBindingFile(s.den, 1)).toEqual({ workId: s.taskB, domain: "wolfpack", boundAt: "2026-10-01T00:00:00Z", featureId: s.featureId });
     expect(existsSync(join(s.den, "tasks", "active.json"))).toBe(false);
@@ -268,7 +268,7 @@ describe("per-conversation binding", () => {
     // a later unbind is not undone by a re-migration
     await tool(s, 1, "task_unbind");
     expect(readBindingFile(s.den, 1)).toBeNull();
-    expect((await tool(s, 1, "task_current")).text).not.toContain(s.taskB);
+    expect((await tool(s, 1, "task_query", { current: true })).text).not.toContain(s.taskB);
   });
 
   it("each conversation's active_task section shows its own lineage binding; task_done reports a refused rebind", async () => {

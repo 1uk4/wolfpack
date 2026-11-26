@@ -15,11 +15,6 @@
     "@wolfpack/memory": "*",
     "@wolfpack/kb": "*"
   },
-  "pi": {
-    "extensions": [
-      "./index.ts"
-    ]
-  },
   "wolfpack": {
     "assets": ["../../packages/agents/prompts"]
   },

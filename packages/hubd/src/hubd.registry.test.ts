@@ -46,7 +46,7 @@ function fixtures() {
   const domains = join(src, "domains.yaml");
   writeFileSync(domains, domainsText);
   const wolfA = join(src, "a.yaml");
-  writeFileSync(wolfA, "name: alpha\ndomains: [personal, wolfpack]\ntools: [coding]\nworkspace: /tmp/x\ntiers:\n  fast: { model: m1 }\nruntime: pi\n");
+  writeFileSync(wolfA, "name: alpha\ndomains: [personal, wolfpack]\ntools: [coding]\nworkspace: /tmp/x\ntiers:\n  fast: { model: m1 }\nruntime: pi-durable\n");
   const wolfB = join(src, "b.yaml");
   writeFileSync(wolfB, "name: beta\ndomains: [wolfpack]\n");
   writeFileSync(join(src, "devices.yaml"), "devices: [{name: laptop}]\n");

@@ -177,6 +177,23 @@ describe("ChatBar on a phone", () => {
 		assert.equal(bar().getAttribute("data-layout"), "dock");
 	});
 
+	it("the phone dock lists the thread's frame badges above the input, with the chat icon while viz mode is on", async () => {
+		const { setVizActive } = await import("../../../components/viewer/viz-mode.ts");
+		mem.set("wolfpack:frames:w/a", JSON.stringify([{ objectId: "f1", path: "a.html", title: "Plan", rev: 1 }]));
+		setVizActive({ wolf: "w", threadId: "w/a" });
+		try {
+			await mount();
+			const row = bar().querySelector('[data-testid="frame-badges"]') as HTMLElement;
+			assert.ok(row, "the dock has the badge row");
+			assert.equal(bar().getAttribute("data-layout"), "dock");
+			assert.deepEqual([...row.querySelectorAll('[data-testid="frame-badge"]')].map((b) => b.textContent?.trim()), ["Plan"]);
+			assert.ok(row.querySelector('[data-testid="frame-badges-chat"]'), "the chat icon leaves viz mode");
+			assert.ok(row.compareDocumentPosition(ta()) & 4, "the row comes before the input");
+		} finally {
+			setVizActive(null);
+		}
+	});
+
 	it("keeps every dock control at 44px or more and respects the safe area", async () => {
 		await mount();
 		for (const id of ["chat-bar-chip", "bar-sheet-open", "chat-bar-minimize"]) assert.match(q(`[data-testid="${id}"]`)!.className, /min-h-11/, id);

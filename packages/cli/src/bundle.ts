@@ -1,16 +1,10 @@
 /**
- * Portable identity-bundle builder (remote wolves).
+ * pi-durable harness bundle builder (remote wolves).
  *
- * "Single source of truth": a wolf's PI identity (its `agent/` dir — settings,
- * persona, and extensions) is built here from the repo's `extensions/` plus the
- * wolf's config, then shipped to a host agent as a base64 tar.gz. The agent
- * unpacks it into the wolf's home; the VPS never needs the monorepo.
- *
- * Extensions are bundled with esbuild (Path Z): each becomes a self-contained
- * `index.js` + `package.json` + resource dirs, with Pi-supplied packages left
- * external. No node_modules, no npm on the VPS.
- *
- * Used by both `wolf add` (create) and `wolf sync` (propagate updates).
+ * A wolf's identity (harness.cjs, wolf.yaml, models.json, AGENTS.md and its
+ * extensions) is built here from the repo plus the wolf's config, then shipped
+ * to a host agent by `wolf sync`. Extensions are bundled with esbuild into
+ * self-contained `index.js` files; the VPS never needs the monorepo.
  */
 
 import fs from "node:fs";
@@ -18,39 +12,15 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
-import { parseAgentDefinition, standardsFor } from "@wolfpack/agents";
 import { wolfDenDir, writeModelTable, type ModelTable } from "@wolfpack/engine";
-import {
-  getExtension,
-  extensionsDir,
-  type WolfExtension,
-} from "./extensions.js";
+import { getExtension, extensionsDir } from "./extensions.js";
 import { buildDenExtension, findDenExtension } from "./den-extensions.js";
 import { MODELS_FILE_NAME, modelTableHash } from "./models.js";
 
-/**
- * Packages Pi supplies to extensions at load time — never bundle these.
- * (From the Pi packages doc: `pi` package catalog + typebox.)
- */
-const PI_SUPPLIED_EXTERNALS = [
-  "@earendil-works/pi-ai",
-  "@earendil-works/pi-agent-core",
-  "@earendil-works/pi-coding-agent",
-  "@earendil-works/pi-tui",
-  "typebox",
-];
-
-/** Minimal shape of an extension package.json `pi` field. */
-interface PiManifest {
-  extensions?: string[];
-  agents?: string[];
-  prompts?: string[];
-  skills?: string[];
-  themes?: string[];
-}
+/** Packages the harness supplies to a pi-durable extension at load time; never bundled. */
+const DURABLE_EXTERNALS = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "grammy"];
 
 /** Config fields the bundle needs for settings.json + persona. */
 export interface BundleWolfConfig {
@@ -95,17 +65,6 @@ export interface BundleManifest {
   modelTableHash?: string;
 }
 
-export interface BuiltBundle {
-  /** base64(gzip(tar)) of the `agent/` directory contents. */
-  bundleB64: string;
-  /** Extension keys whose package dir was missing (skipped). */
-  missing: string[];
-  /** Extension keys actually included. */
-  included: string[];
-  /** Version/hash manifest of included extensions. */
-  manifest: BundleManifest;
-}
-
 /** Feed an asset's contents into the hash: a file's bytes, or every file under a folder (sorted, with relative paths). */
 function hashAsset(hash: ReturnType<typeof createHash>, abs: string, rel = path.basename(abs)): void {
   if (fs.statSync(abs).isDirectory()) {
@@ -117,27 +76,9 @@ function hashAsset(hash: ReturnType<typeof createHash>, abs: string, rel = path.
 }
 
 /**
- * Fail the build when a profile shipped in the extension names (or is always given) a standard that is not in the built
- * extension's `standards` folder. At runtime a missing standard only degrades the agent, so this is where it must be caught.
- */
-function assertStandardsShipped(dest: string, agentGlobs: string[] | undefined): void {
-  for (const glob of agentGlobs ?? []) {
-    const agentsDir = path.join(dest, path.basename(glob.replace(/\/[^/]*$/, "")));
-    if (!fs.existsSync(agentsDir)) continue;
-    for (const file of fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md"))) {
-      const def = parseAgentDefinition(fs.readFileSync(path.join(agentsDir, file), "utf8"), file.replace(/\.md$/, ""));
-      if (!def) continue;
-      for (const name of standardsFor(def.name, def.standards, file.replace(/\.md$/, ""))) {
-        const shipped = path.join(dest, "standards", `${name}.md`);
-        if (!fs.existsSync(shipped)) throw new Error(`Agent profile ${file} needs standard "${name}" but ${shipped} is not in the built extension (add the standards folder to wolfpack.assets)`);
-      }
-    }
-  }
-}
-
-/**
  * Compute the stamp (version + content hash) an extension *would* get right now,
  * without building a full bundle. Used by `status`/`list` to detect drift.
+ * Hashes the esbuild output of the package's `pi-durable` entrypoint plus its asset folders.
  * Returns undefined if the extension is unknown or missing from the repo.
  */
 export async function stampExtension(
@@ -149,130 +90,32 @@ export async function stampExtension(
   if (!fs.existsSync(srcDir)) return undefined;
   const pkg = JSON.parse(
     fs.readFileSync(path.join(srcDir, "package.json"), "utf8"),
-  ) as { name?: string; version?: string; pi?: PiManifest; wolfpack?: { assets?: string[] } };
+  ) as {
+    name?: string;
+    version?: string;
+    "pi-durable"?: { extensions?: string[] };
+    wolfpack?: { assets?: string[]; externals?: string[] };
+  };
   const hash = createHash("sha256");
-  for (const entry of pkg.pi?.extensions ?? []) {
+  for (const entry of pkg["pi-durable"]?.extensions ?? []) {
     const built = await esbuild.build({
       entryPoints: [path.resolve(srcDir, entry)],
       bundle: true,
       platform: "node",
-      format: "esm",
+      format: "cjs",
       target: "node20",
-      external: PI_SUPPLIED_EXTERNALS,
+      external: DURABLE_EXTERNALS.concat(pkg.wolfpack?.externals ?? []),
       write: false,
       logLevel: "silent",
     });
     for (const f of built.outputFiles) hash.update(f.contents);
   }
-  // Must match bundleExtension's hash, which includes the asset folders.
   for (const asset of pkg.wolfpack?.assets ?? []) {
     const abs = path.resolve(srcDir, asset);
     if (fs.existsSync(abs)) hashAsset(hash, abs);
   }
   return {
     key,
-    name: pkg.name ?? ext.dir,
-    version: pkg.version ?? "0.0.0",
-    hash: hash.digest("hex").slice(0, 16),
-  };
-}
-
-/**
- * Bundle one extension into `destDir/<dir>/`: esbuild its entry files and copy
- * declared resource dirs (agents/prompts/skills/themes) verbatim.
- */
-export async function bundleExtension(
-  ext: WolfExtension,
-  srcDir: string,
-  destRoot: string,
-): Promise<ExtensionStamp> {
-  const pkgJsonPath = path.join(srcDir, "package.json");
-  const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8")) as {
-    name?: string;
-    version?: string;
-    pi?: PiManifest;
-    /** Extra folders the extension reads at runtime (e.g. "assets"), copied as-is. */
-    wolfpack?: { assets?: string[] };
-  };
-  const pi = pkg.pi ?? {};
-  const dest = path.join(destRoot, ext.dir);
-  fs.mkdirSync(dest, { recursive: true });
-
-  // 1. esbuild each extension entry → self-contained .js (keep basename).
-  const outExtensions: string[] = [];
-  const hash = createHash("sha256");
-  for (const entry of pi.extensions ?? []) {
-    const absEntry = path.resolve(srcDir, entry);
-    const outName = path.basename(entry).replace(/\.(ts|tsx|mts|cts)$/, ".js");
-    const outFile = path.join(dest, outName);
-    await esbuild.build({
-      entryPoints: [absEntry],
-      outfile: outFile,
-      bundle: true,
-      platform: "node",
-      format: "esm",
-      target: "node20",
-      external: PI_SUPPLIED_EXTERNALS,
-      logLevel: "silent",
-    });
-    hash.update(fs.readFileSync(outFile));
-    outExtensions.push(`./${outName}`);
-  }
-
-  // 2. Copy resource dirs declared via globs (e.g. "./agents/*.md").
-  const copyGlobDir = (globs: string[] | undefined): string[] => {
-    const out: string[] = [];
-    for (const g of globs ?? []) {
-      // Only the directory part matters for copying; keep the glob in manifest.
-      const dirPart = g.replace(/\/[^/]*$/, "");
-      const absDir = path.resolve(srcDir, dirPart);
-      if (fs.existsSync(absDir) && fs.statSync(absDir).isDirectory()) {
-        fs.cpSync(absDir, path.join(dest, path.basename(dirPart)), {
-          recursive: true,
-        });
-      }
-      out.push(g);
-    }
-    return out;
-  };
-  const outAgents = copyGlobDir(pi.agents);
-  const outPrompts = copyGlobDir(pi.prompts);
-  const outSkills = copyGlobDir(pi.skills);
-  const outThemes = copyGlobDir(pi.themes);
-
-  // 2b. Copy runtime asset folders (not Pi resources; just files next to the bundle).
-  for (const asset of pkg.wolfpack?.assets ?? []) {
-    const abs = path.resolve(srcDir, asset);
-    if (fs.existsSync(abs)) {
-      fs.cpSync(abs, path.join(dest, path.basename(asset)), { recursive: true });
-      hashAsset(hash, abs);
-    }
-  }
-  assertStandardsShipped(dest, pi.agents);
-
-  // 3. Write a slim package.json: inlined deps, Pi resources repointed to .js.
-  const outPi: PiManifest = { extensions: outExtensions };
-  if (outAgents.length) outPi.agents = outAgents;
-  if (outPrompts.length) outPi.prompts = outPrompts;
-  if (outSkills.length) outPi.skills = outSkills;
-  if (outThemes.length) outPi.themes = outThemes;
-  fs.writeFileSync(
-    path.join(dest, "package.json"),
-    JSON.stringify(
-      {
-        name: pkg.name ?? ext.dir,
-        version: pkg.version ?? "0.0.0",
-        private: true,
-        type: "module",
-        pi: outPi,
-      },
-      null,
-      2,
-    ) + "\n",
-  );
-
-  return {
-    key: ext.key,
     name: pkg.name ?? ext.dir,
     version: pkg.version ?? "0.0.0",
     hash: hash.digest("hex").slice(0, 16),
@@ -314,79 +157,6 @@ function renderPersona(cfg: BundleWolfConfig): string {
     "",
   );
   return lines.join("\n");
-}
-
-/**
- * Build the portable identity bundle for a remote wolf.
- *
- * Produces an `agent/` directory containing:
- *   - settings.json   (packages[] = ./extensions/<dir>, resolved relative to it)
- *   - AGENTS.md       (generated persona)
- *   - extensions/<dir>/ (esbuild-bundled, self-contained)
- * then tars + gzips + base64-encodes it.
- */
-export async function buildRemoteBundle(
-  cfg: BundleWolfConfig,
-): Promise<BuiltBundle> {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wolf-bundle-"));
-  const agentStage = path.join(tmpRoot, "agent");
-  const extStage = path.join(agentStage, "extensions");
-  fs.mkdirSync(extStage, { recursive: true });
-
-  const base = extensionsDir();
-  const included: string[] = [];
-  const missing: string[] = [];
-  const packages: string[] = [];
-  const stamps: ExtensionStamp[] = [];
-
-  try {
-    for (const key of cfg.extensions) {
-      const ext = getExtension(key);
-      if (!ext) {
-        missing.push(key);
-        continue;
-      }
-      const srcDir = path.join(base, ext.dir);
-      if (!fs.existsSync(srcDir)) {
-        missing.push(key);
-        continue;
-      }
-      stamps.push(await bundleExtension(ext, srcDir, extStage));
-      // Relative path — Pi resolves local package paths from the settings file.
-      packages.push(`./extensions/${ext.dir}`);
-      included.push(key);
-    }
-
-    const manifest: BundleManifest = {
-      builtAt: new Date().toISOString(),
-      extensions: stamps,
-    };
-
-    // settings.json
-    fs.writeFileSync(
-      path.join(agentStage, "settings.json"),
-      JSON.stringify({ packages }, null, 2) + "\n",
-    );
-
-    // bundle manifest (drift detection: version + content hash per extension)
-    fs.writeFileSync(
-      path.join(agentStage, "bundle.json"),
-      JSON.stringify(manifest, null, 2) + "\n",
-    );
-
-    // persona
-    fs.writeFileSync(path.join(agentStage, "AGENTS.md"), renderPersona(cfg));
-
-    // tar + gzip + base64 (portable: bsdtar on mac, GNU tar on linux)
-    const tarBuf = execFileSync(
-      "tar",
-      ["-czf", "-", "-C", agentStage, "."],
-      { maxBuffer: 256 * 1024 * 1024 },
-    );
-    return { bundleB64: tarBuf.toString("base64"), missing, included, manifest };
-  } finally {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
-  }
 }
 
 /** Return type for pi-durable harness bundle (individual files, not tarball). */
@@ -509,12 +279,7 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
       format: "cjs",
       target: "node20",
       plugins: playwrightRoot,
-      external: [
-        "@earendil-works/pi-coding-agent",
-        "@earendil-works/pi-tui",
-        "grammy",
-        ...(pkg.wolfpack?.externals ?? []),
-      ],
+      external: DURABLE_EXTERNALS.concat(pkg.wolfpack?.externals ?? []),
       logLevel: "silent",
     });
     if (playwrightFiles) {

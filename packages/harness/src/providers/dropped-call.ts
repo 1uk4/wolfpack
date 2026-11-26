@@ -1,4 +1,5 @@
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { isInjectedUserText } from "../injected-text.js";
 import { roundNotes, type RoundSlot } from "./max-turns.js";
 
 export const DROPPED_CALL_MESSAGE = "The model's tool call was lost (bridge dropped it); please resend";
@@ -7,9 +8,11 @@ export const EMPTY_ACK_MESSAGE = "The model answered with an empty acknowledgeme
  * Sent after every tool-result round, replacing the bridge default "[Continue from the tool result above.]"
  * (pi-claude-bridge-stateless src/stateless/plan.ts:11), which the model read as "nothing asked of me" after
  * acknowledgement-only results (launched, resumed, saved) and answered "No response requested." Passed to the bridge as
- * its `continuePrompt` option; also the user text of an empty-ack retry.
+ * its `continuePrompt` option;.
  */
-export const CONTINUE_PROMPT = "If more work remains, call the next tool. Otherwise write your closing message to the owner: what you did and what is pending. Never reply with 'No response requested' or an empty acknowledgement.";
+export const CONTINUE_PROMPT = "If more work remains, call the next tool; otherwise send your closing message: what you did and what is pending (see Ending a turn). Never reply 'No response requested' or an empty acknowledgement.";
+/** Appended inside the last message of an empty-ack retry. Differs from CONTINUE_PROMPT on purpose: the model already ignored that one. */
+export const EMPTY_ACK_NUDGE = "Your previous reply was empty. Send your closing message to the owner now: what you did, what you found, what is pending (see Ending a turn), or call the next tool.";
 export const NO_TERMINAL_MESSAGE = "The model stream ended without a result";
 
 /**
@@ -48,6 +51,13 @@ const isEmptyAck = (msg: any) => {
   return msg?.stopReason === "stop" && !c.some((b: any) => b?.type === "toolCall")
     && texts.length > 0 && ACK_RE.test(texts.map((b: any) => String(b.text ?? "")).join(""));
 };
+/**
+ * User messages wolfd injects itself (ask result, skip, answer, superseded note, task notice, sub-agent delivery or merge).
+ * The model must answer these, so a bare ack to one is a failure like an ack to a tool result. A genuine owner chat
+ * message is none of these and is never retried (a real "ok" may deserve a short ack).
+ */
+const userText = (m: any): string => typeof m?.content === "string" ? m.content : Array.isArray(m?.content) ? m.content.map((b: any) => (b?.type === "text" ? String(b.text ?? "") : "")).join("") : "";
+const needsAnswer = (last: any) => last?.role === "toolResult" || (last?.role === "user" && isInjectedUserText(userText(last)));
 const stillAckPrefix = (text: string) => ACK.startsWith(text.trim().toLowerCase());
 const isDropped = (slot: RoundSlot, msg: any) =>
   slot.rewrite !== undefined && msg?.stopReason === "stop"
@@ -64,7 +74,7 @@ const addUsage = (msg: any, extra: any) => {
   return { ...msg, usage: sum };
 };
 
-export const withDroppedCallNet = (stream: (...a: any[]) => any, log: (line: string) => void = (l) => console.warn(l)) =>
+export const withDroppedCallNet = (stream: (...a: any[]) => any, log: (line: string) => void = (l) => console.warn(l), forget?: (sessionId: string) => unknown) =>
   (model: any, context: any, options?: any) => {
     const out = createAssistantMessageEventStream();
     void (async () => {
@@ -72,7 +82,7 @@ export const withDroppedCallNet = (stream: (...a: any[]) => any, log: (line: str
       let lastMsg: any;
       let started = false;
       let thinkingShown = false;
-      let ctx = context; // an empty-ack retry gets CONTINUE_PROMPT as an explicit user message: the same prompt would likely repeat the ack
+      let ctx = context; // an empty-ack retry runs on a copy whose last message carries EMPTY_ACK_NUDGE
       for (let attempt = 1; attempt <= 2; attempt++) {
         const slot: RoundSlot = {};
         const inner = roundNotes.run(slot, () => stream(model, ctx, options));
@@ -80,8 +90,15 @@ export const withDroppedCallNet = (stream: (...a: any[]) => any, log: (line: str
         let committed = false; // visible text or a tool call was released
         const release = () => { const h = held; held = undefined; h?.forEach((e) => out.push(e)); };
         let retry = false;
-        const ackCtx = (context?.messages ?? []).at(-1)?.role === "toolResult";
-        const retryCtx = () => ({ ...context, messages: [...(context?.messages ?? []), { role: "user", content: CONTINUE_PROMPT, timestamp: Date.now() }] });
+        const ackCtx = needsAnswer((context?.messages ?? []).at(-1));
+        // The nudge rides inside the last message (tool result or injected user text), never as a standalone owner-like user turn.
+        const retryCtx = () => {
+          const msgs = [...(context?.messages ?? [])];
+          const last = msgs.at(-1);
+          const c = last?.content;
+          msgs[msgs.length - 1] = { ...last, content: typeof c === "string" ? `${c}\n\n${EMPTY_ACK_NUDGE}` : [...(Array.isArray(c) ? c : []), { type: "text", text: EMPTY_ACK_NUDGE }] };
+          return { ...context, messages: msgs };
+        };
         let textAcc = "";
         for await (const e of inner as AsyncIterable<any>) {
           if (e.type === "done") {
@@ -89,6 +106,9 @@ export const withDroppedCallNet = (stream: (...a: any[]) => any, log: (line: str
             if (!committed && (ack || isDropped(slot, e.message))) {
               log(ack ? `claude-stateless: EMPTY ACK (attempt ${attempt})` : `claude-stateless: DROPPED TOOL CALL (attempt ${attempt}): ${slot.rewrite}`);
               lastMsg = e.message;
+              // Claude Code itself writes the ack into the resumed session file as a <synthetic> record (and the bridge's verify
+              // skips such records), so the next round would replay it. Drop the file; the next round rebuilds it from pi's transcript.
+              if (ack && forget && options?.sessionId) { try { await forget(options.sessionId); } catch (err) { log(`claude-stateless: could not drop the session after an empty ack: ${err instanceof Error ? err.message : String(err)}`); } }
               if (options?.signal?.aborted) {
                 out.push({ type: "error", reason: "aborted", error: { ...addUsage(e.message, carried), content: [], stopReason: "aborted", errorMessage: "aborted" } });
                 out.end();

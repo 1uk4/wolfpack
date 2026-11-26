@@ -69,6 +69,16 @@ describe("the work page offers a thread for a feature", () => {
 		assert.match(two, /Open thread on hal/);
 	});
 
+	it("labels each wolf's button by its thread: go to the open one, reopen the closed one, open for none", () => {
+		const html = renderToStaticMarkup(
+			<WorkItemView id="work-x-F" state={{ kind: "ready", item: feat, parent: null, threadWolves: ["1uk4", "hal", "bob"], threadButtons: [{ wolf: "hal", state: "open", threadId: "t1" }, { wolf: "1uk4", state: "closed", threadId: "t2" }, { wolf: "bob", state: "none" }] }} />,
+		);
+		assert.match(html, /Go to thread on hal/);
+		assert.match(html, /Reopen thread on 1uk4/);
+		assert.match(html, /Open thread on bob/);
+		assert.ok(html.indexOf("Go to thread on hal") < html.indexOf("Reopen thread on 1uk4"), "the live thread's wolf is first");
+	});
+
 	it("a task, a container, or no wolf online offers none", () => {
 		const task = renderToStaticMarkup(<WorkItemView id="t" state={{ kind: "ready", item: { ...feat, id: "t", kind: "task" }, parent: null, threadWolves: [] }} />);
 		assert.doesNotMatch(task, /open-feature-thread/);
@@ -76,6 +86,15 @@ describe("the work page offers a thread for a feature", () => {
 		assert.doesNotMatch(none, /open-feature-thread/);
 		const inbox = renderToStaticMarkup(<WorkItemView id="i" state={{ kind: "ready", item: { ...feat, container: true }, parent: null, threadWolves: ["1uk4"] }} />);
 		assert.doesNotMatch(inbox, /open-feature-thread/);
+	});
+
+	it("offers Graduate (work-wolfpack-F85qPOc) only when the page found the item ready to graduate", () => {
+		const ready = renderToStaticMarkup(<WorkItemView id="work-x-F" state={{ kind: "ready", item: { ...feat, stage: "shipped" }, parent: null, graduate: { assignee: "hal", ready: true, reason: "" } }} />);
+		assert.match(ready, /data-testid="graduate-button"/);
+		const notReady = renderToStaticMarkup(<WorkItemView id="work-x-F" state={{ kind: "ready", item: feat, parent: null, graduate: { assignee: "hal", ready: false, reason: "not shipped yet" } }} />);
+		assert.doesNotMatch(notReady, /graduate-button/);
+		const plain = renderToStaticMarkup(<WorkItemView id="work-x-F" state={{ kind: "ready", item: feat, parent: null }} />);
+		assert.doesNotMatch(plain, /graduate-button/);
 	});
 
 	it("targets: online wolves, the librarian last", () => {

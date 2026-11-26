@@ -125,6 +125,24 @@ export function startDevConsole({ home, env, dir, port, stackPort, node, uid, la
 	loadAgent({ home, env, args: [node, next, "dev", "--hostname", "127.0.0.1", "--port", port], workingDir: app, port, stackPort, uid, launchctl });
 }
 
+/**
+ * After a runtime update: restart the preview console agent when it serves this runtime checkout, so it stops handing out HTML
+ * for chunks the new build replaced. Refreshes the standalone copy of .next/static first. Does nothing when no agent is installed
+ * or it serves another checkout (a preview worktree, a dev console). → "none" | "other-build" | "restarted" | "failed".
+ */
+export function restartConsole({ home, runtimeDir, uid, launchctl, prepare = prepareConsole }) {
+	const file = plistPath(home);
+	if (!fs.existsSync(file)) return "none";
+	const wd = /<key>WorkingDirectory<\/key>\s*<string>([^<]*)<\/string>/.exec(fs.readFileSync(file, "utf8"))?.[1];
+	if (!wd || !(wd === runtimeDir || wd.startsWith(runtimeDir + path.sep))) return "other-build";
+	try {
+		prepare(runtimeDir);
+	} catch {
+		/* no standalone build: the kickstart below still reloads whatever is there */
+	}
+	return launchctl("kickstart", "-k", `gui/${uid}/${CONSOLE_LABEL}`) === 0 ? "restarted" : "failed";
+}
+
 export function stopConsole({ home, uid, launchctl }) {
 	launchctl("bootout", `gui/${uid}/${CONSOLE_LABEL}`);
 	fs.rmSync(plistPath(home), { force: true });

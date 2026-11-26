@@ -3,7 +3,7 @@
  * them, so ls is a small in-process version on the call's execution environment and grep/find search in a worker thread
  * under a hard deadline (so they respect the conversation's cwd, a worktree included, and cannot block wolfd). All cap
  * their output and say when a cap or the deadline stopped a search. `guarded_bash` is the durable `bash` tool behind the
- * same read-only command guard the terminal pi uses (@wolfpack/agents command-guard, shared with extensions/wolfpack-subagents).
+ * same read-only command guard (@wolfpack/agents command-guard).
  */
 import { Worker } from "node:worker_threads";
 import { Type } from "typebox";
@@ -11,6 +11,7 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { getOrThrow, type ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { createBashTool, type BashExecution } from "@earendil-works/pi-durable/tools";
 import type { Extension } from "@earendil-works/pi-durable";
+import { fenceReadTool } from "./fence.js";
 import { checkReadOnlyCommand, routeTestCommand } from "@wolfpack/agents";
 
 export const READONLY_TOOL_NAMES = ["ls", "grep", "find", "guarded_bash"] as const;
@@ -279,7 +280,7 @@ const guardedBash = (() => {
   };
 })();
 
-const ALL_TOOLS = [lsTool, grepTool, findTool, guardedBash];
+const ALL_TOOLS = [fenceReadTool(lsTool), fenceReadTool(grepTool), fenceReadTool(findTool), guardedBash];
 
 /** `ls`, `grep`, `find` and `guarded_bash` as one extension. */
 export const ReadOnlyTools = defineExtension({ name: "wolfd-readonly-tools", tools: ALL_TOOLS }) as unknown as Extension;

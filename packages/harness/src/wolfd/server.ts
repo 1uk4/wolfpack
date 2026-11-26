@@ -64,7 +64,7 @@ import { prepareSocketPath } from "./socket.js";
 import type { AskBridge } from "../extensions/ask.js";
 import { diagramPath } from "../diagrams.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
-import { pendingTaskNotice, workApiReader } from "./task-notice.js";
+import { pendingNotices, workApiReader } from "./task-notice.js";
 import { WolfSettingsStore, SettingsError } from "./wolf-settings.js";
 import { PutWolfSettingsBodySchema, RevealBodySchema } from "@wolfpack/protocol";
 import { postStartRejectionCount } from "../crash-guard.js";
@@ -76,6 +76,7 @@ import { readOnlyCatalog, type ToolInfo } from "./prompt-catalog.js";
 import { GraduationJobs } from "./graduation-jobs.js";
 import { watchApprovals, type ApprovedRequest, type HubEventsTarget } from "./hub-approvals.js";
 import { GitInfo } from "./workspace-info.js";
+import { readFrameFile } from "./frames.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
 import { SubagentManager, type SubagentOptions } from "./subagents.js";
 import { readFeatureClosed, unbindOnGraduation, writeThreadAutoShip } from "@wolfpack/memory";
@@ -368,7 +369,7 @@ export class WolfServer {
       descendantsOf: (id) => this.relatives(id, "down"),
       onError: (e) => this.opts.onError?.(e),
       applyTier: (c, tier) => (this.opts.conversations?.setTier ? this.opts.conversations.setTier(c, tier) : Promise.resolve()),
-      ...(this.opts.den && this.opts.work?.endpoint ? { taskNotice: (cid: string) => pendingTaskNotice(this.opts.den as string, cid, workApiReader(this.opts.work ?? {})) } : {}),
+      ...(this.opts.den ? { taskNotice: (cid: string, deadlineMs?: number) => pendingNotices(this.opts.den as string, cid, this.opts.work?.endpoint ? workApiReader(this.opts.work) : undefined, deadlineMs) } : {}),
     });
     this.threads.set(summary.id, t);
     if (this.opts.onTurnEnd) {
@@ -1089,6 +1090,20 @@ export class WolfServer {
         const t = thread !== null ? this.checkThread(thread) : this.home;
         const bound = this.opts.den ? await readBound(this.opts.den, t.conv.id, this.opts.work ?? {}) : null;
         return this.json(res, 200, await readMemoryStatus(this.memoryReadInput(), this.lastPromote(), bound, (this.opts.den ? memoryActionsFor(this.opts.den)?.promotingJob?.() : null) ?? null));
+      }
+      case "getFrameFile": {
+        this.checkWolf(params.name);
+        if (!this.opts.wolfHome) throw new HttpError("not_found", "this wolf has no home to keep frames in");
+        const bytes = await readFrameFile(this.opts.wolfHome, url.searchParams.get("path"));
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Content-Length": bytes.length,
+          "X-Content-Type-Options": "nosniff",
+          "Content-Security-Policy": "sandbox",
+          "Cache-Control": "no-store",
+        });
+        res.end(bytes);
+        return;
       }
       case "getMemoryTopic": {
         this.checkWolf(params.name);

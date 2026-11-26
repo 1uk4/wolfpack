@@ -104,6 +104,7 @@ describe("card field kind validation (pure)", () => {
         "- Ship it?: no (Hold)",
         "The user answered your raise question (call c3):",
         "- Ship it?: yes (Ship) — go",
+        "Reply to the owner or continue the work.",
       ].join("\n"),
     );
     expect(answerText([{ callId: "c", card: MULTI, answers: { m: { value: [] } } }])).toContain("(none selected)");

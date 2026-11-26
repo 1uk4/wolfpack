@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BookOpenIcon, GaugeIcon, GitForkIcon, ListChecksIcon, ListTreeIcon, PinIcon, ScaleIcon, XIcon, type LucideIcon } from "lucide-react";
+import { AppWindowIcon, BookOpenIcon, GaugeIcon, GitForkIcon, ListChecksIcon, ListTreeIcon, PinIcon, ScaleIcon, XIcon, type LucideIcon } from "lucide-react";
 import { ChecklistItems } from "@/components/thread/checklist-card";
 import { DecisionCard } from "@/components/thread/decision-card";
 import { PlanGraphCard } from "@/components/thread/plan-graph-card";
@@ -52,7 +52,7 @@ export function useSyncObjectPins(threadId: string, objects: readonly StripObjec
 	}, [threadId, objects]);
 }
 
-const KIND_ICON: Record<string, LucideIcon> = { work: ListTreeIcon, kb: BookOpenIcon, checklist: ListChecksIcon, decision: ScaleIcon, graph: GitForkIcon, task: GaugeIcon };
+const KIND_ICON: Record<string, LucideIcon> = { work: ListTreeIcon, kb: BookOpenIcon, checklist: ListChecksIcon, decision: ScaleIcon, graph: GitForkIcon, task: GaugeIcon, frame: AppWindowIcon };
 const INLINE = new Set(["checklist", "decision", "graph", "task"]);
 
 function useWide(): boolean {
@@ -90,7 +90,8 @@ export function PinnedStrip({ wolf, threadId, objects, task, onDismiss }: { wolf
 	const openTask = open?.kind === "task" && task ? task : undefined;
 	const body = openObject ? <ObjectBody o={openObject} /> : openTask ? <FeatureProgressPanel model={openTask.model} /> : null;
 	const click = (p: Pin) => {
-		if (INLINE.has(p.kind)) setExpanded(threadId, key(p) === expanded ? null : p);
+		if (p.kind === "task" && !task && p.title) v.openView({ kind: "work", id: p.title });
+		else if (INLINE.has(p.kind)) setExpanded(threadId, key(p) === expanded ? null : p);
 		else v.openView({ kind: p.kind, id: p.id, ...(p.title ? { title: p.title } : {}) });
 	};
 	const dismissChip = (p: Pin) => {

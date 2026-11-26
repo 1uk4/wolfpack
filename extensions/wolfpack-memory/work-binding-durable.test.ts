@@ -38,6 +38,8 @@ async function fetchImpl(url: string | URL, init: RequestInit = {}) {
   if (init.method === "PATCH") {
     if (body.stage) it.stage = body.stage;
     if ("moveTo" in body) it.partOf = body.moveTo;
+    if (body.link) it.links = [...(it.links ?? []), body.link];
+    if (body.unlink) it.links = (it.links ?? []).filter((l: any) => !(l.rel === body.unlink.rel && l.target === body.unlink.target));
     if (body.note) it.log.push({ at: "now", text: body.note });
     if (typeof body.body === "string") it.body = body.body;
     return json({ item: it });
@@ -71,9 +73,11 @@ afterEach(() => {
 
 describe("durable task tools: binding", () => {
   it("has bind, unbind and current; the section says where learning goes while unbound", async () => {
-    for (const t of ["task_bind", "task_unbind", "task_current"]) expect(tool(t)).toBeDefined();
+    for (const t of ["task_bind", "task_unbind", "task_query"]) expect(tool(t)).toBeDefined();
     expect(await sectionText("active_task")).toContain("No work item bound: what you learn now goes to den topics, not to a work item. Bind the item you're working on (task_bind).");
     expect(await sectionText("task_tools")).not.toContain("workItem");
+    expect(await sectionText("task_tools")).toContain("always write the full `work-<domain>-<id>`");
+    expect(await sectionText("task_tools")).toContain("Graduation:\n- Never graduate on your own.");
   });
 
   it("task_create binds a new task when nothing is bound (feature = a real parent), and not twice", async () => {
@@ -84,6 +88,37 @@ describe("durable task tools: binding", () => {
     const r2 = await run("task_create", { kind: "task", domain: "wolfpack", title: "T2", partOf: f.id });
     expect(r2).toContain("Not bound: another item is already bound");
     expect((await readBoundTask(den))?.taskId).toBe("work-2");
+  });
+
+  it("task_create with items creates each in order, binds nothing, resolves $N parents and keeps earlier items when a later one fails", async () => {
+    const r = await run("task_create", { items: [
+      { kind: "feature", domain: "wolfpack", title: "Feat" },
+      { kind: "task", domain: "wolfpack", title: "Child", partOf: "$0", successCriteria: "done" },
+      { kind: "task", domain: "nope", title: "Bad" },
+      { kind: "task", domain: "wolfpack", title: "Orphan", partOf: "$2" },
+    ] });
+    const lines = r.split("\n");
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toBe("1. Created work-1 Feat");
+    expect(lines[1]).toBe("2. Created work-2 Child");
+    expect(lines[2]).toBe("3. Error: Not subscribed to domain: nope");
+    expect(lines[3]).toMatch(/^4\. Error: /);
+    expect(items.get("work-2")!.partOf).toBe("work-1");
+    expect(items.size).toBe(2);
+    expect(await readBoundTask(den)).toBeNull();
+  });
+
+  it("task_link with links adds each link, and remove:true removes them, one reply line per link", async () => {
+    const a = add({ kind: "task", title: "A" });
+    const b = add({ kind: "task", title: "B" });
+    const c = add({ kind: "task", title: "C" });
+    const added = await run("task_link", { id: a.id, links: [{ rel: "depends_on", target: b.id }, { rel: "blocks", target: c.id }] });
+    expect(added.split("\n")).toEqual([`${a.id} depends_on ${b.id}`, `${a.id} blocks ${c.id}`]);
+    expect(items.get(a.id)!.links).toEqual([{ rel: "depends_on", target: b.id }, { rel: "blocks", target: c.id }]);
+    const removed = await run("task_link", { remove: true, links: [{ id: a.id, rel: "depends_on", target: b.id }] });
+    expect(removed).toBe(`Removed: ${a.id} depends_on ${b.id}`);
+    expect(items.get(a.id)!.links).toEqual([{ rel: "blocks", target: c.id }]);
+    expect(ext.tools!.find((t) => t.name === "task_unlink")).toBeUndefined();
   });
 
   it("task_move with an id moves that item and leaves the binding alone", async () => {
@@ -140,12 +175,20 @@ describe("durable task tools: binding", () => {
     expect((await readBoundTask(den))?.taskId).toBe(a.id);
   });
 
+  it("task_query lists only open features of a domain when open is set", async () => {
+    const f1 = add({ kind: "feature", title: "Open feature" });
+    const f2 = add({ kind: "feature", title: "Done feature", stage: "shipped" });
+    const out = await run("task_query", { domain: "wolfpack", kind: "feature", open: true });
+    expect(out).toContain(f1.id);
+    expect(out).not.toContain(f2.id);
+  });
+
   it("unbind clears, current reports it", async () => {
     const a = add({ kind: "task", title: "A" });
     await run("task_bind", { id: a.id });
-    expect(await run("task_current")).toContain(`ID: ${a.id}`);
+    expect(await run("task_query", { current: true })).toContain(`ID: ${a.id}`);
     await run("task_unbind");
-    expect(await run("task_current")).toBe("No task currently bound.");
+    expect(await run("task_query", { current: true })).toBe("No task currently bound.");
     expect(await readBoundTask(den)).toBeNull();
     expect(JSON.parse(readFileSync(bindingFile(den, 1), "utf8"))).toBeNull();
   });
@@ -180,6 +223,8 @@ describe("durable task tools: subagent sessions (PI_SUBAGENT_AGENT)", () => {
 
     expect(await section("active_task")).toBe("");
     expect(await section("task_tools")).not.toContain("Work item binding");
+    expect(await section("task_tools")).toContain("always write the full `work-<domain>-<id>`"); // a subagent child gets the work-id rule too
+    expect(await section("task_tools")).not.toContain("Graduation:");
     for (const [tool, args] of [["task_bind", { id: mine.id }], ["task_unbind", {}]] as const) {
       const r = await call(tool, args);
       expect(r.isError, tool).toBe(true);
@@ -208,12 +253,12 @@ describe("durable task tools: finishing the last task stays bound until graduate
     expect(await run("task_done", { confirm: false })).toContain(`Bound to next: [${t2.id}]`);
     const last = await run("task_done", { confirm: false });
     expect(last.split("\n").at(-1)).toBe("Bound to F (all tasks done — ready to graduate)");
-    expect(last).toContain("Tell the user");
+    expect(last).toContain("Make ONE light offer to graduate it");
     expect(await readBoundTask(den)).toEqual({ taskId: f.id, featureId: f.id });
-    // the section is a stable header; the ready label and stage live in task_current
+    // the section is a stable header; the ready label and stage live in task_query current
     expect(await sectionText("active_task")).toContain("**Feature:** [");
     expect(await sectionText("active_task")).not.toContain(readyLine);
-    expect(await run("task_current", {})).toContain(readyLine);
+    expect(await run("task_query", { current: true })).toContain(readyLine);
     // task_done does not ship the feature
     const again = await tool("task_done").execute({ confirm: false }, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 });
     expect(again.isError).toBe(true);
@@ -263,7 +308,7 @@ describe("durable task tools: the Active Task section is a stable header", () =>
     return sectionText("active_task");
   };
 
-  it("is byte-identical across task_note, task_stage and a Record update, and says to call task_current", async () => {
+  it("is byte-identical across task_note, task_stage and a Record update, and says to call task_query {current: true}", async () => {
     const f = add({ kind: "feature", title: "F", successCriteria: "it works", body: "# F\n\n## Plan\n\nx\n" });
     const t1 = add({ kind: "task", title: "T1", partOf: f.id });
     add({ kind: "task", title: "T2", partOf: f.id });
@@ -271,7 +316,7 @@ describe("durable task tools: the Active Task section is a stable header", () =>
     const before = await settle();
     expect(before).toContain(`**Task:** [${t1.id}] T1 (kind: task)`);
     expect(before).toContain(`[${f.id}] F`);
-    expect(before).toContain("Call task_current for the plan, notes and current stage.");
+    expect(before).toContain("Call task_query {current: true} for the plan, notes and current stage.");
     expect(before).not.toContain("Stage:");
     expect(before).not.toContain("Working Document");
 
@@ -283,8 +328,8 @@ describe("durable task tools: the Active Task section is a stable header", () =>
     await sectionText("active_task"); // schedules a refresh
     expect(await settle()).toBe(before);
 
-    // task_current has the volatile state in full
-    const current = await run("task_current", {});
+    // task_query current has the volatile state in full
+    const current = await run("task_query", { current: true });
     expect(current).toContain("in_build");
     expect(current).toContain("new fact");
   });

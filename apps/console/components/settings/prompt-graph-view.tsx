@@ -29,6 +29,17 @@ export function PromptGraphCanvas({ graph, selected, onSelect, toolbar }: { grap
 	);
 	// The Tools graph has 17+ leaves: one-line nodes and rows level with their group, so it fits the box at a readable scale.
 	const compact = graph.key === "tools";
+	// A wolf whose runtime is older than this console does not list some prompts: say so instead of drawing a blank canvas.
+	if (graph.nodes.length === 0) {
+		return (
+			<div className="flex h-full min-w-0 flex-col">
+				{toolbar ? <div className="flex min-w-0 items-center p-1" data-testid="graph-toolbar">{toolbar}</div> : null}
+				<p className="m-auto max-w-sm p-4 text-center text-sm text-muted-foreground" role="status" data-testid="prompt-graph-empty">
+					{graph.key === "request" ? "This wolf's runtime does not list per-request prompts yet. Update and restart it to see them." : `This wolf's runtime does not list any ${graph.title} prompts yet. Update and restart it to see them.`}
+				</p>
+			</div>
+		);
+	}
 	return (
 		<PlanGraphView
 			key={`${graph.key}:${graph.nodes.length}`}

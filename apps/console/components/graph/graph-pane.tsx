@@ -17,12 +17,13 @@
  * pane's content follows the cursor's node because the view hands it that
  * node's card.
  */
+import { loadThreadButtons, runThreadButton } from "@/components/work/feature-thread-actions";
 import { openWorkHrefLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { openKbLink, useOpenView, viewFromHref } from "@/components/viewer/viewer-context";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { XIcon } from "lucide-react";
-import type { KbEntryDetail, NodeCard, WorkRecordResponse } from "@/src/core";
+import type { FeatureThreadButton, KbEntryDetail, NodeCard, WorkRecordResponse } from "@/src/core";
 import {
 	GRAPH_PANE_WIDTH_KEY,
 	PaneCache,
@@ -35,16 +36,16 @@ import {
 	parsePaneWidth,
 	resolveWork,
 	stageLabel,
-	threadHref,
+	threadButtonLabel,
 	workWolfCandidates,
 	type PaneWork,
 } from "@/src/core";
 import { KbMarkdown } from "@/components/kb/kb-markdown";
-import { fetchKbEntry, fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb/kb-client";
+import { fetchKbEntry, fetchWolves, fetchWorkRecord } from "@/components/kb/kb-client";
 import { EntryBody } from "@/components/kb/entry-reader";
 import { Field, KIND_LABEL, LinkList } from "./graph-card.tsx";
 import { createGraduateClient, type GraduateClient } from "../kb/graduate-client";
-import { GraduateControl } from "../kb/graduate-dialog";
+import { GraduateButton } from "../work/graduate-button";
 import { useGraduated } from "../kb/graduation-signal";
 import { RouteNav, isEditableTarget, type RouteNavModel } from "./graph-route-nav.tsx";
 
@@ -293,16 +294,29 @@ export function GraphPane({
 		window.addEventListener("pointercancel", up);
 	};
 
-	const openThread = async (wolf: string) => {
+	const openThread = async (b: FeatureThreadButton) => {
 		setThreadError(null);
 		setThreadBusy(true);
-		const r = await openFeatureThread(wolf, card.id.slice("work:".length));
+		const r = await runThreadButton(b, card.id.slice("work:".length));
 		setThreadBusy(false);
-		if (r.ok) onNavigate(threadHref(wolf, r.data.id));
+		if (r.ok) onNavigate(r.href);
 		else setThreadError(r.message);
 	};
 
 	const threadWolves = data.kind === "work" ? data.threadWolves : [];
+	const threadWolvesKey = threadWolves.join(",");
+	const [threadStates, setThreadStates] = useState<{ key: string; buttons: FeatureThreadButton[] } | null>(null);
+	useEffect(() => {
+		if (!threadWolvesKey) return;
+		let cancelled = false;
+		void loadThreadButtons(card.id.slice("work:".length), threadWolvesKey.split(",")).then((buttons) => {
+			if (!cancelled) setThreadStates({ key: `${card.id}|${threadWolvesKey}`, buttons });
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [card.id, threadWolvesKey]);
+	const threadButtons: FeatureThreadButton[] = threadStates?.key === `${card.id}|${threadWolvesKey}` ? threadStates.buttons : threadWolves.map((wolf) => ({ wolf, state: "none" }));
 	// A feature's (or initiative's) children come with its record; without them (older server) a shipped feature counts as ready.
 	const graduateState_ =
 		data.kind === "work"
@@ -377,9 +391,9 @@ export function GraphPane({
 								Open page
 							</Link>
 						)}
-						{threadWolves.map((w) => (
-							<button key={w} type="button" data-testid="pane-open-thread" data-wolf={w} disabled={threadBusy} onClick={() => void openThread(w)} className={`${BTN} disabled:opacity-40`}>
-								{threadWolves.length > 1 ? `Open thread on ${w}` : "Open thread"}
+						{threadButtons.map((b) => (
+							<button key={b.wolf} type="button" data-testid="pane-open-thread" data-wolf={b.wolf} data-thread-state={b.state} disabled={threadBusy} onClick={() => void openThread(b)} className={`${BTN} disabled:opacity-40`}>
+								{threadButtonLabel(b, threadButtons.length > 1)}
 							</button>
 						))}
 						{card.focusIds && (
@@ -391,7 +405,12 @@ export function GraphPane({
 				)}
 				{card.kind === "work" && (
 					<div className="mt-3 empty:hidden">
-						<GraduateControl key={card.id} target={{ id: card.id.slice("work:".length), title: card.title, assignee: card.assignee }} state={graduateState_} client={graduateClient} showReason testid="pane-graduate" />
+						{graduateState_.show && graduateState_.ready && <GraduateButton key={card.id} itemId={card.id.slice("work:".length)} title={card.title} assignee={card.assignee} via="graph" client={graduateClient} testid="pane-graduate" />}
+						{graduateState_.show && !graduateState_.ready && (
+							<span data-testid="pane-graduate-reason" className="text-[11px] text-muted-foreground">
+								Not ready to graduate: {graduateState_.reason}
+							</span>
+						)}
 					</div>
 				)}
 				{threadError && (

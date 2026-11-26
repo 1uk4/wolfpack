@@ -1,15 +1,13 @@
 /**
- * oracles — the three narrow LLM calls, each a thin engine.call wrapper with a
- * tight Zod contract. Two run on the fast model and are conditional; one (label)
- * is deferrable. Everything else in the sweep is deterministic code.
+/**
+ * oracles — narrow LLM calls, each a thin engine.call wrapper with a tight Zod
+ * contract. Everything else in the sweep is deterministic code.
  */
 import type { Engine } from "@wolfpack/engine";
 import { classifyError } from "./backoff.js";
 import { BudgetExceeded } from "./park.js";
-import { CONTRADICT_SYSTEM, SECTION_PICK_SYSTEM, MATCH_SUBJECT_SYSTEM, CONFIRM_SUBJECT_SYSTEM } from "@wolfpack/engine";
+import { SECTION_PICK_SYSTEM, MATCH_SUBJECT_SYSTEM, CONFIRM_SUBJECT_SYSTEM } from "@wolfpack/engine";
 import {
-  ContradictResultSchema,
-  type ContradictResult,
   SectionPickSchema,
   type SectionPick,
   MatchSubjectSchema,
@@ -18,26 +16,6 @@ import {
 
 export function createOracles(engine: Engine) {
   return {
-    async contradict(
-      newText: string,
-      existingText: string,
-      dates?: {
-        newDate?: string;
-        newCurrency?: string;
-        existingDate?: string;
-        newOrigin?: string;
-      }
-    ): Promise<ContradictResult> {
-      const header = dates
-        ? `NEW date: ${dates.newDate ?? "unknown"} (currency: ${dates.newCurrency ?? "live"}, origin: ${dates.newOrigin ?? "wolf"})\n` +
-          `EXISTING date: ${dates.existingDate ?? "unknown"}\n\n`
-        : "";
-      return engine.call("contradict", ContradictResultSchema, {
-        system: CONTRADICT_SYSTEM,
-        prompt: `${header}NEW:\n${newText}\n\nEXISTING:\n${existingText}`,
-      });
-    },
-
     /**
      * classifyToSection — route a contribution to a section from a closed set.
      * 

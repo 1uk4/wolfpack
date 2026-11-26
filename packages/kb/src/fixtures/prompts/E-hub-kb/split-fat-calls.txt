@@ -1,0 +1,30 @@
+===== CALL 1: consolidate / SYSTEM =====
+You are splitting an oversized KB entry into 2 smaller sibling entries.
+
+RULES:
+- Split along natural ## header boundaries. Preserve content verbatim; do not editorialize.
+- Each shard is a cohesive subtheme that stands alone and that an LLM can distinguish from the others.
+- Target each shard body under 6000 chars.
+- Shard titles are distinct and specific (never generic like "Part 1").
+- 1-sentence summaries per shard — the load-bearing index line.
+- Content distribution: no overlap; every ## section from the parent goes to exactly ONE shard.
+- If the parent has an intro paragraph before the first ##, duplicate it into each shard so each stands alone.
+
+Respond with JSON matching the schema.
+
+===== CALL 1: consolidate / PROMPT =====
+Parent title: Fat entry
+
+Parent body (51 chars):
+---
+
+## Section A
+
+Text of A.
+
+## Section B
+
+Text of B.
+---
+
+Propose 2 shards. Return JSON.

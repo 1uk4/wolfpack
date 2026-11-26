@@ -80,6 +80,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchImpl);
   const call = vi.fn(async (_step: string, schema: { parse: (v: unknown) => unknown }) =>
     schema.parse({
+      summary: "The KB gains how the change works now.",
       contributions: [{ slug: "main", title: "The change", summary: "How it works now.", body: "## How\n\nLike this.\n\n## History\n\n- 2026-10-22: changed (work-wolfpack-T000002)" }],
     }));
   const engine = { call, usage: { summarize: () => ({}) } } as unknown as Engine;
@@ -101,6 +102,7 @@ describe("task_graduate files an owner-approval request and never graduates", ()
     expect(filed).toHaveLength(1);
     expect(filed[0]).toMatchObject({ path: `/v1/work/${f.id}/requests`, auth: "Bearer hub-secret", body: { kind: "graduate", wolf: "1uk4" } });
     expect(filed[0].body.preview.contributions).toMatchObject([{ title: "The change" }]);
+    expect(filed[0].body.preview.summary).toBe("The KB gains how the change works now.");
     expect(inboxFiles()).toEqual([]);
     expect(items.get(f.id)!.graduated).toBeNull();
     expect(items.get(f.id)!.stage).toBe("shipped");
@@ -173,5 +175,93 @@ describe("task_stage to archived files an archive request instead of archiving",
     await run("task_stage", { to: "approved", id: t.id });
     expect(items.get(t.id)!.stage).toBe("approved");
     expect(filed).toEqual([]);
+  });
+});
+
+describe("task_graduate ids: one multi-select card for several finished items", () => {
+  const cardCtx = { cwd: "", wolfDen: "", wolfName: "1uk4", conversationId: 1, conversation: { latestCard: () => undefined, classify: async () => ({ kind: "main" }) } };
+  const withCards = () => {
+    ext = createTasksExtension({ engine: () => ({ call: vi.fn(async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ summary: "The KB gains how the change works now.", contributions: [{ slug: "main", title: "The change", summary: "How it works now.", body: "## How\n\nLike this.\n\n## History\n\n- 2026-10-22: changed (work-wolfpack-T000002)" }] })), usage: { summarize: () => ({}) } }) as unknown as Engine, kbRoots: kb, workLog: "fold" }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {}, capabilities: { askCards: true } } as never);
+  };
+  const runCard = async (args: Record<string, unknown>, conversation: unknown = cardCtx.conversation) => (await tool("task_graduate").execute(args, { ...cardCtx, conversation, cwd: den, wolfDen: den } as never)) as any;
+  const shippedFeature = (title: string, updated: string) => {
+    const f = add({ kind: "feature", title, stage: "shipped", updated, body: "# F\n\n## Plan\n\nx\n\n## Record\n\n### Decisions\n\n- A — why: B\n" });
+    add({ kind: "task", title: "T", stage: "shipped", partOf: f.id });
+    return f;
+  };
+
+  it("raises one picked card: features first, newest first, loose named items last; open ones reported, nothing filed", async () => {
+    withCards();
+    const old = shippedFeature("Old feature", "2026-11-01");
+    const fresh = shippedFeature("Fresh feature", "2026-11-20");
+    const loose = add({ kind: "task", title: "Loose task", stage: "shipped", updated: "2026-11-24" });
+    const open = add({ kind: "feature", title: "Open feature" });
+    add({ kind: "task", title: "Open T", stage: "plan", partOf: open.id });
+    const r = await runCard({ ids: [loose.id, old.id, open.id, fresh.id], named: [loose.id] });
+    expect(r.isError).toBeUndefined();
+    expect(r.card.tool).toBe("task_graduate");
+    expect(r.card.meta).toEqual({ wolf: "1uk4", via: "card" });
+    expect(r.card.fields).toHaveLength(1);
+    expect(r.card.fields[0]).toMatchObject({ id: "picked", kind: "multi" });
+    expect(r.card.fields[0].options.map((o: any) => o.value)).toEqual([fresh.id, old.id, loose.id]);
+    expect(r.card.fields[0].options[0]).toMatchObject({
+      label: "Fresh feature",
+      description: "The KB gains how the change works now.",
+      href: `/work/${fresh.id}?view=graduation&wolf=1uk4`,
+    });
+    expect(r.content[0].text).toContain(`${open.id}: not eligible (1 task open)`);
+    expect(filed).toEqual([]);
+  });
+
+  it("a loose item the owner did not name is not eligible when gathering; named, it is", async () => {
+    withCards();
+    const f = shippedFeature("F", "2026-11-01");
+    const loose = add({ kind: "task", title: "Loose task", stage: "shipped", updated: "2026-11-24" });
+    const r = await runCard({ ids: [f.id, loose.id] });
+    expect(r.card.fields[0].options.map((o: any) => o.value)).toEqual([f.id]);
+    expect(r.content[0].text).toContain(`${loose.id}: not eligible (a loose task graduates only when the owner names it)`);
+    const named = await runCard({ ids: [f.id, loose.id], named: [loose.id] });
+    expect(named.card.fields[0].options.map((o: any) => o.value)).toEqual([f.id, loose.id]);
+  });
+
+  it("orders by finish time, not by the date text: an offset timestamp sorts by the instant it names", async () => {
+    withCards();
+    const early = shippedFeature("Early", "2026-11-21T23:30:00+14:00"); // 09:30Z
+    const late = shippedFeature("Late", "2026-11-21T12:00:00Z");
+    const r = await runCard({ ids: [early.id, late.id] });
+    expect(r.card.fields[0].options.map((o: any) => o.value)).toEqual([late.id, early.id]);
+  });
+
+  it("a subagent conversation never raises a card: it files requests instead", async () => {
+    withCards();
+    const a = shippedFeature("A", "2026-11-01");
+    const r = await runCard({ ids: [a.id] }, { latestCard: () => undefined, classify: async () => ({ kind: "task" }) });
+    expect(r.card).toBeUndefined();
+    expect(filed.map((x) => x.path)).toEqual([`/v1/work/${a.id}/requests`]);
+  });
+
+  it("reconcile tells graduated, picked-but-not-graduated, not picked, and unreadable apart", async () => {
+    withCards();
+    const a = shippedFeature("A", "2026-11-01");
+    const b = shippedFeature("B", "2026-11-02");
+    const c = shippedFeature("C", "2026-11-03");
+    items.get(a.id)!.graduated = "2026-11-25";
+    const answered = { status: "answered", card: { fields: [{ id: "picked", kind: "multi", options: [a.id, b.id, c.id].map((value) => ({ value })) }] }, answers: { picked: { value: [a.id, b.id] } }, laterResults: [] };
+    const conv = { latestCard: async () => answered, classify: async () => ({ kind: "main" }) };
+    const r = await runCard({ ids: [a.id, b.id, c.id, "work-wolfpack-Nope000"], reconcile: true }, conv);
+    const t = r.content[0].text;
+    expect(r.card).toBeUndefined();
+    expect(t).toContain(`${a.id}: graduated`);
+    expect(t).toContain(`${b.id}: picked but NOT graduated`);
+    expect(t).toContain(`${c.id}: not picked`);
+    expect(t).toContain("work-wolfpack-Nope000: could not be checked");
+  });
+
+  it("with no card surface files one approval request per eligible id", async () => {
+    const a = shippedFeature("A", "2026-11-01");
+    const b = shippedFeature("B", "2026-11-02");
+    const r = await run("task_graduate", { ids: [a.id, b.id] });
+    expect(r.card).toBeUndefined();
+    expect(filed.map((x) => x.path).sort()).toEqual([`/v1/work/${a.id}/requests`, `/v1/work/${b.id}/requests`].sort());
   });
 });

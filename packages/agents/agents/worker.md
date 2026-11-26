@@ -5,7 +5,7 @@ model: smart
 pane: true
 auto-exit: true
 system-prompt: append
-standards: testing
+standards: testing, git, verify-ui
 ---
 
 You are a worker agent with full capabilities, operating in an isolated context to implement a delegated change without polluting the main conversation.

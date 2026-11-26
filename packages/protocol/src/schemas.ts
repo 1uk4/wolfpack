@@ -185,6 +185,8 @@ export const CardSchema = z
      * raised by that call id (`fields`/`steps` are the replacement pages only).
      */
     revises: z.string().optional(),
+    /** Free-form facts the raising tool attaches for the console (task_graduate: the preparing wolf and `via`). Optional; old cards have none. */
+    meta: z.record(z.string(), z.unknown()).optional(),
   })
   .refine((c) => !c.paged || c.steps !== undefined, { message: "a paged card needs steps (its pages)", path: ["steps"] })
   .refine((c) => c.fields.length >= 1 || c.brief !== undefined, { message: "a card needs at least one field", path: ["fields"] })
@@ -516,7 +518,7 @@ export type ThreadToolCall = z.infer<typeof ThreadToolCallSchema>;
 
 // -------------------------------------------------------- structured objects
 
-import { CHECKLIST_STATES, GRAPH_LIMITS, GRAPH_NODE_STATUSES, graphProblem, parseObjectData, type KnownObjectType, type ObjectToolName } from "./objects.js";
+import { CHECKLIST_STATES, GRAPH_LIMITS, GRAPH_NODE_STATUSES, framePathProblem, graphProblem, parseObjectData, type KnownObjectType, type ObjectToolName } from "./objects.js";
 export * from "./objects.js";
 
 /**
@@ -614,13 +616,26 @@ export const ShowGraphParamsSchema = GraphDataSchema.extend({
 export type ShowGraphParams = z.infer<typeof ShowGraphParamsSchema>;
 
 /** Parameters of the `show_view` tool: open a work item or KB entry in the owner's viewer; reuse objectId to revise. */
-export const ShowViewParamsSchema = z.object({
-  kind: z.enum(["work-item", "kb-entry"]).describe("work-item | kb-entry"),
-  id: z.string().min(1).describe("The full id of the work item or KB entry (e.g. work-wolfpack-AbC1234)"),
-  title: z.string().optional().describe("Optional title for the card and the chip"),
-  pinned: SHOW_PINNED,
-  objectId: z.string().min(1).describe("Stable id for this view; call again with the same id to point it at something else"),
-});
+export const ShowViewParamsSchema = z
+  .object({
+    kind: z.enum(["work-item", "kb-entry", "frame"]).describe("work-item | kb-entry | frame"),
+    id: z.string().min(1).optional().describe("work-item and kb-entry: the full id (e.g. work-wolfpack-AbC1234)"),
+    wolf: z.string().min(1).optional().describe("frame: your own wolf name"),
+    path: z.string().min(1).optional().describe("frame: the .html file, relative to your frames dir (e.g. pack-health.html)"),
+    title: z.string().optional().describe("Optional title for the card and the chip"),
+    pinned: SHOW_PINNED,
+    objectId: z.string().min(1).describe("Stable id for this view; call again with the same id to point it at something else (for a frame: to reload it after the file changed)"),
+  })
+  .superRefine((d, ctx) => {
+    if (d.kind === "frame") {
+      if (d.path === undefined) ctx.addIssue({ code: "custom", path: ["path"], message: "path is required for a frame" });
+      else {
+        const problem = framePathProblem(d.path);
+        if (problem) ctx.addIssue({ code: "custom", path: ["path"], message: problem });
+      }
+      if (d.wolf === undefined) ctx.addIssue({ code: "custom", path: ["wolf"], message: "wolf is required for a frame" });
+    } else if (d.id === undefined) ctx.addIssue({ code: "custom", path: ["id"], message: "id is required" });
+  });
 export type ShowViewParams = z.infer<typeof ShowViewParamsSchema>;
 
 /** Parameters of the `pin` tool: pin or unpin an object already shown in this thread, without resending it. */
@@ -946,6 +961,12 @@ const hubBase = z.object({ id: EventIdSchema, at: IsoSchema });
 export const HubWorkChangedEventSchema = hubBase.extend({ type: z.literal("work.changed"), itemId: z.string(), event: z.string(), domain: z.string().optional() });
 /** An approval request was filed, approved or rejected (`status` is the new state). */
 export const HubWorkRequestChangedEventSchema = hubBase.extend({ type: z.literal("work-request-changed"), requestId: z.string(), itemId: z.string(), kind: z.enum(["graduate", "archive", "reassign"]), status: z.enum(["pending", "approved", "rejected"]), domain: z.string().optional() });
+/**
+ * An item was graduated straight by the owner (`POST /v1/work/:id/graduate-direct`: a card pick, the Graduate button). There is no
+ * approval request, so this is NOT a `work-request-changed`. wolfd follows it to close the feature threads and unbind the item;
+ * `domain` is the item's domain, `via` where the owner approved. Also emitted when a retry resumed a half-finished archive.
+ */
+export const HubWorkGraduatedEventSchema = hubBase.extend({ type: z.literal("work-graduated"), itemId: z.string(), domain: z.string(), via: z.enum(["card", "work", "graph"]) });
 export const HubKbChangedEventSchema = hubBase.extend({ type: z.literal("kb.changed"), entryIds: z.array(z.string()), domain: z.string().optional() });
 /** The hub curator's sweep (KB curation in hubd): started once real work begins, one item per contribution, finished always follows a started (also on a throw: `error`). */
 export const HubSweepStartedEventSchema = hubBase.extend({ type: z.literal("sweep_started"), pending: z.number().int().nonnegative() });
@@ -1115,7 +1136,7 @@ export const HubWolfPresenceEventSchema = hubBase.extend({ type: z.literal("wolf
  * it as Last-Event-ID resumes with exactly the events after it.
  */
 export const HubResyncEventSchema = hubBase.extend({ type: z.literal("resync"), id: z.number().int().nonnegative() });
-export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubWorkRequestChangedEventSchema, HubKbChangedEventSchema, HubSweepStartedEventSchema, HubSweepItemEventSchema, HubSweepProgressEventSchema, HubSweepFinishedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
+export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubWorkRequestChangedEventSchema, HubWorkGraduatedEventSchema, HubKbChangedEventSchema, HubSweepStartedEventSchema, HubSweepItemEventSchema, HubSweepProgressEventSchema, HubSweepFinishedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
 export type HubEvent = z.infer<typeof HubEventSchema>;
 const HUB_EVENT_TYPES: ReadonlySet<string> = new Set(HubEventSchema.options.map((o) => o.shape.type.value));
 export type ParsedHubEvent = { kind: "event"; event: HubEvent } | { kind: "unknown" } | { kind: "invalid"; error: z.ZodError };
@@ -1578,12 +1599,26 @@ export type GraduationContribution = z.infer<typeof GraduationContributionSchema
  * `POST /v1/wolves/:name/work/:id/graduate/preview`: what graduating the item would write to the KB. Nothing is sent
  * or archived. `token` identifies exactly this preview; confirm sends it back.
  */
+/** The cap, in characters, of the owner-facing graduation summary (preview, approval request, audit line): one constant for all of them. */
+export const GRADUATION_SUMMARY_MAX = 160;
+
+/** One line, cut at a word boundary to at most `max` characters (a trailing "…" marks the cut). */
+export function capSummary(text: string, max: number = GRADUATION_SUMMARY_MAX): string {
+  const s = text.replace(/\s+/g, " ").trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max - 1);
+  const sp = cut.lastIndexOf(" ");
+  return `${(sp > max / 2 ? cut.slice(0, sp) : cut).trimEnd()}…`;
+}
+
 export const GraduationPreviewSchema = z.object({
   itemId: z.string(),
   kind: z.string(),
   title: z.string(),
   domain: z.string(),
   contributions: z.array(GraduationContributionSchema),
+  /** 1-2 sentence summary of what graduating this item puts in the KB, at most GRADUATION_SUMMARY_MAX characters (absent on older previews). */
+  summary: z.string().optional(),
   /** Pending observations folded into the Record just before the entries were distilled. */
   foldedObservations: z.number().int(),
   /** Non-blocking: totals not carried over, secrets redacted, a stale build, missing History lines. */

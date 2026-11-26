@@ -6,9 +6,6 @@
   "description": "Headless-first Telegram bridge for wolfpack wolves (auto-connects from env). Based on badlogic/pi-telegram (MIT).",
   "keywords": ["pi-package", "pi", "telegram", "wolfpack"],
   "license": "MIT",
-  "pi": {
-    "extensions": ["./index.ts"]
-  },
   "pi-durable": {
     "extensions": ["./unified.ts"]
   },

@@ -14,6 +14,7 @@ beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "test-runner-"));
   repo = join(tmp, "repo");
   execFileSync("mkdir", [repo]);
+  writeFileSync(join(repo, "vitest.config.ts"), "export default { test: { projects: [{ test: { name: 'default' } }] } };\n");
   for (const a of [["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]]) execFileSync("git", a, { cwd: repo });
   writeFileSync(join(repo, "a.ts"), "export {};\n");
   execFileSync("git", ["add", "."], { cwd: repo });
@@ -58,8 +59,14 @@ describe("wolfpack test runner", () => {
     expect(code).toBe(3);
     expect(calls()[0]!.args).toContain("--maxWorkers=3");
     expect(calls()[0]!.args.slice(0, 2)).toEqual(["run", "a.test.ts"]);
-    // always the default project: an explicit .live./.eval. path must find nothing instead of running a slow test
+    // the repo's config defines projects: always the default one, so an explicit .live./.eval. path finds nothing instead of running a slow test
     expect(calls()[0]!.args).toEqual(expect.arrayContaining(["--project", "default"]));
+  });
+
+  it("omits --project in a repo whose vitest config defines no projects", async () => {
+    writeFileSync(join(repo, "vitest.config.ts"), "export default { test: { include: ['**/*.test.ts'] } };\n");
+    expect(await runTests({ ...base(), args: ["run", "a.test.ts"], env: env(), stdio: "ignore" })).toBe(0);
+    expect(calls()[0]!.args).not.toContain("--project");
   });
 
   it("reruns a failure, and a pass is served from the cache without starting vitest", async () => {

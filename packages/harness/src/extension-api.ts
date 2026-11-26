@@ -66,6 +66,14 @@ export interface Section {
   name: string;
   /** Render function - return undefined to omit section */
   render: (context: SectionContext) => string | undefined | Promise<string | undefined>;
+  /**
+   * Volatile text (changes mid-conversation). Under the durable runtime the conversation keeps the text it first showed, so
+   * the prompt prefix stays byte-stable for caching; later changes reach the model as a one-line "Context update" notice
+   * (context-notice.ts). Ignored by the pi runtime.
+   */
+  frozen?: boolean;
+  /** Side-effect-free render the notice uses to re-read a frozen section between requests (no one-shot clears, no fetches). Default: `render`. */
+  peek?: (context: SectionContext) => string | undefined | Promise<string | undefined>;
 }
 
 export interface SectionContext {
@@ -199,7 +207,7 @@ export interface TelegramSharedState {
 
 // ─── Extension Definition ──────────────────────────────────────────────────
 
-export type Runtime = "pi" | "pi-durable";
+export type Runtime = "pi-durable";
 
 /** Context passed to extension factory */
 /** Sweep manager for librarian mode */
@@ -350,9 +358,10 @@ export function defineTool(tool: Tool): Tool {
  */
 export function section(
   name: string,
-  render: (context: SectionContext) => string | undefined | Promise<string | undefined>
+  render: (context: SectionContext) => string | undefined | Promise<string | undefined>,
+  opts: { frozen?: boolean; peek?: Section["peek"] } = {}
 ): Section {
-  return { name, render };
+  return { name, render, ...(opts.frozen ? { frozen: true } : {}), ...(opts.peek ? { peek: opts.peek } : {}) };
 }
 
 /**

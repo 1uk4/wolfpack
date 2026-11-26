@@ -102,6 +102,11 @@ export class GraduateStore {
 		this.emit();
 	}
 
+	/** Drop the item's job (it graduated some other way, e.g. a direct graduation); a running poller of it stops. */
+	clear(id: string): void {
+		if (this.jobs.has(id)) this.set(id, undefined);
+	}
+
 	dismissDone(id: string): void {
 		this.done = this.done.filter((d) => d.id !== id);
 		this.emit();

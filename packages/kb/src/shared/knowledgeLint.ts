@@ -8,6 +8,8 @@
  * the rest need a rewrite (retry) or a hold-back.
  */
 
+import { KB_TITLE_MAX } from "@wolfpack/engine";
+
 export type LintCode =
   | "commit-hash"
   | "work-id"
@@ -15,6 +17,7 @@ export type LintCode =
   | "deploy-status"
   | "dated-heading"
   | "oversize"
+  | "long-title"
   | "lede-repeat"
   | "broken-link"
   | "forbidden-property";
@@ -176,6 +179,8 @@ export function lintKnowledge(input: LintInput): LintFinding[] {
   const cap = input.cap ?? DEFAULT_BODY_CAP;
   const size = main.length + (input.extraChars ?? 0);
   if (size > cap) add("oversize", `body is ${size} chars (History excluded), cap is ${cap}`);
+
+  if (input.title && input.title.length > KB_TITLE_MAX) add("long-title", `title is ${input.title.length} chars, the limit is ${KB_TITLE_MAX}: make it a short noun phrase`, input.title);
 
   if (input.summary && ledeRepeated(input.summary, main)) add("lede-repeat", "the lede paragraph is repeated in the body", input.summary);
 

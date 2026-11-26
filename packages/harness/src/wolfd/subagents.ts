@@ -30,7 +30,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { discoverAgents, formatRosterLines, loadAgent, parseCommaList, type AgentDefinition, type AgentIsolation, type DiscoverOptions } from "@wolfpack/agents";
 import { TIERS, isTier } from "@wolfpack/engine";
 import { readBindingFile } from "@wolfpack/memory";
@@ -38,10 +38,11 @@ import { WriterGuard, abandonChild, dependenciesLine, installDependencies, wants
 import type { Card, LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
 import { runDir } from "@wolfpack/protocol/runtime-home";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
-import { fenceRoot, markSubagentConversation, offLimitsRegex, unfenceRoot, unmarkSubagentConversation } from "../engine/fence.js";
+import { fenceRoot, fenceViolation, markSubagentConversation, offLimitsRegex, unfenceRoot, unmarkSubagentConversation } from "../engine/fence.js";
 import { HttpError } from "./http-error.js";
 import { DEFAULT_HOST_MAX, SlotPool } from "./subagent-slots.js";
 import { conflictBrief, conflictText, dirtyText, homeText, manualText, mergedText, ShipEvents } from "./subagent-merge.js";
+import { subAgentHead } from "../injected-text.js";
 import { appendLedger, loadChildren, readLedger, saveChildren, type ChildRecord, type Delivery } from "./subagent-store.js";
 import type { ThreadRuntime, WolfEventDraft } from "./thread.js";
 import { loadThreads, setThreadWorkspace, type SavedThread } from "./threads.js";
@@ -208,6 +209,9 @@ function cardQuestionText(card: Card): string {
   return out.join("\n");
 }
 
+/** Sent to a child whose turn the bridge killed for silence. The killed turn may have done part of its work, so it must look first. */
+const IDLE_RESUME_TEXT = "Your previous turn was killed by the 90 s idle timeout (the model produced no output). Check the current state (git status, git log, the files) before repeating any step, and do not repeat a commit, push or merge that already happened. Then continue where you left off.";
+
 export class SubagentManager {
   private records: ChildRecord[];
   private readonly unobserve = new Map<string, () => void>();
@@ -215,6 +219,8 @@ export class SubagentManager {
   private readonly shipWatch = new Map<string, () => void>();
   private readonly chains = new Map<string, Promise<void>>();
   private readonly lastError = new Map<string, string>();
+  /** Children whose current turn was already resumed once after a bridge idle-timeout kill. */
+  private readonly idleRetried = new Set<string>();
   private readonly ledgerSeq = new Map<string, number>();
   private readonly turnChain = new Map<string, Promise<void>>();
   private deliverySeq = 0;
@@ -412,6 +418,12 @@ export class SubagentManager {
       return fail(`Cannot resolve model tier "${tier}": ${e instanceof Error ? e.message : String(e)}`);
     }
     if (params.isolation !== undefined && params.isolation !== "worktree" && params.isolation !== "none") return fail(`isolation must be "worktree" or "none", got ${JSON.stringify(params.isolation)}`);
+
+    // A profile that declares a cwd is pinned to it (the visualizer writes only into the fenced frames dir): the caller may not move it or isolate it elsewhere.
+    if (def.cwd) {
+      if (params.cwd !== undefined) return fail(`The "${def.name}" agent is pinned to its own working directory (${def.cwd}); remove the cwd parameter.`);
+      if (params.isolation !== undefined && params.isolation !== (def.isolation ?? "none")) return fail(`The "${def.name}" agent is pinned to its own working directory and runs with isolation "${def.isolation ?? "none"}"; remove the isolation parameter.`);
+    }
 
     const { tools, missing } = this.childTools(def);
     const name = this.uniqueName(parent.summary.id, params.name?.trim() || def.name);
@@ -815,6 +827,7 @@ export class SubagentManager {
     if (this.closed) return;
     switch (ev.type) {
       case "turn-start":
+        this.lastError.delete(rec.id); // an error from an earlier turn must not colour how this one ends
         if (rec.state !== "running") this.setState(rec, "running");
         return;
       case "tool-start":
@@ -880,12 +893,39 @@ export class SubagentManager {
       this.settle(rec, "done");
       return;
     }
+    // The bridge killed a silent round (its 90 s idle timeout) and the engine then ended the turn aborted: not a fault of the
+    // child's work. Resume it once with a nudge; a second kill fails it with the real cause.
+    const idleKilled = reason === "aborted" && /idle timeout/i.test(this.lastError.get(rec.id) ?? "");
+    if (reason !== "aborted") this.lastError.delete(rec.id);
+    if (reason === "complete") this.idleRetried.delete(rec.id);
+    if (idleKilled) {
+      this.lastError.delete(rec.id);
+      if (!this.idleRetried.has(rec.id)) {
+        this.idleRetried.add(rec.id);
+        const message = "the turn was killed by the 90 s idle timeout (no output from the model); resuming it once";
+        this.ledger(rec, "system", "parent", "error", message);
+        console.error(`subagent ${rec.id} (${name}): ${message}`);
+        void this.send(rec, IDLE_RESUME_TEXT, "parent", "steer").catch((e) => {
+          this.port.onError(e);
+          const why = e instanceof Error ? e.message : String(e);
+          this.ledger(rec, "system", "parent", "error", `the idle-timeout resume failed: ${why}`);
+          this.settle(rec, "failed", `${subAgentHead(name, "failed")}${elapsed}: its turn was killed by the 90 s idle timeout and resuming it failed (${why}).\n\nYou can resume the session with subagent_message.${followUp}`);
+        });
+        return;
+      }
+      this.idleRetried.delete(rec.id);
+      const message = "the turn was killed by the 90 s idle timeout twice";
+      this.ledger(rec, "system", "parent", "error", message);
+      this.port.onError(new Error(`subagent ${rec.id}: ${message}`));
+      this.settle(rec, "failed", `${subAgentHead(name, "failed")}${elapsed}: its turn was killed by the 90 s idle timeout (no output from the model) twice.\n\nYou can resume the session with subagent_message.${followUp}`);
+      return;
+    }
     if (reason === "aborted") {
       // Nobody asked for this stop (Stop button, subagent_stop, parent release): it is a fault, not an operator decision.
       const message = "the turn was aborted without a stop request";
       this.ledger(rec, "system", "parent", "error", message);
       this.port.onError(new Error(`subagent ${rec.id}: ${message}`));
-      this.settle(rec, "failed", `Sub-agent "${name}" failed after ${elapsed}: its turn was aborted although nobody stopped it.\n\nYou can resume the session with subagent_message.${followUp}`);
+      this.settle(rec, "failed", `${subAgentHead(name, "failed")}${elapsed}: its turn was aborted although nobody stopped it.\n\nYou can resume the session with subagent_message.${followUp}`);
       return;
     }
     if (reason === "error") {
@@ -895,7 +935,7 @@ export class SubagentManager {
       this.settle(
         rec,
         "failed",
-        `Sub-agent "${name}" failed after ${elapsed} (provider/agent error — auto-retry exhausted).\n\nError: ${message}\n\n` +
+        `${subAgentHead(name, "failed")}${elapsed} (provider/agent error — auto-retry exhausted).\n\nError: ${message}\n\n` +
           `The subagent did not produce a result. You can retry by spawning a new subagent or resume the session with subagent_message.${followUp}`,
       );
       return;
@@ -907,14 +947,14 @@ export class SubagentManager {
       this.settle(
         rec,
         "waiting",
-        `Sub-agent "${name}" asks (${elapsed}):\n\n${question}\n\nReply with subagent_message({ name: "${name}", message: "…" }) — the same name works whether it is still running or has since exited. It stays open until you reply.`,
+        `${subAgentHead(name, "asks")}${elapsed}):\n\n${question}\n\nReply with subagent_message({ name: "${name}", message: "…" }) — the same name works whether it is still running or has since exited. It stays open until you reply.`,
       );
       return;
     }
     const summary = thread.lastAssistantText() || "(no output)";
     this.ledger(rec, "child", "parent", "result", summary);
     this.resultDelivered.add(rec.id);
-    this.settle(rec, "done", `Sub-agent "${name}" completed (${elapsed}).\n\n${summary}${followUp}`);
+    this.settle(rec, "done", `${subAgentHead(name, "completed")}${elapsed}).\n\n${summary}${followUp}`);
     const resolved = rec.resolves ? this.records.find((r) => r.id === rec.resolves) : undefined;
     if (resolved) void this.mergeRec(resolved).catch((e) => this.port.onError(e));
     else void this.mergeIfShipped(rec).catch((e) => this.port.onError(e));
@@ -924,7 +964,7 @@ export class SubagentManager {
     delete rec.stopping;
     this.ledger(rec, by, "child", "stop", by === "owner" ? "stopped by the operator" : "stopped by the parent");
     // The parent that stopped it knows; one stopped from the console has to be told.
-    this.settle(rec, "stopped", by === "owner" ? `Sub-agent "${rec.name}" was stopped by the operator.\n\nFollow up with subagent_message({ name: "${rec.name}", message: "…" }) to resume it.` : undefined);
+    this.settle(rec, "stopped", by === "owner" ? `${subAgentHead(rec.name, "stopped")}.\n\nFollow up with subagent_message({ name: "${rec.name}", message: "…" }) to resume it.` : undefined);
   }
 
   // ------------------------------------------------------------ delivery
@@ -934,6 +974,8 @@ export class SubagentManager {
    * finished child with nothing to deliver (or a delivery for a child still marked running).
    */
   private settle(rec: ChildRecord, state: SubagentState, text?: string): void {
+    this.idleRetried.delete(rec.id);
+    this.lastError.delete(rec.id);
     delete rec.resuming;
     delete rec.step;
     // A warning about the main checkout waits (persisted) for the next delivery, so a restart or a stop does not lose it.
@@ -1125,7 +1167,7 @@ ${text}`;
     if (this.merging.has(rec.id)) return `A merge of "${rec.name}" is already running.`;
     this.merging.add(rec.id);
     try {
-      const say = (text: string): string => (notify && this.tell(rec, `Sub-agent "${rec.name}" merge: ${text}`), text);
+      const say = (text: string): string => (notify && this.tell(rec, `${subAgentHead(rec.name, "merge")}${text}`), text);
       const feature = this.featureWsOf(rec);
       // (mergeTried is set only once an attempt has an outcome: a crash mid-merge is retried by recover)
       const tried = (): void => {
@@ -1518,7 +1560,7 @@ ${text}`;
       thread = this.port.thread(rec.id);
       if (!thread) {
         this.ledger(rec, "system", "parent", "error", "could not start: the child's thread is not attached");
-        this.settle(rec, "failed", `Sub-agent "${rec.name}" could not start: its thread is not attached.`);
+        this.settle(rec, "failed", `${subAgentHead(rec.name, "couldNotStart")}its thread is not attached.`);
         return;
       }
       await this.deliverBrief(rec, thread.conv, r.status === "skipped" ? "" : `${dependenciesLine(r)}\n\n`);
@@ -1526,7 +1568,7 @@ ${text}`;
       if ((rec.state as string) === "stopped") return; // (stopped while submitting)
       const message = e instanceof Error ? e.message : String(e);
       this.ledger(rec, "child", "parent", "error", message);
-      this.settle(rec, "failed", `Sub-agent "${rec.name}" could not start: ${message}`);
+      this.settle(rec, "failed", `${subAgentHead(rec.name, "couldNotStart")}${message}`);
       return;
     } finally {
       this.endStarting(rec.id, token);
@@ -1580,7 +1622,7 @@ ${text}`;
     const thread = this.port.thread(rec.id);
     if (!thread) {
       this.ledger(rec, "system", "parent", "error", "could not start: the child's thread is not attached");
-      this.settle(rec, "failed", `Sub-agent "${rec.name}" could not start: its thread is not attached.`);
+      this.settle(rec, "failed", `${subAgentHead(rec.name, "couldNotStart")}its thread is not attached.`);
       return;
     }
     const resume = thread.hadHistory || thread.messageCount() > 0; // (hadHistory is the state at attach)
@@ -1620,7 +1662,7 @@ ${text}`;
       if (rec.state === "stopped") return; // stopped meanwhile: stays stopped
       const message = e instanceof Error ? e.message : String(e);
       this.ledger(rec, "child", "parent", "error", message);
-      this.settle(rec, "failed", `Sub-agent "${rec.name}" could not start: ${message}`);
+      this.settle(rec, "failed", `${subAgentHead(rec.name, "couldNotStart")}${message}`);
     }
   }
 
@@ -1644,7 +1686,10 @@ ${text}`;
   > {
     const tools = parseCommaList(a.def.tools);
     const writer = isWriter(tools);
-    const inGit = insideGit(a.cwd);
+    // A pinned cwd that is a fenced root registered at boot (the frames dir) needs no git checkout or writer guard, even when a parent dir (such as $HOME) is a repo.
+    // Any other pinned cwd (a project or user profile can set one) gets the normal planning. (fenceViolation names a path outside the fence only when cwd is inside one.)
+    const inFencedRoot = !!a.def.cwd && fenceViolation(a.cwd, parse(a.cwd).root) !== undefined;
+    const inGit = inFencedRoot ? false : insideGit(a.cwd);
     const want = a.requested ?? defaultIsolation({ ...(tools ? { tools } : {}), ...(a.def.isolation ? { isolation: a.def.isolation } : {}) }, inGit);
     const inPlace = (note = ""): { ok: true; isolation: "none"; cwd: string; note: string } => ({ ok: true, isolation: "none", cwd: a.cwd, note });
     const notGit = want === "worktree" ? "Notice: the working directory is not in a git repository; the sub-agent runs there without a worktree." : "";

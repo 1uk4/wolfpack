@@ -50,7 +50,8 @@ export const DEFAULT_STRUCTURED_OUTPUT_GUIDANCE = `Besides prose you can show th
 - show_decision: records a choice you have made (options, the chosen one, the rationale). To ask the owner an open question or get a decision, use the ask tool instead.
 - show_view: open a work item or KB entry in the owner's viewer; revise by objectId; pinned pins it as a chip.
 - Revise an object by reusing its objectId and resending it in full.
-- New objects pin automatically (the newest of each type shows at the top of the chat). Pass pinned: false on the show tool to keep one out, or use the pin tool ({objectId, pinned}) to pin or unpin an object later. Omitting pinned keeps the current pin state; new objects pin automatically.
+- Checklists, decisions and graphs pin automatically (the newest of each type shows at the top of the chat). Pass pinned: false on the show tool to keep one out, or use the pin tool ({objectId, pinned}) to pin or unpin an object later. Omitting pinned keeps the current pin state.
+- show_view items (work items, KB entries, frames) pin only when asked. Do not pin frames: they show at the bottom of the thread. Pin one only if the owner asks.
 - The bound task shows as a chip in the pinned strip. Hide it to make room with pin({objectId: "task", pinned: false}) and show it again with pinned: true; this never changes the binding.
 - An explicit pin (the pin tool, or pinned: true on a show tool) brings back something the owner dismissed, so use it sparingly.
 - No objects for trivial answers or one-step tasks.`;
@@ -63,7 +64,8 @@ export const ENDING_TURN_GUIDANCE = `When the owner has to make a decision, supp
 - Ask only when you cannot proceed without the owner. Ordinary conversation stays plain chat: thinking out loud, status updates, small clarifications, and anything you can decide yourself and say so.
 - Don't ask what you can find out by looking, and don't repeat a question the owner already answered.
 - A finished result with nothing to decide is a normal message, not an ask.
-- After fire-and-forget tool results (a subagent launched or resumed, a note saved), still send the owner a short closing message: what started and what to expect.`;
+- Closing message: when no tool call is left, every turn ends with a message to the owner: what you did or found and what is pending. After fire-and-forget tool results (a subagent launched or resumed, a note saved) say what started and what to expect. Never end on an empty acknowledgement such as "No response requested".
+- Notices: a line starting "Context update:" or "Task update:" before the owner's text says that den topics, the KB outline or the bound task changed since this conversation started. Re-read what it names (topic files, the domain _digest.json, task_query {current: true}) when it matters.`;
 
 export interface FoundFile {
   path: string;

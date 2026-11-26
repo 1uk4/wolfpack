@@ -5,7 +5,7 @@
  */
 import { dropSourceProps, hideSourceProperties } from "./source-props.js";
 import type { Engine } from "@wolfpack/engine";
-import { parseFrontmatter, PRODUCE_SYSTEM } from "@wolfpack/engine";
+import { KB_NO_NOISE, parseFrontmatter, PRODUCE_SYSTEM } from "@wolfpack/engine";
 import type { ParsedContribution } from "../shared/index.js";
 import { entryId as mkEntryId, now } from "../shared/index.js";
 import {
@@ -256,12 +256,12 @@ export async function produceEntry(
   // findings, then strip what can be stripped safely.
   const before = lintOpinion(opinion, previous, liveIds);
   let retried = false;
-  if (hardFindings(before).length || before.some((f) => f.code === "oversize")) {
+  if (hardFindings(before).length || before.some((f) => f.code === "oversize" || f.code === "long-title")) {
     retried = true;
     opinion = shape(
       await engine.call("produce", LlmOpinion, {
         system: PRODUCE_SYSTEM,
-        prompt: `${prompt}\n\nYOUR PREVIOUS ANSWER FAILED THESE CHECKS:\n${describeFindings(before)}\nWrite the entry again and fix every one. If the body is over the size cap${allowOverflow ? ", put material about a second subject in `overflow` (its own title, summary and detail) and otherwise" : ","} cut redundancy and anything off the entry's subject (never drop History lines). Commit hashes, task ids, test counts, deploy status and dated headings are never part of an entry; a work id appears only as the closing citation of a History line; History lines carry dates and reasons only. A [[link]] names a real entry id only: write anything else as plain words.`,
+        prompt: `${prompt}\n\nYOUR PREVIOUS ANSWER FAILED THESE CHECKS:\n${describeFindings(before)}\nWrite the entry again and fix every one. If the body is over the size cap${allowOverflow ? ", put material about a second subject in `overflow` (its own title, summary and detail) and otherwise" : ","} cut redundancy and anything off the entry's subject (never drop History lines). Never write ${KB_NO_NOISE}, or dated headings, in an entry; a work id appears only as the closing citation of a History line; History lines carry dates and reasons only. A [[link]] names a real entry id only: write anything else as plain words.`,
       })
     );
   }

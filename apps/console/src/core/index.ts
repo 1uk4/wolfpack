@@ -41,6 +41,7 @@ export * from "./thread/tool-parts.ts";
 export * from "./settings/prices.ts";
 export * from "./ui/fuzzy.ts";
 export * from "./thread/subagents.ts";
+export * from "./thread/wolf-pins.ts";
 export * from "./ui/palette.ts";
 // settings.ts + settings-resolution.ts (settings-storage wave, 2026-09-19):
 // the user-settings record's shape/sanitizer (pure) and its fully-resolved

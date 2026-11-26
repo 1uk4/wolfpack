@@ -47,6 +47,8 @@ export function createPromptsApi(source: ClientSource) {
 	};
 	return {
 		list: (wolf: string) => run(async (c) => (c.listPrompts ? json({ prompts: await c.listPrompts(wolf) }) : unsupported())),
+		/** The hub's own prompts (KB sweep and reorg), read-only: the hub is one for the whole pack, not per wolf. */
+		hub: () => run(async (c) => (c.getHubSettings ? json({ prompts: (await c.getHubSettings()).prompts }) : unsupported())),
 		async save(wolf: string, id: string, req: Request): Promise<Response> {
 			const body = (await req.json().catch(() => null)) as { text?: unknown } | null;
 			if (!body || typeof body.text !== "string") return json({ error: "body must be {text: string}", code: "invalid_request" }, 400);

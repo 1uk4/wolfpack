@@ -293,6 +293,53 @@ describe("thread API: snapshot frames", () => {
 	});
 });
 
+describe("frame file proxy", () => {
+	const named = (name: string, code?: string) => Object.assign(new Error("refused"), { name, ...(code ? { code } : {}) });
+	const withFrames = (getFrameFile: (wolf: string, path: string) => Promise<{ bytes: Uint8Array; mimeType: string }>) =>
+		createThreadApi(() => Object.assign(new MockConsoleClient({ delayMs: 0 }), { getFrameFile }));
+
+	it("relays the wolf's html sandboxed and uncached, and maps its refusals to 400/403/404/413", async () => {
+		const html = new TextEncoder().encode("<p>hi</p>");
+		const ok = await withFrames(async () => ({ bytes: html, mimeType: "text/html; charset=utf-8" })).frameFile("1uk4", "a.html");
+		assert.equal(ok.status, 200);
+		assert.equal(await ok.text(), "<p>hi</p>");
+		assert.equal(ok.headers.get("content-type"), "text/html; charset=utf-8");
+		assert.equal(ok.headers.get("content-security-policy"), "sandbox");
+		assert.equal(ok.headers.get("cache-control"), "no-store");
+		assert.equal(ok.headers.get("x-content-type-options"), "nosniff");
+
+		const status = async (err: Error) =>
+			(await withFrames(async () => { throw err; }).frameFile("1uk4", "a.html")).status;
+		assert.equal(await status(named("NotFoundError")), 404);
+		assert.equal(await status(named("ProtocolError", "forbidden")), 403);
+		assert.equal(await status(named("ProtocolError", "too_large")), 413);
+		assert.equal(await status(named("ProtocolError", "invalid_request")), 400);
+		assert.equal((await withFrames(async () => ({ bytes: html, mimeType: "" })).frameFile("1uk4", null)).status, 400);
+	});
+
+	it("tells a host that has no frame route (404 'no route' / 'no such path') from a missing file (404 'no such frame file')", async () => {
+		const answer = async (message: string) => {
+			const res = await withFrames(async () => { throw Object.assign(new Error(message), { name: "NotFoundError" }); }).frameFile("hal", "progress.html");
+			return { status: res.status, code: ((await res.json()) as { code?: string }).code };
+		};
+		assert.deepEqual(await answer("no route /v1/wolves/hal/frame-file"), { status: 404, code: "host_outdated" });
+		assert.deepEqual(await answer("no such path: /v1/wolves/hal/frame-file"), { status: 404, code: "host_outdated" });
+		assert.deepEqual(await answer("no such frame file"), { status: 404, code: undefined });
+	});
+
+	it("keeps the 403/413 mapping local: another route still answers forbidden and too_large with 500", async () => {
+		const other = (code: string) =>
+			createThreadApi(() =>
+				Object.assign(new MockConsoleClient({ delayMs: 0 }), {
+					getThreadSettings: async () => ({}),
+					listThreads: async () => { throw named("ProtocolError", code); },
+				}),
+			).getSettings({ wolf: "1uk4", slug: "x" });
+		assert.equal((await other("forbidden")).status, 500);
+		assert.equal((await other("too_large")).status, 500);
+	});
+});
+
 describe("hub-auth failures (relay mode, unpaired or revoked browser)", () => {
 	// The relay client throws HubAuthError when the request has no (valid) bearer: a plain route and the SSE route must answer 401 + the marker,
 	// and the SSE route must do it BEFORE a stream opens (it resolves the thread first, which fails first).

@@ -528,7 +528,7 @@ export function updateWarnings(rows: WarnRow[], nowMs: number): string[] {
 		else if (u.stale && u.lastCheck && !seen.has(host)) {
 			const min = Math.max(0, Math.floor((nowMs - Date.parse(u.lastCheck)) / 60_000));
 			const age = min < 60 ? `${min}m` : min < 48 * 60 ? `${Math.floor(min / 60)}h` : `${Math.floor(min / 1440)}d`;
-			seen.set(host, `Auto-update hasn't run on ${host} for ${age} — see deploy/auto-update/RUNBOOK.md`);
+			seen.set(host, `Auto-update hasn't run on ${host} for ${age}. Its update timer may have stopped; check the machine.`);
 		}
 	}
 	return [...seen.values()];

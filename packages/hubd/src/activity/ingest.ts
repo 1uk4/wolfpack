@@ -56,7 +56,9 @@ export function createActivityIngest(o: IngestOptions) {
 
   const allowed = (e: ActivityEvent, who: Publisher): boolean => {
     if (e.actor.kind === "owner") return !who.worker;
-    if (!who.worker || !who.hostId || !e.actor.wolf) return false; // a wolf publishes as itself, from its own host
+    // A worker token is per HOST, not per wolf, so it may speak for any sibling wolf registered on its own host. Accepted for now:
+    // the host is one trust unit (its wolves share a machine and a token file); it can never speak for a wolf on another host.
+    if (!who.worker || !who.hostId || !e.actor.wolf) return false;
     return o.wolfOnHost(e.actor.wolf, who.hostId);
   };
 

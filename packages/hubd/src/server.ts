@@ -764,7 +764,18 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         if (!id) throw new HubError("unauthorized", "missing or invalid bearer token");
         tokenId = id.tokenId;
         identity = id;
-        derive.setWorker(id.kind === "worker");
+        let wolfId: string | undefined;
+        if (id.kind === "worker") {
+          // The wolf the TOKEN resolves to (X-Wolf is only a hint, validated against the host's active wolves); never the raw header.
+          try {
+            const named = req.headers["x-wolf"];
+            const a = assertedActor(req);
+            if (a) wolfId = wolfActorFor(a, (Array.isArray(named) ? named[0] : named)?.trim() || undefined).id;
+          } catch {
+            wolfId = undefined; // unresolved: no wolf attribution
+          }
+        }
+        derive.setWorker(id.kind === "worker", wolfId);
       }
       if (m === undefined) throw new HubError("not_found", `no route ${url.pathname}`);
       if (m === "method") throw new HubError("invalid_request", `method ${req.method} not allowed`);

@@ -75,13 +75,17 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
   return {
     /** Run one request inside its context. */
     run<T>(headers: Record<string, string | string[] | undefined>, fn: () => T): T {
-      const ctx: RequestActivityCtx = { threadId: one(headers[THREAD_HEADER]), subagent: one(headers[SUBAGENT_HEADER]), wolf: one(headers["x-wolf"]) };
+      // The wolf is NOT read from X-Wolf (client-controlled): setWorker() sets it from the authenticated token.
+      const ctx: RequestActivityCtx = { threadId: one(headers[THREAD_HEADER]), subagent: one(headers[SUBAGENT_HEADER]) };
       return als.run(ctx, fn);
     },
     /** After authentication: remember whether the caller is a worker (wolf) or the owner's console. */
-    setWorker(worker: boolean): void {
+    setWorker(worker: boolean, wolfId?: string): void {
       const c = als.getStore();
-      if (c) c.worker = worker;
+      if (c) {
+        c.worker = worker;
+        c.wolf = wolfId;
+      }
     },
     /** Ledger events a write appended. `actor` is the write queue's actor (wolf id, operator or system). */
     onLedger(batch: { actor: { id: string; kind: string }; events: readonly LedgerLike[] }): void {

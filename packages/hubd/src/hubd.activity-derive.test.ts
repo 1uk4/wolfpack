@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { contentHash } from "@wolfpack/kb/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ActivityEvent } from "@wolfpack/protocol";
+import { parseWorkEvent } from "@wolfpack/kb/client";
 import { createMemoryBus, type ActivityBus } from "./activity/bus.js";
+import { createActivityDeriver } from "./activity/derive.js";
+import { createPresenceStore } from "./activity/presence.js";
 import { createHubServer, type HubServer } from "./server.js";
 import { OP, seedTokens, workerTokenFor } from "./testing/tokens.js";
 
@@ -44,11 +47,36 @@ const feature = { kind: "feature", domain: "personal", title: "Derive me", assig
 const create = async (r: Awaited<ReturnType<typeof rig>>, headers: Record<string, string> = {}) =>
   ((await (await r.wolf("POST", "", feature, headers)).json()) as { id: string }).id;
 
+describe("derive actor trust", () => {
+  const mk = () => {
+    const bus = createMemoryBus();
+    const seen: ActivityEvent[] = [];
+    bus.subscribe("p", (e) => seen.push(e));
+    return { seen, d: createActivityDeriver({ bus, presence: createPresenceStore(), pack: "p" }) };
+  };
+
+  it("a kb-write is attributed to the token's wolf, not to the X-Wolf header", () => {
+    const { seen, d } = mk();
+    d.run({ "x-wolf": "other" }, () => {
+      d.setWorker(true, "wa");
+      d.onKb(["kb-personal-aaaaaaa"], "personal");
+    });
+    expect(seen.map((e) => e.actor)).toEqual([{ kind: "wolf", wolf: "wa" }]);
+  });
+
+  it("a work.staged event in the real WorkEvent shape publishes shipped (the destination stage is `to`)", () => {
+    const { seen, d } = mk();
+    const ev = parseWorkEvent({ type: "work.staged", id: "work-personal-Aaaaaaa", at: "2026-01-01 00:00", to: "shipped" })!;
+    d.run({}, () => d.onLedger({ actor: { id: "owner", kind: "operator" }, events: [ev] }));
+    expect(seen.map((e) => e.verb)).toEqual(["shipped"]);
+  });
+});
+
 describe("hub-derived activity", () => {
   it("a Work write with thread headers publishes a contribution by that thread, on the bus and on SSE", async () => {
     const r = await rig();
     const ctl = new AbortController();
-    const res = await fetch(r.hub.url + "/v1/events", { headers: OP, signal: ctl.signal });
+    const res = await fetch(r.hub.url + "/v1/events?activity=1", { headers: OP, signal: ctl.signal });
     const reader = res.body!.getReader();
     let buf = "";
     void (async () => { try { for (;;) { const x = await reader.read(); if (x.done) return; buf += new TextDecoder().decode(x.value); } } catch { /* aborted */ } })();

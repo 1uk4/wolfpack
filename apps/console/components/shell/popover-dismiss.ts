@@ -13,11 +13,15 @@ export function usePopoverDismiss(
 	rootRef: RefObject<HTMLElement | null>,
 	open: boolean,
 	close: () => void,
+	/** Other elements that count as inside (a panel rendered in a portal is not a DOM descendant of the root). */
+	extraRefs: readonly RefObject<HTMLElement | null>[] = [],
 ): void {
 	useEffect(() => {
 		if (!open) return;
 		const onPointerDown = (e: PointerEvent) => {
-			if (rootRef.current && !rootRef.current.contains(e.target as Node)) close();
+			const t = e.target as Node;
+			if (extraRefs.some((r) => r.current?.contains(t))) return;
+			if (rootRef.current && !rootRef.current.contains(t)) close();
 		};
 		const onKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
@@ -34,5 +38,5 @@ export function usePopoverDismiss(
 			document.removeEventListener("pointerdown", onPointerDown);
 			document.removeEventListener("keydown", onKeyDown);
 		};
-	}, [open, close, rootRef]);
+	}, [open, close, rootRef]); // eslint-disable-line react-hooks/exhaustive-deps -- extraRefs is a stable list of refs
 }

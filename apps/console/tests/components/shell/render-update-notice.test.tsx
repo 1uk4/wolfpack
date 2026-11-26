@@ -97,6 +97,21 @@ describe("sidebar update notice", () => {
 		assert.match(text(html([r as never])), /sfo-01: Installing…/);
 	});
 
+	it("What's new is a button that opens that row's release notes, and falls back to the release link when there are none", () => {
+		const r = row("hubd", "0.1.23");
+		const view = (notes?: { machine: string; state: "loading" | "missing" | { body: string; url: string } }) =>
+			renderToStaticMarkup(<UpdateNoticeView rows={[r]} dismissed={new Set()} onDismiss={() => {}} onOpenNotes={() => {}} notes={notes} />);
+		assert.match(view(), /<button[^>]*>What(&#x27;|')s new<\/button>/);
+		assert.doesNotMatch(view(), /role="dialog"/);
+		assert.match(text(view({ machine: "sfo-01", state: "loading" })), /Loading release notes/);
+		const open = view({ machine: "sfo-01", state: { body: "## Fixes\n\n- Update now works from any console", url: "https://github.com/1uk4/wolfpack/releases/tag/hubd%2Fv0.1.23" } });
+		assert.match(open, /role="dialog"/);
+		assert.match(text(open), /Fixes Update now works from any console/);
+		assert.match(open, /href="https:\/\/github\.com\/1uk4\/wolfpack\/releases\/tag\/hubd%2Fv0\.1\.23"[^>]*>View on GitHub/);
+		const missing = view({ machine: "sfo-01", state: "missing" });
+		assert.match(missing, /href="https:\/\/example\.test\/notes\/hubd"[^>]*>View on GitHub/);
+	});
+
 	it("stays hidden for a dismissed version and returns for a newer one", () => {
 		assert.equal(html([row("hubd", "0.1.23")], ["hubd@0.1.23"]), "");
 		assert.match(text(html([row("hubd", "0.1.24")], ["hubd@0.1.23"])), /hubd 0\.1\.24 is available/);

@@ -14,6 +14,7 @@ import { ArrowUpCircleIcon, XIcon } from "lucide-react";
 import { failedLine, retryLabel, stageLabel, type UpdateState } from "@wolfpack/protocol/update-state";
 import { useAppBridge } from "@/components/settings/app-bridge";
 import { useAppUpdateState } from "@/components/settings/use-app-update-state";
+import { ReleaseNotesModal, useReleaseNotes, type NotesState } from "@/components/shell/release-notes-view";
 import { updateOutcome } from "@/src/core";
 
 type Row = { component: string; running: string | null; latest: string | null; outdated: boolean | null; notesUrl: string | null; updateStep?: string; updateStatus?: { state: string; host?: string }; updateState?: { state: string; progress?: number | null; error?: { message: string } } };
@@ -21,7 +22,7 @@ type Row = { component: string; running: string | null; latest: string | null; o
 const HOUR = 60 * 60_000;
 const STORE = "wolfpack.update-notice.dismissed";
 
-type Group = { machine: string; reason: string | null; items: { component: string; latest: string | null; key: string }[]; failed: boolean; installing: boolean; notesUrl: string | null };
+type Group = { machine: string; reason: string | null; items: { component: string; latest: string | null; key: string }[]; failed: boolean; installing: boolean; notesUrl: string | null; notesTag: string | null };
 
 const keyOf = (r: Row) => `${r.component}@${r.latest ?? "?"}`;
 
@@ -33,12 +34,15 @@ function groupRows(rows: Row[], dismissed: ReadonlySet<string>): Group[] {
 		const installing = r.updateState?.state === "installing";
 		if (r.outdated !== true && !failed && !installing) continue;
 		const machine = r.updateStatus?.host || "this machine";
-		const g = by.get(machine) ?? { machine, reason: null, items: [], failed: false, installing: false, notesUrl: null };
+		const g = by.get(machine) ?? { machine, reason: null, items: [], failed: false, installing: false, notesUrl: null, notesTag: null };
 		g.installing ||= installing;
 		g.items.push({ component: r.component, latest: r.latest, key: keyOf(r) });
 		g.failed ||= failed;
 		if (failed) g.reason ??= r.updateState?.error?.message ?? null;
-		g.notesUrl ??= r.notesUrl;
+		if (!g.notesUrl && r.notesUrl) {
+			g.notesUrl = r.notesUrl;
+			g.notesTag = r.latest ? `${r.component}/v${r.latest}` : null; // the release tag the manifest's notesUrl points at
+		}
 		by.set(machine, g);
 	}
 	return [...by.values()];
@@ -83,7 +87,7 @@ function AppRow({ app, onInstall, onRetry }: { app: UpdateState; onInstall?: () 
 
 const APP_SHOWN = new Set(["downloading", "ready", "installing", "failed"]);
 
-export function UpdateNoticeView({ rows, dismissed, onDismiss, app, onInstall, onRetry, retrying, onRetryApp, retryError }: { retryError?: string | null;  rows: Row[]; dismissed: ReadonlySet<string>; onDismiss: (keys: string[]) => void; app?: UpdateState | null; onInstall?: () => void; /** Retry a failed pack update on this console's own machine (clears the held failure and tries again); `retrying` while it is pending. */ onRetry?: () => void; retrying?: boolean; /** Retry a failed Mac app update (checks for updates again). */ onRetryApp?: () => void }) {
+export function UpdateNoticeView({ rows, dismissed, onDismiss, app, onInstall, onRetry, retrying, onRetryApp, retryError, onOpenNotes, notes, onCloseNotes }: { /** Open the release notes for a machine's row (the container fetches them); with no handler What's new stays a plain link. */ onOpenNotes?: (machine: string, tag: string) => void; /** The open notes: the machine whose row asked and the fetch state. */ notes?: { machine: string; state: NotesState } | null; onCloseNotes?: () => void; retryError?: string | null;  rows: Row[]; dismissed: ReadonlySet<string>; onDismiss: (keys: string[]) => void; app?: UpdateState | null; onInstall?: () => void; /** Retry a failed pack update on this console's own machine (clears the held failure and tries again); `retrying` while it is pending. */ onRetry?: () => void; retrying?: boolean; /** Retry a failed Mac app update (checks for updates again). */ onRetryApp?: () => void }) {
 	const groups = groupRows(rows, dismissed);
 	const showApp = app != null && APP_SHOWN.has(app.state) && !(app.state === "failed" && app.error?.quiet); // an offline laptop failing its background check stays quiet here; the Pack machine card still shows it
 	if (!groups.length && !showApp) return null;
@@ -111,7 +115,11 @@ export function UpdateNoticeView({ rows, dismissed, onDismiss, app, onInstall, o
 							</Link>
 						)}
 						{g.failed && retryError && <p data-testid="update-notice-retry-error" className="mt-1 pl-[18px] text-red-400">{retryError}</p>}
-					{g.notesUrl && (
+					{g.notesUrl && g.notesTag && onOpenNotes ? (
+						<button type="button" onClick={() => onOpenNotes(g.machine, g.notesTag!)} className="text-muted-foreground underline hover:text-foreground">
+							What's new
+						</button>
+					) : g.notesUrl && (
 							<a href={g.notesUrl} target="_blank" rel="noreferrer" className="text-muted-foreground underline hover:text-foreground">
 								What's new
 							</a>
@@ -119,8 +127,19 @@ export function UpdateNoticeView({ rows, dismissed, onDismiss, app, onInstall, o
 					</div>
 				</div>
 			))}
+			{notes && (() => {
+				const g = groups.find((x) => x.machine === notes.machine);
+				return <ReleaseNotesModal state={notes.state} title={g ? `What's new: ${title(g)}` : "What's new"} fallbackUrl={g?.notesUrl} onClose={() => onCloseNotes?.()} />;
+			})()}
 		</div>
 	);
+}
+
+/** The notes the user opened (machine + tag), fetched through /api/release-notes. */
+function useOpenNotes() {
+	const [open, setOpen] = useState<{ machine: string; tag: string } | null>(null);
+	const state = useReleaseNotes(open?.tag ?? null);
+	return { notes: open ? { machine: open.machine, state } : null, onOpenNotes: (machine: string, tag: string) => setOpen({ machine, tag }), onCloseNotes: () => setOpen(null) };
 }
 
 function readDismissed(): Set<string> {
@@ -179,5 +198,6 @@ export function UpdateNotice() {
 			.catch(() => setRetryError("Update failed: Couldn't reach the console, so nothing was sent."))
 			.finally(() => (setRetrying(false), setReload((n) => n + 1)));
 	};
-	return <UpdateNoticeView rows={rows} dismissed={dismissed} onDismiss={dismiss} app={app} onInstall={() => void bridge?.installUpdate?.()} onRetry={retry} retrying={retrying} retryError={retryError} onRetryApp={() => void bridge?.checkForUpdates?.()} />;
+	const n = useOpenNotes();
+	return <UpdateNoticeView {...n} rows={rows} dismissed={dismissed} onDismiss={dismiss} app={app} onInstall={() => void bridge?.installUpdate?.()} onRetry={retry} retrying={retrying} retryError={retryError} onRetryApp={() => void bridge?.checkForUpdates?.()} />;
 }

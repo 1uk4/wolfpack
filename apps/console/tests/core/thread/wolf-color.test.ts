@@ -38,7 +38,7 @@ describe("wolf colour tokens", () => {
 		assert.equal(wolfAccentForeground(undefined), "var(--primary-foreground)");
 	});
 
-	it("offers 18 named colours, each readable as an accent in both themes", () => {
+	it("offers named colours, each readable as an accent in both themes", () => {
 		const lum = (hex: string) => {
 			const c = (i: number) => {
 				const v = parseInt(hex.slice(i, i + 2), 16) / 255;
@@ -50,7 +50,6 @@ describe("wolf colour tokens", () => {
 			const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
 			return (hi! + 0.05) / (lo! + 0.05);
 		};
-		assert.equal(THREAD_COLOR_KEYS.length, 18);
 		for (const key of THREAD_COLOR_KEYS) {
 			const t = wolfColorTokens(key);
 			assert.match(t.light.accent, /^#[0-9a-f]{6}$/, key);

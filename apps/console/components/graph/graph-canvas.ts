@@ -1287,6 +1287,11 @@ export class GraphCanvasRenderer {
 	}
 
 	/** Ring a node / target / wolf on the overlay (the activity feed's hover); null clears it. */
+	/** The map's tree edges and node ids, for the kbdemo to pick real filing targets from. */
+	demoGraph(): { edges: readonly { from: string; to: string }[]; ids: string[] } {
+		return { edges: this.data?.edges ?? [], ids: [...this.nodeById.keys()] };
+	}
+
 	setOverlayHighlight(h: OverlayHighlight | null): void {
 		this.overlay?.setHighlight(h);
 	}
@@ -1325,6 +1330,7 @@ export class GraphCanvasRenderer {
 			},
 			hasNode: (id) => this.nodeById.has(id),
 			nodeColor: (id) => this.nodeById.get(id)?.color,
+			edgesOf: () => this.data?.edges ?? [],
 			nodeRadius: (id) => {
 				const n = this.nodeById.get(id);
 				return n ? this.radiusOf(n) : null;

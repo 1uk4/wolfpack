@@ -1,0 +1,80 @@
+/**
+ * NERVE (pure, no DOM): the path a filed entry's pulse runs down the KB tree, domain -> section(s) -> entry, and the geometry of a
+ * polyline pulse (its head, and the lit stretch behind it). Drawing lives in components/graph/live/kb-life-draw.ts.
+ */
+
+export interface NervePt { x: number; y: number }
+export interface NerveEdge { from: string; to: string }
+
+/** Shortest path between two nodes over the edges (either direction), or null when they are not connected. */
+function bfs(adj: Map<string, string[]>, from: string, to: string): string[] | null {
+	if (from === to) return [from];
+	const prev = new Map<string, string>([[from, from]]);
+	const queue = [from];
+	for (let i = 0; i < queue.length; i++) {
+		const cur = queue[i]!;
+		for (const nb of adj.get(cur) ?? []) {
+			if (prev.has(nb)) continue;
+			prev.set(nb, cur);
+			if (nb === to) {
+				const path = [to];
+				for (let at = to; at !== from; ) path.unshift((at = prev.get(at)!));
+				return path;
+			}
+			queue.push(nb);
+		}
+	}
+	return null;
+}
+
+/**
+ * The node ids a nerve pulse visits: from `dom` down the tree edges to `ent` (the sections between are on the way).
+ * An entry the map does not have yet (or cannot reach) ends the path at its section, or at the domain when that is missing too.
+ */
+export function nervePath(edges: readonly NerveEdge[], dom: string, sec?: string, ent?: string): string[] {
+	const adj = new Map<string, string[]>();
+	const link = (a: string, b: string) => (adj.get(a) ?? adj.set(a, []).get(a)!).push(b);
+	for (const e of edges) {
+		link(e.from, e.to);
+		link(e.to, e.from);
+	}
+	return (ent && bfs(adj, dom, ent)) || (sec && bfs(adj, dom, sec)) || [dom];
+}
+
+const segLen = (a: NervePt, b: NervePt) => Math.hypot(b.x - a.x, b.y - a.y);
+
+/** The point `dist` along the polyline (clamped to its ends). */
+function pointAt(points: readonly NervePt[], dist: number): NervePt {
+	let left = Math.max(0, dist);
+	for (let i = 1; i < points.length; i++) {
+		const a = points[i - 1]!;
+		const b = points[i]!;
+		const len = segLen(a, b);
+		if (left <= len) return len === 0 ? { ...a } : { x: a.x + ((b.x - a.x) * left) / len, y: a.y + ((b.y - a.y) * left) / len };
+		left -= len;
+	}
+	const last = points[points.length - 1];
+	return last ? { ...last } : { x: 0, y: 0 };
+}
+
+const totalLen = (points: readonly NervePt[]) => points.slice(1).reduce((n, p, i) => n + segLen(points[i]!, p), 0);
+
+/** The head of the pulse when it has run fraction `t` (0..1) of the polyline's length. */
+export function nerveHead(points: readonly NervePt[], t: number): NervePt {
+	return pointAt(points, Math.min(1, Math.max(0, t)) * totalLen(points));
+}
+
+/** The lit stretch: the polyline from `tailFrac` of its length behind the head (at fraction `t`) up to the head. */
+export function nerveTrail(points: readonly NervePt[], t: number, tailFrac: number): NervePt[] {
+	const total = totalLen(points);
+	const end = Math.min(1, Math.max(0, t)) * total;
+	const start = Math.max(0, end - Math.max(0, tailFrac) * total);
+	const out: NervePt[] = [pointAt(points, start)];
+	let at = 0;
+	for (let i = 1; i < points.length; i++) {
+		at += segLen(points[i - 1]!, points[i]!);
+		if (at > start && at < end) out.push({ ...points[i]! });
+	}
+	out.push(pointAt(points, end));
+	return out;
+}

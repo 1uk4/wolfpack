@@ -5,7 +5,7 @@
  * The curator is a small mark near the KB domains (the hub has no node on the map): the middle of the domain nodes seen, eased toward
  * the graph centre, so it never sits on a domain.
  */
-import { curatorBusy, displayFill, KB_FILL_EASE_MS, topicsOf, type KbFlight, type KbLife, type KbResult } from "@/src/core";
+import { curatorBusy, displayFill, KB_FILL_EASE_MS, kbNerveState, nerveHead, nervePath, nerveTrail, topicsOf, type KbPulse, type KbFlight, type KbLife, type KbResult } from "@/src/core";
 import { rgba } from "./live-effects";
 import { LIVE_TUNING } from "./live-tuning";
 
@@ -18,6 +18,8 @@ export interface KbDrawHost {
 	hasNode(id: string): boolean;
 	nodeColor(id: string): string | undefined;
 	center(): Pt;
+	/** The tree edges (either direction), for the nerve path. Absent: the nerve is a dot at the entry. */
+	edgesOf?(): readonly { from: string; to: string }[];
 	colors: { node: string; label: string; hoverText: string };
 	fontFamily: string;
 }
@@ -41,6 +43,26 @@ export function resultPos(host: KbDrawHost, r: KbResult | undefined, domain?: st
 	return null;
 }
 
+/** The domain node a filed entry flies to first. */
+function domainPos(host: KbDrawHost, domain: string | undefined): Pt | null {
+	return domain && host.hasNode(`dom:${domain}`) ? host.nodePos(`dom:${domain}`) : null;
+}
+
+/** The nerve path's node ids on the map, cached per pulse and edge list (the graph is the same for the pulse's whole life). */
+const nerveCache = new WeakMap<object, Map<string, string[]>>();
+function nerveIds(host: KbDrawHost, pl: KbPulse): string[] {
+	const edges = host.edgesOf?.();
+	if (!edges || !pl.domain) return [];
+	let per = nerveCache.get(edges);
+	if (!per) nerveCache.set(edges, (per = new Map()));
+	let ids = per.get(pl.id);
+	if (!ids) {
+		if (per.size > 200) per.clear();
+		per.set(pl.id, (ids = nervePath(edges, `dom:${pl.domain}`, pl.section ? `sec:${pl.section}` : undefined, pl.entryId ? `ent:${pl.entryId}` : undefined).filter((id) => host.hasNode(id))));
+	}
+	return ids;
+}
+
 /** The inner ring round Home (kbRingPx, scaled by the overlay unit m): items circle Home here until the curator files them. */
 function slotPos(cur: Pt, slot: number, wall: number, reduced: boolean, m: number): Pt {
 	const a = slot * 2.4 + (reduced ? 0 : wall / 4000);
@@ -61,6 +83,7 @@ export function itemPos(start: Pt, cur: Pt, slot: number, born: number, wall: nu
 
 export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDrawHost, wolfOf: (name: string) => KbWolfBody | undefined, k: number, wall: number, reduced: boolean, focus: KbFocus | null, m = KB_UNIT): void {
 	const cur = curatorPos(kb, host);
+	const view = viewOf(ctx) ?? undefined;
 	const busy = curatorBusy(kb);
 	const hasLife = Object.keys(kb.wolves).length > 0 || kb.flights.length > 0 || kb.pulses.length > 0 || Object.keys(kb.curator).length > 0;
 	if (!hasLife) return;
@@ -139,7 +162,7 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 			queuedIdx.set(f.wolf, (queuedIdx.get(f.wolf) ?? 0) + 1);
 		}
 		const start = body ? beside(body, idx, k) : cur;
-		const p = flightPos(f, start, cur, resultPos(host, f.result, f.domain), wall, k, reduced, m);
+		const p = flightPos(f, start, cur, domainPos(host, f.result?.domain ?? f.domain) ?? resultPos(host, f.result, f.domain), wall, k, reduced, m, view);
 		if ((f.stage !== "queued" || f.born !== undefined) && f.stage !== "fade" && shown++ >= LIVE_TUNING.kbMaxItems) continue;
 		const alpha = f.stage === "fade" ? 1 - smooth((wall - f.at) / Math.max(1, f.endAt - f.at)) : 1;
 		const r = 4.2 / k;
@@ -159,23 +182,46 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 		if (focus?.topicId === f.id) ring(ctx, p, 9 / k, host.colors.hoverText, k);
 	}
 
-	// Results: a create grows a node at its section; a merge pulses the entry.
+	// Results: the filed entry's nerve. A pulse runs down the tree edges (domain, section(s), entry), the path stays lit, then a ring at the entry.
 	for (const pl of kb.pulses) {
-		const at = resultPos(host, { outcome: pl.kind, ...(pl.entryId ? { entryId: pl.entryId } : {}), ...(pl.section ? { section: pl.section } : {}), ...(pl.domain ? { domain: pl.domain } : {}) }, pl.domain);
-		if (!at) continue;
 		const color = host.nodeColor(`dom:${pl.domain ?? ""}`) ?? host.colors.node;
-		const u = reduced ? 0.4 : Math.max(0, Math.min(1, (wall - pl.at) / 2600));
-		ctx.lineWidth = 1.6 / k;
-		ctx.strokeStyle = rgba(color, 0.8 * (1 - u));
-		ctx.beginPath();
-		ctx.arc(at.x, at.y, (6 + u * 18) / k, 0, Math.PI * 2);
-		ctx.stroke();
-		if (pl.kind === "create" && !pl.entryId) {
-			// the map has no node for it yet (the graph refreshes later): a temporary dot stands for it
-			ctx.fillStyle = rgba(color, 0.9 * (1 - u * 0.5));
+		const pts = nerveIds(host, pl).map((id) => host.nodePos(id)).filter((q): q is Pt => !!q);
+		const end = pts[pts.length - 1] ?? resultPos(host, { outcome: pl.kind, ...(pl.section ? { section: pl.section } : {}), ...(pl.domain ? { domain: pl.domain } : {}) }, pl.domain);
+		if (!end) continue;
+		const st = kbNerveState(pl, wall, reduced);
+		if (st.phase === "done") continue;
+		if (pts.length > 1 && st.phase !== "ring") {
+			// reduced motion: the whole path fades in and out; otherwise the head runs, then the path stays lit (easing out over the last second)
+			const glow = reduced ? Math.sin(Math.PI * st.t) : st.phase === "run" ? 1 : Math.min(1, (1 - st.t) * 10);
+			const lit = st.phase === "run" ? nerveTrail(pts, st.t, 1) : pts;
+			ctx.lineJoin = "round";
+			ctx.lineWidth = 2.6 / k;
+			ctx.strokeStyle = rgba(color, 0.75 * glow);
 			ctx.beginPath();
-			ctx.arc(at.x + 10 / k, at.y - 8 / k, (3.6 * smooth(u * 4)) / k, 0, Math.PI * 2);
+			lit.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+			ctx.stroke();
+			if (st.phase === "run") {
+				const h = nerveHead(pts, st.t);
+				ctx.fillStyle = rgba("#ffffff", 0.95);
+				ctx.beginPath();
+				ctx.arc(h.x, h.y, 3.4 / k, 0, Math.PI * 2);
+				ctx.fill();
+			}
+		}
+		if ((!pl.entryId || !host.hasNode(`ent:${pl.entryId}`)) && pl.kind === "create" && st.phase !== "run") {
+			// the map has no node for it yet (the graph refreshes later): a temporary dot stands for it at the end of the path
+			ctx.fillStyle = rgba(color, 0.9);
+			ctx.beginPath();
+			ctx.arc(end.x + 10 / k, end.y - 8 / k, 3.6 / k, 0, Math.PI * 2);
 			ctx.fill();
+		}
+		if (st.phase === "ring") {
+			const u = reduced ? 0.4 : st.t;
+			ctx.lineWidth = 1.6 / k;
+			ctx.strokeStyle = rgba(color, 0.8 * (1 - u));
+			ctx.beginPath();
+			ctx.arc(end.x, end.y, (6 + u * 18) / k, 0, Math.PI * 2);
+			ctx.stroke();
 		}
 	}
 	ctx.restore();
@@ -195,8 +241,23 @@ function ring(ctx: CanvasRenderingContext2D, p: Pt, r: number, color: string, k:
 	ctx.stroke();
 }
 
+/** The visible part of the map in world coordinates. */
+export interface WorldRect { minX: number; minY: number; maxX: number; maxY: number }
+
+/** The world rectangle the canvas shows under its current transform (null when the transform cannot be inverted). */
+function viewOf(ctx: CanvasRenderingContext2D): WorldRect | null {
+	try {
+		const inv = ctx.getTransform().inverse();
+		const a = inv.transformPoint({ x: 0, y: 0 });
+		const b = inv.transformPoint({ x: ctx.canvas.width, y: ctx.canvas.height });
+		return { minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y), maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y) };
+	} catch {
+		return null;
+	}
+}
+
 /** Where a flight is at `wall` (exported for the draw tests). */
-export function flightPos(f: KbFlight, start: Pt, cur: Pt, target: Pt | null, wall: number, k: number, reduced: boolean, m = KB_UNIT): Pt {
+export function flightPos(f: KbFlight, start: Pt, cur: Pt, target: Pt | null, wall: number, k: number, reduced: boolean, m = KB_UNIT, view?: WorldRect): Pt {
 	const slot = slotPos(cur, f.slot, wall, reduced, m);
 	// A flight made from a topic dot that reached the ring carries on from that place (no second trip from the wolf).
 	if (f.born !== undefined && (f.stage === "queued" || f.stage === "travel")) return itemPos(start, cur, f.slot, f.born, wall, m, reduced);
@@ -214,7 +275,9 @@ export function flightPos(f: KbFlight, start: Pt, cur: Pt, target: Pt | null, wa
 		case "place": {
 			const to = target ?? { x: cur.x + 40 / k, y: cur.y - 30 / k };
 			const t = smooth((wall - f.at) / Math.max(1, f.endAt - f.at));
-			return { x: lerp(slot.x, to.x, t), y: lerp(slot.y, to.y, t) };
+			// Home off screen: the entry enters from the screen edge nearest Home.
+			const from = view ? { x: Math.min(view.maxX, Math.max(view.minX, slot.x)), y: Math.min(view.maxY, Math.max(view.minY, slot.y)) } : slot;
+			return { x: lerp(from.x, to.x, t), y: lerp(from.y, to.y, t) };
 		}
 		default:
 			return slot;

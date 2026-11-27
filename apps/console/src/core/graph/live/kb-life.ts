@@ -22,6 +22,9 @@ export const KB_STAGGER_MS = 900;
 export const KB_MAX_FLIGHTS = 6;
 export const KB_MAX_QUEUE = 80;
 export const KB_PULSE_MS = 2600;
+/** A landed entry's nerve pulse: the run down the tree, the lit path that stays after it reaches the entry, then the final ring (KB_PULSE_MS). */
+export const KB_NERVE_MS = 1800;
+export const KB_NERVE_GLOW_MS = 10_000;
 /** A consolidated topic nobody promotes stays beside its wolf this long; a flight whose curator never answers fades after this. */
 export const KB_TOPIC_TTL_MS = 120_000;
 export const KB_WAIT_MAX_MS = 60_000;
@@ -164,6 +167,22 @@ export function displayFill(w: KbWolf, now: number): number {
 	return w.prevFill + (w.fill - w.prevFill) * t;
 }
 
+export type KbNervePhase = "run" | "lit" | "ring" | "done";
+/**
+ * Where a landed pulse is in its life at `now`: run (t = 0..1 along the path), lit (t = elapsed share of the glow), ring (t = 0..1), done.
+ * Reduced motion has no run: the lit path (faded in and out by the drawing) starts at landing.
+ */
+export function kbNerveState(p: Pick<KbPulse, "at">, now: number, reduced: boolean): { phase: KbNervePhase; t: number } {
+	let e = now - p.at;
+	if (!reduced) {
+		if (e < KB_NERVE_MS) return { phase: "run", t: Math.max(0, e) / KB_NERVE_MS };
+		e -= KB_NERVE_MS;
+	}
+	if (e < KB_NERVE_GLOW_MS) return { phase: "lit", t: Math.max(0, e) / KB_NERVE_GLOW_MS };
+	e -= KB_NERVE_GLOW_MS;
+	return e < KB_PULSE_MS ? { phase: "ring", t: e / KB_PULSE_MS } : { phase: "done", t: 1 };
+}
+
 const dur = (s: KbLife, ms: number) => (s.reduced ? 0 : ms);
 
 /** Advance the phases to `now`: start queued flights (paced and capped), move arrived ones on, land results, expire. Returns `s` itself when nothing changed. */
@@ -208,7 +227,7 @@ export function stepKbLife(s: KbLife, now: number): KbLife {
 	const curator: Record<string, number> = {};
 	for (const [k, at] of Object.entries(s.curator)) if (now - at < KB_CURATOR_TTL_MS) curator[k] = at;
 	if (Object.keys(curator).length !== Object.keys(s.curator).length) changed = true;
-	const allPulses = [...s.pulses, ...pulses].filter((p) => now - p.at < KB_PULSE_MS);
+	const allPulses = [...s.pulses, ...pulses].filter((p) => kbNerveState(p, now, s.reduced).phase !== "done");
 	if (allPulses.length !== s.pulses.length + pulses.length || pulses.length > 0) changed = true;
 	if (!changed) return s;
 	// flights keep arrival order (a started flight keeps its place among the others)

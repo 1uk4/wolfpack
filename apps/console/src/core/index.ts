@@ -22,6 +22,7 @@ export * from "./graph/live/motion-mode.ts";
 export * from "./graph/live/live-targets.ts";
 export * from "./graph/work-node-thread.ts";
 export * from "./graph/live/kb-life.ts";
+export * from "./graph/live/kb-nerve.ts";
 export * from "./graph/live/kb-life-log.ts";
 export * from "./graph/live/live-physics.ts";
 export * from "./graph/live/feed.ts";

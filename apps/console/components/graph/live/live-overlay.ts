@@ -46,6 +46,8 @@ export interface OverlayHost {
 	hasNode(id: string): boolean;
 	nodeColor(id: string): string | undefined;
 	center(): Pt;
+	/** The tree edges (either direction): a filed entry's nerve pulse runs along them. */
+	edgesOf?(): readonly { from: string; to: string }[];
 	/** Bounding radius (world) of all nodes about `center()`; the wolves roam over a fraction of it. Absent or null: no roam. Cached by the host. */
 	extentRadius?(): number | null;
 	/** Base-layer radius (world) and label of a node: a hub on it is drawn a little larger and its card names the work item. */

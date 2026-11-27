@@ -52,3 +52,15 @@ describe("a memory item travels from its wolf to the ring", () => {
 		assert.ok(Math.abs(dist(itemPos(wolf, home, 3, 1000, 1000, 1, true)) - 40) < 1e-6);
 	});
 });
+
+describe("the filing flight leaves Home, or the screen edge nearest it when Home is off screen", () => {
+	const flight = { id: "f", wolf: "hal", stage: "place", slot: 2, at: 0, endAt: 1000 } as never;
+	it("starts the place leg at the nearest edge of the view, and at Home's ring when Home is in view", () => {
+		const home = { x: -500, y: 0 };
+		const target = { x: 200, y: 0 };
+		const off = flightPos(flight, home, home, target, 0, 1, true, 1, { minX: 0, minY: -100, maxX: 400, maxY: 100 });
+		assert.equal(off.x, 0);
+		const on = flightPos(flight, home, home, target, 0, 1, true, 1, { minX: -1000, minY: -1000, maxX: 1000, maxY: 1000 });
+		assert.ok(Math.hypot(on.x - home.x, on.y - home.y) < 60);
+	});
+});

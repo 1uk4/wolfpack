@@ -472,7 +472,7 @@ export class WolfServer {
       .map((t) => ({
         kind: t.summary.kind,
         boundWorkItem: t.summary.boundWorkItem,
-        conversationId: Number(t.conv.id),
+        conversationId: String(t.conv.id),
         running: t.isRunning,
         liveChildren: (this.subagents?.children(t.summary.id) ?? []).filter((c) => c.state === "queued" || c.state === "running" || c.state === "waiting").map((c) => c.title),
       }));

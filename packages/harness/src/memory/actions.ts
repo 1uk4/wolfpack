@@ -118,7 +118,7 @@ export interface GraduationActions {
   /** Distill and return the preview (writes the confirmation token). Throws GraduationError. */
   preview(id: string): Promise<GraduationPreviewResult>;
   /** Check the token, fold late observations, ship, then file a graduate approval request (the hub sends, graduates and archives on approval). Throws GraduationError. */
-  confirm(id: string, token: string): Promise<GraduationConfirmResult>;
+  confirm(id: string, token: string, callerConversation?: number): Promise<GraduationConfirmResult>;
   /** The newest stored preview of this item that has not expired (its token file survives a restart), if any. */
   pendingPreview(id: string): Promise<GraduationPreviewResult | undefined>;
   /** The pending observations in this wolf's pool a graduation of the item folds (the item and its descendants), per work item. */

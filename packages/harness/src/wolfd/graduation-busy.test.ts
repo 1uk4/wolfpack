@@ -19,4 +19,9 @@ describe("runningReasonFor: is the feature thread of a work item busy", () => {
     expect(runningReasonFor("work-w-A", [thread({ running: true })], 5)).toBeUndefined();
     expect(runningReasonFor("work-w-A", [thread({ running: true, liveChildren: ["w-api"] })], 5)).toBe("1 sub-agent running (w-api)");
   });
+
+  it("compares conversation ids as strings, so a non-numeric id still matches its own turn", () => {
+    expect(runningReasonFor("work-w-A", [thread({ conversationId: "c-9", running: true })], "c-9")).toBeUndefined();
+    expect(runningReasonFor("work-w-A", [thread({ conversationId: "c-9", running: true })], "c-8")).toBe("a turn is in progress");
+  });
 });

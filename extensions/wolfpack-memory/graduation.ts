@@ -63,13 +63,13 @@ export function createGraduation(deps: GraduationDeps) {
     return roots;
   };
 
-  /** Refuse an item that is not ready with the reason, before any model work. */
   /** Refuse while the item's feature thread has a turn or running sub-agents: nothing is distilled or filed. */
   function assertIdle(id: string, callerConversation?: number): void {
     const why = deps.threadRunning?.()?.(id, callerConversation);
     if (why) throw new GraduationError("thread_running", `${THREAD_RUNNING_MESSAGE}: ${why}. Graduate once it is idle.`);
   }
 
+  /** Refuse an item that is not ready with the reason, before any model work. */
   async function assertReady(id: string, callerConversation?: number): Promise<WorkItem[]> {
     assertIdle(id, callerConversation);
     const all = await loadGraduationScope(client, id);
@@ -121,12 +121,14 @@ export function createGraduation(deps: GraduationDeps) {
    * here: the hub delivers and graduates on the owner's approval. The token is used up only once the hub holds the request,
    * so a failed filing can be confirmed again.
    */
-  async function confirm(id: string, token: string): Promise<{ preview: GraduationPreview; requestId: string; existing: boolean; lateFolded: number }> {
+  async function confirm(id: string, token: string, callerConversation?: number): Promise<{ preview: GraduationPreview; requestId: string; existing: boolean; lateFolded: number }> {
     try {
-      assertIdle(id);
+      assertIdle(id, callerConversation);
       const roots = needRoots();
       const p = await loadPreview(id, token);
-      const prepared = await prepareGraduation({ client, roots, preview: p, ship: deps.ship, drain: deps.drain, finalPass: deps.finalPass, engine: deps.engine() });
+      // The thread can become busy while the drain and distill run: check again right before the ship and again before filing.
+      const prepared = await prepareGraduation({ client, roots, preview: p, ship: deps.ship, drain: deps.drain, finalPass: deps.finalPass, engine: deps.engine(), beforeCommit: () => assertIdle(id, callerConversation) });
+      assertIdle(id, callerConversation);
       const { requestId, existing } = await deps.fileRequest(id, { kind: "graduate", preview: { contributions: prepared.preview.contributions, ...(prepared.preview.summary ? { summary: prepared.preview.summary } : {}) } });
       await unlink(previewFile(token)).catch(() => { /* used once */ });
       return { preview: prepared.preview, requestId, existing, lateFolded: prepared.lateFolded };
@@ -219,8 +221,8 @@ export function createGraduation(deps: GraduationDeps) {
     async preview(id: string): Promise<GraduationPreviewResult> {
       return toResult(await preview(id));
     },
-    async confirm(id: string, token: string): Promise<GraduationConfirmResult> {
-      const r = await confirm(id, token);
+    async confirm(id: string, token: string, callerConversation?: number): Promise<GraduationConfirmResult> {
+      const r = await confirm(id, token, callerConversation);
       return { requestId: r.requestId, status: r.existing ? "pending" : "filed", entries: r.preview.contributions.map((c) => c.id), archived: [], lateFolded: r.lateFolded, unbound: 0 };
     },
     pendingPreview,

@@ -56,7 +56,7 @@ async function devRoot(): Promise<string> {
 }
 
 /** What the scripted engine does for each model step; tests flip these. */
-const behave: { workRecordFails: boolean; distillCalls: number; recordCalls: number; featureId: string; hold: Promise<void> | null } = { workRecordFails: false, distillCalls: 0, recordCalls: 0, featureId: "", hold: null };
+const behave: { workRecordFails: boolean; distillCalls: number; recordCalls: number; featureId: string; hold: Promise<void> | null; onRecord: (() => void) | null } = { workRecordFails: false, distillCalls: 0, recordCalls: 0, featureId: "", hold: null, onRecord: null };
 
 const engine = (): Engine =>
   ({
@@ -70,6 +70,7 @@ const engine = (): Engine =>
       }
       if (step === "workRecord") {
         behave.recordCalls++;
+        behave.onRecord?.();
         if (behave.workRecordFails) throw new Error("model exploded");
         return schema.parse({ decisions: [], changes: [{ text: "Cached the lookups", from: [] }], findings: [], problems: [] });
       }
@@ -170,6 +171,7 @@ beforeEach(() => {
   behave.distillCalls = 0;
   behave.recordCalls = 0;
   behave.hold = null;
+  behave.onRecord = null;
 });
 
 describe("graduate routes", () => {
@@ -239,6 +241,43 @@ describe("graduate routes", () => {
       expect(existsSync(join(den, "tasks", "graduation", `${p.token}.json`))).toBe(true);
       busy = undefined;
       expect(await confirm(feature, p.token)).toMatchObject({ requestId: "req-new", status: "filed" });
+    } finally {
+      unregisterThreadRunningCheck(den, check);
+    }
+  });
+
+  it("a confirm from the feature thread's own turn is allowed, one from elsewhere is refused while that turn runs", async () => {
+    tw = await boot(await devRoot());
+    const { feature } = await makeFeature(tw);
+    const den = tw.wolf.config.den;
+    const p = await preview(feature);
+    const check = (id: string, except?: number) => (id === feature && except !== 7 ? "a turn is in progress" : undefined);
+    registerThreadRunningCheck(den, check);
+    try {
+      const actions = graduationActionsFor(den)!;
+      await expect(actions.confirm(feature, p.token)).rejects.toMatchObject({ code: "thread_running" });
+      expect(filed).toEqual([]);
+      expect(await actions.confirm(feature, p.token, 7)).toMatchObject({ requestId: "req-new", status: "filed" });
+    } finally {
+      unregisterThreadRunningCheck(den, check);
+    }
+  });
+
+  it("a thread that becomes busy while the confirm drains is refused before anything ships or is filed", async () => {
+    tw = await boot(await devRoot());
+    const { feature, tasks } = await makeFeature(tw, { open: 1, tasks: 1 });
+    await work(tw, "PATCH", `/work/${tasks[0]}`, { stage: "shipped" });
+    const den = tw.wolf.config.den;
+    const p = await preview(feature);
+    tag(den, tasks[0]!);
+    let busy = false;
+    const check = (id: string) => (id === feature && busy ? "a turn is in progress" : undefined);
+    registerThreadRunningCheck(den, check);
+    behave.onRecord = () => { busy = true; };
+    try {
+      await expect(graduationActionsFor(den)!.confirm(feature, p.token)).rejects.toMatchObject({ code: "thread_running" });
+      expect(filed).toEqual([]);
+      expect(existsSync(join(den, "tasks", "graduation", `${p.token}.json`))).toBe(true);
     } finally {
       unregisterThreadRunningCheck(den, check);
     }

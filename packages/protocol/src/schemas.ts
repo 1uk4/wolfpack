@@ -1408,6 +1408,13 @@ export const MemoryStatusSchema = z.object({
   promoting: z.object({ jobId: z.string() }).optional(),
   /** `?thread=<id>`: that thread's bound work item; without it the home thread's. null = unbound. Absent on older servers. */
   bound: BoundWorkSchema.nullable().optional(),
+  /** Saves that keep failing (consolidation or the Work API): how many groups, the oldest wait, the retry and the first message. Absent: none stuck, or an older wolfd. */
+  pending: z.object({
+    stuck: z.number().int().positive(),
+    oldestAgeMs: z.number().nonnegative(),
+    nextRetryInMs: z.number().nonnegative(),
+    message: z.string().optional(),
+  }).optional(),
 });
 export type MemoryStatus = z.infer<typeof MemoryStatusSchema>;
 

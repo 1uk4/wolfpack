@@ -1126,11 +1126,11 @@ export class GraphCanvasRenderer {
 		const w = this.canvas.clientWidth;
 		const h = this.canvas.clientHeight;
 		if (w < 10 || h < 10) return; // not laid out yet; the next setData/resize checks
-		const b = this.worldBBox;
-		if (!cameraFramesWorld(rc, b, w, h)) {
-			this.restoredCamera = null;
-			this.hasFit = false;
-		}
+		// Owner decision (work-wolfpack-2wEvr00): fit on every page visit's first
+		// laid-out load, not only when the stored camera is off the graph. The
+		// saved camera is replaced; later pans persist as before.
+		this.restoredCamera = null;
+		this.hasFit = false;
 	}
 
 	/** Frame the whole graph (padding included). Keeps the camera on later

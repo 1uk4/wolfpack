@@ -108,6 +108,27 @@ describe("live overlay fade clock", () => {
 		assert.ok(a !== undefined && Math.abs(a - 0.45 * 0.5) < 0.02, `thread alpha ${a}`);
 	});
 
+	it("never passes a negative or non-finite radius to ctx.arc at any zoom, so one bad value cannot disable the overlay", () => {
+		const radii: { r: number; k: number }[] = [];
+		let curK = 1;
+		const rec = new Proxy({}, {
+			get: (_t, p) => (p === "measureText" ? () => ({ width: 1 }) : p === "createRadialGradient" || p === "createLinearGradient" ? () => grad : p === "arc" ? (_x: number, _y: number, r: number) => radii.push({ r, k: curK }) : () => undefined),
+			set: () => true,
+		}) as unknown as CanvasRenderingContext2D;
+		o.dispatch({ type: "event", event: ev("thread-active", { actor: th("tz") }), now: Date.now() });
+		o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("tz", "sa") }), now: Date.now() });
+		o.dispatch({ type: "event", event: ev("needs-you", { actor: th("tz") }), now: Date.now() });
+		let t = 1;
+		for (const k of [1e-5, 1e-3, 0.02, 0.3, 1, 8, 0, -0.5]) {
+			curK = k;
+			o.step(t, 0.016, host, k);
+			o.draw(rec, host, k, t);
+			t += 400;
+		}
+		assert.ok(radii.length > 0);
+		assert.deepEqual(radii.filter((a) => !(a.r >= 0 && Number.isFinite(a.r))), []);
+	});
+
 	it("draws each wolf as a badge with the wolf-head logo path, dimmed when offline", () => {
 		const fills: { d?: string; alpha: number; scale: number }[] = [];
 		let alpha = 1;

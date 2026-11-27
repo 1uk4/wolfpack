@@ -27,7 +27,7 @@ import {
 } from "@/src/core";
 import { ownerThreadKey, targetNodeId, threadKey, threadSlugOf } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
-import { AMBER, EFFECTS, rgba } from "./live-effects";
+import { AMBER, EFFECTS, rgba, safeArc, safeZoom } from "./live-effects";
 import { floatOffset, nameHash } from "./live-float";
 import { LIVE_TUNING } from "./live-tuning";
 import { badgeRadiusPx, badgeRing, isLightHex, ownerSpot, parkingSpot, stateRingRadiusPx, wolfFallbackHex } from "./live-badge";
@@ -505,7 +505,8 @@ export class LiveOverlay {
 		for (const id in s.subagents) if (s.subagents[id]!.finishedAt === undefined) ws.add(s.subagents[id]!.wolf);
 	}
 
-	step(now: number, dtSec: number, host: OverlayHost, k: number): void {
+	step(now: number, dtSec: number, host: OverlayHost, kIn: number): void {
+		const k = safeZoom(kIn);
 		this.syncReplaced(host);
 		if (!this.settings.enabled) return;
 		this.kNow = k;
@@ -970,7 +971,7 @@ export class LiveOverlay {
 			ctx.shadowColor = rgba(YOU_ACCENT, 0.55);
 			ctx.shadowBlur = 10;
 			ctx.beginPath();
-			ctx.arc(badge.x, badge.y, badge.r, 0, Math.PI * 2);
+			safeArc(ctx, badge.x, badge.y, badge.r, 0, Math.PI * 2);
 			ctx.fillStyle = rgba(YOU_ACCENT, 0.2);
 			ctx.fill();
 			ctx.shadowBlur = 0;
@@ -991,7 +992,8 @@ export class LiveOverlay {
 	private cachedItems: OverlayItem[] = [];
 
 	/** Wolves, thread satellites and subagent satellites at their current positions (world). */
-	items(host: OverlayHost, k: number, now: number): OverlayItem[] {
+	items(host: OverlayHost, kIn: number, now: number): OverlayItem[] {
+		const k = safeZoom(kIn);
 		const s = this.state;
 		const out = this.itemsOut; // reused across frames: callers read it within the frame
 		out.length = 0;
@@ -1082,7 +1084,8 @@ export class LiveOverlay {
 	 * `now` is the renderer's monotonic clock (animation phase only). Everything stored in the state (idle and finish times, trails, pulses)
 	 * is epoch ms, so fades are computed from the wall clock here, never from `now`.
 	 */
-	draw(ctx: CanvasRenderingContext2D, host: OverlayHost, k: number, now: number): void {
+	draw(ctx: CanvasRenderingContext2D, host: OverlayHost, kIn: number, now: number): void {
+		const k = safeZoom(kIn);
 		if (!this.settings.enabled || Object.keys(this.state.wolves).length === 0) return;
 		ctx.save();
 		try {
@@ -1184,13 +1187,13 @@ export class LiveOverlay {
 				this.drawBadge(ctx, it, k, now, reduced);
 			} else if (it.kind === "thread") {
 				ctx.beginPath();
-				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
+				safeArc(ctx, it.x, it.y, it.r, 0, Math.PI * 2);
 				ctx.fillStyle = rgba(it.color, it.working ? 1 : 0.7);
 				ctx.fill();
 				if (it.working) this.drawWorkingRing(ctx, it, k, now, reduced);
 			} else if (it.kind === "subagent") {
 				ctx.beginPath();
-				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
+				safeArc(ctx, it.x, it.y, it.r, 0, Math.PI * 2);
 				ctx.fillStyle = rgba(it.color, 0.95);
 				ctx.fill();
 				ctx.lineWidth = 1 / k;
@@ -1219,7 +1222,7 @@ export class LiveOverlay {
 			if (at) {
 				const pulse = reduced ? 0 : 0.5 + 0.5 * Math.sin(now / 260);
 				ctx.beginPath();
-				ctx.arc(at.x, at.y, r + pulse * 1.5 / k, 0, Math.PI * 2);
+				safeArc(ctx, at.x, at.y, r + pulse * 1.5 / k, 0, Math.PI * 2);
 				ctx.fillStyle = rgba(color, 0.12);
 				ctx.fill();
 				ctx.lineWidth = 1.5 / k;
@@ -1255,7 +1258,7 @@ export class LiveOverlay {
 		ctx.globalAlpha = 1;
 		const r = T.denRadiusPx * m;
 		ctx.beginPath();
-		ctx.arc(den.x, den.y, r, 0, Math.PI * 2);
+		safeArc(ctx, den.x, den.y, r, 0, Math.PI * 2);
 		ctx.fillStyle = rgba(host.colors.node, 0.25);
 		ctx.fill();
 		ctx.lineWidth = 1.5 / k;
@@ -1285,7 +1288,7 @@ export class LiveOverlay {
 			ctx.setLineDash([]);
 		}
 		ctx.beginPath();
-		ctx.arc(ow.x, ow.y, or, 0, Math.PI * 2);
+		safeArc(ctx, ow.x, ow.y, or, 0, Math.PI * 2);
 		ctx.fillStyle = rgba(YOU_ACCENT, 0.2);
 		ctx.fill();
 		ctx.lineWidth = 1.3 / k;
@@ -1319,7 +1322,7 @@ export class LiveOverlay {
 		ctx.shadowBlur = 5;
 		ctx.shadowOffsetY = 1.5;
 		ctx.beginPath();
-		ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
+		safeArc(ctx, it.x, it.y, it.r, 0, Math.PI * 2);
 		ctx.fillStyle = rgba(st.dim ? DIM_FILL : it.color, 1);
 		ctx.fill();
 		ctx.restore();
@@ -1340,7 +1343,7 @@ export class LiveOverlay {
 		if (st.kind === "arc") {
 			const a0 = reduced ? -Math.PI / 2 - st.sweepRad / 2 : (now / 1000) * ((Math.PI * 2) / T.arcTurnSec) + (this.hashOf(it.key) % 628) / 100;
 			ctx.beginPath();
-			ctx.arc(it.x, it.y, rr, a0, a0 + st.sweepRad);
+			safeArc(ctx, it.x, it.y, rr, a0, a0 + st.sweepRad);
 			ctx.lineWidth = T.ringStrokePx / k;
 			ctx.strokeStyle = rgba(color, 0.95);
 			ctx.stroke();
@@ -1348,7 +1351,7 @@ export class LiveOverlay {
 			const pulse = st.pulse && !reduced ? 0.7 + 0.3 * Math.sin(now / 450) : 1;
 			const a = ctx.globalAlpha;
 			ctx.beginPath();
-			ctx.arc(it.x, it.y, rr, 0, Math.PI * 2);
+			safeArc(ctx, it.x, it.y, rr, 0, Math.PI * 2);
 			ctx.globalAlpha = a * 0.2 * pulse;
 			ctx.lineWidth = (T.ringStrokePx * 2.4) / k;
 			ctx.strokeStyle = rgba(color, 1);
@@ -1411,19 +1414,19 @@ export class LiveOverlay {
 		ctx.lineWidth = 1.2 / k;
 		if (reduced) {
 			ctx.beginPath();
-			ctx.arc(it.x, it.y, it.r * 1.9, 0, Math.PI * 2);
+			safeArc(ctx, it.x, it.y, it.r * 1.9, 0, Math.PI * 2);
 			ctx.strokeStyle = rgba(it.color, 0.5 * it.alpha);
 			ctx.stroke();
 			return;
 		}
 		const ph = ((now / 1600 + (this.hashOf(it.key) % 100) / 100) % 1 + 1) % 1;
 		ctx.beginPath();
-		ctx.arc(it.x, it.y, it.r * (1.5 + 1.0 * ph), 0, Math.PI * 2);
+		safeArc(ctx, it.x, it.y, it.r * (1.5 + 1.0 * ph), 0, Math.PI * 2);
 		ctx.strokeStyle = rgba(it.color, 0.5 * (1 - ph) * it.alpha);
 		ctx.stroke();
 		const a0 = now / 650 + (this.hashOf(it.key) % 628) / 100;
 		ctx.beginPath();
-		ctx.arc(it.x, it.y, it.r * 1.9, a0, a0 + 1.1);
+		safeArc(ctx, it.x, it.y, it.r * 1.9, a0, a0 + 1.1);
 		ctx.strokeStyle = rgba(it.color, 0.75 * it.alpha);
 		ctx.lineCap = "round";
 		ctx.stroke();

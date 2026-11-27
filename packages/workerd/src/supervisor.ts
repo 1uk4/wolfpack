@@ -155,12 +155,17 @@ export class Supervisor implements WolfRegistry {
     this.emit({ type: "add", config });
   }
 
-  /** Replace a supervised wolf's in-memory config (its wolf.yaml was re-read after a settings save). Does not restart the child. */
-  reloadConfig(config: WolfConfig): boolean {
-    const c = this.children.get(config.identity.name);
-    if (!c) return false;
-    c.config = config;
-    return true;
+  /**
+   * A wolf's wolf.yaml was re-read after a settings save: take only the restart-free, announced field (`color`) into the live config.
+   * Everything else (file, serve.socket, den, transport, keys, domains) stays as the running child was started until a real restart.
+   * Returns the merged config, or undefined when the wolf is not supervised. Does not restart the child.
+   */
+  reloadConfig(fresh: WolfConfig): WolfConfig | undefined {
+    const c = this.children.get(fresh.identity.name);
+    if (!c) return undefined;
+    const { color: _old, ...rest } = c.config;
+    c.config = { ...rest, ...(fresh.color ? { color: fresh.color } : {}) };
+    return c.config;
   }
 
   /** Stop and forget a wolf. */

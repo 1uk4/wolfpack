@@ -374,7 +374,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       if (linkOnly) return;
       try {
         const fresh = discoverWolves(root).wolves.map((l) => l.config).find((c) => c.identity.name === name);
-        if (fresh && supervisor.reloadConfig(fresh)) link?.wolfAdded(linkWolf(fresh));
+        const merged = fresh && supervisor.reloadConfig(fresh); // only the color is taken; the child keeps running on its start-time config
+        if (merged) link?.wolfAdded(linkWolf(merged));
       } catch (e) {
         log(`[workerd] re-announce of ${name} after a settings save failed: ${e instanceof Error ? e.message : String(e)}`);
       }

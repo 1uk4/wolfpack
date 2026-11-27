@@ -160,7 +160,15 @@ export class WorkerdServer {
     const up = httpRequest(
       { ...where, path: target.pathname + target.search, method: req.method, headers: forwardHeaders(req.headers) },
       (ur) => {
-        if (settingsSave && (ur.statusCode ?? 0) >= 200 && (ur.statusCode ?? 0) < 300) ur.on("end", () => this.opts.onWolfSettingsSaved?.(wolf)); // the file is written before wolfd answers
+        if (settingsSave && (ur.statusCode ?? 0) >= 200 && (ur.statusCode ?? 0) < 300) {
+          // The file is written before wolfd answers: announce once the whole 2xx answer has arrived and our response is done (finished, or the client left after a complete upstream answer).
+          let announced = false;
+          res.once("close", () => {
+            if (announced || !ur.complete) return;
+            announced = true;
+            this.opts.onWolfSettingsSaved?.(wolf);
+          });
+        }
         res.writeHead(ur.statusCode ?? 502, forwardHeaders(ur.headers));
         res.flushHeaders();
         ur.pipe(res);

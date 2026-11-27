@@ -148,6 +148,19 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
     await r.eventually(async () => JSON.stringify(await names(r)) === JSON.stringify([["alpha", "box"], ["gamma", "box"]]), "gamma synced after welcome");
   });
 
+  it("a color that changes between the hello snapshot and the welcome is sent after the welcome", async () => {
+    const r = await rig({ noHub: true, wolves: ["alpha"] });
+    let calls = 0;
+    const link = new HubLink({
+      hubUrl: r.hub.url, token: r.token, hostId: r.hostId,
+      wolves: () => [{ name: "alpha", domains: [], ...(++calls === 1 ? {} : { color: "blue" }) }],
+    });
+    cleanup.push(() => link.stop());
+    link.start();
+    const hubColor = async () => ((await (await fetch(`${r.hub.url}/v1/wolves`, { headers: r.operator })).json()) as any).wolves.find((w: any) => w.name === "alpha")?.color ?? null;
+    await r.eventually(async () => (await hubColor()) === "blue", "blue synced after welcome");
+  });
+
   it("the newest connection from a host wins (4409 to the old one)", async () => {
     const r = await rig({ noHub: true });
     const a = await r.rawLink(r.token);

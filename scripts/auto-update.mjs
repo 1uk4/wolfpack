@@ -251,6 +251,8 @@ export async function runAutoUpdate(o) {
 		return { result: "locked", status: readStatus(o.statusFile) };
 	}
 	try {
+		// `manual` may be a function (the Mac run-now request): read only now, under the lock, so a blocked run leaves the request alone.
+		if (typeof o.manual === "function") o = { ...o, manual: !!o.manual() };
 		return await locked(o, now, log, base);
 	} finally {
 		release();

@@ -38,6 +38,7 @@ export interface HealthLink {
 /** What the console offers besides restart (src/server/pack/pack-health.ts HealthActions; absent from older servers). */
 export interface HealthActionsView {
 	systemd: boolean;
+	macUpdate?: boolean;
 	rollback: { service: string; from: string | null; to: string | null; last?: { result: string; exitStatus: number | null; at: string | null } | null }[];
 }
 
@@ -438,7 +439,7 @@ type UpdateLast = { result: string; exitStatus: number | null; at: string | null
 
 /** Update is offered only under systemd and when at least one component has a newer stable release. */
 export function updateOffered(actions: HealthActionsView | undefined, units: UpdateUnitView[]): boolean {
-	return !!actions?.systemd && units.length > 0;
+	return (!!actions?.systemd || !!actions?.macUpdate) && units.length > 0;
 }
 
 /** The confirm text: `current → target` per unit, and the warning that hubd and the console restart. */

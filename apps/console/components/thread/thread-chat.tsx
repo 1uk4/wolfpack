@@ -989,7 +989,7 @@ function ThreadChatInner({
 							/>
 						</ConversationContent>
 						<div ref={setDockEl} className="pointer-events-none absolute inset-x-0 bottom-0 flex max-h-[calc(100%-0.75rem)] flex-col" style={barOverPage ? { paddingBottom: "var(--chat-bar-over, 0px)" } : undefined}>
-							<div className={ask.covers ? "h-0" : "h-16"} data-testid="dock-fade" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
+							<div className={ask.covers ? "pointer-events-none h-0" : "pointer-events-none h-16"} data-testid="dock-fade" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
 							<div className="flex min-h-0 flex-col pb-4 max-md:pb-0" style={{ backgroundColor: tintSolid }}>
 								<div className={`${DOCK} flex min-h-0 flex-col [&>*:not([data-testid=ask-sheet-host])]:shrink-0`}>
 									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />

@@ -24,7 +24,7 @@ export function FrameBadges({ wolf, threadId, vizOn, onNavigate, lead, bar = fal
 			data-testid="frame-badges"
 			role="toolbar"
 			aria-label="Frames"
-			className={`pointer-events-auto flex min-w-0 flex-nowrap items-center gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${bar ? "px-3 py-1 [mask-image:linear-gradient(to_right,transparent,#000_12px,#000_calc(100%-12px),transparent)]" : "px-1 pb-1.5"}`}
+			className={`pointer-events-auto flex min-w-0 flex-nowrap items-center gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${bar ? "px-3 py-2 [mask-image:linear-gradient(to_right,transparent,#000_12px,#000_calc(100%-12px),transparent)]" : "px-1 pb-1.5"}`}
 		>
 			{lead}
 			{vizOn && (

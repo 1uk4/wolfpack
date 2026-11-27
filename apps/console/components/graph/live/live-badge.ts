@@ -29,14 +29,32 @@ export function badgeRing(s: { online: boolean; working: boolean; needsYou: bool
 	return NONE;
 }
 
-/** Badge radius, screen px. */
-export function badgeRadiusPx(mobile: boolean, t: LiveTuning): number {
-	return (mobile ? t.badgePhonePx : t.badgePx) / 2;
+export type BadgeKind = "home" | "feature";
+
+/** Badge radius, screen px: the home wolf is the biggest, a feature thread smaller. */
+export function badgeRadiusPx(mobile: boolean, t: LiveTuning, kind: BadgeKind): number {
+	const d = kind === "home" ? (mobile ? t.homePhonePx : t.homePx) : mobile ? t.featurePhonePx : t.featurePx;
+	return d / 2;
 }
 
-/** Radius (screen px) of the state ring's centre line, which the sub-agent dots sit on. */
-export function stateRingRadiusPx(mobile: boolean, t: LiveTuning): number {
-	return badgeRadiusPx(mobile, t) + t.ringGapPx + t.ringStrokePx / 2;
+/** Sub-agent badge radius, screen px. */
+export function subRadiusPx(mobile: boolean, t: LiveTuning): number {
+	return (mobile ? t.subPhonePx : t.subPx) / 2;
+}
+
+/** Radius (screen px) of the state ring's centre line, which the sub-agent badges sit on. */
+export function stateRingRadiusPx(mobile: boolean, t: LiveTuning, kind: BadgeKind): number {
+	return badgeRadiusPx(mobile, t, kind) + t.ringGapPx + t.ringStrokePx / 2;
+}
+
+/** Radius (screen px) sub-agent badges orbit at: on the state ring, pushed out just far enough that the small disc clears the badge itself. */
+export function subOrbitRadiusPx(mobile: boolean, t: LiveTuning, kind: BadgeKind): number {
+	return Math.max(stateRingRadiusPx(mobile, t, kind), badgeRadiusPx(mobile, t, kind) + subRadiusPx(mobile, t) + 1);
+}
+
+/** How a badge kind is filled: home = solid and vibrant with a quiet glow and no border; feature = translucent with a solid wolf-colour hairline. */
+export function badgeLook(kind: BadgeKind, t: LiveTuning): { fillAlpha: number; glowPx: number; border: boolean } {
+	return kind === "home" ? { fillAlpha: 1, glowPx: t.homeGlowPx, border: false } : { fillAlpha: t.featureFillAlpha, glowPx: 0, border: true };
 }
 
 /**

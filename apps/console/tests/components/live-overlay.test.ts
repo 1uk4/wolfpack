@@ -146,10 +146,10 @@ describe("live overlay fade clock", () => {
 			o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("tw", "sa") }), now: Date.now() });
 			o.step(1, 0.016, host, 2);
 			o.draw(rec, host, 2, 1);
-			// The wolf is a 28 px badge with the logo path at 62% of it (scale = px / k / 64); the subagent is a plain dot.
+			// The home wolf is a 34 px badge with the logo path at 62% of it (scale = px / k / 64); the subagent is an agent badge with its own glyph.
 			const scales = logo().map((f) => f.scale);
 			assert.equal(scales.length, 1);
-			assert.ok(Math.abs(scales[0]! - (28 * 0.62) / 2 / 64) < 1e-9, `${scales}`);
+			assert.ok(Math.abs(scales[0]! - (34 * 0.62) / 2 / 64) < 1e-9, `${scales}`);
 			assert.equal(logo()[0]?.alpha, 1);
 			mock.timers.tick(3_600_000);
 			o.dispatch({ type: "tick", now: Date.now() });
@@ -160,12 +160,14 @@ describe("live overlay fade clock", () => {
 		}
 	});
 
-	it("the wolf badge stays 28 px (glyph 62% of it) and a subagent dot 4.5 px at any zoom, while thread dots keep the old zoom scaling and hide at the floor", () => {
+	it("the home wolf badge stays 34 px (glyph 62% of it) and a subagent badge 14 px with its bot glyph at any zoom, while thread dots keep the old zoom scaling and hide at the floor", () => {
 		const fills: { d?: string; scale: number }[] = [];
 		let scale = 1;
 		const radii: number[] = [];
+		const strokes: string[] = [];
+		let botGlyphs = 0;
 		const rec = new Proxy({}, {
-			get: (_t, p) => (p === "measureText" ? () => ({ width: 1 }) : p === "createRadialGradient" || p === "createLinearGradient" ? () => grad : p === "scale" ? (sx: number) => (scale = sx) : p === "arc" ? (_x: number, _y: number, r: number) => radii.push(r) : p === "fill" ? (path?: { d?: string }) => fills.push({ d: path?.d, scale }) : () => undefined),
+			get: (_t, p) => (p === "measureText" ? () => ({ width: 1 }) : p === "createRadialGradient" || p === "createLinearGradient" ? () => grad : p === "scale" ? (sx: number) => (scale = sx) : p === "arc" ? (_x: number, _y: number, r: number) => radii.push(r) : p === "stroke" ? (path?: { d?: string }) => path?.d && strokes.push(path.d) : p === "fill" ? (path?: { d?: string }) => fills.push({ d: path?.d, scale }) : () => undefined),
 			set: () => true,
 		}) as unknown as CanvasRenderingContext2D;
 		o.dispatch({ type: "event", event: ev("thread-active", { actor: th("tz") }), now: Date.now() });
@@ -173,19 +175,22 @@ describe("live overlay fade clock", () => {
 		const frame = (k: number) => {
 			fills.length = 0;
 			radii.length = 0;
+			strokes.length = 0;
 			o.step(1, 0.016, host, k);
 			o.draw(rec, host, k, 1);
 			const px = fills.filter((f) => f.d?.startsWith("M8 2L24 18")).map((f) => f.scale * 64 * k);
+			botGlyphs = strokes.filter((d) => d.startsWith("M4 10a2")).length;
 			const dotPx = 3.2 * Math.min(36.4, Math.max(14, 34 * k)) / 36.4;
-			return { px, dot: radii.find((r) => Math.abs(r * k - dotPx) < 1e-6), sub: radii.find((r) => Math.abs(r * k - 4.5) < 1e-6), badge: radii.find((r) => Math.abs(r * k - 14) < 1e-6) };
+			return { px, dot: radii.find((r) => Math.abs(r * k - dotPx) < 1e-6), sub: radii.find((r) => Math.abs(r * k - 7) < 1e-6), badge: radii.find((r) => Math.abs(r * k - 17) < 1e-6) };
 		};
 		const near = (a: number | undefined, b: number) => assert.ok(a !== undefined && Math.abs(a - b) < 1e-6, `${a} vs ${b}`);
 		for (const k of [4, 0.8, 0.1]) {
 			const f = frame(k);
-			assert.equal(f.px.length, 1, "one wolf glyph (the subagent is a plain dot)");
-			near(f.px[0], 28 * 0.62);
-			near(f.badge ? f.badge * k : undefined, 14);
-			near(f.sub ? f.sub * k : undefined, 4.5);
+			assert.equal(f.px.length, 1, "one wolf glyph (the subagent carries the bot glyph)");
+			near(f.px[0], 34 * 0.62);
+			near(f.badge ? f.badge * k : undefined, 17);
+			near(f.sub ? f.sub * k : undefined, 7);
+			assert.equal(botGlyphs, 1, "the running subagent shows its bot glyph");
 		}
 		assert.ok(frame(0.8).dot !== undefined, "the thread dot keeps its reference proportion");
 		assert.equal(frame(0.1).dot, undefined, "thread dots hide at the floor");

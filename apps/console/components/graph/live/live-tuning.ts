@@ -20,8 +20,6 @@ export interface LiveTuning {
 	restBreathRadPerSec: number;
 	/** The den disc (ref px). */
 	denRadiusPx: number;
-	/** A sub-agent dot radius on the state ring (screen px). */
-	ringSubPx: number;
 	/** Chat pull: the share of the way to the target the whole group is drawn (pull x reach), held for holdMul x pace. */
 	chatPull: number;
 	chatReach: number;
@@ -37,9 +35,17 @@ export interface LiveTuning {
 	groupSpring: number;
 	subSpring: number;
 	subDamping: number;
-	/** Avatar badge (screen px, constant at any zoom): diameter on desktop and phone, the gap and stroke of the state ring hugging it, the working arc (degrees) and its turn time (s). */
-	badgePx: number;
-	badgePhonePx: number;
+	/** Avatar badges (screen px, constant at any zoom): diameter of the home wolf and the feature thread on desktop and phone, the gap and stroke of the state ring hugging it, the working arc (degrees) and its turn time (s). */
+	homePx: number;
+	homePhonePx: number;
+	featurePx: number;
+	featurePhonePx: number;
+	/** Sub-agent badge diameter (screen px) on desktop and phone. */
+	subPx: number;
+	subPhonePx: number;
+	/** The home wolf's soft glow blur (px) and a feature thread's fill opacity. */
+	homeGlowPx: number;
+	featureFillAlpha: number;
 	ringGapPx: number;
 	ringStrokePx: number;
 	arcDeg: number;
@@ -60,7 +66,6 @@ export const LIVE_TUNING: LiveTuning = {
 	restBreathPx: 5,
 	restBreathRadPerSec: 1.2,
 	denRadiusPx: 20,
-	ringSubPx: 4.5,
 	chatPull: 0.7,
 	chatReach: 0.8,
 	chatHoldMul: 1.1,
@@ -72,8 +77,14 @@ export const LIVE_TUNING: LiveTuning = {
 	groupSpring: 6,
 	subSpring: 18,
 	subDamping: 2.2,
-	badgePx: 28,
-	badgePhonePx: 32,
+	homePx: 34,
+	homePhonePx: 38,
+	featurePx: 24,
+	featurePhonePx: 28,
+	subPx: 14,
+	subPhonePx: 16,
+	homeGlowPx: 8,
+	featureFillAlpha: 0.55,
 	ringGapPx: 3,
 	ringStrokePx: 2.5,
 	arcDeg: 90,

@@ -51,6 +51,8 @@ export function eligibleAt(level: LabelLevel, ze: number): boolean {
 }
 
 export interface LabelTreeNode {
+	/** A domain (depth 0): wins every collision against a section of the same level. */
+	domain: boolean;
 	level: LabelLevel;
 	childCount: number;
 	parent: string | null;
@@ -65,9 +67,11 @@ export function buildLabelTree(
 	ids: Iterable<string>,
 	edges: ReadonlyArray<{ from: string; to: string }>,
 	depths: ReadonlyMap<string, number>,
+	/** Bucket nodes (Inbox, Factory): never promoted by child count. */
+	isBucket?: (id: string) => boolean,
 ): Map<string, LabelTreeNode> {
 	const out = new Map<string, LabelTreeNode>();
-	for (const id of ids) out.set(id, { level: 3, childCount: 0, parent: null });
+	for (const id of ids) out.set(id, { domain: (depths.get(id) ?? 2) === 0, level: 3, childCount: 0, parent: null });
 	for (const e of edges) {
 		const p = out.get(e.from);
 		const c = out.get(e.to);
@@ -83,7 +87,7 @@ export function buildLabelTree(
 			continue;
 		}
 		let level = d <= 0 ? 1 : 2;
-		if (n.childCount >= BIG_PARENT_CHILDREN) level -= 1;
+		if (n.childCount >= BIG_PARENT_CHILDREN && !isBucket?.(id)) level -= 1;
 		n.level = Math.min(3, Math.max(1, level)) as LabelLevel;
 	}
 	return out;
@@ -116,6 +120,8 @@ export interface LabelCandidate {
 	widthEm: number;
 	/** Font scale on top of the level's px (the cluster label size setting); default 1. */
 	scale?: number;
+	/** A domain label: outranks a section at the same level whatever the sizes. */
+	domain?: boolean;
 }
 
 interface Rect {
@@ -163,6 +169,7 @@ export function chooseLabels(
 		const fb = forced.has(b.id) ? 0 : 1;
 		if (fa !== fb) return fa - fb;
 		if (a.level !== b.level) return a.level - b.level;
+		if (!!a.domain !== !!b.domain) return a.domain ? -1 : 1;
 		if (a.size !== b.size) return b.size - a.size;
 		return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 	});
@@ -191,6 +198,11 @@ export function chooseLabels(
 		shown.add(c.id);
 	}
 	return shown;
+}
+
+/** Catch-all bucket nodes ("Inbox", "Factory", "Unsorted"): big because they collect, not because they matter. */
+export function isBucketLabel(label: string): boolean {
+	return /^(inbox|factory|unsorted|misc(ellaneous)?|uncategori[sz]ed|other)$/i.test(label.trim());
 }
 
 /** One fade step: every label moves toward 1 (shown) or 0 (hidden). Reduced motion jumps. Drops labels that reached 0. */

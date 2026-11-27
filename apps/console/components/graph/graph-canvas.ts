@@ -62,7 +62,7 @@ import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import { LabelPass, type GroupTitle } from "./label-pass.ts";
 import { computeGroupShapes, drawGroupShapes, groupAt, type GroupShape } from "./group-regions.ts";
-import { DEFAULT_RENDER_SETTINGS, effectiveZoom, labelsOn } from "@/src/core";
+import { DEFAULT_RENDER_SETTINGS, effectiveZoom, isBucketLabel, labelsOn } from "@/src/core";
 import type { LiveOverlay, OverlayHighlight, OverlayHit, OverlayHost } from "./live/live-overlay";
 import {
 	CHARGE_STRENGTH,
@@ -887,7 +887,7 @@ export class GraphCanvasRenderer {
 		this.data = data;
 		this.nodeById = new Map(data.nodes.map((n) => [n.id, n]));
 		this.hasBlocked = data.nodes.some((n) => n.blocked);
-		this.labels.setHierarchy(this.nodeById.keys(), data.edges, data.depths ?? new Map());
+		this.labels.setHierarchy(this.nodeById.keys(), data.edges, data.depths ?? new Map(), (id) => isBucketLabel(this.nodeById.get(id)?.label ?? ""));
 		this.refreshVisible();
 		let minX = Infinity;
 		let minY = Infinity;

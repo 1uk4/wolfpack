@@ -70,3 +70,23 @@ describe("label anchor", () => {
 		assert.equal(labelTop(100, 6, 20), 106);
 	});
 });
+
+describe("domains outrank sections (work-wolfpack-Wu0RH2z)", () => {
+	it("a domain label beats a bigger level-1 section in a collision", () => {
+		const cs: LabelCandidate[] = [cand("sec", 1, 500, 400, 40), { ...cand("dom", 1, 505, 402, 3), domain: true }];
+		assert.deepEqual([...chooseLabels(cs, { ...view, ze: 1 })], ["dom"]);
+	});
+
+	it("marks domains, and a bucket node (Inbox, Factory) is not promoted by child count", () => {
+		const a = Array.from({ length: 14 }, (_, i) => `a${i}`);
+		const b = Array.from({ length: 14 }, (_, i) => `b${i}`);
+		const ids = ["dom", "inbox", "big", ...a, ...b];
+		const edges = [{ from: "dom", to: "inbox" }, { from: "dom", to: "big" }, ...a.map((k) => ({ from: "inbox", to: k })), ...b.map((k) => ({ from: "big", to: k }))];
+		const depths = new Map<string, number>([["dom", 0], ["inbox", 1], ["big", 1], ...[...a, ...b].map((k) => [k, 2] as [string, number])]);
+		const t = buildLabelTree(ids, edges, depths, (id) => id === "inbox");
+		assert.equal(t.get("big")!.level, 1);
+		assert.equal(t.get("inbox")!.level, 2);
+		assert.equal(t.get("dom")!.domain, true);
+		assert.equal(t.get("big")!.domain, false);
+	});
+});

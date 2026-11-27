@@ -118,8 +118,8 @@ export class LabelPass {
 	private groupByIdFor: readonly GroupTitle[] | null = null;
 
 	/** New hierarchy (edges parent → child, depths per node id). Measured widths stay cached by id; the choice is recomputed. */
-	setHierarchy(ids: Iterable<string>, edges: ReadonlyArray<{ from: string; to: string }>, depths: ReadonlyMap<string, number>): void {
-		this.tree = buildLabelTree(ids, edges, depths);
+	setHierarchy(ids: Iterable<string>, edges: ReadonlyArray<{ from: string; to: string }>, depths: ReadonlyMap<string, number>, isBucket?: (id: string) => boolean): void {
+		this.tree = buildLabelTree(ids, edges, depths, isBucket);
 		this.choice = null;
 	}
 
@@ -161,7 +161,7 @@ export class LabelPass {
 					const isForced = forced.has(id);
 					if (!isForced && (!eligibleAt(t.level, f.ze) || (!showTitles && t.level <= 1))) continue;
 					const m = this.measure(f, id, n.label, t.level);
-					cands.push({ id, level: t.level, size: t.childCount, sx: n.x * f.k + f.tx, sy: n.y * f.k + f.ty, below: f.radiusOf(n) * f.k + 2, widthEm: m.widthEm, ...(t.level <= 1 ? { scale: f.clusterScale } : {}) });
+					cands.push({ id, level: t.level, size: t.childCount, sx: n.x * f.k + f.tx, sy: n.y * f.k + f.ty, below: f.radiusOf(n) * f.k + 2, widthEm: m.widthEm, ...(t.level <= 1 ? { scale: f.clusterScale } : {}), ...(t.domain ? { domain: true } : {}) });
 				}
 				if (f.on && showTitles) {
 					for (const g of f.groups) {

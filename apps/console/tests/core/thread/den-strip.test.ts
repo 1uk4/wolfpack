@@ -53,6 +53,9 @@ describe("buildDenStrip", () => {
 		const strip = buildDenStrip([{ name: "w", color: "red" }, { name: "v" }], { w: [t("w/home", "idle", { kind: "home" })], v: [t("v/home", "idle", { kind: "home" })] }, []);
 		assert.equal(strip[0]!.color, "#f07178", "the wolf's own colour: red");
 		assert.match(strip[1]!.color, /^#[0-9a-f]{6}$/i, "automatic: one of the palette's hex colours");
+		assert.equal(strip[0]!.colorKey, "red", "the colour key a config colour gives");
+		const auto = buildDenStrip([{ name: "1uk4" }], {}, []);
+		assert.equal(auto[0]!.colorKey, "yellow", "no config colour: the home-thread hash colour (same rule as the chat)");
 	});
 
 	it("marks only the swap wolf as swapping, and names each wolf's home thread for the sheet's move-chat button", () => {

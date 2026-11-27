@@ -70,7 +70,11 @@ describe("loading a settled layout", () => {
 		const ids = Object.keys(c);
 		assert.equal(ids.length, 12);
 		assert.ok(Math.abs(ids.reduce((s, id) => s + c[id]!.x, 0)) < 1e-6 && Math.abs(ids.reduce((s, id) => s + c[id]!.y, 0)) < 1e-6, "centroid at the origin");
-		assert.deepEqual([c.n0!.x * r.transform.k + r.transform.x, c.n0!.y * r.transform.k + r.transform.y], [550, 300]);
+		// The first load always fits (work-wolfpack-2wEvr00) and replaces the stored camera: the whole recentred layout is on screen.
+		for (const id of ids) {
+			const sx = c[id]!.x * r.transform.k + r.transform.x, sy = c[id]!.y * r.transform.k + r.transform.y;
+			assert.ok(sx >= 0 && sx <= 800 && sy >= 0 && sy <= 600, `${id} on screen (${sx.toFixed(0)}, ${sy.toFixed(0)})`);
+		}
 		const loaded = nodes.map((n) => [n.x, n.y]);
 		// Reheat (what a drag does): the origin pull must not slide the whole layout.
 		r.setPhysicsTuning({ gravity: 0.3 });
@@ -85,24 +89,22 @@ describe("loading a settled layout", () => {
 		assert.ok(commits.length <= 2, `the recentre commit plus at most the settle commit (${commits.length})`);
 	});
 
-	it("re-fits a restored camera that framed the partial graph when the full graph is only slightly larger but elsewhere", async () => {
+	it("fits the graph on the first load even when the stored camera already frames it", async () => {
 		const commits: unknown[] = [];
-		const r = await renderer({ k: 1, x: 400, y: 300 }, commits); // looks at the origin
+		const r = await renderer({ k: 1, x: 400, y: 300 }, commits); // frames the origin
 		r.setData(dataOf(ring(3, 0, 0, 50)));
-		assert.equal(r.transform.k, 1, "framed: kept");
-		// Span grows under 2x (about 70 -> 120) yet the world no longer holds the camera centre.
-		r.setData(dataOf(ring(12, 600, 0, 60)));
 		r.destroy();
-		assert.ok(r.transform.k > 1, `re-fitted (k=${r.transform.k})`);
+		// work-wolfpack-2wEvr00: the saved camera is replaced; a 3-node ring of radius 50 fills the 800x600 view (k about 10.17).
+		assert.ok(Math.abs(r.transform.k - 10.17) < 0.05, `fitted (k=${r.transform.k})`);
 	});
 
-	it("re-fits a stored camera that framed the small first batch once the full data spreads far from it", async () => {
+	it("keeps the fitted camera when more data arrives after the first load", async () => {
 		const commits: unknown[] = [];
-		const r = await renderer({ k: 1, x: 400, y: 300 }, commits); // looks at the origin
+		const r = await renderer({ k: 1, x: 400, y: 300 }, commits);
 		r.setData(dataOf(ring(3, 0, 0, 50)));
-		assert.equal(r.transform.k, 1, "framed: kept");
+		const fitted = r.transform.k;
 		r.setData(dataOf(ring(12, 9000, 9000, 2000)));
 		r.destroy();
-		assert.ok(r.transform.k < 0.2, `re-fitted to the big layout (k=${r.transform.k})`);
+		assert.equal(r.transform.k, fitted, "later growth does not yank the camera");
 	});
 });

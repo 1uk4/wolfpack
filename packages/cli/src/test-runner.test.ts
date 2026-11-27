@@ -35,7 +35,7 @@ if (o) fs.writeFileSync(o.slice(18), JSON.stringify({ testResults: [{ name: proc
 console.log("stub says hi");
 if (process.env.STUB_EDIT) fs.appendFileSync(process.env.STUB_EDIT, "// edited during the run\\n");
 if (process.env.STUB_IGNORE_TERM) process.on("SIGTERM", () => {});
-if (process.env.STUB_HANG) { fs.writeFileSync(process.env.STUB_HANG, String(process.pid)); setInterval(() => {}, 1000); }
+if (process.env.STUB_HANG) { fs.writeFileSync(process.env.STUB_HANG + '.tmp', String(process.pid)); fs.renameSync(process.env.STUB_HANG + '.tmp', process.env.STUB_HANG); setInterval(() => {}, 1000); }
 else process.exit(Number(process.env.STUB_EXIT ?? 0));
 `,
 );

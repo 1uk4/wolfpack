@@ -89,6 +89,8 @@ export interface ThreadHost {
  * generation / run start) are engine events and count as activity, so an error + retry at ~90 s does not trip it.
  */
 export const DEFAULT_STALL_TIMEOUT_MS = 120_000;
+/** Start of the error message the stall watchdog emits before it aborts a turn; the subagent manager matches on it. */
+export const STALL_ERROR_PREFIX = "Turn stalled";
 
 const OPERATOR: Actor = { id: "operator", kind: "operator" };
 const SYSTEM: Actor = { id: "wolfd", kind: "system" };
@@ -459,7 +461,7 @@ export class ThreadRuntime {
     const idle = Date.now() - this.lastActivity;
     if (idle < limit) return this.armWatchdog(limit - idle);
     const follow = this.ownerQueued.size > 0 || this.withdrawn.length > 0;
-    this.emit({ type: "error", turnId: turn.turnId, message: `Turn stalled: no activity for ${Math.round(idle / 1000)}s. Aborting it.${follow ? " Queued messages and card answers will follow." : ""}` });
+    this.emit({ type: "error", turnId: turn.turnId, message: `${STALL_ERROR_PREFIX}: no activity for ${Math.round(idle / 1000)}s. Aborting it.${follow ? " Queued messages and card answers will follow." : ""}` });
     void this.abort()
       .catch((e) => this.host.onError(e))
       .finally(() => {
@@ -881,6 +883,7 @@ export class ThreadRuntime {
    */
   async submitCard(callId: string, body: SubmitCardBody = {}): Promise<SubmitAck> {
     const pending = this.pagedCard(callId);
+    this.checkCardTool(pending, body.tool);
     this.checkStepsKey(pending, body.stepsKey);
     const card = pending.card;
     const last = pageCard(card, pending.pageIndex ?? 0)!;
@@ -1021,9 +1024,10 @@ export class ThreadRuntime {
    * input, and the history folds it onto the call that raised the card. While sibling cards of the turn still wait
    * the answer is held and the ack is `queued`.
    */
-  async answerCard(callId: string, rawAnswers: CardAnswers): Promise<SubmitAck> {
+  async answerCard(callId: string, rawAnswers: CardAnswers, tool?: string): Promise<SubmitAck> {
     const pending = this.cards.get(callId);
     if (!pending) throw new HttpError("not_found", `card ${callId}`);
+    this.checkCardTool(pending, tool);
     if (pending.card.paged) throw new HttpError("invalid_request", `card ${callId} is a paged questionnaire: save its pages as drafts (saveCardPage) and send them once (submitCard)`);
     const bad = validateAnswers(pending.card, rawAnswers);
     if (bad) throw new HttpError("invalid_request", bad);
@@ -1039,6 +1043,14 @@ export class ThreadRuntime {
     // A repeated skip of an already held-skipped card changes nothing: no second announcement.
     if (pending.heldSkip) return { messageId: `card-${callId}`, disposition: "queued" };
     return this.resolveCard(callId, this.cards.skip(callId));
+  }
+
+  /** Wrong-card / stale-client guard: a caller that names a tool must name the one that raised the card, else the answer is rejected, logged, and the card stays pending. Clients that send no tool pass. */
+  private checkCardTool(pending: PendingCard, tool: string | undefined): void {
+    if (tool === undefined || tool === pending.card.tool) return;
+    const message = `card ${pending.callId} was raised by "${pending.card.tool}", not "${tool}"; answer not accepted, the card is still pending`;
+    console.error(`[wolfd] ${this.summary.id}: ${message}`);
+    throw new HttpError("invalid_request", message);
   }
 
   /** After an answer or skip was recorded: hold it while siblings wait, else submit the whole turn's resolutions. */

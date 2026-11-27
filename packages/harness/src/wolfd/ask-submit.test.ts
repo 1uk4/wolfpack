@@ -67,6 +67,16 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe("questionnaire save, note and submit", () => {
+  it("a submit naming another tool than the one that raised the card is a 400 and the card stays pending", async () => {
+    const { eng, rt } = await rig();
+    const before = eng.submitted.length;
+    rt.saveCardPage("k", 0, { answers: { a: { value: "x" } } });
+    await expect(rt.submitCard("k", { answers: { c: { value: "y" } }, tool: "crawl_run" })).rejects.toMatchObject({ code: "invalid_request" });
+    expect(eng.submitted.length).toBe(before);
+    expect(rt.detail().pendingCards).toHaveLength(1);
+    expect((await rt.submitCard("k", { answers: { c: { value: "y" } }, tool: "ask" })).disposition).toBe("steered");
+  });
+
   it("a submit missing required answers is one 400 naming every missing question by number and label", async () => {
     const { rt } = await rig();
     await expect(rt.submitCard("k", {})).rejects.toMatchObject({ code: "invalid_request", message: expect.stringMatching(/Q1 "A", Q3 "C"/) });

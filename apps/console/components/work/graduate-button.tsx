@@ -7,6 +7,7 @@
  * through graduateDirect, with no second request to approve. A failure shows inline; "already graduated" counts as done.
  */
 import { useEffect, useRef, useState } from "react";
+import { useBusyAction } from "@/components/ui/use-busy-action";
 import { createGraduateClient, type GraduateClient } from "../kb/graduate-client";
 import { openGraduationLink, useOpenView } from "../viewer/viewer-context";
 import { graduateStore, useGraduateJob } from "../kb/graduate-store";
@@ -28,21 +29,16 @@ export function GraduateButton({ itemId, assignee, via, title, client, onDone, t
 	const [real] = useState(() => client ?? createGraduateClient());
 	const c = client ?? real;
 	const [open, setOpen] = useState(false);
-	const [sending, setSending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [done, setDone] = useState(false);
 	// The popover opens by itself when a preview this click started turns ready.
 	const wanted = useRef(false);
-	// Set synchronously at the start of a confirm: a second click in the same tick must not send a second request.
-	const inFlight = useRef(false);
 	useEffect(() => {
 		if (job?.phase === "ready" && wanted.current) {
 			wanted.current = false;
 			setOpen(true);
 		}
 	}, [job?.phase]);
-
-	if (done) return <span data-testid={testid} data-phase="graduated" className="shrink-0 text-[11px] text-emerald-300">Graduated</span>;
 
 	const target = { id: itemId, title: title ?? itemId, ...(assignee ? { assignee } : {}) };
 	const start = async () => {
@@ -57,35 +53,32 @@ export function GraduateButton({ itemId, assignee, via, title, client, onDone, t
 		if (!graduateStore.get(itemId)) await graduateStore.startPreview(c, target, assignee);
 	};
 	const confirm = async () => {
-		if (job?.phase !== "ready" || inFlight.current || threadRunning) return;
-		inFlight.current = true;
-		setSending(true);
+		if (job?.phase !== "ready" || threadRunning) return;
 		setError(null);
-		try {
-			// Send exactly what the owner can read under More details: read the wolf's preview again right before sending.
-			const fresh = await getPendingPreview(job.wolf, itemId);
-			if (!fresh.ok) return void setError(fresh.message);
-			if ("none" in fresh || fresh.preview.token !== job.preview.token) {
-				// Expired, or prepared again since the popover opened: drop it and, when a newer one exists, show that instead.
-				graduateStore.clear(itemId);
-				if ("none" in fresh) setOpen(false);
-				else await graduateStore.recover(c, target);
-				return void setError("The preview changed, review it again");
-			}
-			const p = fresh.preview;
-			const res = await graduateDirect(itemId, { contributions: p.contributions, ...(p.summary ? { summary: p.summary } : {}), via, wolf: job.wolf });
-			if (res.ok || res.alreadyGraduated) {
-				graduateStore.clear(itemId);
-				setOpen(false);
-				setDone(true);
-				notifyGraduated(itemId);
-				onDone?.();
-			} else setError(res.message);
-		} finally {
-			inFlight.current = false;
-			setSending(false);
+		// Send exactly what the owner can read under More details: read the wolf's preview again right before sending.
+		const fresh = await getPendingPreview(job.wolf, itemId);
+		if (!fresh.ok) return void setError(fresh.message);
+		if ("none" in fresh || fresh.preview.token !== job.preview.token) {
+			// Expired, or prepared again since the popover opened: drop it and, when a newer one exists, show that instead.
+			graduateStore.clear(itemId);
+			if ("none" in fresh) setOpen(false);
+			else await graduateStore.recover(c, target);
+			return void setError("The preview changed, review it again");
 		}
+		const p = fresh.preview;
+		const res = await graduateDirect(itemId, { contributions: p.contributions, ...(p.summary ? { summary: p.summary } : {}), via, wolf: job.wolf });
+		if (res.ok || res.alreadyGraduated) {
+			graduateStore.clear(itemId);
+			setOpen(false);
+			setDone(true);
+			notifyGraduated(itemId);
+			onDone?.();
+		} else setError(res.message);
 	};
+	// A second click while a confirm is in flight (even in the same tick) sends nothing; `sending` disables the button.
+	const { run: runConfirm, pending: sending } = useBusyAction(confirm);
+	if (done) return <span data-testid={testid} data-phase="graduated" className="shrink-0 text-[11px] text-emerald-300">Graduated</span>;
+
 
 	const busy = job?.phase === "previewing" || job?.phase === "graduating";
 	const label = busy ? "Preparing…" : job?.phase === "ready" ? "Review" : job?.phase === "error" ? "Retry" : "Graduate";
@@ -142,7 +135,7 @@ export function GraduateButton({ itemId, assignee, via, title, client, onDone, t
 						<button type="button" data-testid="graduate-cancel" onClick={() => (setOpen(false), setError(null))} className="rounded-md border border-border px-2 py-0.5">
 							Cancel
 						</button>
-						<button type="button" data-testid="graduate-confirm" disabled={sending || threadRunning || !!job.preview.blocked} onClick={() => void confirm()} className="rounded-md border border-emerald-400/60 bg-emerald-500/20 px-2 py-0.5 font-medium text-emerald-200 disabled:opacity-60">
+						<button type="button" data-testid="graduate-confirm" disabled={sending || threadRunning || !!job.preview.blocked} onClick={() => void runConfirm()} className="rounded-md border border-emerald-400/60 bg-emerald-500/20 px-2 py-0.5 font-medium text-emerald-200 disabled:opacity-60">
 							{sending ? "Graduating…" : "Confirm"}
 						</button>
 					</div>

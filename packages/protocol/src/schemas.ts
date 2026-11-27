@@ -1828,6 +1828,8 @@ export const AnswerCardRequestSchema = z.object({
   threadId: z.string(),
   callId: z.string(),
   answers: CardAnswersSchema,
+  /** The tool the client believes raised the card; wolfd rejects the answer when it differs. Optional for older clients. */
+  tool: z.string().max(64).optional(),
 });
 export type AnswerCardRequest = z.infer<typeof AnswerCardRequestSchema>;
 
@@ -1876,6 +1878,8 @@ export const SubmitCardBodySchema = z.object({
   answers: NoAttachmentAnswersSchema.optional(),
   note: CardNoteBodySchema.optional(),
   stepsKey: z.string().optional(),
+  /** The tool the client believes raised the card; wolfd rejects the submit when it differs. Optional for older clients. */
+  tool: z.string().max(64).optional(),
 });
 export type SubmitCardBody = z.infer<typeof SubmitCardBodySchema>;
 

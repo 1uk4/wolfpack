@@ -14,7 +14,7 @@ import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
 import { Hint } from "@/components/ui/hint";
 import { cn } from "@/lib/utils";
-import { buildDenStrip, denLabel, type NeedsYouItem } from "@/src/core";
+import { buildDenStrip, denLabel, wolfColorStyle, type NeedsYouItem } from "@/src/core";
 
 /** The pending cards from /api/needs-you, fetched while the sheet is open and refetched on every needs-you-changed (no polling). */
 export function useNeedsYouItems(enabled: boolean): NeedsYouItem[] {
@@ -58,6 +58,8 @@ interface Props {
 export function DenStrip({ swap = null, onSwap, open, setOpen }: Props) {
 	const api = useAttachedThread()!;
 	const items = useNeedsYouItems(open !== null);
+	// While a swap is on offer the swap icon follows the pointer: it is drawn on the hovered wolf, else on the attached wolf. A click on the icon swaps the chat to that wolf's home thread; with no hover it docks the page's thread (onSwap).
+	const [hovered, setHovered] = useState<string | null>(null);
 	const strip = useMemo(() => buildDenStrip(api.wolves, api.threads, items, swap?.wolf ?? null, api.attached?.wolf ?? null), [api.wolves, api.threads, items, swap?.wolf, api.attached?.wolf]);
 	// A wolf that leaves the strip (went offline, its cards were answered) takes its tree with it.
 	useEffect(() => {
@@ -79,17 +81,24 @@ export function DenStrip({ swap = null, onSwap, open, setOpen }: Props) {
 							data-needs-you={s.swap && swap?.needsYou ? "true" : undefined}
 							disabled={s.swap && swap?.busy ? true : undefined}
 							aria-expanded={open === s.wolf}
+							onMouseEnter={() => setHovered(s.wolf)}
+							onMouseLeave={() => setHovered((h) => (h === s.wolf ? null : h))}
 							onClick={() => {
 								if (s.swap && swap) {
 									setOpen(null);
 									onSwap?.();
+								} else if (swap && hovered === s.wolf && s.homeThreadId) {
+									// The swap icon is on this hovered wolf: swap the chat to it (its home thread, the one the tree leads with).
+									setOpen(null);
+									api.attach({ wolf: s.wolf, threadId: s.homeThreadId });
 								} else setOpen(open === s.wolf ? null : s.wolf);
 							}}
-							style={{ color: s.color }}
+							data-wolf-color={s.colorKey}
+							style={{ ...wolfColorStyle(s.colorKey), color: "var(--wolf-accent)" }}
 							className={cn("relative flex size-[34px] shrink-0 items-center justify-center rounded-full border bg-card/70 backdrop-blur hover:bg-accent max-md:size-11", open === s.wolf && "border-current bg-accent")}
 							{...(open === s.wolf ? { "data-selected": "true" } : {})}
 						>
-							{s.swap && swap ? <ArrowLeftRightIcon aria-hidden className="size-5" /> : <WolfpackMark className="size-5" />}
+							{swap && (hovered ?? swap.wolf) === s.wolf ? <ArrowLeftRightIcon aria-hidden data-testid="den-swap-icon" className="size-5" /> : <WolfpackMark className="size-5" />}
 							{s.working && <i aria-hidden data-testid="den-working" className="absolute bottom-px right-px size-[7px] rounded-full bg-current ring-2 ring-card motion-safe:animate-pulse" />}
 							{s.needsYou > 0 && (
 								<b data-testid="den-badge" className="absolute -right-1.5 -top-[5px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1 font-ui text-[11px] font-bold leading-none text-white ring-2 ring-card">

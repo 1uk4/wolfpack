@@ -110,8 +110,24 @@ function routeFetch(client: ServerTurnClient): typeof fetch {
 	}) as typeof fetch;
 }
 
-async function mount(client: ServerTurnClient) {
+/** Submit POSTs of a send test: held until `release()` so the send stays in flight. */
+let submits = 0;
+let release: () => void = () => {};
+function holdSubmits(inner: typeof fetch): typeof fetch {
+	const gate = new Promise<void>((r) => (release = r));
+	return (async (input: RequestInfo | URL, init?: RequestInit) => {
+		if (init?.method === "POST" && new URL(String(input), "http://t").pathname.endsWith("/submit")) {
+			submits++;
+			await gate;
+			return new Response("{}", { status: 200 });
+		}
+		return inner(input, init);
+	}) as typeof fetch;
+}
+
+async function mount(client: ServerTurnClient, opts: { initialBound?: string; hold?: boolean } = {}) {
 	globalThis.fetch = routeFetch(client);
+	if (opts.hold) globalThis.fetch = holdSubmits(globalThis.fetch);
 	const detail = await client.getThread(FIXTURE_THREAD.id);
 	const host = document.createElement("div");
 	document.body.appendChild(host);
@@ -122,7 +138,7 @@ async function mount(client: ServerTurnClient) {
 				<>
 					<ServerEventsProvider connect={eventsSource}>
 						<MemoryEventsProvider connect={inertSource}>
-							<ThreadChat wolf="1uk4" slug="home" threadId={FIXTURE_THREAD.id} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />
+							<ThreadChat wolf="1uk4" slug="home" threadId={FIXTURE_THREAD.id} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} {...(opts.initialBound ? { initialBound: opts.initialBound } : {})} />
 						</MemoryEventsProvider>
 					</ServerEventsProvider>
 				</>
@@ -251,5 +267,48 @@ describe("ThreadChat follows a server-started turn", () => {
 		assert.ok(stop, "Stop stays reachable");
 		await act(async () => void (stop as any)[Object.keys(stop).find((k) => k.startsWith("__reactProps$"))!].onClick());
 		assert.deepEqual(posts, ["/api/wolves/1uk4/threads/home/abort"]);
+	});
+});
+
+describe("ThreadChat send button", () => {
+	const reactProps = (el: Element) => (el as any)[Object.keys(el).find((k) => k.startsWith("__reactProps$"))!];
+	const typeHi = () => act(async () => reactProps(q("textarea")!).onChange({ target: { value: "hi" } }));
+	const submit = () => act(async () => void reactProps(q('[data-testid="composer"]')!).onSubmit({ preventDefault() {} }));
+	const sendButton = () => q('button[type="submit"]') as HTMLButtonElement;
+
+	it("ignores a second send while the first is in flight and unlocks when it settles", async () => {
+		submits = 0;
+		await mount(new ServerTurnClient(), { hold: true });
+		await typeHi();
+		await submit();
+		await typeHi();
+		await submit();
+		await settle();
+		assert.equal(submits, 1, "one submit while the first is pending");
+		assert.equal(sendButton().disabled, true);
+		await act(async () => release());
+		await settle();
+		assert.equal(sendButton().getAttribute("aria-busy"), null);
+	});
+
+	it("is disabled while the bound feature is graduating", async () => {
+		const { graduateStore } = await import("../../../components/kb/graduate-store.ts");
+		const preview = { itemId: "work-wolfpack-F1", kind: "feature", title: "T", domain: "wolfpack", summary: "s", contributions: [], foldedObservations: 0, warnings: [], archive: [], token: "tok", createdAt: "t", readiness: { ready: true } };
+		const never = new Promise<never>(() => {});
+		const client = {
+			startPreview: async () => ({ ok: true as const, data: { jobId: "j", kind: "preview" as const, state: "running" as const, startedAt: "t" } }),
+			status: async () => ({ ok: true as const, data: { state: "preview_ready" as const, preview } }),
+			startConfirm: () => never,
+			wolves: async () => [{ name: "1uk4", status: "online" }],
+		} as never;
+		await mount(new ServerTurnClient(), { initialBound: "work-wolfpack-F1" });
+		await typeHi();
+		assert.equal(sendButton().disabled, false);
+		await graduateStore.startPreview(client, { id: "work-wolfpack-F1", title: "T" }, "1uk4");
+		await settle(100);
+		void graduateStore.confirm(client, "work-wolfpack-F1");
+		await settle();
+		assert.equal(sendButton().disabled, true);
+		graduateStore.reset();
 	});
 });

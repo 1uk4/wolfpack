@@ -107,7 +107,7 @@ export default function ChatBarComposer({ phone = false, docked = false, target,
 	const sendInFlight = useRef(false);
 	const onSend = useCallback(() => {
 		if (sendInFlight.current) return;
-		if (!dictation.active) return void send();
+		if (!dictation.active) return send();
 		sendInFlight.current = true;
 		void dictation.finish().finally(() => void (sendInFlight.current = false));
 	}, [dictation, send]);

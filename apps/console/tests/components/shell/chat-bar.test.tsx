@@ -193,18 +193,18 @@ describe("ChatBar", () => {
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
 	});
 
-	it("the chip row shows the attached thread's running sub-agents (count, names in the tooltip), and nothing when none run", async () => {
-		kids = [{ id: "w/k1", title: "t1", agent: "scout", state: "running", parentThreadId: "w/a" }, { id: "w/k2", title: "t2", agent: "coder", state: "running", parentThreadId: "w/a" }, { id: "w/k3", title: "t3", agent: "old", state: "done", parentThreadId: "w/a" }];
+	it("the chip row shows one badge per running sub-agent, and nothing when none run", async () => {
+		kids = [{ id: "w/k1", title: "scout", agent: "worker", state: "running", parentThreadId: "w/a" }, { id: "w/k2", title: "coder", agent: "worker", state: "running", parentThreadId: "w/a" }, { id: "w/k3", title: "old", agent: "worker", state: "done", parentThreadId: "w/a" }];
 		await mount("/kb", A);
-		const chip = q('[data-testid="chat-bar-subagents"]')!;
-		assert.equal(chip.getAttribute("aria-label"), "2 sub-agents running");
-		assert.equal(chip.textContent?.trim().endsWith("2"), true);
-		assert.ok(chip.closest('[data-testid="chat-bar"]'), "inside the bar surface");
+		const chips = [...document.querySelectorAll('[data-testid="subagent-badge"]')];
+		assert.deepEqual(chips.map((c) => c.getAttribute("title")), ["scout", "coder"]);
+		assert.equal(chips[0]!.getAttribute("aria-label"), "scout, running");
+		assert.ok(chips[0]!.closest('[data-testid="chat-bar"]'), "inside the bar surface");
 		await act(async () => root?.unmount());
 		document.body.innerHTML = "";
 		kids = [];
 		await mount("/kb", A);
-		assert.equal(q('[data-testid="chat-bar-subagents"]'), null);
+		assert.equal(q('[data-testid="subagent-badge"]'), null);
 	});
 
 	it("has no pop-out/dock button", async () => {

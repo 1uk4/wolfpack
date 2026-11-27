@@ -147,6 +147,13 @@ describe("update controls per machine", () => {
 		assert.deepEqual(machineServiceCards(here, actions, units).map((c) => [c.component, c.canUpdate]), [["console", false], ["hubd", true], ["wolfd", false], ["workerd", false]]);
 		assert.deepEqual(machineServiceCards(other, actions, units), []);
 	});
+
+	it("offers Update per behind component on a Mac console (launchd updater, no systemd) but never Roll back", () => {
+		const actions = { systemd: false, macUpdate: true, rollback: [] } as unknown as Parameters<typeof serviceCards>[1];
+		const here = { console: true, hub: link("hubd", "ok"), workerds: [{ link: link("workerd", "ok"), wolves: [] }], wolves: [] };
+		const cards = machineServiceCards(here, actions, [{ component: "hubd", from: "0.1.14", to: "0.1.15" }]);
+		assert.deepEqual(cards.map((c) => [c.component, c.canUpdate, c.rollbackTo]), [["console", false, null], ["hubd", true, null], ["wolfd", false, null], ["workerd", false, null]]);
+	});
 });
 
 describe("pack health summary (the sidebar bar)", () => {

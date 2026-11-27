@@ -1,6 +1,8 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { OpenerContext, useSubagentModal, type SubagentOpener } from "@/components/thread/subagent-opener";
+export { useSubagentModal };
 import { SquareIcon } from "lucide-react";
 import { createPortal } from "react-dom";
 import { openReaderLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
@@ -485,24 +487,6 @@ function SubagentView({ wolf, childThreadId, titleId, close, onLeave }: { wolf: 
 			)}
 		</div>
 	);
-}
-
-interface SubagentOpener {
-	/** Open the subagent modal over the current page: the child's thread id ("wolf/slug") and the wolf that owns it. */
-	openSubagent: (childThreadId: string, wolf?: string) => void;
-	closeSubagent: () => void;
-}
-const OpenerContext = createContext<SubagentOpener | null>(null);
-let warned = false;
-
-/** `openSubagent(childThreadId, wolf)` from anywhere under <SubagentModalProvider>; outside one it does nothing. */
-export function useSubagentModal(): SubagentOpener {
-	const o = useContext(OpenerContext);
-	if (!o && !warned && process.env.NODE_ENV !== "production") {
-		warned = true;
-		console.warn("useSubagentModal() used outside <SubagentModalProvider>: openSubagent is a no-op");
-	}
-	return o ?? { openSubagent: () => {}, closeSubagent: () => {} };
 }
 
 /** The wolf a child thread id is prefixed with ("wolf/slug"): the fallback when the caller does not know it. */

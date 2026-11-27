@@ -23,6 +23,7 @@ import { stampedVersion, subscriptionFile } from "@wolfpack/protocol/health-lag"
 import { failedLine, mapHostStatus, plainError, STALE_AFTER_MS as HOST_STALE_AFTER_MS, type UpdateState } from "@wolfpack/protocol/update-state";
 import { macAutoUpdateDir } from "./updater-paths.ts";
 import { readSubscription } from "./subscription-api.ts";
+import { probeMacLocalServices } from "./mac-local-probe.ts";
 
 export type HostUnitState = "idle" | "updating" | "updated" | "failed" | "disabled";
 
@@ -185,10 +186,12 @@ export function createUpdatesHandler(o: UpdatesOptions = {}): (q?: { refresh?: b
 	return async (q) => {
 		const hostStatus = readStatusFile(statusFile);
 		const channel = readSubscription(subFile).channel;
+		// A Mac console's services are local and need no URLs set: probe the Mac's own hubd and workerd when the env names none.
+		const mac = (o.platform ?? process.platform) === "darwin" && !base(env.WOLFPACK_HUB_URL) && !base(env.WOLFPACK_API_URL) ? await probeMacLocalServices(env, { timeoutMs }) : null;
 		const [m, hubd, workerd] = await Promise.all([
 			manifest(q),
-			serviceVersion(base(env.WOLFPACK_HUB_URL), "hubd", timeoutMs),
-			serviceVersion(base(env.WOLFPACK_API_URL), "workerd", timeoutMs),
+			mac ? mac.hubd.version ?? undefined : serviceVersion(base(env.WOLFPACK_HUB_URL), "hubd", timeoutMs),
+			mac ? mac.workerd.version ?? undefined : serviceVersion(base(env.WOLFPACK_API_URL), "workerd", timeoutMs),
 		]);
 		// No workerd to probe (local mode, relay): the version the host updater last saw installed stands in (its units carry `current`).
 		const fromStatus = (c: string) => Object.values(hostStatus?.units ?? {}).find((u) => u?.component === c && typeof (u as { current?: unknown }).current === "string") as { current?: string } | undefined;

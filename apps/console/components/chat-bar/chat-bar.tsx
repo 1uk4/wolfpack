@@ -12,7 +12,7 @@
  * --chat-bar-over), so there is only ever one composer, and the pill attaches that page's thread, which docks into it.
  * Only the chip, the switcher and the shortcuts are eager; the input half (chat-bar-composer.tsx) loads on first expand.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useDockSlot } from "@/components/chat-bar/dock-slot";
 import { useBarDrop } from "@/components/chat-bar/bar-drop";
@@ -23,7 +23,7 @@ import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import { ArrowLeftRightIcon, MessageCircleQuestionIcon, ChevronDownIcon, ChevronUpIcon, MicIcon } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
-import { useSubagentChildren } from "@/components/thread/use-subagent-children";
+import { SubagentBadges } from "@/components/chat-bar/subagent-badges";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
@@ -47,7 +47,7 @@ import type { Answering } from "@/components/ask/ask-sheet";
 import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask/ask-session";
 import { replyLabel } from "@/components/ask/ask-reply";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
-import { attachable, barGeometry, barHiddenFor, pickHomeThread, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread } from "@/src/core";
+import { effectiveWolfColor, hasWolfColor, wolfColorStyle, wolfAccentForeground, attachable, barGeometry, barHiddenFor, pickHomeThread, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread } from "@/src/core";
 import { ZC } from "@/lib/z-layers";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar/chat-bar-io";
@@ -482,6 +482,8 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
 	const wolfColor = api.wolves.find((w) => w.name === target.wolf)?.color;
 	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.kind ? { kind: attachedThread.kind } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all, wolfColor).hex;
+	const wolfKey = effectiveWolfColor({ name: target.wolf, color: wolfColor }, api.threads[target.wolf]?.find((t) => t.kind === "home")?.id);
+	const wolfTint = hasWolfColor(wolfKey);
 	const router = useRouter();
 	const onThreadPage = onOwnThreadPage(usePathname(), target);
 	const rawCards = useBarCards(target, working, BAR_EXTRAS.cards || BAR_EXTRAS.peek || BAR_EXTRAS.ask);
@@ -612,16 +614,8 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	const vizOn = !!vizActive && vizActive.wolf === target.wolf && vizActive.threadId === target.threadId;
 	const badge = BAR_EXTRAS.badge && !vizOn && (waiting.length > 0 || approvals.length > 0) ? <NeedsYouBadge waiting={waiting} all={all} approvals={approvals} /> : null;
 	// Same source as the thread page's strip, so the two always agree on what is running.
-	const running = useSubagentChildren(target.wolf, target.slug, target.threadId).filter((c) => c.state === "running");
-	const subagentChip = running.length > 0 && !vizOn ? (
-		<Hint label={`Running: ${running.map((c) => c.agent ?? "agent").join(", ")}`}>
-			<button type="button" data-testid="chat-bar-subagents" aria-label={`${running.length} sub-agent${running.length === 1 ? "" : "s"} running`} onClick={() => router.push(threadHref(target.wolf, target.threadId))} className="flex shrink-0 items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 font-ui text-xs text-muted-foreground hover:bg-accent max-md:min-h-11">
-				<BrailleSpinner />
-				{running.length}
-			</button>
-		</Hint>
-	) : null;
-	const lead = badge || subagentChip ? <>{badge}{subagentChip}</> : null;
+	const subagentChip = vizOn ? null : <SubagentBadges wolf={target.wolf} slug={target.slug} threadId={target.threadId} />;
+	const lead = <>{badge}{subagentChip}</>;
 	// Every badge of the bar (frame chips, needs-you, approvals, running sub-agents) rides one scrolling row inside the bar's surface, between the card slot and the header.
 	const chipRow = (
 		<FrameBadges bar wolf={target.wolf} threadId={target.threadId} vizOn={vizOn} lead={lead} onNavigate={onThreadPage ? undefined : (view) => router.push(`${threadHref(target.wolf, target.threadId)}?view=${encodeURIComponent(view)}`)} />
@@ -702,6 +696,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				ref={wrapRef}
 				data-testid="chat-bar"
 				data-layout="dock"
+				data-wolf-color={wolfTint ? wolfKey : undefined}
 				data-dropping={dropping ? "true" : undefined}
 				{...dropProps}
 				data-state={minimized ? "minimized" : sheet ? "sheet" : "open"}
@@ -709,7 +704,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				// Docked in the thread page's slot (not a sheet): the dock is a static block that takes its own height in the page, so the last messages are never under it.
 				className={cn("flex flex-col border-t bg-card shadow-lg", dropping && "ring-2 ring-inset ring-(color:--thread-accent)", docked && !sheet ? "relative w-full" : "fixed inset-x-0", sheet ? cn(ZC.chatSheet, askCard ? "" : "rounded-t-2xl") : docked ? "" : ZC.chatBar)}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
-				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
+				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey), backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : {}), ...(composing ? {} : { borderColor: wolfTint ? "var(--wolf-accent)" : color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
 			>
 				{!sheet && phoneTree}
@@ -813,14 +808,16 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	);
 
 	return (
-		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-dropping={dropping ? "true" : undefined} {...dropProps} data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={docked ? undefined : { left: geo.left, width: geo.width }}>
+		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-dropping={dropping ? "true" : undefined} {...dropProps} data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} data-wolf-color={wolfTint ? wolfKey : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={{ ...(docked ? {} : { left: geo.left, width: geo.width }), ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey) } : {}) } as CSSProperties}>
+			{/* Floating only: an opaque page-colour backdrop under the den strip, the bar and the gap below it, with a soft fade at its top edge, so thread text never shows through. */}
+			{!docked && <div aria-hidden data-testid="chat-bar-backdrop" className="pointer-events-none absolute -bottom-3 -top-6 -inset-x-3 -z-10 bg-gradient-to-t from-background from-[calc(100%-1.5rem)] to-transparent" />}
 			{!vizOn && <DenStrip swap={denSwap} onSwap={onDenSwap} open={BAR_EXTRAS.switcher ? switcher : null} setOpen={setSwitcher} />}
 			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>
 				{sheetCard}
 				{hasSurface && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
 			</div>
-			<div className={cn("relative rounded-2xl border bg-card shadow-lg motion-safe:transition-shadow", dropping && "ring-2 ring-(color:--thread-accent)", askCard && session.expanded ? "rounded-t-none border-t-0" : "focus-within:ring-1 focus-within:ring-(color:--thread-accent)")} style={composing ? undefined : { borderColor: color }}>
+			<div className={cn("relative rounded-2xl border bg-card shadow-lg motion-safe:transition-shadow", dropping && "ring-2 ring-(color:--thread-accent)", askCard && session.expanded ? "rounded-t-none border-t-0" : "focus-within:ring-1 focus-within:ring-(color:--thread-accent)")} style={{ ...(wolfTint ? { backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : {}), ...(composing ? {} : { borderColor: wolfTint ? "var(--wolf-accent)" : color }) }}>
 				{deskTree}
 				{chipRow}
 				<div className="flex items-center gap-1 px-1.5 pt-1">

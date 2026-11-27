@@ -71,6 +71,8 @@ const FREE: Card = { tool: "ask_user_question", fields: [{ id: "answer", kind: "
 /** A mock whose thread already ended a turn on a card; answering records the answer and starts the next scripted turn. */
 class CardClient extends MockConsoleClient {
 	answers: { callId: string; answers: CardAnswers }[] = [];
+	/** The tool name that came with each answer (the card's own, so wolfd can refuse a mismatch). */
+	tools: (string | undefined)[] = [];
 	answered?: CardAnswers;
 	failNext?: string;
 	/** The card was superseded server-side: history shows it dismissed, nothing pends. */
@@ -134,7 +136,7 @@ class CardClient extends MockConsoleClient {
 		}
 		return this.submit(threadId, "skipped");
 	}
-	async answerCard(threadId: string, callId: string, answers: CardAnswers) {
+	async answerCard(threadId: string, callId: string, answers: CardAnswers, tool?: string) {
 		if (this.failNext) {
 			const m = this.failNext;
 			this.failNext = undefined;
@@ -145,6 +147,7 @@ class CardClient extends MockConsoleClient {
 			throw new NotFoundError(`card ${callId}`);
 		}
 		this.answers.push({ callId, answers });
+		this.tools.push(tool);
 		if (this.holdNext) {
 			this.holdNext = false;
 			this.held = answers;
@@ -261,6 +264,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		await click(q('[data-testid="card-submit"]')!);
 		await settle();
 		assert.deepEqual(client.answers, [{ callId: CALL, answers: { answer: { value: "develop" } } }]);
+		assert.deepEqual(client.tools, ["ask_user_question"], "the answer names the card's own tool");
 		assert.ok(q('[data-testid="answered-card"]'), "answered record replaces the form");
 		assert.equal(q('[data-testid="pending-card"]'), null);
 		assert.equal(q('[data-testid="card-submit"]'), null);

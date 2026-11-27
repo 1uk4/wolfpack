@@ -44,7 +44,7 @@ import { DEFAULT_HOST_MAX, SlotPool } from "./subagent-slots.js";
 import { conflictBrief, conflictText, dirtyText, homeText, manualText, mergedText, ShipEvents } from "./subagent-merge.js";
 import { subAgentHead } from "../injected-text.js";
 import { appendLedger, loadChildren, readLedger, saveChildren, type ChildRecord, type Delivery } from "./subagent-store.js";
-import type { ThreadRuntime, WolfEventDraft } from "./thread.js";
+import { STALL_ERROR_PREFIX, type ThreadRuntime, type WolfEventDraft } from "./thread.js";
 import { loadThreads, setThreadWorkspace, type SavedThread } from "./threads.js";
 
 /** The tools every spawn tool set shares; a child never gets them. */
@@ -209,8 +209,11 @@ function cardQuestionText(card: Card): string {
   return out.join("\n");
 }
 
-/** Sent to a child whose turn the bridge killed for silence. The killed turn may have done part of its work, so it must look first. */
-const IDLE_RESUME_TEXT = "Your previous turn was killed by the 90 s idle timeout (the model produced no output). Check the current state (git status, git log, the files) before repeating any step, and do not repeat a commit, push or merge that already happened. Then continue where you left off.";
+type SilenceCause = "idle" | "stall";
+const CAUSE_TEXT: Record<SilenceCause, string> = { idle: "the 90 s idle timeout", stall: "the stall watchdog" };
+
+/** Sent to a child whose turn was cut off after a silent stretch (bridge idle kill or stall watchdog). The killed turn may have done part of its work, so it must look first. */
+const IDLE_RESUME_TEXT = "Your previous turn was cut off after a silent stretch (no output). Check the current state (git status, git log, the files) before repeating any step, and do not repeat a commit, push or merge that already happened. Then continue where you left off.";
 
 export class SubagentManager {
   private records: ChildRecord[];
@@ -220,7 +223,8 @@ export class SubagentManager {
   private readonly chains = new Map<string, Promise<void>>();
   private readonly lastError = new Map<string, string>();
   /** Children whose current turn was already resumed once after a bridge idle-timeout kill. */
-  private readonly idleRetried = new Set<string>();
+  /** Children resumed once after a silent-turn abort, with the cause of that first abort. */
+  private readonly idleRetried = new Map<string, SilenceCause>();
   private readonly ledgerSeq = new Map<string, number>();
   private readonly turnChain = new Map<string, Promise<void>>();
   private deliverySeq = 0;
@@ -893,31 +897,36 @@ export class SubagentManager {
       this.settle(rec, "done");
       return;
     }
-    // The bridge killed a silent round (its 90 s idle timeout) and the engine then ended the turn aborted: not a fault of the
+    // The bridge killed a silent round (its 90 s idle timeout), or the thread's stall watchdog (120 s of silence, thread.ts
+    // DEFAULT_STALL_TIMEOUT_MS) aborted it, and the engine then ended the turn aborted: not a fault of the
     // child's work. Resume it once with a nudge; a second kill fails it with the real cause.
-    const idleKilled = reason === "aborted" && /idle timeout/i.test(this.lastError.get(rec.id) ?? "");
+    const lastErr = this.lastError.get(rec.id) ?? "";
+    const cause: SilenceCause | undefined = reason !== "aborted" ? undefined : lastErr.startsWith(STALL_ERROR_PREFIX) ? "stall" : /idle timeout/.test(lastErr) ? "idle" : undefined;
+    const idleKilled = cause !== undefined;
     if (reason !== "aborted") this.lastError.delete(rec.id);
     if (reason === "complete") this.idleRetried.delete(rec.id);
     if (idleKilled) {
       this.lastError.delete(rec.id);
-      if (!this.idleRetried.has(rec.id)) {
-        this.idleRetried.add(rec.id);
-        const message = "the turn was killed by the 90 s idle timeout (no output from the model); resuming it once";
+      const first = this.idleRetried.get(rec.id);
+      if (first === undefined) {
+        this.idleRetried.set(rec.id, cause);
+        const message = `the turn was killed by ${CAUSE_TEXT[cause]} (no output from the model); resuming it once`;
         this.ledger(rec, "system", "parent", "error", message);
         console.error(`subagent ${rec.id} (${name}): ${message}`);
         void this.send(rec, IDLE_RESUME_TEXT, "parent", "steer").catch((e) => {
           this.port.onError(e);
           const why = e instanceof Error ? e.message : String(e);
-          this.ledger(rec, "system", "parent", "error", `the idle-timeout resume failed: ${why}`);
-          this.settle(rec, "failed", `${subAgentHead(name, "failed")}${elapsed}: its turn was killed by the 90 s idle timeout and resuming it failed (${why}).\n\nYou can resume the session with subagent_message.${followUp}`);
+          this.ledger(rec, "system", "parent", "error", `the resume failed: ${why} (after ${CAUSE_TEXT[cause]})`);
+          this.settle(rec, "failed", `${subAgentHead(name, "failed")}${elapsed}: its turn was killed by ${CAUSE_TEXT[cause]} and resuming it failed (${why}).\n\nYou can resume the session with subagent_message.${followUp}`);
         });
         return;
       }
       this.idleRetried.delete(rec.id);
-      const message = "the turn was killed by the 90 s idle timeout twice";
+      const both = first === cause ? `by ${CAUSE_TEXT[cause]} twice` : `twice: first by ${CAUSE_TEXT[first]}, then by ${CAUSE_TEXT[cause]}`;
+      const message = `the turn was killed ${both}`;
       this.ledger(rec, "system", "parent", "error", message);
       this.port.onError(new Error(`subagent ${rec.id}: ${message}`));
-      this.settle(rec, "failed", `${subAgentHead(name, "failed")}${elapsed}: its turn was killed by the 90 s idle timeout (no output from the model) twice.\n\nYou can resume the session with subagent_message.${followUp}`);
+      this.settle(rec, "failed", `${subAgentHead(name, "failed")}${elapsed}: its turn was killed ${both} (no output from the model).\n\nYou can resume the session with subagent_message.${followUp}`);
       return;
     }
     if (reason === "aborted") {

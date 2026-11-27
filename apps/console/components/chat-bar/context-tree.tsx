@@ -74,9 +74,13 @@ export function ContextTree({ wolf, items, phone = false, onClose, onLeave }: Pr
 		api.attach({ wolf, threadId });
 		onClose();
 	};
-	const answer = (row: DenRow) => {
+	/** Whether the thread that raised the card can hold the chat (home / feature, not a subagent). */
+	const attachableRow = (row: DenRow) => {
 		const t = api.threads[row.wolf]?.find((x) => x.id === row.threadId);
-		if (t && (t.kind === "home" || t.kind === "feature") && !t.parentThreadId) attach(row.threadId);
+		return !!t && (t.kind === "home" || t.kind === "feature") && !t.parentThreadId;
+	};
+	const answer = (row: DenRow) => {
+		if (attachableRow(row)) attach(row.threadId);
 		else {
 			onClose();
 			router.push(row.href);
@@ -89,6 +93,8 @@ export function ContextTree({ wolf, items, phone = false, onClose, onLeave }: Pr
 				href={row.href}
 				onClick={(e) => {
 					e.preventDefault();
+					// Opening a card's page also swaps the chat to the thread that raised it.
+					if (attachableRow(row)) api.attach({ wolf: row.wolf, threadId: row.threadId });
 					onClose();
 					router.push(row.href);
 				}}

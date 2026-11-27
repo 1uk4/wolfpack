@@ -42,7 +42,7 @@ describe("read-only prompt catalog", () => {
 
   it("lists the per-request sections and the injected messages, with the wording the code really sends", () => {
     const all = catalog();
-    for (const s of ["wolf_memory", "wolf_memory_retired", "kb_access", "task_tools", "active_task"]) expect(all.find((e) => e.id === `request.${s}`)?.kind, s).toBe("request-section");
+    for (const s of ["wolf_memory", "wolf_memory_retired", "kb_access", "task_tools", "task_tools_graduation", "active_task"]) expect(all.find((e) => e.id === `request.${s}`)?.kind, s).toBe("request-section");
     expect(all.find((e) => e.id === "delivery.continue-prompt")?.text).toMatch(/^If more work remains, call the next tool;/);
     expect(all.find((e) => e.id === "delivery.task-notice")?.text).toBe("Task update: stage in_build → shipped; Record updated");
     expect(all.find((e) => e.id === "delivery.subagent-completed")?.text).toMatch(/^Sub-agent "<name>" completed \(/);

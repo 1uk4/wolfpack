@@ -112,12 +112,13 @@ describe("Labels toggle", () => {
 
 describe("live settings", () => {
 	test("old files without a live section get the defaults; bad values clamp", () => {
-		assert.deepEqual(sanitizeRenderSettings({}).live, { enabled: true, subagentFadeSec: 15, trailSec: 15, intensity: 1 });
+		assert.deepEqual(sanitizeRenderSettings({}).live, { enabled: true, subagentFadeSec: 15, trailSec: 15, intensity: 1, motion: "follow" });
 		assert.deepEqual(sanitizeRenderSettings({ live: { enabled: false, intensity: 9, trailSec: -3 } }).live, {
 			enabled: false,
 			subagentFadeSec: 15,
 			trailSec: 0,
 			intensity: 5,
+			motion: "follow",
 		});
 	});
 });

@@ -119,7 +119,7 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 	useEffect(() => {
 		overlayRef.current?.configure(live);
 		if (!live.enabled) setShown(null);
-	}, [renderer, live.enabled, live.intensity, live.trailSec, live.subagentFadeSec]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [renderer, live.enabled, live.intensity, live.trailSec, live.subagentFadeSec, live.motion]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// The feed: only while enabled; the stream closes when it is switched off or the graph goes away.
 	useEffect(() => {

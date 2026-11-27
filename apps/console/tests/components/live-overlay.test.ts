@@ -116,6 +116,22 @@ describe("live overlay fade clock", () => {
 		assert.ok(a !== undefined && Math.abs(a - 0.45 * 0.5) < 0.02, `thread alpha ${a}`);
 	});
 
+	it("wolf, thread-hub and subagent badges are world geometry: their on-screen size scales with the camera, 55% of the old size at 1:1", () => {
+		o.dispatch({ type: "event", event: ev("thread-active", { actor: th("tw") }), now: Date.now() });
+		o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("tw", "sa") }), now: Date.now() });
+		const screenR = (k: number): Record<string, number> => {
+			o.step(1, 0.016, host, k);
+			const out: Record<string, number> = {};
+			for (const it of o.items(host, k, 1)) out[it.kind] = it.r * k;
+			return out;
+		};
+		const full = screenR(1);
+		const far = screenR(0.25);
+		assert.ok(Math.abs(full.wolf! - 17 * 0.55) < 1e-9, `wolf radius at k=1: ${full.wolf}`); // home badge is 34 px across
+		assert.ok(Math.abs(far.wolf! - full.wolf! * 0.25) < 1e-9, `wolf radius at k=0.25: ${far.wolf}`);
+		assert.ok(far.subagent === undefined || Math.abs(far.subagent - full.subagent! * 0.25) < 1e-9);
+	});
+
 	it("never passes a negative or non-finite radius to ctx.arc at any zoom, so one bad value cannot disable the overlay", () => {
 		const radii: { r: number; k: number }[] = [];
 		let curK = 1;
@@ -157,7 +173,7 @@ describe("live overlay fade clock", () => {
 			// The home wolf is a 34 px badge with the logo path at 62% of it (scale = px / k / 64); the subagent is an agent badge with its own glyph.
 			const scales = logo().map((f) => f.scale);
 			assert.equal(scales.length, 1);
-			assert.ok(Math.abs(scales[0]! - (34 * 0.62) / 2 / 64) < 1e-9, `${scales}`);
+			assert.ok(Math.abs(scales[0]! - (17 * 0.55 * 0.62) / 32) < 1e-9, `${scales}`); // world size, k-independent: the camera scales it
 			assert.equal(logo()[0]?.alpha, 1);
 			mock.timers.tick(3_600_000);
 			o.dispatch({ type: "tick", now: Date.now() });
@@ -168,7 +184,7 @@ describe("live overlay fade clock", () => {
 		}
 	});
 
-	it("the home wolf badge stays 34 px (glyph 62% of it) and a subagent badge 14 px with its bot glyph at any zoom, while thread dots keep the old zoom scaling and hide at the floor", () => {
+	it("the home wolf badge (glyph 62% of it), the subagent badge with its bot glyph and the thread dots all scale with the camera, and the dots hide once they are specks", () => {
 		const fills: { d?: string; scale: number }[] = [];
 		let scale = 1;
 		const radii: number[] = [];
@@ -188,20 +204,20 @@ describe("live overlay fade clock", () => {
 			o.draw(rec, host, k, 1);
 			const px = fills.filter((f) => f.d?.startsWith("M8 2L24 18")).map((f) => f.scale * 64 * k);
 			botGlyphs = strokes.filter((d) => d.startsWith("M4 10a2")).length;
-			const dotPx = 3.2 * Math.min(36.4, Math.max(14, 34 * k)) / 36.4;
-			return { px, dot: radii.find((r) => Math.abs(r * k - dotPx) < 1e-6), sub: radii.find((r) => Math.abs(r * k - 7) < 1e-6), badge: radii.find((r) => Math.abs(r * k - 17) < 1e-6) };
+			const dotPx = 3.2 * 0.55 * k;
+			return { px, dot: radii.find((r) => Math.abs(r * k - dotPx) < 1e-6), sub: radii.find((r) => Math.abs(r * k - 7 * 0.55 * k) < 1e-6), badge: radii.find((r) => Math.abs(r * k - 17 * 0.55 * k) < 1e-6) };
 		};
 		const near = (a: number | undefined, b: number) => assert.ok(a !== undefined && Math.abs(a - b) < 1e-6, `${a} vs ${b}`);
-		for (const k of [4, 0.8, 0.1]) {
+		for (const k of [4, 0.8, 0.3]) {
 			const f = frame(k);
 			assert.equal(f.px.length, 1, "one wolf glyph (the subagent carries the bot glyph)");
-			near(f.px[0], 34 * 0.62);
-			near(f.badge ? f.badge * k : undefined, 17);
-			near(f.sub ? f.sub * k : undefined, 7);
+			near(f.px[0], 34 * 0.62 * 0.55 * k);
+			near(f.badge ? f.badge * k : undefined, 17 * 0.55 * k);
+			near(f.sub ? f.sub * k : undefined, 7 * 0.55 * k);
 			assert.equal(botGlyphs, 1, "the running subagent shows its bot glyph");
 		}
 		assert.ok(frame(0.8).dot !== undefined, "the thread dot keeps its reference proportion");
-		assert.equal(frame(0.1).dot, undefined, "thread dots hide at the floor");
+		assert.equal(frame(0.1).dot, undefined, "thread dots hide once the wolf is a speck");
 	});
 
 	it("a finished subagent is half faded 7.5 s after it finished when the renderer passes its monotonic clock to draw", () => {
@@ -214,5 +230,63 @@ describe("live overlay fade clock", () => {
 		o.draw(ctx, host, 1, mono);
 		const a = alphaOf(o, "subagent");
 		assert.ok(a !== undefined && a > 0.2 && a < 0.8, `subagent alpha ${a}`);
+	});
+});
+
+describe("live overlay motion mode", () => {
+	const host = {
+		nodePos: () => null,
+		hasNode: () => false,
+		nodeColor: () => undefined,
+		center: () => ({ x: 0, y: 0 }),
+		colors: { node: "#888", edge: "#444", label: "#fff", hoverText: "#fff" },
+		fontFamily: "sans-serif",
+	};
+	const g = globalThis as unknown as { window?: unknown };
+	let o: LiveOverlay;
+	beforeEach(() => {
+		g.window = { matchMedia: (q: string) => ({ matches: q.includes("reduced-motion") }), innerWidth: 1280 }; // the OS has Reduce motion on
+		mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now: 5_000_000_000_000 });
+		o = new LiveOverlay(() => {});
+	});
+	afterEach(() => {
+		o.stop();
+		mock.timers.reset();
+		delete g.window;
+	});
+	const wolfAt = (now: number) => o.items(host, 1, now).find((i) => i.kind === "wolf")!;
+	const settle = () => {
+		for (let i = 0; i < 40; i++) {
+			mock.timers.tick(50);
+			o.step(Date.now(), 0.05, host, 1);
+		}
+	};
+
+	it("reduced motion keeps a working wolf's state animating while the wolf itself stays put", () => {
+		o.configure(LIVE_DEFAULTS);
+		o.dispatch({ type: "event", event: ev("thread-active"), now: Date.now() });
+		settle();
+		assert.equal(o.needsFrames(0), true);
+		const a = wolfAt(Date.now());
+		const b = wolfAt(Date.now() + 700);
+		assert.deepEqual([b.x, b.y], [a.x, a.y]);
+	});
+
+	it("'Always animate' ignores the OS setting, so the wolf floats", () => {
+		o.configure({ ...LIVE_DEFAULTS, motion: "always" });
+		o.dispatch({ type: "event", event: ev("thread-active"), now: Date.now() });
+		settle();
+		const a = wolfAt(Date.now());
+		const b = wolfAt(Date.now() + 700);
+		assert.notDeepEqual([b.x, b.y], [a.x, a.y]);
+	});
+
+	it("reduced motion with nothing animating asks for no frames", () => {
+		o.configure(LIVE_DEFAULTS);
+		o.dispatch({ type: "event", event: ev("thread-active"), now: Date.now() });
+		o.dispatch({ type: "event", event: ev("thread-idle"), now: Date.now() });
+		mock.timers.tick(LIVE_DEFAULTS.subagentFadeSec * 1000 + 20_000);
+		o.step(Date.now(), 0.05, host, 1);
+		assert.equal(o.needsFrames(0), false);
 	});
 });

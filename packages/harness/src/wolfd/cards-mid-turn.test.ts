@@ -83,6 +83,15 @@ describe("card answers while a turn runs", () => {
     expect(events.some((e) => e.type === "card-settled" && e.callId === "a" && e.closed === "answered")).toBe(true);
   });
 
+  it("rejects an answer naming a different tool than the one that raised the card, and keeps the card pending", async () => {
+    const { eng, rt } = await rig(["a"]);
+    const before = eng.submitted.length;
+    await expect(rt.answerCard("a", { answer: { value: "blue" } }, "crawl_run")).rejects.toMatchObject({ code: "invalid_request" });
+    expect(eng.submitted.length).toBe(before);
+    expect(rt.detail().pendingCards).toHaveLength(1);
+    expect((await rt.answerCard("a", { answer: { value: "blue" } }, "ask")).disposition).toBe("steered");
+  });
+
   it("skip mid-turn is steered too", async () => {
     const { eng, rt } = await rig(["a"]);
     const ack = await rt.skipCard("a");

@@ -11,8 +11,10 @@
  */
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { cn } from "@/lib/utils";
+import { BusyButton } from "@/components/ui/busy-button";
+import { useBusyAction } from "@/components/ui/use-busy-action";
 import { ThreadColorPicker } from "@/components/settings/thread-color-picker";
-import { THREAD_COLORS, autoThreadColor, buildPayload, fieldKind, getAt, parseIssues, retryAfterSeconds, type Draft } from "@/src/core";
+import { THREAD_COLORS, autoThreadColor, buildPayload, changedKeys, fieldKind, getAt, parseIssues, retryAfterSeconds, type Draft } from "@/src/core";
 
 export interface WolfSettingsView {
 	etag: string;
@@ -113,6 +115,7 @@ export function WolfRestartBar(props: { wolfName: string; view: WolfSettingsView
 				.catch(() => void (seenDown = true));
 		}, 2000);
 	};
+	const { run: runRestart, busy: restartBusy } = useBusyAction(restart);
 	const restartable = view.restartable ?? false;
 	const canRestart = restartable && wait <= 0 && !pending;
 	return (
@@ -123,7 +126,7 @@ export function WolfRestartBar(props: { wolfName: string; view: WolfSettingsView
 				<p className="rounded-full border border-amber-500/50 bg-amber-500/10 px-2.5 py-0.5" role="status" data-testid="banner-restart-needed" title="wolf.yaml changed since the wolf started, so the running wolf still has the old values.">Restart needed: wolf.yaml changed since {wolf} started.</p>
 			) : null}
 			<div className="flex flex-wrap items-center gap-2">
-				<button className={`rounded-sm border px-2.5 py-1 text-xs hover:bg-accent disabled:opacity-50 max-md:min-h-11 ${view.restartNeeded ? "border-amber-500 bg-amber-500/15 font-medium text-foreground" : "text-muted-foreground"}`} data-emphasis={view.restartNeeded ? "true" : "false"} disabled={!canRestart} onClick={() => void restart()} data-testid="restart-button">Restart {wolf}</button>
+				<BusyButton type="button" variant="outline" size="sm" busy={restartBusy} className={view.restartNeeded ? "border-amber-500 bg-amber-500/15 font-medium text-foreground" : "text-muted-foreground"} data-emphasis={view.restartNeeded ? "true" : "false"} disabled={!canRestart} onClick={() => void runRestart()} data-testid="restart-button">Restart {wolf}</BusyButton>
 				{!restartable && <span className="text-muted-foreground" data-testid="restart-reason">Not supervised: this wolf cannot restart itself.</span>}
 				{restartable && wait > 0 && <span className="text-muted-foreground" data-testid="restart-countdown">Available in {wait}s</span>}
 				{restartError && <span className="text-destructive" role="alert" data-testid="restart-error">{restartError}</span>}
@@ -150,7 +153,7 @@ export function WolfAllSettings(props: { wolfName: string; view: WolfSettingsVie
 	const [confirming, setConfirming] = useState("");
 	const [saved, setSaved] = useState(false);
 
-	const save = async () => {
+	const saveNow = async () => {
 		const { set, invalid } = buildPayload(view.config, drafts);
 		setErrors(invalid);
 		setFormError("");
@@ -182,6 +185,8 @@ export function WolfAllSettings(props: { wolfName: string; view: WolfSettingsVie
 		}
 	};
 
+	const { run: save, busy: saving } = useBusyAction(saveNow);
+
 	/** The wolf's one color: saved at once (no Save button), null = automatic. */
 	const saveColor = async (key: string | null) => {
 		setFormError("");
@@ -206,11 +211,12 @@ export function WolfAllSettings(props: { wolfName: string; view: WolfSettingsVie
 		setRevealed((m) => ({ ...m, [`${source}:${name}`]: j.value ?? "(not set)" }));
 	};
 
+	const changed = new Set(changedKeys(view.config, drafts));
 	const renderField = (key: string) => {
 		const k = fieldKind(key);
 		const current = getAt(view.config, key);
 		const draft = drafts[key];
-		const dirty = key in drafts;
+		const dirty = changed.has(key);
 		const set = (d: Draft) => setDrafts((m) => ({ ...m, [key]: d }));
 		const cleared = draft === null;
 		const text = typeof draft === "string" ? draft : current === undefined || current === null ? "" : String(current);
@@ -279,7 +285,7 @@ export function WolfAllSettings(props: { wolfName: string; view: WolfSettingsVie
 
 	const editable = view.editable.filter((k) => !OWNED_BY_PICKERS.has(k) && !NOT_IN_PACK.has(k));
 	const other = editable.filter((k) => !SECTIONS.some((s) => s.match(k)));
-	const dirtyCount = Object.keys(drafts).length;
+	const dirtyCount = changed.size;
 	// The Save row shows only where a form field is rendered; a Save sends every draft, whichever tab it was typed on.
 	const formFields = SECTIONS.filter((s) => s.id !== "color" && want(s.id)).reduce((n, s) => n + editable.filter(s.match).length, 0) + (want("other") ? other.length : 0);
 	const tierModels = Object.entries(view.tierModels ?? {});
@@ -311,7 +317,8 @@ export function WolfAllSettings(props: { wolfName: string; view: WolfSettingsVie
 			)}
 			{formFields > 0 && (
 			<div className="flex flex-wrap items-center gap-3">
-				<button className="rounded border px-3 py-1 disabled:opacity-50 max-md:min-h-11" disabled={!dirtyCount} onClick={() => void save()} data-testid="settings-save">Save{dirtyCount ? ` (${dirtyCount})` : ""}</button>
+				<BusyButton type="button" variant="outline" size="sm" busy={saving} disabled={!dirtyCount} onClick={() => void save()} data-testid="settings-save">Save{dirtyCount ? ` (${dirtyCount})` : ""}</BusyButton>
+				{dirtyCount > 0 && <span className="text-amber-600" data-testid="settings-unsaved">Unsaved changes</span>}
 				{saved && <span className="text-muted-foreground" data-testid="settings-saved">Saved to wolf.yaml. Takes effect after the wolf restarts.</span>}
 				{formError && <span className="text-destructive" role="alert" data-testid="settings-form-error">{formError}</span>}
 			</div>

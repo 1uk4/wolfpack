@@ -153,9 +153,9 @@ describe("resolvePositions drift", () => {
 			minY = Math.min(minY, p.y);
 			maxY = Math.max(maxY, p.y);
 		}
-		// Measured: fixed layout centroid 66, bbox 2443x2501; the pre-fix layout code gave 148 and 4031x4010.
+		// Measured: bbox 2919x2966 on the Mac, 2895x3010 on CI (platform float noise; free-settling chains, work-wolfpack-1sWb8GF); the pre-fix layout gave 4031x4010. 3500 leaves margin yet still catches that drift. Centroid was 66.
 		assert.ok(Math.hypot(sx / positions.size, sy / positions.size) < 100, "centroid within 100 of the origin");
-		assert.ok(maxX - minX < 3000 && maxY - minY < 3000, `bbox ${Math.round(maxX - minX)}x${Math.round(maxY - minY)} stays under 3000`);
+		assert.ok(maxX - minX < 3500 && maxY - minY < 3500, `bbox ${Math.round(maxX - minX)}x${Math.round(maxY - minY)} stays under 3500`);
 	});
 
 	// Kept: the "nothing missing" test above checks only `added` and the size, not that
@@ -165,6 +165,37 @@ describe("resolvePositions drift", () => {
 		const { positions, added } = resolvePositions(nodes, edges, known);
 		assert.deepEqual(added, []);
 		assert.deepEqual(positions, known);
+	});
+});
+
+describe("resolvePositions: a subtree arriving after the rest", () => {
+	// A Factory (work items) loads after the KB: its nodes are new, linked only to each other
+	// and to one anchored node. They must settle like a fresh layout, not stay pinned on the rim
+	// (they then sat bunched, and snapped out on the first drag).
+	it("settles a new connected subtree as tightly as a fresh layout does", () => {
+		const old = ["hub", ...Array.from({ length: 30 }, (_, i) => `e${i}`)];
+		const fresh = ["fac", "mid", ...Array.from({ length: 12 }, (_, i) => `t${i}`)];
+		const nodes = [...old, ...fresh].map((id) => ({ id }));
+		const edges = [
+			...old.slice(1).map((e) => ({ from: "hub", to: e })),
+			{ from: "hub", to: "fac" },
+			{ from: "fac", to: "mid" },
+			...fresh.slice(2).map((t) => ({ from: "mid", to: t })),
+		];
+		const oldIds = new Set(old);
+		const known = resolvePositions(
+			nodes.filter((n) => oldIds.has(n.id)),
+			edges.filter((e) => oldIds.has(e.from) && oldIds.has(e.to)),
+			new Map(),
+		).positions;
+		const reach = (positions: Map<string, { x: number; y: number }>) => {
+			const ts = fresh.slice(2).map((id) => positions.get(id)!);
+			const mid = positions.get("mid")!;
+			return ts.reduce((s, p) => s + Math.hypot(p.x - mid.x, p.y - mid.y), 0) / ts.length;
+		};
+		const staged = reach(resolvePositions(nodes, edges, known).positions);
+		const together = reach(resolvePositions(nodes, edges, new Map()).positions);
+		assert.ok(staged < together * 1.2, `staged ${Math.round(staged)} vs fresh ${Math.round(together)}`);
 	});
 });
 

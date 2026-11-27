@@ -103,6 +103,13 @@ describe("den strip", () => {
 		assert.equal(wolf("hal").querySelector('[data-testid="den-working"]'), null);
 	});
 
+	it("colours each wolf button with its wolf colour key and the theme-aware accent", async () => {
+		await mount();
+		assert.equal(wolf("w").getAttribute("data-wolf-color"), "red");
+		assert.equal(wolf("hal").getAttribute("data-wolf-color"), "teal");
+		assert.match(wolf("w").getAttribute("style") ?? "", /--wolf-accent:\s*light-dark\(#c93a45, #f07178\)/);
+	});
+
 	it("a click opens the wolf's sheet, Esc closes it, and a second click closes it too", async () => {
 		await mount();
 		assert.equal(q('[data-testid="den-sheet"]'), null);
@@ -118,12 +125,13 @@ describe("den strip", () => {
 		assert.equal(q('[data-testid="den-sheet"]'), null, "a second click closes");
 	});
 
-	it("a row opens its thread and closes the sheet", async () => {
+	it("a needs-you row opens its thread, attaches the chat to the thread that raised it, and closes the sheet", async () => {
 		await mount();
 		await click(wolf("hal"));
 		await until(() => q('[data-testid="den-row"] a'), "the row");
 		await click(q('[data-testid="den-row"] a')!);
 		assert.equal(navLog.stack[navLog.index], "/wolf/hal/thread/b");
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "hal/b");
 		assert.equal(q('[data-testid="den-sheet"]'), null);
 	});
 
@@ -183,5 +191,30 @@ describe("den strip", () => {
 		await flush();
 		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "hal/b");
 		assert.equal(q('[data-testid="den-sheet"]'), null, "the sheet never opened");
+	});
+
+	it("hovering another wolf puts the swap icon on that wolf's button, not the attached wolf's, and leaving restores it", async () => {
+		await mount("/wolf/hal/thread/b");
+		const fire = (el: HTMLElement, name: string) => act(async () => void props(el, name)({ currentTarget: el, target: el }));
+		const icon = '[data-testid="den-swap-icon"]';
+		assert.ok(q(`[data-testid="chat-bar-swap"][data-wolf="w"] ${icon}`), "the attached wolf wears it at rest");
+		await fire(wolf("hal"), "onMouseEnter");
+		assert.ok(q(`[data-testid="den-wolf"][data-wolf="hal"] ${icon}`), "the hovered wolf wears it");
+		assert.equal(q(`[data-testid="chat-bar-swap"][data-wolf="w"] ${icon}`), null, "the attached wolf does not");
+		assert.equal(document.querySelectorAll(icon).length, 1);
+		await fire(wolf("hal"), "onMouseLeave");
+		assert.ok(q(`[data-testid="chat-bar-swap"][data-wolf="w"] ${icon}`), "back on the attached wolf");
+		assert.equal(q(`[data-testid="den-wolf"][data-wolf="hal"] ${icon}`), null);
+	});
+
+	it("clicking the swap icon on a hovered wolf attaches the chat to that wolf's home thread and opens no tree", async () => {
+		await mount("/wolf/hal/thread/b");
+		const fire = (el: HTMLElement, name: string) => act(async () => void props(el, name)({ currentTarget: el, target: el }));
+		await fire(wolf("hal"), "onMouseEnter");
+		await click(wolf("hal"));
+		await flush();
+		const a = JSON.parse(mem.get(ATTACHED_KEY)!);
+		assert.deepEqual([a.wolf, a.threadId], ["hal", "hal/home"]);
+		assert.equal(q('[data-testid="den-sheet"]'), null, "no tree opened");
 	});
 });

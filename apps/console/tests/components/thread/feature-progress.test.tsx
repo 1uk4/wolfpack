@@ -377,7 +377,8 @@ describe("ThreadChat pinned area", () => {
 		await fire({});
 		await settle(450);
 		assert.ok(q('[data-pin-key="task:task"]') === null, "unbound while open: the chip goes");
-		assert.equal(chatRequests.filter((u) => u.endsWith("/threads")).length, 0);
+		// The header's turn-state icon (work-wolfpack-UF11dZj) reads the wolf's list once on mount; binding and unbinding never list again.
+		assert.equal(chatRequests.filter((u) => u.endsWith("/threads")).length, 1);
 	});
 
 	it("an unbound thread shows the checklist chip and no progress panel", async () => {

@@ -316,13 +316,13 @@ export function createThreadApi(source: ClientSource) {
 		/** Answer a pending card: the console's side of `POST /v1/threads/:id/cards/:callId/answer`. */
 		async answerCard(ref: ThreadRef, callId: string, req: Request): Promise<Response> {
 			try {
-				const body = (await req.json().catch(() => null)) as { answers?: unknown } | null;
+				const body = (await req.json().catch(() => null)) as { answers?: unknown; tool?: unknown } | null;
 				if (!body || typeof body.answers !== "object" || body.answers === null || Array.isArray(body.answers)) {
 					return json({ error: "answers is required" }, 400);
 				}
 				const client = source();
 				if (!client.answerCard) return json({ error: "this client has no cards" }, 501);
-				return json(await client.answerCard(await resolve(client, ref), callId, body.answers as CardAnswers));
+				return json(await client.answerCard(await resolve(client, ref), callId, body.answers as CardAnswers, typeof body.tool === "string" ? body.tool : undefined));
 			} catch (err) {
 				return failure(err);
 			}
@@ -349,7 +349,7 @@ export function createThreadApi(source: ClientSource) {
 		/** Submit a paged `ask` once (current page's answers + the note): `POST /v1/threads/:id/cards/:callId/submit`. */
 		async submitCard(ref: ThreadRef, callId: string, req: Request): Promise<Response> {
 			try {
-				const body = (await req.json().catch(() => null)) as { answers?: unknown; note?: unknown; stepsKey?: unknown } | null;
+				const body = (await req.json().catch(() => null)) as { answers?: unknown; note?: unknown; stepsKey?: unknown; tool?: unknown } | null;
 				if (!body) return json({ error: "a JSON body is required" }, 400);
 				if (body.answers !== undefined && !isRecord(body.answers)) return json({ error: "answers must be an object" }, 400);
 				const note = body.note === undefined ? undefined : parseNote(body.note);
@@ -357,7 +357,7 @@ export function createThreadApi(source: ClientSource) {
 				if (body.stepsKey !== undefined && typeof body.stepsKey !== "string") return json({ error: "stepsKey must be a string" }, 400);
 				const client = source();
 				if (!client.submitCard) return json({ error: "this client has no paged cards" }, 501);
-				return json(await client.submitCard(await resolve(client, ref), callId, { ...(body.answers !== undefined ? { answers: body.answers as CardAnswers } : {}), ...(note ? { note } : {}), ...(body.stepsKey !== undefined ? { stepsKey: body.stepsKey as string } : {}) }));
+				return json(await client.submitCard(await resolve(client, ref), callId, { ...(body.answers !== undefined ? { answers: body.answers as CardAnswers } : {}), ...(typeof body.tool === "string" ? { tool: body.tool } : {}), ...(note ? { note } : {}), ...(body.stepsKey !== undefined ? { stepsKey: body.stepsKey as string } : {}) }));
 			} catch (err) {
 				return failure(err);
 			}

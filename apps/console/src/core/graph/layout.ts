@@ -544,7 +544,13 @@ export function incrementalLayout(
 				// batch linking it to the graph pulls it in naturally —
 				// but then it also has a previous position, and its anchor
 				// becomes that previous position, exactly like any node.)
-				anchors.set(node.id, { x, y });
+				// Only a TRUE orphan: a node with links (its neighbours are new
+				// too, e.g. a Factory arriving after the KB) must be free to settle
+				// or the 0.85 re-blend pins the whole subtree on the rim.
+				// Only a TRUE orphan: a node with links (its neighbours are new
+				// too, e.g. a Factory arriving after the KB) must be free to settle,
+				// or the 0.85 re-blend pins the whole subtree on the rim.
+				if ((adjacency.get(node.id)?.length ?? 0) === 0) anchors.set(node.id, { x, y });
 			} else {
 				// Bootstrap: the classic seeded scatter.
 				x = (rand() - 0.5) * 100;

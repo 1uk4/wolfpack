@@ -1,5 +1,5 @@
 import { threadBase } from "@/components/thread/thread-transport";
-import { threadHref, type AttachedRef } from "@/src/core";
+import { resolveThreadId, threadHref, type AttachedRef } from "@/src/core";
 
 /** What a send does: a running turn takes the message as a steer, an idle thread starts a turn. */
 export const whenBusyFor = (working: boolean): "steer" | "reject" => (working ? "steer" : "reject");
@@ -46,6 +46,13 @@ export function pageThreadOf(pathname: string | null): { wolf: string; slug: str
 	} catch {
 		return null;
 	}
+}
+
+/** The attach ref for a thread page href (the sidebar tree's rows): the id resolves from the wolf's list, else `wolf/slug`. Null for any other href. */
+export function attachRefForHref(href: string | null | undefined, threads: readonly { id: string }[]): { wolf: string; threadId: string; slug: string } | null {
+	const page = pageThreadOf(href ?? null);
+	if (!page) return null;
+	return { wolf: page.wolf, slug: page.slug, threadId: resolveThreadId(page.wolf, page.slug, threads) ?? `${page.wolf}/${page.slug}` };
 }
 
 /**

@@ -1,5 +1,6 @@
 "use client";
 
+import { useGraduateJob } from "@/components/kb/graduate-store";
 import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 import { isSupersedable } from "@/components/ask/ask-session";
 import { createEarlierScroll } from "@/components/thread/earlier-scroll";
@@ -17,11 +18,11 @@ import { TaskPinToggle, applyAgentTaskPin, lastAgentTaskPin, syncTaskPin } from 
 import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread/thread-compaction-divider";
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/thread/subagent-message";
-import { parseSubagentMessage, setPagePendingAsk } from "@/src/core";
+import { effectiveWolfColor, hasWolfColor, parseSubagentMessage, setPagePendingAsk, wolfColorStyle, wolfAccentForeground } from "@/src/core";
 import { TurnTimer, useTurnStart } from "@/components/thread/turn-timer";
 import { useOwnAsk } from "@/components/thread/thread-ask";
 import { submitToThread, swapTarget } from "@/components/chat-bar/chat-bar-io";
-import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/thread/subagent-strip";
+import { useSubagentChildren } from "@/components/thread/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/shell/panel-host";
 import { ViewerPanel } from "@/components/viewer/viewer-panel";
 import { registerColumn } from "@/components/chat-bar/column-store";
@@ -293,6 +294,9 @@ function ThreadChatInner({
 	const own = useMemo(() => colorThreads.find((t) => t.id === threadId), [colorThreads, threadId]);
 	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads, colorApi?.wolves.find((w) => w.name === wolf)?.color ?? wolfColor).hex;
 	const tintSolid = threadTintSolid(tintHex);
+	// The wolf's own colour (every thread of the wolf): --wolf-tint / --wolf-accent, a faint tint over the page and the accent.
+	const wolfKey = effectiveWolfColor({ name: wolf, color: colorApi?.wolves.find((w) => w.name === wolf)?.color ?? wolfColor }, colorApi?.threads[wolf]?.find((t) => t.kind === "home")?.id);
+	const wolfStyle = hasWolfColor(wolfKey) ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey), backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : null;
 	// The page canvas (html background) takes the chat colour while a thread is open, so the strip the iOS home-screen app leaves under the viewport matches it
 	useEffect(() => {
 		const root = document.documentElement;
@@ -423,7 +427,7 @@ function ThreadChatInner({
 	const answerInFlight = useRef(false);
 	// An answer (answers given) or a skip (no answers) of one card: the same POST/ack handling.
 	const resolveCard = useCallback(
-		async (callId: string, answers?: CardAnswers) => {
+		async (callId: string, answers?: CardAnswers, tool?: string) => {
 			if (answerInFlight.current) return; // double click / Enter: one POST
 			answerInFlight.current = true;
 			setAnswering(callId);
@@ -432,7 +436,7 @@ function ThreadChatInner({
 				const res = await fetch(answers ? cardAnswerUrl(wolf, slug, callId) : cardSkipUrl(wolf, slug, callId), {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: answers ? JSON.stringify({ answers }) : undefined,
+					body: answers ? JSON.stringify({ answers, ...(tool ? { tool } : {}) }) : undefined,
 				});
 				if (!res.ok) {
 					const body = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -468,7 +472,7 @@ function ThreadChatInner({
 		},
 		[wolf, slug, resumeStream, refreshCards, setSendPending],
 	);
-	const cardCtx: CardContext = { wolf, slug, cards, answering, onAnswer: (callId, answers) => void resolveCard(callId, answers), onSkip: (callId) => void resolveCard(callId) };
+	const cardCtx: CardContext = { wolf, slug, cards, answering, onAnswer: (callId, answers) => void resolveCard(callId, answers, cards.pending.find((p) => p.callId === callId)?.card.tool), onSkip: (callId) => void resolveCard(callId) };
 	const { allOpen: allThinkingOpen, epoch: thinkingEpoch } = useAllThinkingToggle();
 	const [text, setText] = useState("");
 	// Ref mirror of the composer text: a dictation flush lands via setState, which a send resuming after
@@ -646,7 +650,6 @@ function ThreadChatInner({
 	const busy = status === "submitted" || status === "streaming";
 	const turnStart = useTurnStart(threadId, busy, turnStartedAt, initialTurnStartedAt);
 	const subagents = useSubagentChildren(wolf, slug, threadId);
-	const stripReserve = stripReservePx(subagents, Date.now());
 	const subagentOrigins = useMemo(
 		() => messages.map((m) => (m.role === "user" ? parseSubagentMessage(m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")) : undefined)),
 		[messages],
@@ -730,6 +733,7 @@ function ThreadChatInner({
 		}
 	}, [dictation.active]);
 
+	const graduating = useGraduateJob(bound ?? "")?.phase === "graduating";
 	const replyInFlight = useRef(false);
 	const beginSend = useRestoreOnSendFailure(error, status, textRef, applyText);
 	const doSend = useCallback(() => {
@@ -743,7 +747,7 @@ function ThreadChatInner({
 		// A running turn takes the message as a steer, attachments included (the submit route accepts them with
 		// whenBusy "steer"); Stop is the abort.
 		if (busy) return steer(t, refs);
-		send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
+		return send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
 	}, [busy, send, steer, attachments, applyText, beginSend, setSendPending]);
 	// Submit while dictating only finishes the run (the spoken tail lands in the field); the next press sends. A press
 	// while the run is still settling does nothing.
@@ -779,7 +783,8 @@ function ThreadChatInner({
 			data-testid="thread-chat"
 			data-thread={threadId}
 			data-dragging={dragging || undefined}
-			style={{ ...(threadAccentStyle(tintHex) as CSSProperties), backgroundColor: tintSolid }}
+			data-wolf-color={wolfStyle ? wolfKey : undefined}
+			style={{ ...(threadAccentStyle(tintHex) as CSSProperties), backgroundColor: tintSolid, ...(wolfStyle as CSSProperties | null) }}
 			onDragOver={(e) => {
 				if (!dragHasFiles(e.dataTransfer)) return;
 				e.preventDefault(); // take the drop instead of the browser opening the file
@@ -798,10 +803,9 @@ function ThreadChatInner({
 		>
 			<div ref={registerColumn} className={viz ? "hidden" : "flex min-w-0 flex-1 flex-col"} data-testid="thread-main">
 				<TopBar>
-					<span className="min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl">{title}</span>
-					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
+					<span data-wolf-color={wolfStyle ? wolfKey : undefined} className={`min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl${wolfStyle ? " underline decoration-(color:--wolf-accent)/50 decoration-2 underline-offset-[6px]" : ""}`}>{title}</span>
 					<TurnTimer startedAt={turnStart} />
-					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} />
+					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} turn={ask.pending ? "waiting" : busy ? "working" : "idle"} />
 					<TaskPinToggle threadId={threadId} bound={bound} />
 					{kind === "feature" && (
 						<ThreadActionsMenu
@@ -977,14 +981,13 @@ function ThreadChatInner({
 								aria-hidden
 								data-testid="thread-tail-spacer"
 								className={dockHeight === null ? "h-40" : undefined}
-								style={dockHeight !== null ? { height: dockHeight } : stripReserve ? { marginTop: stripReserve } : undefined}
+								style={dockHeight !== null ? { height: dockHeight } : undefined}
 							/>
 						</ConversationContent>
 						<div ref={setDockEl} className="pointer-events-none absolute inset-x-0 bottom-0 flex max-h-[calc(100%-0.75rem)] flex-col" style={barOverPage ? { paddingBottom: "var(--chat-bar-over, 0px)" } : undefined}>
 							<div className={ask.covers ? "pointer-events-none h-0" : "pointer-events-none h-16"} data-testid="dock-fade" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
 							<div className="flex min-h-0 flex-col pb-4 max-md:pb-0" style={{ backgroundColor: tintSolid }}>
 								<div className={`${DOCK} flex min-h-0 flex-col [&>*:not([data-testid=ask-sheet-host])]:shrink-0`}>
-									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />
 									{closedReason !== undefined ? (
 										<div data-testid="thread-closed" className="pointer-events-auto rounded-2xl border bg-card px-4 py-3 text-sm shadow-lg">
 											<div className="font-medium">{closedByOwner(closedReason) ? closedReason : FEATURE_GRADUATED}</div>
@@ -1023,6 +1026,8 @@ function ThreadChatInner({
 										{noteMode && session.error && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{session.error}</p>}
 										<Composer
 											busy={noteMode ? false : busy}
+											// The bound feature is graduating: its thread is about to close, a send would race the archive.
+											sending={noteMode ? false : graduating}
 											value={noteMode ? session.note.text : text}
 											onChange={noteMode ? session.setNoteText : applyText}
 											onSend={noteMode ? onNoteSend : onSend}

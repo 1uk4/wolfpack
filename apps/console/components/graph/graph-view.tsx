@@ -32,7 +32,7 @@ import { startCursor, type RouteCursor } from "@/src/core";
 import type { RouteNavModel } from "./graph-route-nav.tsx";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { SearchIcon, WaypointsIcon } from "lucide-react";
+import { HomeIcon, SearchIcon, WaypointsIcon } from "lucide-react";
 import {
 	GRAPH_CAMERA_KEY,
 	describeNode,
@@ -146,8 +146,11 @@ export function GraphChromeRow({
 	domains = [],
 	groups,
 	changeGroups,
+	onHome,
 }: {
 	isEmpty: boolean;
+	/** Recentre and fit the whole graph. */
+	onHome?: () => void;
 	query: string;
 	onQuery: (v: string) => void;
 	/** The search panel's "No matching nodes." note (computed by the
@@ -188,6 +191,18 @@ export function GraphChromeRow({
 				</div>
 			)}
 			<div className="graph-chrome-fade-in pointer-events-auto absolute bottom-0 right-0 flex shrink-0 items-center gap-2">
+				{!isEmpty && onHome && (
+					<Hint label="Fit graph in view" side="top">
+						<button
+							type="button"
+							onClick={onHome}
+							aria-label="Fit graph in view"
+							className="flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent"
+						>
+							<HomeIcon className="size-4" />
+						</button>
+					</Hint>
+				)}
 				<GraphSettingsControl settings={settings} changeSettings={changeSettings} domains={domains} groups={groups} changeGroups={changeGroups} />
 			</div>
 		</>
@@ -610,6 +625,7 @@ export function GraphView({
 							domains={graph.domains}
 							groups={groupState.groups}
 							changeGroups={groupState.changeGroups}
+							onHome={() => rendererRef.current?.fit()}
 						/>
 					</div>
 				</div>

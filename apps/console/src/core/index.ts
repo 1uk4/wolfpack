@@ -18,6 +18,7 @@ export * from "./ui/ports.ts";
 export * from "./graph/render-settings.ts";
 export * from "./graph/privacy.ts";
 export * from "./graph/live/live-state.ts";
+export * from "./graph/live/motion-mode.ts";
 export * from "./graph/live/live-targets.ts";
 export * from "./graph/work-node-thread.ts";
 export * from "./graph/live/kb-life.ts";
@@ -165,3 +166,4 @@ export {
 export { EVENT_LABEL, parseSubagentMessage, resolveChild } from "./thread/subagent-message.ts";
 export type { SubagentOrigin } from "./thread/subagent-message.ts";
 export * from "./graph/live/thread-key.ts";
+export * from "./thread/wolf-color.ts";

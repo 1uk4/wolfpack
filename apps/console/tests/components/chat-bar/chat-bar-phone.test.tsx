@@ -77,7 +77,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		return new Response(JSON.stringify({ disposition: "started" }), { status: 200 });
 	}
 	if (url === "/api/needs-you") return needsYou ? Response.json({ items: needsYou }) : new Response("{}", { status: 500 });
-	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
+	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w", ...(wolfColor ? { color: wolfColor } : {}) }] });
 	if (url === "/api/wolves/w/threads") return Response.json({ threads: [...(noHome ? [] : [th("w/home", { kind: "home" })]), th("w/a"), th("w/b"), th("w/c"), ...extraThreads] });
 	const g = /^\/api\/wolves\/w\/threads\/([^/?]+)\?/.exec(url);
 	if (g) {
@@ -102,6 +102,7 @@ const until = async (cond: () => unknown, what: string) => {
 const q = (s: string) => document.querySelector(s) as HTMLElement | null;
 const qa = (s: string) => Array.from(document.querySelectorAll(s)) as HTMLElement[];
 let startPath = "/kb";
+let wolfColor: string | undefined; // the roster's colour for wolf "w"
 let noHome = false; // the wolf has no home thread: nothing to auto-attach
 async function mount(stored: object | null = A, extra?: React.ReactNode, expectBar = true) {
 	if (stored) mem.set(ATTACHED_KEY, JSON.stringify(stored));
@@ -158,6 +159,7 @@ afterEach(async () => {
 	phone = true;
 	startPath = "/kb";
 	noHome = false;
+	wolfColor = undefined;
 	document.body.style.overflow = "";
 	document.documentElement.style.removeProperty("--chat-bar-reserve");
 	delete (window as any).visualViewport;
@@ -170,6 +172,29 @@ const colors = { fields: [{ id: "c", kind: "single", label: "Which color?", opti
 const raise = (slug: string, ...ids: string[]) => void (bodies[slug] = { messages: [], pendingCards: ids.map((callId) => ({ callId, threadId: "w/a", card: { tool: "ask_user_question", ...colors }, raisedAt: "2026-01-01T00:00:00Z" })) });
 
 describe("ChatBar on a phone", () => {
+	it("tints a wolf with no config colour by the colour the den strip shows for it", async () => {
+		await mount();
+		assert.equal(bar().getAttribute("data-wolf-color"), "red"); // the automatic colour of "w/home"
+	});
+
+	it("carries the attached wolf's colour onto the bar root", async () => {
+		wolfColor = "blue";
+		await mount();
+		assert.equal(bar().getAttribute("data-wolf-color"), "blue");
+		assert.match(bar().getAttribute("style") ?? "", /--wolf-accent:\s*light-dark\(#1f6fc0, #6cb2f2\)/);
+	});
+
+	it("carries the wolf's colour onto the floating desktop bar root, and its border takes the wolf accent", async () => {
+		(window as any).innerWidth = 1440;
+		wolfColor = "blue";
+		await resize(false);
+		await mount();
+		assert.equal(bar().getAttribute("data-layout"), null); // the floating pill, not the phone dock
+		assert.equal(bar().getAttribute("data-wolf-color"), "blue");
+		assert.match(bar().getAttribute("style") ?? "", /--wolf-accent:\s*light-dark\(#1f6fc0, #6cb2f2\)/);
+		assert.match(bar().querySelector<HTMLElement>("[data-testid=composer]")!.closest(".rounded-2xl")!.getAttribute("style") ?? "", /border-color:\s*var\(--wolf-accent\)/);
+	});
+
 	it("is a full-width dock below md and the floating pill from md up, switching live", async () => {
 		(window as any).innerWidth = 1440;
 		await mount();

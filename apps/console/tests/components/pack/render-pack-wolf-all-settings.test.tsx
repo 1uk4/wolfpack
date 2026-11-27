@@ -96,6 +96,56 @@ describe("Pack > Wolves > All settings (interaction)", () => {
 		await act(async () => root.unmount());
 	});
 
+	it("Save stays disabled until a field changes, then shows unsaved changes and sends once on a double click", async () => {
+		const calls: Call[] = [];
+		const call = (async (url: string, init?: RequestInit) => {
+			calls.push({ url, init });
+			await new Promise((r) => setTimeout(r, 20));
+			return new Response(JSON.stringify({ ...view, etag: "e2" }), { status: 200 });
+		}) as unknown as typeof fetch;
+		const { dom, root, q } = await mount(<WolfAllSettings wolfName="hal" view={view} call={call} onView={() => {}} sections={["compaction"]} />);
+		assert.equal((q("settings-save") as HTMLButtonElement).disabled, true);
+		assert.equal(q("settings-unsaved"), null);
+		await typeInto(dom, q("field-compaction.threshold")!, "90");
+		assert.equal((q("settings-save") as HTMLButtonElement).disabled, false);
+		assert.match(q("settings-unsaved")?.textContent ?? "", /Unsaved changes/);
+		await act(async () => {
+			q("settings-save")!.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
+			q("settings-save")!.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
+		});
+		await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+		assert.equal(calls.length, 1);
+		await act(async () => root.unmount());
+	});
+
+	it("typing a field back to its saved value counts as no change: Save disabled, no unsaved label, no edited mark", async () => {
+		const { dom, root, q } = await mount(<WolfAllSettings wolfName="hal" view={view} call={noCall} onView={() => {}} sections={["compaction", "memory"]} />);
+		await typeInto(dom, q("field-compaction.threshold")!, "90");
+		assert.equal((q("settings-save") as HTMLButtonElement).disabled, false);
+		await typeInto(dom, q("field-compaction.threshold")!, "80"); // saved value is the number 80
+		assert.equal((q("settings-save") as HTMLButtonElement).disabled, true);
+		assert.equal(q("settings-unsaved"), null);
+		assert.ok(!(q("row-compaction.threshold")?.textContent ?? "").includes("edited"));
+		await act(async () => root.unmount());
+	});
+
+	it("Restart posts to the wolf's restart route once even on a double click", async () => {
+		const calls: Call[] = [];
+		const call = (async (url: string, init?: RequestInit) => {
+			calls.push({ url, init });
+			await new Promise((r) => setTimeout(r, 20));
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch;
+		const { dom, root, q } = await mount(<WolfRestartBar wolfName="hal" view={view} call={call} onView={() => {}} onReload={() => {}} />);
+		await act(async () => {
+			q("restart-button")!.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
+			q("restart-button")!.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
+		});
+		await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+		assert.deepEqual(calls.map((c) => [c.url, c.init?.method]), [["/api/wolves/hal/settings/restart", "POST"]]);
+		await act(async () => root.unmount());
+	});
+
 	it("a 400 about a setting the form does not show still appears as a visible form error", async () => {
 		const call = (async () => new Response(JSON.stringify({ error: "memory.model: not a model" }), { status: 400 })) as unknown as typeof fetch;
 		const { dom, root, q } = await mount(<WolfAllSettings wolfName="hal" view={view} call={call} onView={() => {}} sections={["models", "subagents", "compaction", "memory", "other", "env"]} />);

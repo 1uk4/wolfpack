@@ -29,6 +29,7 @@ import {
   CRAWL_JOURNEY_USER_PROMPT,
   CRAWL_OBSERVER_USER_PROMPT,
   CrawlTopicSchema,
+  GRADUATION_RULES,
   DistillOutputSchema,
   JourneyResultSchema,
   LIVE_OBSERVER_USER_PROMPT,
@@ -199,6 +200,7 @@ function requestSectionEntries(): CatalogEntry[] {
       "Work item IDs: always write the full `work-<domain>-<id>` ... (rule about chips and code blocks)",
       "<binding rules, omitted for subagents and read-only task conversations>",
     ].join("\n\n")),
+    sec("task_tools_graduation", "task_tools: graduation rules (the Graduation block, real text)", "packages/memory/src/work/binding.ts GRADUATION_RULES (rendered in task_tools by extensions/wolfpack-memory/unified-tasks.ts, not for subagents)", GRADUATION_RULES),
     sec("active_task", "active_task: the bound work item (template)", "extensions/wolfpack-memory/unified-tasks.ts section active_task", [
       "## Active Task",
       "<unbound: the 'item completed' notice once, then the unbound context and: Use `task_query` to see available work.>",

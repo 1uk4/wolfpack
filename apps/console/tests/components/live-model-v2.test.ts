@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import type { ActivityEvent } from "@wolfpack/protocol";
 import { LiveOverlay, LIVE_DEFAULTS, type OverlayHost, type OverlayItem } from "../../components/graph/live/live-overlay.ts";
 import { talkToWolf } from "../../components/graph/live/live-talk.ts";
+import { effectiveWolfColor, wolfColorTokens } from "../../src/core/index.ts";
 import { formatFeed } from "../../src/core/graph/live/feed.ts";
 
 /** Map model v2: features are hubs at their work node, subagents dart between targets and tether back, the wolf floats free. Real event shapes. */
@@ -93,6 +94,20 @@ describe("live map model v2", () => {
 		to.draw(rec.ctx, host, 1, Date.now());
 		return rec.strokes;
 	};
+
+	it("a wolf is drawn in its own colour for the theme: the configured key's accent, else its automatic colour", () => {
+		const dark = host; // light hover text = dark theme
+		const light: OverlayHost = { ...host, colors: { ...host.colors, hoverText: "#111111" } };
+		const colorIn = (h: OverlayHost) => o.items(h, 1, Date.now()).find((i) => i.kind === "wolf")!.color;
+		send("thread-active", home);
+		run(0.1);
+		o.setWolfColors(new Map([["1uk4", "blue"]]));
+		assert.equal(colorIn(dark), "#6cb2f2");
+		assert.equal(colorIn(light), "#1f6fc0");
+		o.setWolfColors(new Map());
+		assert.equal(colorIn(dark), wolfColorTokens(effectiveWolfColor({ name: "1uk4" })).dark.accent);
+		assert.equal(colorIn(light), wolfColorTokens(effectiveWolfColor({ name: "1uk4" })).light.accent);
+	});
 
 	it("a feature thread is a hub at its work-item node, not on its wolf", () => {
 		send("thread-active", feature);
@@ -187,8 +202,8 @@ describe("live map model v2", () => {
 		run(5);
 		const hub = of("feature");
 		const sub = of("subagent");
-		assert.ok(Math.abs(dist(sub, hub) - 20) < 2, `on the ring (${dist(sub, hub)})`);
-		assert.ok(hub.r === 12 && sub.r === 7, `a 14 px agent badge (${sub.r * 2}) on the ring of a 24 px badge (${hub.r * 2})`);
+		assert.ok(Math.abs(dist(sub, hub) - 11) < 1.1, `on the ring (${dist(sub, hub)})`);
+		assert.ok(Math.abs(hub.r - 6.6) < 1e-9 && Math.abs(sub.r - 3.85) < 1e-9, `a 7.7 world-unit agent badge (${sub.r * 2}) on the ring of a 13.2 one (${hub.r * 2})`);
 		const link = render().filter((s) => !s.dash && near(s.from, hub, 0.5) && near(s.to, sub, 0.5));
 		assert.equal(link.length, 0, "no link line while the dot rests on the ring: it is drawn only once the dot stretches away");
 		send("subagent-finished", subTap);
@@ -207,7 +222,7 @@ describe("live map model v2", () => {
 		const hub = of("feature");
 		const subs = items().filter((i) => i.kind === "subagent");
 		assert.equal(subs.length, 3);
-		for (const s of subs) assert.ok(Math.abs(dist(s, hub) - 20) < 2, `on the ring (${dist(s, hub)})`);
+		for (const s of subs) assert.ok(Math.abs(dist(s, hub) - 11) < 1.1, `on the ring (${dist(s, hub)})`);
 		const gaps = [dist(subs[0]!, subs[1]!), dist(subs[1]!, subs[2]!), dist(subs[2]!, subs[0]!)];
 		assert.ok(Math.max(...gaps) - Math.min(...gaps) < 3, `equal gaps ${gaps}`);
 	});
@@ -252,7 +267,7 @@ describe("live map model v2", () => {
 		assert.ok(away > 100, `it is stretched out (${away})`);
 		run(40);
 		const home_ = dist(of("subagent"), of("feature"));
-		assert.ok(Math.abs(home_ - 20) < 2, `back on the ring (${home_})`);
+		assert.ok(Math.abs(home_ - 11) < 1.1, `back on the ring (${home_})`);
 	});
 
 	it("a finished subagent is back on its ring and still there fading", () => {
@@ -263,7 +278,7 @@ describe("live map model v2", () => {
 		send("subagent-finished", subTap);
 		run(13);
 		const sub = of("subagent");
-		assert.ok(Math.abs(dist(sub, of("feature")) - 20) < 3, `on the ring (${dist(sub, of("feature"))})`);
+		assert.ok(Math.abs(dist(sub, of("feature")) - 11) < 2, `on the ring (${dist(sub, of("feature"))})`);
 		assert.ok(sub.alpha > 0 && sub.alpha < 1, `fading (${sub.alpha})`);
 	});
 
@@ -336,7 +351,7 @@ describe("live map model v2", () => {
 		const hub = of("feature");
 		const moved = dist(hub, hub0);
 		assert.ok(moved > 0.45 * d && moved < 0.62 * d, `about 0.56 of the way (${moved} of ${d})`);
-		assert.ok(Math.abs(dist(of("subagent"), hub) - 20) < 3, "the subagent went with it, still on the ring");
+		assert.ok(Math.abs(dist(of("subagent"), hub) - 11) < 1.65, "the subagent went with it, still on the ring");
 		run(40);
 		assert.ok(dist(of("feature"), hub0) < 5, "and it returns home when the hold ends");
 	});
@@ -353,9 +368,9 @@ describe("live map model v2", () => {
 			run(0.05);
 			const wolf = of("wolf");
 			const dot = of("thread");
-			assert.ok(Math.abs(dist(dot, wolf) - 23.4) < 1, `thread dot beside the wolf at frame ${i} (${dist(dot, wolf)})`);
+			assert.ok(Math.abs(dist(dot, wolf) - 13.75) < 0.55, `thread dot beside the wolf at frame ${i} (${dist(dot, wolf)})`);
 			const sub = of("subagent");
-			assert.ok(Math.abs(dist(sub, wolf) - 25) < 9, `subagent on its ring about the wolf at frame ${i} (${dist(sub, wolf)})`);
+			assert.ok(Math.abs(dist(sub, wolf) - 13.75) < 5, `subagent on its ring about the wolf at frame ${i} (${dist(sub, wolf)})`);
 			if (i === 100) {
 				const trail = render().filter((s) => !s.dash && near(s.to, target, 0.5));
 				assert.equal(trail.length, 1);
@@ -425,7 +440,7 @@ describe("live map model v2", () => {
 		still.step(T0 + 30_000, 0.016, host, 1);
 		const w1 = still.items(host, 1, T0 + 17_000).find((i) => i.kind === "wolf")!;
 		assert.ok(dist(w0, w1) < 1e-9, "the wolf neither moves nor floats");
-		assert.equal(still.needsFrames(0), false);
+		assert.equal(still.needsFrames(0), true); // the working ring still fades in place
 		still.stop();
 	});
 

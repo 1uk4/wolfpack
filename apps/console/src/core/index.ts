@@ -19,6 +19,7 @@ export * from "./graph/render-settings.ts";
 export * from "./graph/privacy.ts";
 export * from "./graph/live/live-state.ts";
 export * from "./graph/live/live-targets.ts";
+export * from "./graph/work-node-thread.ts";
 export * from "./graph/live/kb-life.ts";
 export * from "./graph/live/kb-life-log.ts";
 export * from "./graph/live/live-physics.ts";
@@ -65,6 +66,10 @@ export * from "./thread/session-navigation.ts";
 export * from "./settings/auth-keys.ts";
 // keyboard.ts: the shortcut registry + binding normalization (pure, browser-safe).
 export * from "./ui/keyboard.ts";
+export * from "./ui/bar-eye.ts";
+export * from "./ui/bar-geometry.ts";
+export * from "./ui/bar-visibility.ts";
+export * from "./thread/home-thread.ts";
 // Pure, browser-safe.
 // thread-adapter.ts: the ConsoleClient (@wolfpack/client) ↔ session-model
 // seam — ThreadEvent → wire events, ThreadMessage → native record. Pure.
@@ -76,6 +81,7 @@ export * from "./thread/reply-notify.ts";
 
 // chat-bar.ts: the floating chat bar's attached-thread model + switcher list. Pure.
 export * from "./thread/chat-bar.ts";
+export * from "./thread/den-strip.ts";
 export * from "./thread/page-pending.ts";
 // bar-icon.ts: the collapsed chat icon's position, clamping, edge snapping and drag threshold. Pure.
 export * from "./thread/bar-icon.ts";

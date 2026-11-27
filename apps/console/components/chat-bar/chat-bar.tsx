@@ -13,10 +13,15 @@
  * Only the chip, the switcher and the shortcuts are eager; the input half (chat-bar-composer.tsx) loads on first expand.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { getPageNoteAppend } from "@/components/composer/use-thread-dictation";
+import { createPortal } from "react-dom";
+import { useDockSlot } from "@/components/chat-bar/dock-slot";
+import { useBarDrop } from "@/components/chat-bar/bar-drop";
+import { ContextTree } from "@/components/chat-bar/context-tree";
+import { DenStrip, useNeedsYouItems } from "@/components/chat-bar/den-strip";
+import { getPageNoteAppend } from "@/components/composer/page-note-append";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowLeftRightIcon, EyeIcon, MessageCircleQuestionIcon, ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon } from "lucide-react";
+import { ArrowLeftRightIcon, MessageCircleQuestionIcon, ChevronDownIcon, ChevronUpIcon, MicIcon } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
 import { useSubagentChildren } from "@/components/thread/use-subagent-children";
 import { cn } from "@/lib/utils";
@@ -25,19 +30,25 @@ import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 import { abortThread as abortBarThread, onOwnThreadPage, swapTarget } from "@/components/chat-bar/chat-bar-io";
 import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/composer/dictation";
-import { appendToDraft, draftKey } from "@/lib/composer-draft";
+import { appendToDraft, draftKey, readDraft } from "@/lib/composer-draft";
+import { setSpaceContext } from "@/components/composer/space-dictation";
 import { setVizMode, useVizActive } from "@/components/viewer/viz-mode";
-import { useFrameBadges } from "@/components/viewer/frame-store";
 import { FrameBadges } from "@/components/viewer/frame-badges";
 import { BarIcon } from "@/components/chat-bar/bar-icon";
 import { BarSettings } from "@/components/chat-bar/bar-settings";
+import { useKeyboardInset } from "@/components/chat-bar/use-keyboard-inset";
+import { useBarHiddenReasons } from "@/components/chat-bar/bar-visibility";
+import { BarEyeButton } from "@/components/viewer/frame-badges";
+import { BarOverflow } from "@/components/chat-bar/bar-overflow";
+import { useColumnRect } from "@/components/chat-bar/column-store";
 import { useThreadColor } from "@/components/thread/use-thread-color";
 import { useBarCards, type BarCards } from "@/components/chat-bar/chat-bar-cards";
 import type { Answering } from "@/components/ask/ask-sheet";
 import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask/ask-session";
 import { replyLabel } from "@/components/ask/ask-reply";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
-import { attachable, inFrozenOrder, switcherOrder, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
+import { attachable, barGeometry, barHiddenFor, pickHomeThread, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread } from "@/src/core";
+import { ZC } from "@/lib/z-layers";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar/chat-bar-io";
 
@@ -70,8 +81,8 @@ const afterBarDictation = (then?: () => void) => {
 const AskSheet = dynamic(() => import("@/components/ask/ask-sheet").then((m) => m.AskSheet), { ssr: false });
 const BarCardSurface = dynamic(() => import("@/components/chat-bar/bar-card-surface").then((m) => m.BarCardSurface), { ssr: false });
 
-/** Pages that scroll: the open bar reserves room under their content. Full-height screens (graph, chat) are left alone. */
-const SCROLLING = /^\/(kb|work|kb-activity|pipeline|settings|prompts)(\/|$)|^\/wolf\/[^/]+$/;
+/** Full-height screens (the graph canvas, the new-chat page, a thread page) run under the bar; every other page scrolls, so the open bar reserves room under its content. */
+const FULL_HEIGHT = /^\/(graph|chat)(\/|$)|^\/wolf\/[^/]+\/thread(\/|$)/;
 
 /** md+ (768px): the floating pill. Below it the bar is a full-width dock at the bottom (phone layout). */
 const WIDE_QUERY = "(min-width: 768px)";
@@ -87,27 +98,6 @@ export function useWide(): boolean {
 	return useSyncExternalStore(subscribeWide, () => (canMatch() ? window.matchMedia(WIDE_QUERY).matches : true), () => true);
 }
 
-/** The new-chat page is all composer: the bar stays off it (a thread page is different: the bar floats over it, or the page composer IS the chat). */
-const NEW_CHAT = /^\/chat\/new(\/|$)/;
-
-/** Phone keyboard: how far the visual viewport's bottom sits above the layout viewport's bottom (iOS does not resize the layout, so a fixed dock would stay under the keyboard). 0 when the layout itself resizes (Android, interactive-widget=resizes-content). */
-function useKeyboardInset(enabled: boolean): number {
-	const [inset, setInset] = useState(0);
-	useEffect(() => {
-		const vv = window.visualViewport;
-		if (!enabled || !vv) return setInset(0);
-		const apply = () => setInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)));
-		apply();
-		vv.addEventListener("resize", apply);
-		vv.addEventListener("scroll", apply);
-		return () => {
-			vv.removeEventListener("resize", apply);
-			vv.removeEventListener("scroll", apply);
-		};
-	}, [enabled]);
-	return inset;
-}
-
 export function ChatBar() {
 	const api = useAttachedThread();
 	const pathname = usePathname();
@@ -118,7 +108,7 @@ export function ChatBar() {
 	const viz = useVizActive();
 	const vizHere = onOwnPage && !!viz && !!attached && viz.wolf === attached.wolf && viz.threadId === attached.threadId;
 	const onOwn = onOwnPage && !vizHere;
-	const [switcher, setSwitcher] = useState(false);
+	const [switcher, setSwitcher] = useState<string | null>(null); // the wolf whose den sheet is open
 	const chipRef = useRef<HTMLButtonElement | null>(null);
 	const wrapRef = useRef<HTMLDivElement | null>(null);
 	// Another thread's page: the bar floats over it with a "Swap to <thread>" pill (the page's own composer steps aside).
@@ -129,8 +119,9 @@ export function ChatBar() {
 	const swap = page && pageThreadId ? { wolf: page.wolf, slug: page.slug, threadId: pageThreadId } : null;
 	// The pill is the way to type to that page's thread, so a minimized bar still opens over a thread page.
 	const minimized = (api?.minimized ?? false) && !swap;
-	const dockless = !!pathname && NEW_CHAT.test(pathname);
-	const scrolls = !!pathname && SCROLLING.test(pathname);
+	const hiddenReasons = useBarHiddenReasons();
+	const hidden = barHiddenFor(pathname, { reasons: hiddenReasons });
+	const scrolls = !!pathname && !FULL_HEIGHT.test(pathname);
 
 	// Shortcuts: the dispatcher hands over the KeyboardEvent; the browser's own key (Cmd+J = downloads) is swallowed only
 	// when the bar (or, on its own thread's page, the page composer) actually answers.
@@ -166,18 +157,57 @@ export function ChatBar() {
 	// itself (thread-chat.tsx). Leaving the page mid-run makes `onOwn` false, and the bar appears with the run live.
 	const dictating = dictation.active;
 	const own = onOwn;
+	const dockSlot = useDockSlot();
 	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dictating, vizAttached };
-	const full = !!attached && !own && !dockless && !minimized;
-	const shown = !!attached && !own && !dockless;
+	const full = !!attached && !own && !hidden && !minimized;
+	const shown = !!attached && !own && !hidden;
+	const docked = own && !!dockSlot && !hidden;
 
 	// Published so the popped-out thread's own page shows and drives the same run (use-thread-dictation.ts). Every field
 	// the page reads is a dep (phase/active/error for the state, toggle/stop/finish/cancel for the actions, levelRef for
 	// the meter); clearError only sets state, so a stale copy is as good as the current one.
 	useEffect(() => {
-		publishBarDictation(dictation, shown);
+		publishBarDictation(dictation, shown || docked);
 	// eslint-disable-next-line react-hooks/exhaustive-deps -- the listed dictation fields are the ones the page reads; the dictation object itself is new every render
-	}, [dictation.phase, dictation.error, dictation.active, dictation.levelRef, dictation.toggle, dictation.stop, dictation.finish, dictation.cancel, shown]);
+	}, [dictation.phase, dictation.error, dictation.active, dictation.levelRef, dictation.toggle, dictation.stop, dictation.finish, dictation.cancel, shown, docked]);
 	useEffect(() => () => publishBarDictation(null), []);
+	// The Bar lives in one host element for good. Docked, the host moves into the thread page's dock slot (the page's composer position); otherwise it sits
+	// in this component's own mount point. Moving a DOM node keeps the React tree as is: composer sending state, attachments and the switcher survive.
+	const mountRef = useRef<HTMLDivElement | null>(null);
+	const [host, setHost] = useState<HTMLElement | null>(null);
+	useLayoutEffect(() => {
+		const el = document.createElement("div");
+		el.className = "contents";
+		mountRef.current?.appendChild(el);
+		setHost(el);
+		return () => el.remove();
+	}, []);
+	const placed = useRef(false);
+	useLayoutEffect(() => {
+		if (!host) return;
+		const to = docked && dockSlot ? dockSlot : mountRef.current;
+		if (!to || host.parentNode === to) return;
+		// FLIP: slide from where the bar was to where it lands (only on a real dock/undock, never on the first placement or under reduced motion).
+		const el = wrapRef.current;
+		const from = placed.current && el ? el.getBoundingClientRect() : null;
+		placed.current = true;
+		to.appendChild(host);
+		if (!el || !from || typeof el.animate !== "function" || (typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) return;
+		const now = el.getBoundingClientRect();
+		const dx = from.left - now.left;
+		const dy = from.top - now.top;
+		if (Math.abs(dx) > 1 || Math.abs(dy) > 1) el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0, 0)" }], { duration: 200, easing: "ease-out" });
+	}, [host, docked, dockSlot]);
+	// Space dictation needs the attached thread (the autosend is addressed to it) and its composer's draft (typed text means Space is typing).
+	useEffect(() => {
+		setSpaceContext(() => {
+			const a = live.current.attached;
+			if (!a) return null;
+			const field = document.querySelector<HTMLTextAreaElement>("[data-chat-composer] textarea");
+			return { thread: { wolf: a.wolf, threadId: a.threadId }, draft: field ? field.value : readDraft(draftKey(a.wolf, a.threadId)) };
+		});
+		return () => setSpaceContext(null);
+	}, []);
 
 	// Docking is automatic and never clears the attachment: on the attached thread's own page the page composer IS the chat
 	// (this bar renders nothing there), on any other thread page the bar floats with a swap pill, elsewhere it floats as is.
@@ -191,9 +221,17 @@ export function ChatBar() {
 		const onFocus = (e: Event) => {
 			const kev = (e as CustomEvent<{ event?: KeyboardEvent }>).detail?.event;
 			const l = live.current;
-			// On its own page the page composer is always the input (dictating included).
+			// Nothing attached: the icon is the chat; focus it (Enter opens it).
+			if (!l.attached) {
+				const icon = document.querySelector('[data-testid="chat-bar-expand"]') as HTMLElement | null;
+				if (!icon) return;
+				kev?.preventDefault();
+				icon.focus();
+				return;
+			}
+			// On its own page the docked bar is the input; the page's own composer only when the bar is not docked there (no slot).
 			if (l.onOwn) {
-				const page = document.querySelector('[data-testid="composer"] textarea') as HTMLTextAreaElement | null;
+				const page = (document.querySelector('[data-testid="chat-bar"] textarea') ?? document.querySelector('[data-testid="composer"] textarea')) as HTMLTextAreaElement | null;
 				if (!page) return;
 				kev?.preventDefault();
 				page.focus();
@@ -210,7 +248,7 @@ export function ChatBar() {
 			if (!BAR_EXTRAS.switcher || !l.attached || !l.wide || l.onOwn || l.vizAttached) return;
 			kev?.preventDefault();
 			if (l.minimized) l.setMinimized?.(false);
-			setSwitcher(true);
+			setSwitcher(l.attached.wolf);
 		};
 		window.addEventListener(kbdEventForAction("focus-chat-bar"), onFocus);
 		window.addEventListener(kbdEventForAction("chat-bar-switcher"), onSwitcher);
@@ -241,6 +279,47 @@ export function ChatBar() {
 			root.style.removeProperty("--chat-bar-reserve");
 		};
 	}, [full, scrolls, wide, attached?.wolf, attached?.threadId]);
+
+	// --chat-bar-top: how far the top of the bar (swap pill included, plus the bar's own bottom offset) sits above the viewport bottom,
+	// so other pages (the graph controls) can sit above it. 0px with no bar; written once per frame; removed on cleanup.
+	const hasSwap = !!swap;
+	useLayoutEffect(() => {
+		const root = document.documentElement;
+		if (!shown || !wrapRef.current) {
+			root.style.removeProperty("--chat-bar-top");
+			return;
+		}
+		const el = wrapRef.current;
+		const set = () => {
+			if (el.dataset.state === "sheet") return void root.style.removeProperty("--chat-bar-top");
+			const pill = el.querySelector<HTMLElement>('[data-testid="chat-bar-swap-wrap"]');
+			const top = Math.min(el.getBoundingClientRect().top, pill ? pill.getBoundingClientRect().top : Infinity);
+			root.style.setProperty("--chat-bar-top", `${Math.max(0, Math.ceil(window.innerHeight - top))}px`);
+		};
+		set();
+		let frame = 0;
+		const schedule = () => {
+			if (frame) return;
+			frame = requestAnimationFrame(() => {
+				frame = 0;
+				set();
+			});
+		};
+		const ro = new ResizeObserver(schedule);
+		ro.observe(el);
+		const vv = window.visualViewport;
+		vv?.addEventListener("resize", schedule);
+		vv?.addEventListener("scroll", schedule);
+		window.addEventListener("resize", schedule);
+		return () => {
+			if (frame) cancelAnimationFrame(frame);
+			ro.disconnect();
+			vv?.removeEventListener("resize", schedule);
+			vv?.removeEventListener("scroll", schedule);
+			window.removeEventListener("resize", schedule);
+			root.style.removeProperty("--chat-bar-top");
+		};
+	}, [shown, minimized, wide, hasSwap, attached?.wolf, attached?.threadId]);
 
 	// Over another thread's page: that page's dock (sub-agent strip, pinned strip) pads its bottom by the bar's real height
 	// (--chat-bar-over, read in thread-chat.tsx) so nothing of it peeks out under or behind the bar.
@@ -313,7 +392,7 @@ export function ChatBar() {
 	// Focus returns to the chip; after a pick the re-keyed Bar has a NEW chip, so the focus waits for it.
 	const refocus = useRef(false);
 	const closeSwitcher = useCallback(() => {
-		setSwitcher(false);
+		setSwitcher(null);
 		refocus.current = true;
 		chipRef.current?.focus();
 	}, []);
@@ -326,7 +405,7 @@ export function ChatBar() {
 	// A hidden bar closes its switcher (it must not reappear on return); and the input chunk preloads when idle,
 	// so a cold Cmd+J finds the textarea.
 	useEffect(() => {
-		if (!shown) setSwitcher(false);
+		if (!shown) setSwitcher(null);
 	}, [shown]);
 	useEffect(() => {
 		if (!attached) return;
@@ -336,8 +415,39 @@ export function ChatBar() {
 	// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on whether a thread is attached, not on the attached object identity
 	}, [!!attached]);
 
-	if (!api || !attached || own || dockless) return null;
-	return <Bar key={`${attached.wolf}/${attached.threadId}`} swap={swap} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
+	const content = (() => {
+		if (!api || hidden) return null;
+		// Nothing attached (a fresh browser, the hub down): the icon is still on every page; a press attaches the owner's home thread.
+		if (!attached) return <DetachedIcon phone={!wide} dictation={dictation} />;
+		// The attached thread's own page: the page composer is the chat there.
+		if (own && !dockSlot) return null;
+		if (!host) return null;
+		// ALWAYS the same portal into the same host element: docking moves the host in the DOM (effect above), never the React tree, so the Bar is not remounted.
+		return createPortal(<Bar key={`${attached.wolf}/${attached.threadId}`} docked={docked} swap={swap} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />, host);
+	})();
+	return <div ref={mountRef} className="contents">{content}</div>;
+}
+
+/** The icon with nothing attached: it opens the owner's home thread (the bar attaches it) when there is one. */
+function DetachedIcon({ phone, dictation }: { phone: boolean; dictation: Dictation }) {
+	const api = useAttachedThread()!;
+	const needsYou = api.groups.reduce((n, g) => n + g.needsYou, 0);
+	return (
+		<BarIcon
+			phone={phone}
+			label={needsYou > 0 ? `Open chat (${needsYou} waiting for you)` : "Open chat"}
+			color="var(--border)"
+			wolfStatus="online"
+			needsYou={needsYou}
+			working={false}
+			dictation={dictation}
+			onExpand={() => {
+				const home = pickHomeThread(api.wolves, api.threads);
+				if (home) api.attach(home);
+				api.setMinimized(false);
+			}}
+		/>
+	);
 }
 
 export function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttachedThread>>, a: AttachedRef): string {
@@ -348,7 +458,9 @@ export function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttach
 /** A downward swipe of at least this many px on the sheet's handle closes it. */
 const SWIPE_CLOSE_PX = 60;
 
-function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
+function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
+	/** In the thread page's dock slot: static, full width of the slot, not floating. */
+	docked?: boolean;
 	dictation: Dictation;
 	registerAppend: (fn: ((t: string) => void) | null) => void;
 	target: AttachedRef;
@@ -357,12 +469,14 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 	phone: boolean;
 	wrapRef: React.RefObject<HTMLDivElement | null>;
 	chipRef: React.RefObject<HTMLButtonElement | null>;
-	switcher: boolean;
-	setSwitcher: (v: boolean | ((s: boolean) => boolean)) => void;
+	switcher: string | null;
+	setSwitcher: (v: string | null | ((s: string | null) => string | null)) => void;
 	closeSwitcher: () => void;
 }) {
 	const api = useAttachedThread()!;
 	const { setMinimized, working, attachedThread, groups } = api;
+	// Images dropped on the bar (floating or docked) attach through the composer (bar-drop.ts); `dropping` lights the bar up.
+	const { dropping, props: dropProps } = useBarDrop(docked);
 	const minimized = api.minimized && !swap;
 	const needsYouTotal = groups.reduce((n, g) => n + g.needsYou, 0);
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
@@ -493,7 +607,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 	};
 	const hasSurface = (BAR_EXTRAS.cards || BAR_EXTRAS.peek) && (cards.pending.length > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error);
 
-	// Visualization mode: chat and questionnaires only (no needs-you badge, no thread switcher), and on the phone the dock sits over the viewer's full-screen sheet (z-60).
+	// Visualization mode: chat and questionnaires only (no needs-you badge, no thread switcher), and on the phone the dock sits over the viewer's full-screen sheet (z-40).
 	const vizActive = useVizActive();
 	const vizOn = !!vizActive && vizActive.wolf === target.wolf && vizActive.threadId === target.threadId;
 	const badge = BAR_EXTRAS.badge && !vizOn && (waiting.length > 0 || approvals.length > 0) ? <NeedsYouBadge waiting={waiting} all={all} approvals={approvals} /> : null;
@@ -518,14 +632,14 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 			type="button"
 			data-testid="chat-bar-chip"
 			aria-haspopup={BAR_EXTRAS.switcher ? "dialog" : undefined}
-			aria-expanded={BAR_EXTRAS.switcher ? switcher : undefined}
-			onClick={() => (BAR_EXTRAS.switcher ? (vizOn ? undefined : setSwitcher((s) => !s)) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
-			className={cn("flex items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-11 max-w-[60vw]" : "max-w-56")}
+			aria-expanded={BAR_EXTRAS.switcher ? switcher !== null : undefined}
+			onClick={() => (BAR_EXTRAS.switcher ? (vizOn ? undefined : setSwitcher((s) => (s ? null : target.wolf))) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
+			className={cn("flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-11 max-w-[60vw]" : "max-w-56")}
 			title={`${target.wolf} · ${title}`}
 		>
 			<span data-testid="chat-bar-dot" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
 			<span className="truncate">{title}</span>
-			<span className="text-muted-foreground">{target.wolf}</span>
+			<span className="shrink-0 truncate text-muted-foreground max-w-20">{target.wolf}</span>
 			{working && <BrailleSpinner />}
 			{dictation.active && <MicIcon data-testid="chat-bar-listening" className="size-3 shrink-0 text-red-500" />}
 		</button>
@@ -539,29 +653,27 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 	const pageAsk = useSyncExternalStore(subscribePagePending, () => (swap ? hasPagePendingAsk(swap.wolf, swap.threadId) : false), () => false);
 	const swapNeedsYou = swapThread?.status === "needs-you" || pageAsk;
 	const swapLabel = swapNeedsYou ? `Answer ${swapTitle}` : `Swap to ${swapTitle}`;
+	// Desktop: centred on the page column (the thread chat column, else main). A narrow column is compact: the secondary controls move into a ... menu.
+	const col = useColumnRect();
+	const geo = barGeometry({ colLeft: col.left, colWidth: col.width, viewportWidth: (typeof window === "undefined" ? 0 : window.innerWidth) || 1280 });
+	const compact = !phone && geo.compact;
 	// Not while a send's POST is in flight: a failed send puts the text back into this bar's composer, which a swap would have unmounted.
 	// Narrow gap left: if the attachment changes elsewhere (another tab/wolf) mid-send, the keyed Bar remounts and `sending` resets.
 	const [sending, setSending] = useState(false);
-	// A pill above the send button, on the right: one tap attaches to the thread whose page is open, and the bar steps aside for that page's own composer.
-	const swapPill = swap && !minimized ? (
-		<div data-testid="chat-bar-swap-wrap" className={cn("pointer-events-none absolute bottom-full z-10 mb-2 flex justify-end", phone ? "right-3" : "right-2")}>
-			<Hint label={swapLabel}>
-				<button
-					type="button"
-					data-testid="chat-bar-swap"
-					data-needs-you={swapNeedsYou ? "true" : undefined}
-					aria-label={swapLabel}
-					disabled={sending}
-					aria-busy={sending || undefined}
-					onClick={() => void (!sending && afterBarDictation(() => api.attach({ wolf: swap.wolf, threadId: swap.threadId, slug: swap.slug })))}
-					className={cn("pointer-events-auto flex max-w-[16rem] items-center gap-1.5 rounded-full border bg-card px-3 py-1.5 font-ui text-xs shadow-md transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60 motion-reduce:transition-none motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-200", swapNeedsYou && "border-amber-500/40 text-amber-600 dark:text-amber-400", phone && "min-h-11")}
-				>
-					{swapNeedsYou ? <MessageCircleQuestionIcon aria-hidden className="size-3.5 shrink-0" /> : <ArrowLeftRightIcon aria-hidden className="size-3.5 shrink-0" />}
-					<span className="truncate">{swapLabel}</span>
-				</button>
-			</Hint>
-		</div>
-	) : null;
+	// The swap control is the attached wolf's den button (den-strip.tsx): over another thread's page it shows the swap icon, and a tap attaches that page's thread (the bar docks into it).
+	// Leaving for a thread's page (the sheet's footer) waits for a running dictation, so its words land in the draft. Visualization mode is the stored per-thread choice the page reads on arrival.
+	const leave = (wolf: string, threadId: string, viz: boolean) =>
+		afterBarDictation(() => {
+			setSwitcher(null); // the tree stays open until the run has finished and the page opens
+			if (viz) setVizMode(wolf, threadId, true);
+			router.push(threadHref(wolf, threadId));
+		});
+	const treeItems = useNeedsYouItems(switcher !== null);
+	const tree = (phone: boolean) => (BAR_EXTRAS.switcher && switcher && !vizOn ? <ContextTree key={switcher} wolf={switcher} items={treeItems} phone={phone} onClose={closeSwitcher} onLeave={leave} /> : null);
+	const phoneTree = tree(true);
+	const deskTree = tree(false);
+	const denSwap = swap ? { wolf: target.wolf, label: swapLabel, needsYou: swapNeedsYou, busy: sending } : null;
+	const onDenSwap = () => void (swap && !sending && afterBarDictation(() => api.attach({ wolf: swap.wolf, threadId: swap.threadId, slug: swap.slug })));
 
 	// Collapsed: a small draggable icon on every screen size. It keeps the bar's `chat-bar` test id and "minimized" state; over another thread's page the bar never collapses (`minimized` is false then), because the swap pill is the way to type there.
 	if (minimized) {
@@ -585,19 +697,23 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 		const asSheet = sheet && !minimized;
 		return (
 			<>
-			{asSheet && <button type="button" tabIndex={-1} aria-label="Close chat" data-testid="bar-sheet-backdrop" onClick={() => setSheet(false)} className="fixed inset-0 z-[69] bg-black/40" />}
+			{asSheet && <button type="button" tabIndex={-1} aria-label="Close chat" data-testid="bar-sheet-backdrop" onClick={() => setSheet(false)} className={`fixed inset-0 ${ZC.chatBackdrop} bg-black/40`} />}
 			<div
 				ref={wrapRef}
 				data-testid="chat-bar"
 				data-layout="dock"
+				data-dropping={dropping ? "true" : undefined}
+				{...dropProps}
 				data-state={minimized ? "minimized" : sheet ? "sheet" : "open"}
 				{...(sheet && !minimized ? { role: "dialog", "aria-modal": true, "aria-label": `Chat with ${title}` } : {})}
-				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? cn("z-[70]", askCard ? "" : "rounded-t-2xl") : vizOn ? "z-[65]" : "z-30")}
+				// Docked in the thread page's slot (not a sheet): the dock is a static block that takes its own height in the page, so the last messages are never under it.
+				className={cn("flex flex-col border-t bg-card shadow-lg", dropping && "ring-2 ring-inset ring-(color:--thread-accent)", docked && !sheet ? "relative w-full" : "fixed inset-x-0", sheet ? cn(ZC.chatSheet, askCard ? "" : "rounded-t-2xl") : docked ? "" : ZC.chatBar)}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
-				style={{ bottom: inset, paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
+				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
 			>
-				{!sheet && swapPill}
+				{!sheet && phoneTree}
+				{!sheet && !minimized && !vizOn && <DenStrip swap={denSwap} onSwap={onDenSwap} open={BAR_EXTRAS.switcher ? switcher : null} setOpen={setSwitcher} />}
 				{!sheet && !minimized && sheetCard && <div data-testid="bar-ask-inline" className="flex min-h-0 shrink-0 flex-col px-2 pb-1 pt-2">{sheetCard}</div>}
 				{sheet && !minimized && (
 					<div
@@ -659,39 +775,60 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 						</Hint>
 					</div>
 				</div>
-				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer phone target={target} onSending={setSending} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
-				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
+				{sheet && phoneTree}
+				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer phone docked={docked} target={target} onSending={setSending} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
 			</div>
 			</>
 		);
 	}
 
+	// The header's secondary controls: inline on a wide column, inside the ⋯ menu on a narrow one (where the swap pill joins them).
+	const deskControls = (
+		<>
+			<BarEyeButton wolf={target.wolf} threadId={target.threadId} />
+			<BarSettings wolf={target.wolf} slug={target.slug} phone={false} buttonClass="rounded-md p-1 text-muted-foreground hover:bg-accent" />
+			{!swap && (
+				<Hint label="Minimize">
+					<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="rounded-md p-1 text-muted-foreground hover:bg-accent">
+						<ChevronDownIcon className="size-4" />
+					</button>
+				</Hint>
+			)}
+			{compact && swap && (
+				<Hint label={swapLabel}>
+					<button
+						type="button"
+						data-testid="chat-bar-swap"
+						data-needs-you={swapNeedsYou ? "true" : undefined}
+						aria-label={swapLabel}
+						disabled={sending}
+						onClick={() => void (!sending && afterBarDictation(() => api.attach({ wolf: swap.wolf, threadId: swap.threadId, slug: swap.slug })))}
+						className={cn("rounded-md p-1 text-muted-foreground hover:bg-accent", swapNeedsYou && "text-amber-600 dark:text-amber-400")}
+					>
+						{swapNeedsYou ? <MessageCircleQuestionIcon aria-hidden className="size-4" /> : <ArrowLeftRightIcon aria-hidden className="size-4" />}
+					</button>
+				</Hint>
+			)}
+		</>
+	);
+
 	return (
-		<div ref={wrapRef} data-testid="chat-bar" data-state="open" className="fixed bottom-3 left-1/2 z-30 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2">
-			{swapPill}
+		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-dropping={dropping ? "true" : undefined} {...dropProps} data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={docked ? undefined : { left: geo.left, width: geo.width }}>
+			{!vizOn && <DenStrip swap={denSwap} onSwap={onDenSwap} open={BAR_EXTRAS.switcher ? switcher : null} setOpen={setSwitcher} />}
 			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>
 				{sheetCard}
 				{hasSurface && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
 			</div>
-			<div className={cn("relative rounded-2xl border bg-card shadow-lg", askCard && session.expanded ? "rounded-t-none border-t-0" : "focus-within:ring-1 focus-within:ring-(color:--thread-accent)")} style={composing ? undefined : { borderColor: color }}>
+			<div className={cn("relative rounded-2xl border bg-card shadow-lg motion-safe:transition-shadow", dropping && "ring-2 ring-(color:--thread-accent)", askCard && session.expanded ? "rounded-t-none border-t-0" : "focus-within:ring-1 focus-within:ring-(color:--thread-accent)")} style={composing ? undefined : { borderColor: color }}>
+				{deskTree}
 				{chipRow}
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}
 					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
-					<div className="ml-auto flex items-center gap-0.5">
-						<BarSettings wolf={target.wolf} slug={target.slug} phone={false} buttonClass="rounded-md p-1 text-muted-foreground hover:bg-accent" />
-						{!swap && (
-							<Hint label="Minimize">
-								<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="rounded-md p-1 text-muted-foreground hover:bg-accent">
-									<ChevronDownIcon className="size-4" />
-								</button>
-							</Hint>
-						)}
-					</div>
+					<div className="ml-auto flex items-center gap-0.5">{compact ? <BarOverflow>{deskControls}</BarOverflow> : deskControls}</div>
 				</div>
-				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} onSending={setSending} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />}
-				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
+				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer docked={docked} target={target} onSending={setSending} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />}
 			</div>
 		</div>
 	);
@@ -797,113 +934,5 @@ export function NeedsYouBadge({ waiting, all, approvals }: { waiting: (BarThread
 				</button>
 			))}
 		</span>
-	);
-}
-
-/**
- * The wolf and thread switcher, opened from the chip (the wolf's name): wolves with status dots and their threads, the ones waiting on the owner first with an amber count.
- * A compact popover on desktop, a bottom sheet (rows of at least 44px) on the phone. A dialog: focus moves in, arrows walk the entries, Esc / outside click close and return focus to the chip.
- * The footer opens the attached wolf's visualizations, and the attached thread's own page.
- */
-export function Switcher({ groups: liveGroups, current, onClose, sheet = false }: { groups: SwitcherGroup[]; current: Pick<AttachedRef, "wolf" | "threadId">; onClose: () => void; sheet?: boolean }) {
-	// The order is frozen while it is open (nothing jumps under the pointer); statuses and counts stay live, and the next open re-sorts.
-	const [frozen] = useState(() => switcherOrder(liveGroups));
-	const groups = useMemo(() => inFrozenOrder(liveGroups, frozen), [liveGroups, frozen]);
-	const api = useAttachedThread();
-	const router = useRouter();
-	const frames = useFrameBadges(current.wolf, current.threadId);
-	const ref = useRef<HTMLDivElement | null>(null);
-	const items = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-testid="switcher-entry"], [data-testid="switcher-action"]:not(:disabled)') ?? []);
-	useEffect(() => {
-		const list = items();
-		(list.find((b) => b.getAttribute("aria-current") === "true") ?? list[0] ?? ref.current)?.focus();
-		const onDown = (e: MouseEvent) => {
-			const t = e.target as Node | null;
-			if (!t || ref.current?.contains(t)) return;
-			if ((t as HTMLElement).closest?.('[data-testid="chat-bar-chip"]')) return; // the chip toggles it
-			onClose();
-		};
-		document.addEventListener("mousedown", onDown);
-		return () => document.removeEventListener("mousedown", onDown);
-	// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only listener: the parent's closeSwitcher is a useCallback with [] deps, so the mount-render onClose never goes stale
-	}, []);
-	const onKeyDown = (e: React.KeyboardEvent) => {
-		if (e.key === "Escape") {
-			e.preventDefault();
-			e.stopPropagation();
-			onClose();
-			return;
-		}
-		if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-		e.preventDefault();
-		const list = items();
-		if (list.length === 0) return;
-		const i = list.indexOf(document.activeElement as HTMLElement);
-		list[(i + (e.key === "ArrowDown" ? 1 : -1) + list.length) % list.length]!.focus();
-	};
-	const row = cn("flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none", sheet && "min-h-11");
-	// Leaving for the thread page waits for a running dictation to finish first (so its words land in the draft), like the chip used to.
-	const threadHere = (vizOn = false) =>
-		afterBarDictation(() => {
-			// Visualization mode is the stored per-thread choice; the thread page reads it on arrival (viz-mode.ts).
-			if (vizOn) setVizMode(current.wolf, current.threadId, true);
-			onClose();
-			router.push(threadHref(current.wolf, current.threadId));
-		});
-	const visualizations = () => threadHere(true);
-	return (
-		<>
-		{sheet && <button type="button" tabIndex={-1} aria-label="Close" data-testid="switcher-backdrop" onClick={onClose} className="fixed inset-0 z-[49] bg-black/40 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200" />}
-		<div ref={ref} role="dialog" aria-label="Switch wolf or thread" tabIndex={-1} onKeyDown={onKeyDown} data-testid="chat-bar-switcher" data-layout={sheet ? "sheet" : "popover"} className={cn("z-50 overflow-y-auto border bg-popover/95 p-1 outline-none backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150", sheet ? "fixed inset-x-0 bottom-0 max-h-[70dvh] rounded-t-2xl border-b-0 pb-[env(safe-area-inset-bottom)] shadow-2xl motion-safe:slide-in-from-bottom-4" : "absolute bottom-full left-0 z-40 mb-2 max-h-80 w-72 rounded-xl shadow-lg motion-safe:zoom-in-95")}>
-			{sheet && (
-				<div className="flex min-h-11 items-center justify-between">
-					<span aria-hidden className="ml-2 h-1 w-10 rounded-full bg-muted-foreground/40" />
-					<button type="button" aria-label="Close" data-testid="switcher-close" onClick={onClose} className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-muted-foreground hover:bg-accent">
-						<ChevronDownIcon className="size-5" />
-					</button>
-				</div>
-			)}
-			{groups.length === 0 && <p className="px-2 py-2 text-xs text-muted-foreground">No threads yet.</p>}
-			{groups.map((g) => (
-				<div key={g.wolf} role="group" aria-label={g.wolf} data-testid="switcher-group" data-wolf={g.wolf} data-needs-you={g.needsYou > 0 ? g.needsYou : undefined}>
-					<p className="flex items-center gap-1.5 px-2 pt-1.5 font-ui text-[10px] uppercase tracking-wide text-muted-foreground">
-						<span role="img" aria-label={g.status === "offline" ? "offline" : "online"} data-testid="switcher-wolf-dot" data-status={g.status} className={cn("size-1.5 shrink-0 rounded-full", g.status === "offline" ? "bg-muted-foreground/40" : "bg-emerald-500")} />
-						<span className="min-w-0 flex-1 truncate">{g.wolf}</span>
-						{g.needsYou > 0 && <span data-testid="switcher-wolf-count" aria-label={`${g.needsYou} waiting for you`} className="rounded-full bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">{g.needsYou}</span>}
-					</p>
-					{g.entries.map((e) => (
-						<button
-							key={e.threadId}
-							type="button"
-							data-testid="switcher-entry"
-							data-thread={e.threadId}
-							data-status={e.status}
-							aria-current={e.wolf === current.wolf && e.threadId === current.threadId ? "true" : undefined}
-							onClick={() => {
-								api?.attach({ wolf: e.wolf, threadId: e.threadId, slug: e.slug });
-								onClose();
-							}}
-							className={cn(row, e.wolf === current.wolf && e.threadId === current.threadId && "bg-accent")}
-						>
-							<span className="min-w-0 flex-1 truncate">{e.title}</span>
-							{e.needsYou && <span role="img" aria-label="waiting on you" data-testid="switcher-entry-waiting" className="size-2 shrink-0 rounded-full bg-amber-500" />}
-							{!e.needsYou && e.status === "busy" && <BrailleSpinner />}
-						</button>
-					))}
-				</div>
-			))}
-			<div role="group" aria-label="Actions" className="mt-1 border-t pt-1">
-				<button type="button" data-testid="switcher-action" data-action="visualizations" disabled={frames.length === 0} onClick={visualizations} className={cn(row, "disabled:opacity-40")}>
-					<EyeIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-					<span className="min-w-0 flex-1 truncate">Open visualizations</span>
-					{frames.length > 0 && <span className="font-ui text-[10px] text-muted-foreground">{frames.length}</span>}
-				</button>
-				<button type="button" data-testid="switcher-action" data-action="open-thread" onClick={() => threadHere()} className={row}>
-					<MessageSquareIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-					<span className="min-w-0 flex-1 truncate">Open thread page</span>
-				</button>
-			</div>
-		</div>
-		</>
 	);
 }

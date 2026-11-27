@@ -37,12 +37,15 @@ type Call = { url: string; body?: any };
 let calls: Call[] = [];
 let status: "idle" | "busy" = "idle";
 let bNeedsYou = false; // thread w/b waits on the owner
+let secondWolfDown = false; // a second wolf is listed but its thread list does not load yet (the lists are incomplete)
+let noHome = false; // the wolf has no home thread: nothing to auto-attach
 let holdSubmit: Promise<void> | null = null; // a send's POST stays in flight until this settles
 let archived = false;
 let kids: object[] = [];
 let gets: string[] = [];
 const handlers = new Map<string, (d: string) => void>();
-const fakeSource = () => ({ close() {}, onOpen() {}, onEvent: (n: string, cb: (d: string) => void) => void handlers.set(n, cb) });
+let fireOpen: (() => void) | null = null; // the event source's (re)open: the app's resync
+const fakeSource = () => ({ close() {}, onOpen: (cb: () => void) => void (fireOpen = cb), onEvent: (n: string, cb: (d: string) => void) => void handlers.set(n, cb) });
 const emit = (n: string, d: object) => act(async () => void handlers.get(n)?.(JSON.stringify(d)));
 const realFetch = globalThis.fetch;
 const th = (id: string, extra: object = {}) => ({ id, title: id, kind: "feature", status, ...extra });
@@ -55,8 +58,9 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	}
 	if (init?.method !== "POST") gets.push(url);
 	if (url.endsWith("/threads/a/children")) return Response.json({ threads: kids });
-	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
-	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a", archived ? { closed: true } : {}), th("w/b", bNeedsYou ? { status: "needs-you" } : {})] });
+	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }, ...(secondWolfDown ? [{ name: "v" }] : [])] });
+	if (url === "/api/wolves/v/threads") return secondWolfDown ? new Response("{}", { status: 503 }) : Response.json({ threads: [] });
+	if (url === "/api/wolves/w/threads") return Response.json({ threads: [...(noHome ? [] : [th("w/home", { kind: "home" })]), th("w/a", archived ? { closed: true } : {}), th("w/b", bNeedsYou ? { status: "needs-you" } : {})] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
 
@@ -106,6 +110,9 @@ afterEach(async () => {
 	calls = [];
 	status = "idle";
 	bNeedsYou = false;
+	noHome = false;
+	secondWolfDown = false;
+	fireOpen = null;
 	holdSubmit = null;
 	archived = false;
 	kids = [];
@@ -123,15 +130,36 @@ function AttachHere() {
 }
 
 describe("ChatBar", () => {
-	it("renders nothing and reserves no space with nothing popped out, and clears the old home-wolf default", async () => {
+	it("with nothing attached the owner's home thread attaches on its own, and the old home-wolf default is cleared", async () => {
 		mem.set("wolfpack:chatbar:attached", JSON.stringify(A));
 		mem.set("wolfpack:chatbar:home-wolf", "w");
 		await mount("/kb");
-		assert.equal(q('[data-testid="chat-bar"]'), null);
-		assert.equal(document.documentElement.style.getPropertyValue("--chat-bar-reserve"), "");
-		assert.equal(mem.get(ATTACHED_KEY), undefined);
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/home");
+		assert.ok(q('[data-testid="chat-bar"]'), "the bar is on the page");
 		assert.equal(mem.get("wolfpack:chatbar:attached"), undefined);
 		assert.equal(mem.get("wolfpack:chatbar:home-wolf"), undefined);
+	});
+
+	it("a home thread that shows up after an incomplete first load still gets attached", async () => {
+		noHome = true;
+		secondWolfDown = true;
+		await mount("/kb");
+		assert.equal(mem.get(ATTACHED_KEY), undefined, "no home thread yet and a list is missing: nothing decided");
+		noHome = false;
+		secondWolfDown = false;
+		dataStore.clear();
+		await act(async () => void fireOpen?.());
+		await wait();
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/home");
+	});
+
+	it("is on /chat/new and hidden on the pairing page", async () => {
+		await mount("/chat/new", A);
+		assert.ok(q('[data-testid="chat-bar"]'), "the new-chat page keeps the bar");
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		await mount("/pair", A);
+		assert.equal(q('[data-testid="chat-bar"]'), null, "no console to chat from before sign-in");
 	});
 
 	it("with the extras off the bar fetches no cards, reply peek or needs-you list", async () => {
@@ -220,7 +248,7 @@ describe("ChatBar", () => {
 		}
 		await mount("/kb", A, <Path />);
 		await click(q('[data-testid="chat-bar-chip"]'));
-		await click(q('[data-testid="switcher-action"][data-action="open-thread"]'));
+		await click((q('[data-testid="den-thread"][aria-current="true"]')!.closest('[data-testid="den-thread-group"]')!.querySelector('[data-testid="den-thread-open"]') as HTMLElement));
 		await wait();
 		assert.equal(q('[data-testid="path"]')?.textContent, "/wolf/w/thread/a");
 		assert.equal(q('[data-testid="chat-bar"]'), null);
@@ -233,7 +261,8 @@ describe("ChatBar", () => {
 		it("shows 'Swap to <thread>' on a mismatch only; none on the attached page or a non-thread page", async () => {
 			await mount("/wolf/w/thread/b", A);
 			assert.equal(swap()?.getAttribute("aria-label"), "Swap to w/b");
-			assert.match(swap()!.textContent ?? "", /Swap to w\/b/);
+			assert.equal(q('[data-testid="chat-bar-swap-wrap"]'), null, "the separate Swap pill is gone: the den button is the control");
+			assert.equal(swap()?.getAttribute("data-swap"), "true");
 			assert.equal(document.querySelectorAll('[data-testid="chat-bar"]').length, 1);
 			await act(async () => root?.unmount());
 			document.body.innerHTML = "";
@@ -257,7 +286,6 @@ describe("ChatBar", () => {
 			await mount("/wolf/w/thread/b", A);
 			assert.equal(swap()?.getAttribute("aria-label"), "Answer w/b");
 			assert.equal(swap()?.getAttribute("data-needs-you"), "true");
-			assert.match(swap()!.textContent ?? "", /^Answer w\/b$/);
 			await click(swap());
 			await wait();
 			assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/b");
@@ -335,7 +363,7 @@ describe("ChatBar behaviours", () => {
 		}
 	});
 
-	it("Cmd+J answers (and claims the key) only when the bar is shown", async () => {
+	it("Cmd+J answers (and claims the key) when the bar or its icon is on the page", async () => {
 		const press = (name: string) => {
 			let prevented = false;
 			window.dispatchEvent(new dom.window.CustomEvent(name, { detail: { event: { preventDefault: () => void (prevented = true) } } }));
@@ -349,9 +377,10 @@ describe("ChatBar behaviours", () => {
 		await act(async () => root?.unmount());
 		document.body.innerHTML = "";
 		mem.clear();
-		await mount("/kb"); // nothing popped out: no bar, Cmd+J does nothing
-		assert.equal(q('[data-testid="chat-bar"]'), null);
-		assert.equal(press("wolfpack:kbd-focus-chat-bar"), false);
+		noHome = true;
+		await mount("/kb"); // nothing attached and no home thread to attach: only the icon, Cmd+J does nothing
+		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "minimized");
+		assert.equal(press("wolfpack:kbd-focus-chat-bar"), true, "Cmd+J focuses the icon (Enter opens it)");
 	});
 
 	it("Cmd+J on the popped-out thread's own page focuses the page composer", async () => {
@@ -450,7 +479,7 @@ describe("real keydown through KeyboardShortcuts", () => {
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
 		await keydown({ key: "j", metaKey: true, shiftKey: true });
 		await wait();
-		assert.equal(q('[data-testid="chat-bar-switcher"]')?.getAttribute("data-layout"), "popover");
+		assert.equal(q('[data-testid="den-sheet"]')?.getAttribute("data-layout"), "inline");
 	});
 	it("Cmd+J is left to the browser with nothing attached", async () => {
 		await mountWithKeys("/kb");

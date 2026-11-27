@@ -23,6 +23,7 @@ import { openWorkItem } from "@/components/work/work-reader-nav";
 import { useOpenView } from "@/components/viewer/viewer-context";
 import { featureThreadWolves, findLibrarian, resolveWork, threadHref, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 import { shortWorkId, workIdDomain } from "@/src/core";
+import { ZC } from "@/lib/z-layers";
 
 // ─── Lookup + cache ──────────────────────────────────────────────────────────
 
@@ -415,7 +416,7 @@ function InteractiveChip({ id, short }: { id: string; short: string }) {
 						tabIndex={-1}
 						aria-label={`Work item ${id}`}
 						data-testid="work-card"
-						className="fixed z-50 w-80 rounded-lg border border-border bg-popover p-3 text-sm text-popover-foreground shadow-lg outline-none"
+						className={`fixed ${ZC.menu} w-80 rounded-lg border border-border bg-popover p-3 text-sm text-popover-foreground shadow-lg outline-none`}
 						style={{ left: pos.left, top: pos.top }}
 						onMouseEnter={() => clearTimeout(timer.current)}
 						onMouseLeave={() => scheduleHover(false, HOVER_CLOSE_MS)}

@@ -132,7 +132,7 @@ const bottomComposers = () => qa('[data-testid="composer"]').filter((f) => !f.cl
 const sendBtn = () => q('[data-testid="composer"] button[type="submit"]')!;
 const switchTo = async (id: string) => {
 	await click(q('[data-testid="chat-bar-chip"]'));
-	await click(qa('[data-testid="switcher-entry"]').find((e) => e.getAttribute("data-thread") === id)!);
+	await click(qa('[data-testid="den-thread"]').find((e) => e.getAttribute("data-thread") === id)!);
 	await flush();
 };
 
@@ -626,6 +626,7 @@ describe("ChatBar chip row", () => {
 
 	it("keeps the frame chip and the needs-you badge in one row inside the bar's surface, above the header, with and without an open card", async () => {
 		mem.set("wolfpack:frames:w/a", JSON.stringify([{ objectId: "f1", path: "a.html", title: "Viewer step 3c: frame polish", rev: 1 }]));
+		mem.set("wolfpack:bar-eye-open", "1"); // the eye is closed by default; this row is the open state
 		threadStatus = { "w/b": "needs-you" };
 		await mount();
 		for (const withCard of [false, true]) {

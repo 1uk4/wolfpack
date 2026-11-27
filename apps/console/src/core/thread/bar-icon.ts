@@ -43,11 +43,13 @@ export function clampIconPos(pos: IconPos, vp: Viewport, insets: Insets = NO_INS
 	return { x: Math.min(b.maxX, Math.max(b.minX, pos.x)), y: Math.min(b.maxY, Math.max(b.minY, pos.y)) };
 }
 
-/** Where the icon sits before the owner moves it: the bottom-right corner. */
-export function defaultIconPos(vp: Viewport, insets: Insets = NO_INSETS): IconPos {
+/** Where the icon sits before the owner moves it: bottom centre, of the page column when `centreX` (the column's middle, px) is given, else of the window. */
+export function defaultIconPos(vp: Viewport, insets: Insets = NO_INSETS, centreX: number = vp.width / 2): IconPos {
 	const b = bounds(vp, insets);
-	return { x: b.maxX, y: b.maxY };
+	return { x: Math.min(b.maxX, Math.max(b.minX, centreX - ICON_SIZE / 2)), y: b.maxY };
 }
+
+const offScreen = (pos: IconPos, vp: Viewport): boolean => pos.x < 0 || pos.y < 0 || pos.x + ICON_SIZE > vp.width || pos.y + ICON_SIZE > vp.height;
 
 /** The nearer left or right screen edge (by the icon's centre), height kept (clamped). The phone calls this when a drag ends. */
 export function snapIconToEdge(pos: IconPos, vp: Viewport, insets: Insets = NO_INSETS): IconPos {
@@ -61,18 +63,21 @@ export function snapIconToEdge(pos: IconPos, vp: Viewport, insets: Insets = NO_I
 /** More than DRAG_THRESHOLD px of travel from where the press began. */
 export const isDrag = (dx: number, dy: number): boolean => Math.hypot(dx, dy) > DRAG_THRESHOLD;
 
-/** The remembered position, clamped to today's viewport (it may have shrunk since); the default corner when none or unreadable. */
-export function loadIconPos(s: KeyValueStore | null, vp: Viewport, insets: Insets = NO_INSETS): IconPos {
+/** The remembered position; a spot now off-screen (the window shrank since) snaps back to the default bottom centre; the default also when none or unreadable. */
+export function loadIconPos(s: KeyValueStore | null, vp: Viewport, insets: Insets = NO_INSETS, centreX?: number): IconPos {
 	try {
 		const raw = s?.getItem(ICON_POS_KEY);
 		if (raw) {
 			const v = JSON.parse(raw) as Partial<IconPos>;
-			if (typeof v.x === "number" && typeof v.y === "number" && Number.isFinite(v.x) && Number.isFinite(v.y)) return clampIconPos({ x: v.x, y: v.y }, vp, insets);
+			if (typeof v.x === "number" && typeof v.y === "number" && Number.isFinite(v.x) && Number.isFinite(v.y)) {
+				const saved = { x: v.x, y: v.y };
+				return offScreen(saved, vp) ? defaultIconPos(vp, insets, centreX) : clampIconPos(saved, vp, insets);
+			}
 		}
 	} catch {
 		/* fall through to the default */
 	}
-	return defaultIconPos(vp, insets);
+	return defaultIconPos(vp, insets, centreX);
 }
 
 export function saveIconPos(s: KeyValueStore | null, pos: IconPos): void {

@@ -16,6 +16,7 @@
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ZC } from "@/lib/z-layers";
 import { ChevronDownIcon, ChevronRightIcon, ClockIcon, ChevronUpIcon, PanelRightOpenIcon, SearchIcon } from "lucide-react";
 import { TopBar } from "@/components/shell/top-bar";
 import { useRouter } from "next/navigation";
@@ -833,7 +834,7 @@ export function WorkList({ client: injected, graduate: injectedGraduate, undoMs 
 					</div>
 				</div>
 			{toast && (
-				<div data-testid="work-move-toast" data-kind={toast.kind} role={toast.kind === "error" ? "alert" : "status"} className="fixed bottom-4 left-1/2 z-50 flex max-w-[90vw] -translate-x-1/2 items-center gap-3 rounded-lg border bg-popover px-3 py-2 text-xs shadow-lg">
+				<div data-testid="work-move-toast" data-kind={toast.kind} role={toast.kind === "error" ? "alert" : "status"} className={`fixed bottom-4 left-1/2 ${ZC.toast} flex max-w-[90vw] -translate-x-1/2 items-center gap-3 rounded-lg border bg-popover px-3 py-2 text-xs shadow-lg`}>
 					<span data-testid="work-move-toast-msg" className={`min-w-0 truncate ${toast.kind === "error" ? "text-destructive" : ""}`} title={toast.text}>
 						{toast.text}
 					</span>

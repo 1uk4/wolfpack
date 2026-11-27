@@ -26,8 +26,8 @@
  * `/?focus=<nodeId>` URL param goes through it.
  */
 
-import type { DepRouteSelection } from "@/src/core";
-import { reconcileCursor, rawWorkId, routeForNode, toRouteSelection } from "@/src/core";
+import type { DepRouteSelection, ThreadsByWolf } from "@/src/core";
+import { reconcileCursor, rawWorkId, routeForNode, pickOwnerWolf, threadForWorkNode, toRouteSelection } from "@/src/core";
 import { startCursor, type RouteCursor } from "@/src/core";
 import type { RouteNavModel } from "./graph-route-nav.tsx";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
@@ -56,6 +56,7 @@ import type { GraphGroups } from "@/src/core";
 import { useWorkReader } from "../work/work-reader.tsx";
 import { Hint } from "@/components/ui/hint";
 import { dataStore, entryIdOfNode } from "@/src/core";
+import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { useOpenView, type OpenViewFn } from "@/components/viewer/viewer-context";
 
 /** What a click on a map node does: ANY work node (collapsed features included) only opens the reader; the graph's selection,
@@ -63,6 +64,20 @@ import { useOpenView, type OpenViewFn } from "@/components/viewer/viewer-context
 export function nodeClickAction(nodeId: string): { kind: "open-work"; id: string } | { kind: "select" } {
 	const raw = rawWorkId(nodeId);
 	return raw ? { kind: "open-work", id: raw } : { kind: "select" };
+}
+
+/** A feature or task node also attaches the floating chat to its feature's thread (no navigation); true when it did. With no thread the chat stays. */
+export function attachWorkNodeThread(
+	graph: Pick<KbGraph, "nodes" | "edges">,
+	nodeId: string,
+	threads: ThreadsByWolf,
+	attach: (ref: { wolf: string; threadId: string }) => void,
+	preferWolf?: string | null,
+): boolean {
+	const t = threadForWorkNode(graph, nodeId, threads, preferWolf);
+	if (!t) return false;
+	attach(t);
+	return true;
 }
 
 /** A click on a KB entry node opens the entry in the page viewer (true); any other node, or no viewer host, is not handled (false). */
@@ -74,6 +89,8 @@ export function openNodeInViewer(nodeId: string, open: OpenViewFn | null): boole
 
 /** The default node look when a node carries no colour of its own. */
 const NODE_COLOR_TOKEN = "--primary";
+/** The controls container leaves this much room on its left for the sidebar handle (graph-home.tsx draws it at the left edge, with the KB label beside it), so the two never overlap. A literal class: Tailwind only sees whole strings. */
+const CHROME_LEFT_GUTTER = "left-[5rem]";
 
 type RenderSettings = GraphRenderSettings;
 
@@ -170,7 +187,7 @@ export function GraphChromeRow({
 					{noMatch && <div className="px-1.5 pt-1 text-[11px] text-muted-foreground">No matching nodes.</div>}
 				</div>
 			)}
-			<div className="graph-chrome-fade-in flex shrink-0 items-center gap-2">
+			<div className="graph-chrome-fade-in pointer-events-auto absolute bottom-0 right-0 flex shrink-0 items-center gap-2">
 				<GraphSettingsControl settings={settings} changeSettings={changeSettings} domains={domains} groups={groups} changeGroups={changeGroups} />
 			</div>
 		</>
@@ -217,6 +234,9 @@ export function GraphView({
 	// Private view: a node click shows the redacted card, never the reader or viewer with the real page.
 	const privateRef = useRef(settings.privateView);
 	privateRef.current = settings.privateView;
+	const attachApi = useAttachedThread();
+	const attachApiRef = useRef(attachApi);
+	attachApiRef.current = attachApi;
 	const openView = useOpenView();
 	const openViewRef = useRef(openView);
 	openViewRef.current = openView;
@@ -314,7 +334,11 @@ export function GraphView({
 				onSelect: (nodeId) => {
 					const act = nodeClickAction(nodeId);
 					if (privateRef.current) setSelected({ id: nodeId });
-					else if (act.kind === "open-work") openWorkRef.current(act.id); // the reader only: no selection, route or camera change
+					else if (act.kind === "open-work") {
+						openWorkRef.current(act.id); // the reader: no selection, route or camera change
+						const chat = attachApiRef.current;
+						if (chat) attachWorkNodeThread(graphRef.current, nodeId, chat.threads, chat.attach, pickOwnerWolf(chat.wolves)); // and the floating chat follows the feature
+					}
 					else if (!openNodeInViewer(nodeId, openViewRef.current)) setSelected({ id: nodeId });
 				},
 				onStageClick: () => setSelected(null),
@@ -573,8 +597,8 @@ export function GraphView({
 				    ignores z-index, so without an explicit carve-out the controls
 				    were unclickable in the desktop app. The row NEVER wraps; in
 				    narrow windows the search shrinks. */}
-				<div className={`wp-no-drag wp-wco-floating absolute right-2 top-2 z-10 flex ${embedded ? "max-w-[calc(100%-5.5rem)] max-md:max-w-[calc(100%-4.5rem)]" : "max-w-[calc(100%-5.5rem)]"} flex-col items-end gap-2`}>
-					<div className="relative z-20 flex min-w-0 items-start gap-2">
+				<div className={`wp-no-drag wp-wco-floating pointer-events-none absolute ${CHROME_LEFT_GUTTER} ${embedded ? "max-md:left-[4rem]" : ""} right-2 top-2 bottom-[calc(var(--chat-bar-top,0px)+12px)] z-10 flex flex-col items-end gap-2`}>
+					<div className="pointer-events-auto z-20 flex min-w-0 items-start gap-2">
 						<GraphChromeRow
 							isEmpty={isEmpty}
 							query={query}

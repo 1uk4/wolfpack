@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { desktopBridge } from "@/components/shell/sidebar";
 import { useAppUpdateState } from "@/components/settings/use-app-update-state";
 import { useAppBridge } from "@/components/settings/app-bridge";
+import { ZC } from "@/lib/z-layers";
 
 // The desktop bridge type lives in components/shell/sidebar.tsx (the incumbent
 // declare-global) — onUpdateStatus/installUpdate are declared there too.
@@ -39,7 +40,7 @@ export default function UpdateBanner() {
 	return (
 		<div
 			data-testid="update-banner"
-			className="fixed right-4 bottom-4 z-50 flex items-center gap-3 rounded-lg border border-border bg-popover px-4 py-3 shadow-lg"
+			className={`fixed right-4 bottom-4 ${ZC.toast} flex items-center gap-3 rounded-lg border border-border bg-popover px-4 py-3 shadow-lg`}
 		>
 			<div className="text-sm">
 				<span className="font-medium">Wolfpack {shown.version ?? "update"} is ready</span>

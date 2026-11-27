@@ -15,6 +15,7 @@ import { HourglassIcon } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
 import { THREAD_RUNNING_LABEL, useThreadRunning } from "./thread-running";
 import { getPendingPreview, graduateDirect, type GraduateVia } from "./graduate-direct-client";
+import { ZC } from "@/lib/z-layers";
 
 const moreHref = (id: string, wolf: string) => `/work/${id}?view=graduation&wolf=${encodeURIComponent(wolf)}`;
 const NO_ASSIGNEE = "This item has no assignee wolf to prepare the graduation.";
@@ -126,7 +127,7 @@ export function GraduateButton({ itemId, assignee, via, title, client, onDone, t
 				</span>
 			)}
 			{open && job?.phase === "ready" && (
-				<div data-testid="graduate-popover" role="dialog" className="absolute right-0 top-full z-50 mt-1 w-72 rounded-md border border-border bg-popover p-3 text-xs shadow-lg">
+				<div data-testid="graduate-popover" role="dialog" className={`absolute right-0 top-full ${ZC.menu} mt-1 w-72 rounded-md border border-border bg-popover p-3 text-xs shadow-lg`}>
 					<p className="mb-2 text-foreground">{job.preview.summary ?? `${job.preview.contributions.length} KB ${job.preview.contributions.length === 1 ? "entry" : "entries"} will be written; ${job.preview.archive.length} item${job.preview.archive.length === 1 ? "" : "s"} archived.`}</p>
 					{job.preview.blocked && <p className="mb-2 text-destructive">{job.preview.blocked}</p>}
 					<a data-testid="graduate-more" href={moreHref(itemId, job.wolf)} onClick={(e) => openGraduationLink(e, openView, moreHref(itemId, job.wolf))} className="text-primary underline">

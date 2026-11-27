@@ -40,7 +40,8 @@ export type KeyAction =
 	| "open-settings"
 	| "toggle-user-thinking"
 	| "focus-chat-bar"
-	| "chat-bar-switcher";
+	| "chat-bar-switcher"
+	| "space-dictation";
 
 /** Where the cheat sheet groups an action (display only — dispatch is
  *  global; a seam that isn't mounted simply no-ops). */
@@ -77,6 +78,9 @@ export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	// The floating chat bar (mounted on every route). Both rebindable under Pack → This device → Keyboard → Chat bar.
 	{ id: "focus-chat-bar", label: "Focus the chat bar", scope: "chatbar", binding: "mod+j" },
 	{ id: "chat-bar-switcher", label: "Chat bar · switch thread", scope: "chatbar", binding: "mod+shift+j" },
+	// Display-only: the dictation hook owns bare Space (hold = dictate and send, tap = toggle) and only where Space has no other job.
+	// It must never be dispatched from the registry, or keyboard-shortcuts would swallow Space everywhere.
+	{ id: "space-dictation", label: "Dictate · hold to send, tap to toggle", scope: "chatbar", binding: "space", displayOnly: true },
 	// Mod+F is surface-scoped: graph node search and session text Find share
 	// one action/binding. Only the currently mounted surface listens.
 	{ id: "find", label: "Find", scope: "global", binding: "mod+f" },

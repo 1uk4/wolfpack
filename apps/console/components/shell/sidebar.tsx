@@ -29,6 +29,7 @@ import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, startVi
 import { settingsUrl } from "@/components/thread/thread-transport";
 import { useServerEvent, useServerResync } from "@/components/shell/server-events";
 import { THREAD_COLORS, threadColor, threadColorIndex, threadAccentStyle, threadSlug, isChildThread, rowWolf, sidebarLayout, partitionWolves, togglePinned, toggleHidden, hideWolf, showWolf, denNeedsYou, loadWolfPrefs, saveWolfPrefs, type WolfPrefs, stateLabel, threadListItem, type ChatListItem, type ChildThread, workHref } from "@/src/core";
+import { ZC } from "@/lib/z-layers";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
@@ -233,7 +234,7 @@ function FloatingBack({ toggles, open, mobile, path, onClick }: { toggles: numbe
 			aria-label={MOBILE_BACK_LABEL}
 			data-testid="mobile-back"
 			onClick={onClick}
-			className="fixed left-2 z-30 flex size-11 items-center justify-center rounded-full border bg-card/90 text-muted-foreground shadow-lg backdrop-blur"
+			className={`fixed left-2 ${ZC.viewer} flex size-11 items-center justify-center rounded-full border bg-card/90 text-muted-foreground shadow-lg backdrop-blur`}
 			style={{ top: "calc(env(safe-area-inset-top) + 0.5rem)" }}
 		>
 			<ArrowLeftIcon className="size-5" />
@@ -638,7 +639,7 @@ function WolfPrefsMenu({ pinned, hidden, onPin, onHide }: WolfMenuProps) {
 					⋯
 				</button>
 				{open && (
-					<div role="menu" data-testid="wolf-menu" className="absolute right-0 top-full z-40 mt-1 min-w-36 rounded-md border bg-card p-1 shadow-lg">
+					<div role="menu" data-testid="wolf-menu" className={`absolute right-0 top-full ${ZC.menu} mt-1 min-w-36 rounded-md border bg-card p-1 shadow-lg`}>
 						{!hidden && item("pin", pinned ? "Unpin" : "Pin", onPin)}
 						{item("hide", hidden ? "Show" : "Move to Den", onHide)}
 					</div>
@@ -938,7 +939,7 @@ export function SessionsSidebar() {
 	return (
 		<aside
 			// < md: the open sidebar is the full-screen list layer (fixed, above everything but dialogs); md+ is the original inline panel.
-			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full md:w-72" : "w-0")}
+			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? `max-md:fixed max-md:inset-0 ${ZC.overlayPhone} max-md:w-full md:w-72` : "w-0")}
 			aria-hidden={!open}
 			data-testid="sidebar"
 			data-mobile-list={(open && mobile) || undefined}

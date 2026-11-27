@@ -10,6 +10,7 @@ import { XIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { InertImage, mdComponents } from "@/components/shell/md-blocks";
 import { escapeRawHtml } from "@/src/core";
+import { ZC } from "@/lib/z-layers";
 
 export type NotesState = "loading" | "missing" | { body: string; url: string };
 
@@ -57,7 +58,7 @@ export function ReleaseNotesView({ state, fallbackUrl }: { state: NotesState; fa
 /** The modal shell around already-known notes state (the update notice owns the fetch; tests render this directly). */
 export function ReleaseNotesModal({ state, title, fallbackUrl, onClose }: { state: NotesState; title: string; fallbackUrl?: string | null; onClose: () => void }) {
 	return (
-		<div role="dialog" aria-modal="true" aria-label={title} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+		<div role="dialog" aria-modal="true" aria-label={title} className={`fixed inset-0 ${ZC.modal} flex items-center justify-center bg-black/50 p-4`} onClick={onClose}>
 			<div className="relative max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-lg border bg-background p-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
 				<button type="button" aria-label="Close" onClick={onClose} className="absolute right-2 top-2 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
 					<XIcon className="size-4" />

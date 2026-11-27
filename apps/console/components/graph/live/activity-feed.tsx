@@ -151,7 +151,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 
 	if (count.collapsed || lines.length === 0) {
 		return (
-			<div className="pointer-events-none absolute bottom-3 left-3 z-[6]">
+			<div className="pointer-events-none absolute bottom-[calc(var(--chat-bar-top,0px)+12px)] left-3 z-[6]">
 				<button
 					type="button"
 					aria-label="Show activity feed"
@@ -167,7 +167,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 
 	const shown = lines.slice(-50);
 	return (
-		<div className="pointer-events-none absolute bottom-3 left-3 z-[6] w-[280px] max-w-[calc(100%-1.5rem)]">
+		<div className="pointer-events-none absolute bottom-[calc(var(--chat-bar-top,0px)+12px)] left-3 z-[6] w-[280px] max-w-[calc(100%-1.5rem)]">
 			<div className={`pointer-events-auto overflow-hidden rounded-[12px] border border-border/50 bg-background/70 shadow-sm backdrop-blur-md ${motion}`}>
 				<div className="flex items-center justify-between px-2.5 pt-1.5 text-[11px] text-muted-foreground">
 					<span className="inline-flex items-center gap-1.5"><ActivityIcon className="size-3.5" />Activity</span>

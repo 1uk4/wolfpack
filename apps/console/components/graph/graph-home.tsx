@@ -269,7 +269,7 @@ function GraphHomeInner({ embedded = false }: { embedded?: boolean } = {}) {
 				<WolfTap key={w} wolf={w} onEvent={onEvent} onResync={onResync} />
 			))}
 			{kb.status === "error" && graph !== null && (
-				<div className="absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-lg border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-lg">
+				<div className="absolute bottom-[calc(var(--chat-bar-top,0px)+12px)] left-3 z-10 flex items-center gap-2 rounded-lg border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-lg">
 					<span>Couldn&apos;t refresh the graph: {kb.message}</span>
 					<button type="button" onClick={kb.refetch} className="text-foreground underline">
 						Retry
@@ -277,7 +277,7 @@ function GraphHomeInner({ embedded = false }: { embedded?: boolean } = {}) {
 				</div>
 			)}
 			{notice && (
-				<div className="absolute bottom-3 left-3 z-10 rounded-lg border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-lg">
+				<div className="absolute bottom-[calc(var(--chat-bar-top,0px)+12px)] left-3 z-10 rounded-lg border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-lg">
 					{notice}
 				</div>
 			)}

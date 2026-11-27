@@ -11,6 +11,7 @@
  * first open and cached for the session.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ZC } from "@/lib/z-layers";
 import { useOpenWorkItem } from "@/components/work/work-reader-nav";
 import { Command } from "cmdk";
 import { DialogTitle } from "@radix-ui/react-dialog";
@@ -222,8 +223,8 @@ export function CommandPalette() {
 			shouldFilter={false}
 			value={selected}
 			onValueChange={setSelected}
-			overlayClassName="fixed inset-0 z-50 bg-black/50"
-			contentClassName="fixed left-1/2 top-[18vh] z-50 w-full max-w-[34rem] -translate-x-1/2 overflow-hidden rounded-xl border bg-card shadow-2xl"
+			overlayClassName={`fixed inset-0 ${ZC.modal} bg-black/50`}
+			contentClassName={`fixed left-1/2 top-[18vh] ${ZC.modal} w-full max-w-[34rem] -translate-x-1/2 overflow-hidden rounded-xl border bg-card shadow-2xl`}
 		>
 			<DialogTitle className="sr-only">Command palette</DialogTitle>
 			<Command.Input

@@ -11,6 +11,9 @@ import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 import { Hint } from "@/components/ui/hint";
 import { CompactMeter, type Dictation } from "@/components/composer/dictation";
 import { cn } from "@/lib/utils";
+import { useColumnRect } from "@/components/chat-bar/column-store";
+import { useKeyboardInset } from "@/components/chat-bar/use-keyboard-inset";
+import { ZC } from "@/lib/z-layers";
 
 const store = (): KeyValueStore | null => {
 	try {
@@ -56,13 +59,18 @@ export function BarIcon({ phone, label, color, wolfStatus, needsYou, working, di
 	const insets = useRef<Insets>({ top: 0, right: 0, bottom: 0, left: 0 });
 	const phoneRef = useRef(phone);
 	phoneRef.current = phone;
+	// The default spot is the bottom centre of the page column on desktop (of the window on a phone); the phone keyboard lifts the icon.
+	const col = useColumnRect();
+	const inset = useKeyboardInset(phone);
+	const centreRef = useRef<number | undefined>(undefined);
+	centreRef.current = !phone && col.width > 0 && col.width <= (typeof window === "undefined" ? 0 : window.innerWidth) ? col.left + col.width / 2 : undefined;
 
 	const place = (at: IconPos, toPhone: boolean) => (toPhone ? snapIconToEdge(at, viewport(), insets.current) : clampIconPos(at, viewport(), insets.current));
 
 	// Before the first paint: read the safe area and the remembered spot (snapped to an edge on a phone), then keep the icon on screen when the window resizes.
 	useLayoutEffect(() => {
 		insets.current = readInsets();
-		setPos(place(loadIconPos(store(), viewport(), insets.current), phoneRef.current));
+		setPos(place(loadIconPos(store(), viewport(), insets.current, centreRef.current), phoneRef.current));
 		const onResize = () => {
 			insets.current = readInsets();
 			setPos((p) => (p ? place(p, phoneRef.current) : p));
@@ -135,8 +143,8 @@ export function BarIcon({ phone, label, color, wolfStatus, needsYou, working, di
 			data-testid="chat-bar"
 			data-state="minimized"
 			data-dragging={dragging ? "true" : undefined}
-			className={cn("fixed z-30 size-12", !dragging && "motion-safe:transition-[left,top] motion-safe:duration-200")}
-			style={{ left: pos?.x ?? 0, top: pos?.y ?? 0, visibility: pos ? "visible" : "hidden" }}
+			className={cn(`fixed ${ZC.chatBar} size-12`, !dragging && "motion-safe:transition-[left,top] motion-safe:duration-200")}
+			style={{ left: pos?.x ?? 0, top: (pos?.y ?? 0) - inset, visibility: pos ? "visible" : "hidden" }}
 		>
 			{dictation.active && (
 				<div data-testid="chat-bar-icon-meter" data-side={nearTop ? "below" : "above"} className={cn("pointer-events-none absolute left-1/2 -translate-x-1/2 rounded-full border bg-card px-2 py-1 shadow-md", nearTop ? "top-full mt-1.5" : "bottom-full mb-1.5")}>

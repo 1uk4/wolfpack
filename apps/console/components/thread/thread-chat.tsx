@@ -24,6 +24,7 @@ import { submitToThread, swapTarget } from "@/components/chat-bar/chat-bar-io";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/thread/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/shell/panel-host";
 import { ViewerPanel } from "@/components/viewer/viewer-panel";
+import { registerColumn } from "@/components/chat-bar/column-store";
 import { useViewer } from "@/components/viewer/viewer-store";
 import { setVizActive, useVizMode } from "@/components/viewer/viz-mode";
 import { FrameBadges } from "@/components/viewer/frame-badges";
@@ -33,9 +34,12 @@ import { ViewerProvider } from "@/components/viewer/viewer-context";
 import { AttachmentChips, Composer } from "@/components/composer/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer/composer-controls";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
-import { DictationBar, joinDictation, setDictationFocus, useBarShown, recordingAt } from "@/components/composer/dictation";
+import { DictationBar, joinDictation, setDictationFocus, recordingAt } from "@/components/composer/dictation";
 import { getInlineDropSink } from "@/components/ask/ask-inline-composer";
-import { setPageNoteAppend, useThreadDictation } from "@/components/composer/use-thread-dictation";
+import { getDockedBarSink } from "@/components/chat-bar/bar-drop";
+import { useThreadDictation } from "@/components/composer/use-thread-dictation";
+import { setPageNoteAppend } from "@/components/composer/page-note-append";
+import { setDockSlot } from "@/components/chat-bar/dock-slot";
 import { AttachmentThumbs } from "@/components/composer/attachment-thumbs";
 import { newUploadState, startUploads } from "@/components/composer/attachment-upload";
 import { canSendWith, dragHasFiles, droppedFiles, pastedImages, readyInfos, type AttachmentInfo, type PendingAttachment } from "@/components/composer/attachments";
@@ -485,7 +489,6 @@ function ThreadChatInner({
 	// overwrite or absorb the chat's); when it docks, the composer re-reads the draft via useRereadDraftWhenShown below.
 	// Dictating on this thread's own page does NOT do this: the composer stays and highlights itself.
 	const attachedApi = useAttachedThread();
-	const barShown = useBarShown();
 	// The attached thread's own page: the page composer IS the docked chat (one composer); only viz mode / a shown bar replaces it.
 	// Any other thread attached: the floating chat sits over this page with a swap pill, so this composer steps aside (its strips
 	// pad their bottom by the bar's height, --chat-bar-over) and returns, re-reading its draft, when the owner swaps to this thread.
@@ -493,7 +496,7 @@ function ThreadChatInner({
 	// The same predicate that draws the bar's swap pill (chat-bar-io swapTarget), so this composer never steps aside without a pill to bring it back.
 	const pageSwap = swapTarget(usePathname(), attachedApi?.attached ?? null);
 	const barOverPage = !attachedHere && !!pageSwap && pageSwap.wolf === wolf && pageSwap.slug === slug;
-	const barOwnsInput = barOverPage || (attachedHere && barShown);
+	const barOwnsInput = barOverPage || attachedHere;
 	// `ownedByBar` follows barOwnsInput, but only from a layout effect (below, after the draft hook), never during render: on the commit where
 	// ownership moves to the bar that effect first flushes the pending debounced draft, then sets the flag, so the draft hook's 300ms timer
 	// is never left to find the flag set and skip the write.
@@ -507,7 +510,6 @@ function ThreadChatInner({
 	const viewOpen = viewerState.open && viewerState.stack.length > 0;
 	const viz = vizChoice && viewOpen;
 	const vizAttach = attachedApi?.attach;
-	const vizDock = attachedApi?.detach;
 	const vizWasOn = useRef(false);
 	// Only a real open -> closed transition clears the stored choice: on a reload the viewer hydrates after this effect first runs.
 	const prevViewOpen = useRef(viewOpen);
@@ -516,8 +518,6 @@ function ThreadChatInner({
 		prevViewOpen.current = viewOpen;
 		if (wasOpen && !viewOpen && vizChoice) setVizChoice(false);
 	}, [vizChoice, viewOpen, setVizChoice]);
-	const vizDockRef = useRef(vizDock);
-	vizDockRef.current = vizDock;
 	useEffect(() => {
 		if (viz) {
 			vizWasOn.current = true;
@@ -526,18 +526,14 @@ function ThreadChatInner({
 		} else if (vizWasOn.current) {
 			vizWasOn.current = false;
 			setVizActive(null);
-			vizDock?.();
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- attach/dock identities change with the attached state; the mode flip is the trigger
 	}, [viz, wolf, threadId, slug]);
-	// Leaving the page while the mode is on: the bar must not stay attached to this thread on other pages.
+	// Leaving the page while the mode is on: the viz flag goes; the bar stays attached to this thread (it is always on screen now, no dock).
 	useEffect(
 		() => () => {
 			setVizActive(null);
-			if (vizWasOn.current) {
-				vizWasOn.current = false;
-				vizDockRef.current?.();
-			}
+			vizWasOn.current = false;
 		},
 		[],
 	);
@@ -563,12 +559,8 @@ function ThreadChatInner({
 	// While the questionnaire's note is the composer (noteMode, below), finals join the note instead of the hidden draft.
 	const noteAppendRef = useRef<((t: string) => void) | null>(null);
 	const dictation = useThreadDictation(
-		wolf,
-		slug,
-		threadId,
 		(t) => (noteAppendRef.current ? noteAppendRef.current(t) : applyText(joinDictation(textRef.current, t))),
 		(t) => appendToDraft(draftKey(wolf, threadId), t),
-		draftSchedule.flush, // the chat's input reads the draft: write it now and drop the pending debounce
 	);
 	useRereadDraftWhenShown(barOwnsInput, wolf, threadId, textRef, (v) => {
 		textRef.current = v;
@@ -696,7 +688,7 @@ function ThreadChatInner({
 	// a file drag is always taken so the browser never opens the file, and a drop or an image paste that nothing handled goes to the open
 	// answer, else the note, else the composer. Handlers that already took the event (the column, a composer's own paste) win.
 	const fileSinkRef = useRef<(files: File[]) => void>(() => {});
-	fileSinkRef.current = (files) => (getInlineDropSink() ?? (noteMode ? session.addNoteFiles : onFiles))(files);
+	fileSinkRef.current = (files) => (getInlineDropSink() ?? getDockedBarSink() ?? (noteMode ? session.addNoteFiles : onFiles))(files);
 	useEffect(() => {
 		const over = (e: DragEvent) => {
 			if (dragHasFiles(e.dataTransfer)) e.preventDefault();
@@ -800,11 +792,11 @@ function ThreadChatInner({
 				if (!dragHasFiles(e.dataTransfer)) return;
 				e.preventDefault();
 				setDragging(false);
-				// Follows focus: an open answer composer takes it, else the note's chips while the questionnaire note is the composer, else the chat's.
-				(getInlineDropSink() ?? (noteMode ? session.addNoteFiles : onFiles))(droppedFiles(e.dataTransfer));
+				// Follows focus: an open answer composer takes it, else the docked bar (it is the page composer), else the note's chips while the questionnaire note is the composer, else the chat's.
+				(getInlineDropSink() ?? getDockedBarSink() ?? (noteMode ? session.addNoteFiles : onFiles))(droppedFiles(e.dataTransfer));
 			}}
 		>
-			<div className={viz ? "hidden" : "flex min-w-0 flex-1 flex-col"} data-testid="thread-main">
+			<div ref={registerColumn} className={viz ? "hidden" : "flex min-w-0 flex-1 flex-col"} data-testid="thread-main">
 				<TopBar>
 					<span className="min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl">{title}</span>
 					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
@@ -989,7 +981,7 @@ function ThreadChatInner({
 							/>
 						</ConversationContent>
 						<div ref={setDockEl} className="pointer-events-none absolute inset-x-0 bottom-0 flex max-h-[calc(100%-0.75rem)] flex-col" style={barOverPage ? { paddingBottom: "var(--chat-bar-over, 0px)" } : undefined}>
-							<div className={ask.covers ? "h-0" : "h-16"} data-testid="dock-fade" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
+							<div className={ask.covers ? "pointer-events-none h-0" : "pointer-events-none h-16"} data-testid="dock-fade" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
 							<div className="flex min-h-0 flex-col pb-4 max-md:pb-0" style={{ backgroundColor: tintSolid }}>
 								<div className={`${DOCK} flex min-h-0 flex-col [&>*:not([data-testid=ask-sheet-host])]:shrink-0`}>
 									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />
@@ -1011,6 +1003,8 @@ function ThreadChatInner({
 												</button>
 											) : null}
 										</div>
+									) : attachedHere && !viz ? (
+									<div ref={setDockSlot} data-testid="thread-dock-slot" className="pointer-events-auto" />
 									) : barOwnsInput ? null : (
 									<>
 									<FrameBadges wolf={wolf} threadId={threadId} vizOn={viz} />

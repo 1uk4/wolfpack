@@ -113,12 +113,14 @@ function Probe() {
 	return null;
 }
 let lists = false; // the wolf and thread lists (the badge and switcher need them); off, they 404 like the other tests
+let pagedAsk = false; // the thread has a pending paged ask: the bar fetches it from the thread route, as in the app
 const barFetch = (async (input: RequestInfo | URL) => {
 	const url = String(input);
 	if (url.includes("/api/stt/token")) return new Response(JSON.stringify({ token: "tok" }), { status: 200 });
 	if (lists && url === "/api/wolves") return Response.json({ wolves: [{ name: "1uk4" }] });
 	if (lists && url === "/api/wolves/1uk4/threads") return Response.json({ threads: [th("1uk4/other"), th("1uk4/waiting", "needs-you"), th("1uk4/home", homeStatus)] });
 	if (lists && url === "/api/needs-you") return Response.json({ items: [] });
+	if (pagedAsk && /\/threads\/home\?limit=/.test(url)) return Response.json({ messages: [], pendingCards: [{ callId: "call-ask", threadId: TID, card: PAGED_ASK, raisedAt: "2026-11-09T00:00:00Z" }] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
 
@@ -129,6 +131,7 @@ async function mount(opts: { chat?: boolean; start?: string; ask?: boolean } = {
 	const client = new MockConsoleClient({ delayMs: 0, script: [{ kind: "text", text: "ok" }] });
 	const detail = await client.getThread(TID);
 	if (opts.ask) {
+		pagedAsk = true;
 		const asked = { id: "entry-ask", role: "assistant" as const, text: "", at: new Date().toISOString(), tools: [{ callId: "call-ask", name: "ask", args: { question: "q" }, result: "The operator was asked.", card: PAGED_ASK }] };
 		detail.messages = [asked, ...detail.messages] as never;
 		(detail as { pendingCards?: unknown[] }).pendingCards = [{ callId: "call-ask", threadId: TID, card: PAGED_ASK, raisedAt: new Date().toISOString() }];
@@ -173,6 +176,7 @@ after(() => {
 });
 afterEach(async () => {
 	homeStatus = "idle";
+	pagedAsk = false;
 	dataStore.clear(); // the thread list goes through the client store: the next test must not read this one's list
 	await act(async () => root?.unmount());
 	root = null;
@@ -193,11 +197,13 @@ describe("thread visualization mode", () => {
 	it("turning it on hides the transcript and page composer, fills the width and shows the chat bar; turning it off restores them", async () => {
 		await mount();
 		await openKb();
-		assert.equal(q('[data-testid="chat-bar"]'), null, "bar is off on the thread's own page normally");
+		assert.ok(q('[data-testid="thread-main"] [data-testid="thread-composer-card"]'), "nothing attached: the page keeps its own composer");
+		assert.equal(q('[data-testid="chat-bar"] [data-testid="composer"]'), null, "and no bar composer");
 		await click(q('[data-testid="viz-toggle"]')!);
 		await settle(60);
 		assert.equal(mainHidden(), true);
 		assert.equal(q('[data-testid="viewer-panel"]')!.getAttribute("data-fill"), "true");
+		assert.equal(q('[data-testid="thread-main"] [data-testid="chat-bar"]'), null, "the bar left the hidden column and floats");
 		assert.ok(q('[data-testid="chat-bar"]'), "bar shows");
 		assert.equal(q('[data-testid="thread-main"] [data-testid="composer"]'), null, "no page composer");
 		assert.ok(q('[data-testid="chat-bar"] [data-testid="composer"]'), "the bar has the input");
@@ -206,7 +212,7 @@ describe("thread visualization mode", () => {
 		await click(q('[data-testid="viz-toggle"]')!);
 		await settle(60);
 		assert.equal(mainHidden(), false);
-		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.ok(q('[data-testid="thread-main"] [data-testid="chat-bar"]'), "docked again");
 		assert.equal(document.documentElement.style.getPropertyValue("--chat-bar-h"), "", "cleared when the bar hides");
 	});
 
@@ -303,7 +309,7 @@ describe("thread visualization mode", () => {
 		assert.equal(q('[data-testid="viz-toggle"]'), null);
 	});
 
-	it("leaving the page while the mode is on docks the bar, so it does not stay attached to this thread", async () => {
+	it("leaving the page while the mode is on ends the mode but keeps the thread attached (the bar is always on screen now)", async () => {
 		await mount();
 		await openKb();
 		await click(q('[data-testid="viz-toggle"]')!);
@@ -312,6 +318,7 @@ describe("thread visualization mode", () => {
 		await act(async () => hideChat!());
 		await settle(60);
 		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.ok(store.get(ATTACHED_KEY), "still attached");
 	});
 
 	it("a draft typed in the bar during the mode is in the page composer after leaving it", async () => {
@@ -324,6 +331,8 @@ describe("thread visualization mode", () => {
 		await settle(80);
 		const page = q('[data-testid="thread-main"] [data-testid="composer"] textarea') as HTMLTextAreaElement;
 		assert.equal(page.value, "half a thought");
+		// The bar is not remounted when it docks (so no unmount flush): the draft reaches the store on the normal debounce.
+		await settle(400);
 		assert.equal(store.get(DRAFT), "half a thought");
 	});
 
@@ -352,7 +361,7 @@ describe("thread visualization mode", () => {
 			assert.ok(q('[data-testid="chat-bar"]'), "the bar shows for its own target");
 			assert.equal(q('[data-testid="chat-bar-needs-you"]')?.getAttribute("data-thread"), "1uk4/waiting");
 			await click(q('[data-testid="chat-bar-chip"]')!);
-			assert.ok(q('[data-testid="chat-bar-switcher"]'), "the switcher opens");
+			assert.ok(q('[data-testid="den-sheet"]'), "the switcher opens");
 		});
 	});
 
@@ -384,12 +393,12 @@ describe("automatic docking: one composer on a thread page", () => {
 	beforeEach(() => void (lists = true));
 	afterEach(() => void (lists = false));
 
-	it("attached == the page's thread: the page composer is the docked chat, the only composer, no bar and no pill", async () => {
+	it("attached == the page's thread: the bar is docked into the page, the only composer, no pill", async () => {
 		store.set(ATTACHED_KEY, JSON.stringify({ wolf: "1uk4", slug: "home", threadId: TID }));
 		await mount();
 		assert.equal(composers(), 1);
-		assert.ok(q('[data-testid="thread-main"] [data-testid="composer"]'), "in the thread's chat panel");
-		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.ok(q('[data-testid="thread-main"] [data-testid="chat-bar"] [data-testid="composer"]'), "the docked bar, inside the thread's chat panel");
+		assert.equal(q('[data-testid="thread-composer-card"]'), null, "the page has no composer of its own");
 		assert.equal(q('[data-testid="chat-bar-swap"]'), null);
 	});
 
@@ -411,7 +420,7 @@ describe("automatic docking: one composer on a thread page", () => {
 		assert.equal(JSON.parse(store.get(ATTACHED_KEY)!).threadId, TID);
 		assert.equal(composers(), 1);
 		assert.ok(q('[data-testid="thread-main"] [data-testid="composer"]'), "docked into the page");
-		assert.equal(q('[data-testid="chat-bar"]'), null);
+
 		assert.equal((q('[data-testid="thread-main"] textarea') as HTMLTextAreaElement).value, "", "the page's own draft is its own");
 		assert.equal(store.get("wolfpack:draft:1uk4:1uk4/other"), "for other", "the other thread's draft stays with it");
 	});
@@ -428,6 +437,7 @@ describe("automatic docking: one composer on a thread page", () => {
 		await settle(80);
 		assert.equal(JSON.parse(store.get(ATTACHED_KEY)!).threadId, TID);
 		assert.ok(q('[data-testid="thread-main"] [data-testid="ask-sheet"]'), "the questionnaire shows in the docked page");
+		assert.equal(document.querySelectorAll('[data-testid="ask-sheet"]').length, 1, "one ask host, the bar's");
 		assert.equal(composers(), 1);
 	});
 
@@ -439,7 +449,7 @@ describe("automatic docking: one composer on a thread page", () => {
 		assert.equal(pill.getAttribute("aria-label"), "Answer 1uk4/home");
 	});
 
-	it("text typed in the page composer inside the debounce window survives the chat moving to another thread and back", async () => {
+	it("a draft typed in the docked bar inside the debounce window survives the chat moving to another thread and back", async () => {
 		store.set(ATTACHED_KEY, JSON.stringify({ wolf: "1uk4", slug: "home", threadId: TID }));
 		await mount();
 		await typeIn(q('[data-testid="thread-main"] textarea') as HTMLTextAreaElement, "typed just before");

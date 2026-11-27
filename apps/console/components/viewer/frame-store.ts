@@ -150,9 +150,9 @@ export function dismissFrame(threadId: string, objectId: string): void {
 	emit();
 }
 
-/** The chip text for a title: its first two words, at most 16 characters (an ellipsis replaces the cut). The full title stays in the tooltip. */
+/** The chip text for a title: its first two words, at most 16 characters (an ellipsis replaces the cut), with trailing punctuation dropped. The full title stays in the tooltip. */
 export function shortTitle(title: string): string {
-	const two = title.trim().split(/\s+/).slice(0, 2).join(" ");
+	const two = title.trim().split(/\s+/).slice(0, 2).join(" ").replace(/[\s.,;:!?\-\u2013\u2014\u2026]+$/, "");
 	// By code points, so an emoji or other surrogate pair is never cut in half.
 	const chars = Array.from(two);
 	return chars.length > 16 ? `${chars.slice(0, 15).join("")}\u2026` : two;

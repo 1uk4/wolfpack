@@ -437,6 +437,20 @@ export function labelAlpha(
 }
 
 /**
+ * Section (cluster region tint + cluster label) opacity at a camera ratio.
+ * Sections fade IN as you zoom into them: 1 at/below labelZoom (zoomed in),
+ * 0 at labelZoom + span and beyond (zoomed out). Same threshold and smooth
+ * span as labelAlpha; before, sections used 1 - labelAlpha (the reverse).
+ */
+export function sectionAlpha(
+	ratio: number,
+	labelZoom: number,
+	span = labelZoom * LABELS_FADE_RATIO,
+): number {
+	return labelAlpha(ratio, labelZoom, span);
+}
+
+/**
  * Does a camera (screen = world * k + translate) show the world bbox in a
  * w×h viewport? A stored camera that doesn't (the layout moved, or it was
  * saved against a drifted one) leaves a blank graph, so the caller re-fits
@@ -2322,7 +2336,7 @@ export class GraphCanvasRenderer {
 
 		const ratio = zoomRatioOf(this.kFit, k);
 		const nodeAlpha = labelAlpha(ratio, settings.labelZoom);
-		const regionAlpha = 1 - nodeAlpha;
+		const regionAlpha = sectionAlpha(ratio, settings.labelZoom);
 
 		// Layers 1-7b go to an offscreen cache and are reused while only the overlay changes. Besides the dirty flags, a key of everything
 		// the base reads that can change without markDirty guards against a stale picture; a live sim or a hover fade never reuses it.
@@ -2348,10 +2362,12 @@ export class GraphCanvasRenderer {
 		//    blur is the region softness; adjacent cluster tints blend
 		//    source-over where they overlap (decided: multiply is invisible
 		//    on the dark background).
-		if (this.regionCanvas && this.regionRect) {
+		if (this.regionCanvas && this.regionRect && regionAlpha > 0.01) {
 			const { minX, minY, w, h } = this.regionRect;
 			ctx.imageSmoothingEnabled = true;
+			ctx.globalAlpha = regionAlpha;
 			ctx.drawImage(this.regionCanvas, minX, minY, w, h);
+			ctx.globalAlpha = 1;
 		}
 
 		// 3. Edges: plain segments from cached paths; width constant on

@@ -121,9 +121,8 @@ describe("live trails, end to end through the console path", () => {
 		assert.equal(link.length, 1, "bound thread links to its work node");
 		assert.ok(alphaOfStyle(link[0]!.style) >= 0.4, `thread link alpha ${link[0]!.style}`);
 
-		// The you badge lives in screen space: its secondary link ends at the viewed entry's screen position.
+		// The you badge links only to the floating chat's thread: viewing an entry draws no link (work-wolfpack-mnAxvBe).
 		const geo = o.screenGeometry(host, { x: 0, y: 0, k: K }, { w: 4000, h: 4000 })!;
-		const view = geo.links.find((l) => l.kind === "view")!;
-		assert.deepEqual([view.x, view.y], [target.x * K, target.y * K], "you badge links to the viewed entry");
+		assert.deepEqual(geo.links, [], "no link to the viewed entry");
 	});
 });

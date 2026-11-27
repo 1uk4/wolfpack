@@ -10,6 +10,7 @@ import { CARD_FIT_W, FitSwimlanes, MomentList, ScrollEnd, Swimlanes, useRings } 
 import { OverlayHeader, OverlayShell } from "@/components/shell/overlay-shell";
 import { graphKey, headerStatus, newestRequest, type GitOverview } from "@/src/core";
 import type { ThreadWorkspace, WorkspaceStatus } from "@wolfpack/client";
+import { ZC } from "@/lib/z-layers";
 
 /** The header's repo · base → branch label (a home thread has no base). */
 export function gitTreeLabel(ws: Pick<ThreadWorkspace, "repo" | "base" | "branch">): string {
@@ -185,7 +186,7 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, tit
 				)}
 			</button>
 			{open && (
-				<div className="absolute inset-x-0 top-full z-50 mt-1 px-3" data-testid="git-tree-popover-wrap">
+				<div className={`absolute inset-x-0 top-full ${ZC.menu} mt-1 px-3`} data-testid="git-tree-popover-wrap">
 					<div role="dialog" aria-label="Git workspace" data-testid="git-tree-popover" className="mx-auto flex w-full max-w-[46rem] flex-col gap-2 rounded-lg border border-border bg-popover p-3 text-xs shadow-lg">
 						<div className="flex items-center gap-1.5">
 							<span data-testid="git-tree-title" className="min-w-0 truncate text-sm font-medium text-foreground">

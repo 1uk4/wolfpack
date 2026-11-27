@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { emptyLiveState, reduceLive } from "../../../src/core/graph/live/live-state.ts";
-import { ownerThreadKey, targetNodeId } from "../../../src/core/graph/live/live-targets.ts";
+import { ownerThreadKey, targetNodeId, youLinkTarget } from "../../../src/core/graph/live/live-targets.ts";
 
 const ev = (verb: string, o: Record<string, unknown>) => ({ v: 1, id: verb, pack: "p", ts: 0, ttlMs: 60_000, verb, ...o }) as never;
 
@@ -32,5 +32,24 @@ describe("owner thread and target matching", () => {
 		assert.equal(targetNodeId({ kind: "kb-entry", id: "nope", domain: "wolfpack" }, has), "dom:wolfpack");
 		assert.equal(targetNodeId({ kind: "kb-entry", id: "nope" }, has), null);
 		assert.equal(targetNodeId({ kind: "domain", id: "wolfpack" }, has), "dom:wolfpack");
+	});
+});
+
+describe("the you node's one link", () => {
+	const hubs = [
+		{ wolf: "1uk4", threadId: "1uk4/feature-a", name: "hub-a" },
+		{ wolf: "1uk4", threadId: "feature-b", name: "hub-b" },
+	];
+	const bodies: Record<string, { wolf: string; name: string }> = { "1uk4": { wolf: "1uk4", name: "body" } };
+	const body = (w: string) => bodies[w];
+
+	it("links only the attached thread's hub, and moves at once when the chat swaps", () => {
+		assert.equal(youLinkTarget({ wolf: "1uk4", threadId: "feature-a" }, hubs, body)?.name, "hub-a");
+		assert.equal(youLinkTarget({ wolf: "1uk4", threadId: "1uk4/feature-b" }, hubs, body)?.name, "hub-b");
+	});
+
+	it("falls back to the wolf's body for a thread that is no feature, and to nothing when no chat is attached", () => {
+		assert.equal(youLinkTarget({ wolf: "1uk4", threadId: "home" }, hubs, body)?.name, "body");
+		assert.equal(youLinkTarget(null, hubs, body), undefined);
 	});
 });

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { Loader2Icon, MicIcon } from "lucide-react";
 import { openPackPage } from "@/components/pack/pack-nav";
+import { useSpaceDictation } from "./space-dictation";
 import { Hint } from "@/components/ui/hint";
 import { useSingleMac } from "@/components/shell/single-mac";
 import { cn } from "@/lib/utils";
@@ -841,6 +842,14 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, [enabled]);
+	useSpaceDictation({
+		enabled,
+		isTarget: () => shortcutHook() === idRef.current,
+		running: () => phaseRef.current !== "idle",
+		toggle,
+		finish: () => finishRef.current(),
+		cancel,
+	});
 	useEffect(() => {
 		window.addEventListener("wolfpack:kbd-cancel-dictation", cancel);
 		return () => window.removeEventListener("wolfpack:kbd-cancel-dictation", cancel);

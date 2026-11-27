@@ -1,6 +1,7 @@
 "use client";
 
 import { graduateStore, useGraduateDone } from "./graduate-store";
+import { ZC } from "@/lib/z-layers";
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -9,7 +10,7 @@ export function GraduateToasts() {
 	const done = useGraduateDone();
 	if (done.length === 0) return null;
 	return (
-		<div className="pointer-events-none fixed bottom-4 right-4 z-50 flex flex-col gap-2" data-testid="graduate-toasts">
+		<div className={`pointer-events-none fixed bottom-4 right-4 ${ZC.toast} flex flex-col gap-2`} data-testid="graduate-toasts">
 			{done.map((d) => (
 				<div key={d.id} role="status" data-testid="graduate-done" data-work={d.id} className="pointer-events-auto flex max-w-sm items-start gap-3 rounded-lg border border-emerald-400/40 bg-card px-3 py-2 text-xs shadow-lg">
 					{d.awaitingApproval ? (

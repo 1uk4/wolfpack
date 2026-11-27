@@ -98,6 +98,9 @@ const { useComposerDraft, appendToDraft, draftKey, writeDraft, useRereadDraftWhe
 const { AttachedThreadProvider, useAttachedThread } = await import("../../../components/chat-bar/attached-thread.tsx");
 const { ChatBar } = await import("../../../components/chat-bar/chat-bar.tsx");
 const { useDictation, DictationBar, joinDictation, useBarShown } = await import("../../../components/composer/dictation.tsx");
+const { setDockSlot } = await import("../../../components/chat-bar/dock-slot.ts");
+/** The empty box the attached thread's page leaves for the docked bar (thread-chat.tsx). */
+const DockSlot = () => <div ref={setDockSlot} data-testid="thread-dock-slot" />;
 const { ATTACHED_KEY } = await import("../../../src/core/thread/chat-bar.ts");
 const { dataStore } = await import("../../../src/core/data-store.ts");
 
@@ -309,7 +312,7 @@ describe("floating chat dictation", () => {
 		await wait();
 		const ws = await say("spoken words");
 		await fire(q('[data-testid="chat-bar-chip"]')!, "click");
-		await fire(q('[data-testid="switcher-action"][data-action="open-thread"]')!, "click");
+		await fire((q('[data-testid="den-thread"][aria-current="true"]')!.closest('[data-testid="den-thread-group"]')!.querySelector('[data-testid="den-thread-open"]') as HTMLElement)!, "click");
 		await endRun(ws);
 		await wait();
 		assert.equal(q('[data-testid="path"]')!.textContent, "/wolf/w/thread/a");
@@ -406,8 +409,8 @@ describe("floating chat dictation: docking details", () => {
 		const ws = await say("words");
 		const before = navLog.stack.length;
 		await fire(q('[data-testid="chat-bar-chip"]')!, "click");
-		await fire(q('[data-testid="switcher-action"][data-action="open-thread"]')!, "click");
-		await fire(q('[data-testid="switcher-action"][data-action="open-thread"]')!, "click");
+		await fire((q('[data-testid="den-thread"][aria-current="true"]')!.closest('[data-testid="den-thread-group"]')!.querySelector('[data-testid="den-thread-open"]') as HTMLElement)!, "click");
+		await fire((q('[data-testid="den-thread"][aria-current="true"]')!.closest('[data-testid="den-thread-group"]')!.querySelector('[data-testid="den-thread-open"]') as HTMLElement)!, "click");
 		await endRun(ws);
 		await wait();
 		assert.equal(navLog.stack.length, before + 1, "one navigation");
@@ -683,12 +686,9 @@ function ThreadPage({ slug }: { slug: "a" | "b" }) {
 		setText(v);
 	});
 	const api = useAttachedThread();
-	const barShown = useBarShown();
-	const barOwns = api?.attached?.threadId === id && barShown;
+	// The attached thread's page has no composer of its own: the bar docks there (the real ThreadChat renders a dock slot).
+	const barOwns = api?.attached?.threadId === id;
 	const d = useThreadDictation(
-		"w",
-		slug,
-		id,
 		(t) => {
 			const v = joinDictation(textRef.current, t);
 			textRef.current = v;
@@ -696,7 +696,6 @@ function ThreadPage({ slug }: { slug: "a" | "b" }) {
 			schedule(v);
 		},
 		(t) => appendToDraft(draftKey("w", id), t),
-		() => writeDraft(draftKey("w", id), textRef.current),
 	);
 	// The floating chat replaces the composer while it owns the input; on return the composer re-reads the draft.
 	useRereadDraftWhenShown(barOwns, "w", id, textRef, (v) => {
@@ -738,345 +737,86 @@ const typeInBar = (v: string) =>
 	});
 const pageToggle = () => q('[data-testid="page-dictation"] [data-testid="dictation-toggle"]')!;
 
-describe("dictation for a thread follows the owner, and stopping decides where the chat goes", () => {
-	it("the mic on the thread's own page dictates in place: the page composer stays with the one meter, and no floating chat shows", async () => {
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		await fire(pageToggle(), "click", { detail: 1 });
+describe("one dictation path: the bar's when a thread is attached, the page's own only with nothing attached", () => {
+	it("on the attached thread's page the bar's run is the only run (the page hook stays idle), and the words land in the docked bar's input, unsent", async () => {
+		await mount("/wolf/w/thread/a", A, <><OnPageA /><DockSlot /></>);
+		assert.equal(pageComposerCount(), 0, "no page composer: the bar is the composer there");
+		assert.ok(q('[data-testid="thread-dock-slot"] [data-testid="chat-bar"]'), "the bar sits in the page's dock slot");
+		await fire(barToggle(), "click", { detail: 1 });
 		await wait();
-		assert.equal(FakeWS.count, 1);
-		assert.equal(q('[data-testid="chat-bar"]'), null, "nothing floats over the page");
-		assert.equal(pageComposerCount(), 1, "the page composer stays");
-		assert.equal(document.querySelectorAll('[data-testid="dictation-bar"]').length, 1, "one meter");
-		assert.ok(q('[data-testid="page-dictation"] [data-testid="dictation-bar"]'), "the page's own meter shows it");
+		const ws = await say("spoken once");
+		await endRun(ws);
+		await wait();
+		assert.equal(FakeWS.count, 1, "one socket");
+		assert.equal(barTa()!.value, "spoken once", "in the docked bar's input");
+		assert.deepEqual(posts, [], "nothing sent");
 	});
 
-	it("dictate, leave, come back to the page: still dictating through the trip, the floating chat only while away", async () => {
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		await fire(pageToggle(), "click", { detail: 1 });
-		await wait();
-		const ws = await say("round trip");
-		await act(async () => go("/graph"));
-		await wait();
-		assert.ok(q('[data-testid="chat-bar"]'), "the floating chat follows while away");
-		assert.equal(ws.readyState, 1, "still live after leaving");
+	it("docking and undocking move the same bar: its element and its input survive, so unsent state is not lost", async () => {
+		await mount("/kb", A, <><OnPageA /><DockSlot /></>);
+		const bar = q('[data-testid="chat-bar"]')!;
+		const input = barTa()!;
+		assert.ok(bar && input);
 		await act(async () => go("/wolf/w/thread/a"));
 		await wait();
-		assert.equal(ws.readyState, 1, "still live after coming back");
-		assert.equal(ws.sent.some((m) => typeof m === "string" && m.includes("CloseStream")), false, "coming back did not ask the run to finish");
-		assert.equal(q('[data-testid="chat-bar"]'), null, "back on the page: the page composer, not the floating chat");
-		assert.equal(document.documentElement.style.getPropertyValue("--chat-bar-reserve"), "", "no reserve left behind");
-		assert.ok(JSON.parse(mem.get(ATTACHED_KEY)!), "not docked");
-		assert.equal(FakeWS.count, 1);
+		assert.equal(q('[data-testid="chat-bar"]'), bar, "the same element after docking");
+		assert.equal(barTa(), input, "the same input after docking");
+		assert.ok(q('[data-testid="thread-dock-slot"]')!.contains(bar), "and it now sits in the page's slot");
+		await act(async () => go("/kb"));
+		await wait();
+		assert.equal(q('[data-testid="chat-bar"]'), bar, "the same element after undocking");
+		assert.equal(barTa(), input, "the same input after undocking");
+		assert.ok(!q('[data-testid="thread-dock-slot"]')!.contains(bar), "and it left the slot");
 	});
 
-	it("stopped on the thread's own page, the run docks and the words are in the page composer, unsent", async () => {
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		await fire(pageToggle(), "click", { detail: 1 });
-		await wait();
-		const ws = await say("on the page");
-		await fire(pageToggle(), "click", { detail: 1 });
-		await endRun(ws);
-		await wait();
-		assert.equal(q('[data-testid="chat-bar"]'), null, "docked");
-		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a", "docking never detaches: still attached");
-		assert.equal(pageTa().value, "on the page");
-		assert.deepEqual(posts, []);
+	it("Cmd+J on the attached thread's page focuses the docked bar's input", async () => {
+		await mount("/wolf/w/thread/a", A, <><OnPageA /><DockSlot /></>);
+		let focusedBar = false;
+		barTa()!.focus = () => void (focusedBar = true);
+		let prevented = false;
+		window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-focus-chat-bar", { detail: { event: { preventDefault: () => void (prevented = true) } } }));
+		assert.ok(prevented && focusedBar);
 	});
 
-	it("the page composer keeps its existing draft while dictating; stopping on the page returns it with the draft plus dictated, unsent", async () => {
-		mem.set("wolfpack:draft:w:w/a", "earlier draft");
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		assert.equal(pageTa().value, "earlier draft");
-		await fire(pageToggle(), "click", { detail: 1 });
-		await wait();
-		assert.equal(pageTa().value, "earlier draft", "the same composer, same text");
-		const ws = await say("dictated");
-		await fire(pageToggle(), "click", { detail: 1 });
-		await endRun(ws);
-		await wait();
-		assert.equal(q('[data-testid="chat-bar"]'), null, "docked");
-		assert.equal(pageTa().value, "earlier draft dictated");
-		assert.deepEqual(posts, []);
-	});
-
-	it("started on the page, stopped after leaving: the floating chat stays with the words in its input, unsent", async () => {
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		await fire(pageToggle(), "click", { detail: 1 });
-		await wait();
-		const ws = await say("carried along");
-		await act(async () => go("/graph"));
-		await wait();
-		assert.ok(q('[data-testid="chat-bar-listening"]'), "the floating chat shows it listening");
-		await key(); // Cmd+D stops it
-		await endRun(ws);
-		await wait();
-		assert.ok(q('[data-testid="chat-bar"]'), "stays");
-		assert.equal(barTa()!.value, "carried along");
-		assert.deepEqual(posts, []);
-	});
-
-	it("Cmd+J on the own page while dictating focuses the page composer", async () => {
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		await fire(pageToggle(), "click", { detail: 1 });
-		await wait();
-		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-focus-chat-bar", { detail: {} })));
-		await wait();
-		assert.equal(document.activeElement, pageTa());
-	});
-
-	it("Esc cancel on the thread's own page docks and the composer keeps only the typed text; elsewhere the chat stays", async () => {
-		mem.set("wolfpack:draft:w:w/a", "typed only");
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		await fire(pageToggle(), "click", { detail: 1 });
-		await wait();
-		await say("thrown away");
-		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-cancel-dictation")));
-		await wait();
-		assert.equal(q('[data-testid="chat-bar"]'), null, "docked");
-		assert.equal(pageTa().value, "typed only", "the composer returns with only the typed text");
-		await act(async () => root?.unmount());
-		root = null;
-		mem.clear();
-		document.body.innerHTML = "";
-		await mount("/kb", A);
+	it("a dictation-autosend event sends what was dictated through the send path and clears the input", async () => {
+		await mount("/wolf/w/thread/a", A, <><OnPageA /><DockSlot /></>);
 		await fire(barToggle(), "click", { detail: 1 });
 		await wait();
-		await say("also thrown away");
-		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-cancel-dictation")));
+		const ws = await say("ship it");
+		await endRun(ws);
 		await wait();
-		assert.ok(q('[data-testid="chat-bar"]'), "stays elsewhere");
-		assert.equal(barTa()!.value, "");
+		assert.equal(barTa()!.value, "ship it");
+		assert.deepEqual(posts, [], "nothing sent yet");
+		await act(async () => void window.dispatchEvent(new dom.window.CustomEvent("wolfpack:dictation-autosend", { detail: { wolf: "w", threadId: "w/a" } })));
+		await wait();
+		assert.equal((posts as string[]).filter((p) => p.includes("/submit")).length, 1, "sent once");
+		assert.equal(barTa()!.value, "", "the input is cleared");
 	});
 
-	it("not dictating, popped out: landing on the thread's page docks it, as before", async () => {
-		await mount("/kb", A, <OnPageA />);
-		assert.ok(q('[data-testid="chat-bar"]'));
-		await act(async () => go("/wolf/w/thread/a"));
-		await wait();
-		assert.equal(q('[data-testid="chat-bar"]'), null);
-		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a", "docking never detaches: still attached");
-	});
-
-	it("phone: on a thread page the dock stays off, so the page keeps the one meter; stopping there docks, and elsewhere the dock stays", async () => {
-		const w = window as unknown as { matchMedia?: unknown };
-		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-		try {
-			await mount("/wolf/w/thread/a", null, <OnPageA />);
-			await fire(pageToggle(), "click", { detail: 1 });
-			await wait();
-			assert.equal(q('[data-testid="chat-bar"]'), null, "no dock over the page composer");
-			assert.equal(document.querySelectorAll('[data-testid="dictation-bar"]').length, 1, "the page keeps the one meter");
-			const ws = await say("phone words");
-			await act(async () => go("/graph"));
-			await wait();
-			assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-layout"), "dock", "the dock follows elsewhere");
-			assert.equal(ws.readyState, 1);
-			await act(async () => go("/wolf/w/thread/a"));
-			await wait();
-			assert.equal(q('[data-testid="chat-bar"]'), null);
-			assert.equal(ws.readyState, 1, "coming back does not stop it");
-			await fire(pageToggle(), "click", { detail: 1 });
-			await endRun(ws);
-			await wait();
-			assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a", "docking never detaches: still attached");
-			assert.equal(pageTa().value, "phone words");
-		} finally {
-			delete w.matchMedia;
-		}
-	});
-
-	it("desktop minimized pill: one live meter while dictating, none when idle", async () => {
-		await mount("/kb", A);
-		await fire(q('[data-testid="chat-bar-minimize"]')!, "click");
-		await wait();
-		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "minimized");
-		assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 0, "idle: no meter");
-		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-toggle-dictation")));
-		await wait();
-		await say("words");
-		assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 1, "dictating: exactly one meter");
-		assert.ok(q('[data-testid="chat-bar"] [data-testid="dictation-meter"]'));
-		await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-toggle-dictation")));
-		await endRun(FakeWS.last!);
-		await wait();
-		assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 0, "stopped: no meter");
-	});
-
-	it("phone minimized dock: one live meter while dictating, none when idle", async () => {
-		const w = window as unknown as { matchMedia?: unknown };
-		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-		try {
-			await mount("/kb", A);
-			await fire(q('[data-testid="chat-bar-minimize"]')!, "click");
-			await wait();
-			assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "minimized");
-			assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 0);
-			await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-toggle-dictation")));
-			await wait();
-			await say("words");
-			assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 1);
-			await act(async () => window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-toggle-dictation")));
-			await endRun(FakeWS.last!);
-			await wait();
-			assert.equal(document.querySelectorAll('[data-testid="dictation-meter"]').length, 0);
-		} finally {
-			delete w.matchMedia;
-		}
-	});
-
-	it("there is no Pop out button on a thread page", async () => {
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		assert.equal(q('[data-testid="pop-out"]'), null);
-		assert.equal(q('[aria-label="Pop out this chat"]'), null);
-	});
-
-	it("the mic on a thread page that is not popped out pops it out, and leaving keeps the run live", async () => {
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		await fire(pageToggle(), "click", { detail: 1 });
-		await wait();
-		const ws = await say("popped by the mic");
-		await act(async () => go("/graph"));
-		await wait();
-		assert.equal(ws.readyState, 1, "still live");
-		assert.ok(q('[data-testid="chat-bar-listening"]'));
-	});
-
-	it("Cmd+D on a thread page that is not popped out does the same", async () => {
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		await key();
-		await wait();
-		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a");
-		const ws = await say("popped by keyboard");
-		await act(async () => go("/graph"));
-		await wait();
-		assert.equal(ws.readyState, 1);
-		assert.equal(FakeWS.count, 1, "one run");
-	});
-
-	it("with thread A popped out, dictating on B's page pops out B and A's words land in A's draft", async () => {
-		await mount("/kb", A, <OnPages />);
+	it("a dictation-autosend event started for another thread (or carrying no thread) sends nothing from this composer", async () => {
+		await mount("/wolf/w/thread/a", A, <><OnPageA /><DockSlot /></>);
 		await fire(barToggle(), "click", { detail: 1 });
 		await wait();
-		const wsA = await say("words for A");
-		await act(async () => go("/wolf/w/thread/b"));
+		const ws = await say("typed here");
+		await endRun(ws);
 		await wait();
+		await act(async () => void window.dispatchEvent(new dom.window.CustomEvent("wolfpack:dictation-autosend", { detail: { wolf: "w", threadId: "w/other" } })));
+		await act(async () => void window.dispatchEvent(new dom.window.CustomEvent("wolfpack:dictation-autosend")));
+		await wait();
+		assert.deepEqual(posts, [], "nothing sent");
+		assert.equal(barTa()!.value, "typed here", "the text stays");
+	});
+
+	it("with nothing attached the page's own run works and the words land in the page composer", async () => {
+		await mount("/wolf/w/thread/a", null, <OnPageA />);
+		assert.equal(mem.get(ATTACHED_KEY), undefined);
 		await fire(pageToggle(), "click", { detail: 1 });
 		await wait();
-		await endRun(wsA);
-		await wait(400);
-		assert.equal(mem.get("wolfpack:draft:w:w/a"), "words for A");
-		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/b");
-		assert.equal(FakeWS.count, 2, "a new run for B");
-		assert.equal(FakeWS.last!.readyState, 0, "B's run was started");
-		await act(async () => FakeWS.last!.open());
-		assert.equal(q('[data-testid="chat-bar"]'), null, "B's own page keeps its composer; no floating chat");
-		assert.equal(FakeWS.last!.readyState, 1, "B's run is live: A's stop did not dock B");
-	});
-
-	it("handoff A to B on B's own page: B's run goes live even when A's stop and B's attach land together", async () => {
-		await mount("/kb", A, <OnPages />);
-		await fire(barToggle(), "click", { detail: 1 });
-		await wait();
-		const wsA = await say("words for A");
-		await act(async () => go("/wolf/w/thread/b"));
-		await wait();
-		await act(async () => {
-			pageToggle().dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { detail: 1 }));
-			wsA.emit("close", { code: 1000 });
-			for (let i = 0; i < 10; i++) await Promise.resolve(); // keep the finish + attach inside this one batch
-		});
-		await wait();
-		await wait();
-		assert.equal(mem.get("wolfpack:draft:w:w/a"), "words for A");
-		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/b", "B popped out, not docked");
-		assert.equal(FakeWS.count, 2, "B's run started");
-		const wsB = FakeWS.last!;
-		await act(async () => wsB.open());
-		assert.equal(wsB.readyState, 1, "B's run is live");
-		await act(async () => go("/graph"));
-		await wait();
-		assert.ok(q('[data-testid="chat-bar-listening"]'), "leaving B's page hands the live run to the floating chat");
-	});
-
-	it("a handoff whose bar run never goes live is dropped after the timeout, so it cannot start a surprise run later", async () => {
-		// No ChatBar mounted: the page's start attaches the thread and waits for a bar that never publishes.
-		const host = document.createElement("div");
-		document.body.appendChild(host);
-		root = createRoot(host);
-		const realSet = globalThis.setTimeout;
-		(globalThis as any).setTimeout = ((fn: () => void, ms?: number, ...a: unknown[]) => realSet(fn, ms === 4000 ? 30 : ms, ...a)) as typeof setTimeout;
-		try {
-			const tree = (withBar: boolean) => (
-				<FakeNav start="/wolf/w/thread/a">
-					<>
-						<ServerEventsProvider connect={fakeSource}>
-							<AttachedThreadProvider>
-								{withBar ? <ChatBar /> : null}
-								<Nav />
-								<OnPageA />
-							</AttachedThreadProvider>
-						</ServerEventsProvider>
-					</>
-				</FakeNav>
-			);
-			await act(async () => root!.render(tree(false)));
-			await wait(80);
-			await fire(pageToggle(), "click", { detail: 1 });
-			await wait(200);
-			await act(async () => root!.render(tree(true)));
-			await wait(200);
-			assert.equal(FakeWS.count, 0, "no surprise run once the bar appears");
-		} finally {
-			globalThis.setTimeout = realSet;
-		}
-	});
-
-	it("Cmd+D stopping on the thread's own page docks it, with the words in the page composer", async () => {
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		await fire(pageToggle(), "click", { detail: 1 });
-		await wait();
-		const ws = await say("by keyboard stop");
-		await key();
+		const ws = await say("fallback words");
 		await endRun(ws);
 		await wait();
-		assert.equal(q('[data-testid="chat-bar"]'), null, "docked");
-		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/a", "docking never detaches: still attached");
-		assert.equal(pageTa().value, "by keyboard stop");
-	});
-
-	it("a double press of the mic during the pop-out handoff gives one run", async () => {
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		await act(async () => {
-			const el = pageToggle();
-			el.dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { detail: 1 }));
-			for (let i = 0; i < TICKS; i++) await Promise.resolve();
-			el.dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { detail: 1 }));
-		});
-		await wait();
-		await wait();
-		assert.equal(FakeWS.count, 1, "one run");
-		const ws = FakeWS.last!;
-		await act(async () => ws.open());
-		await endRun(ws);
-		await wait();
-		assert.equal(FakeWS.count, 1, "no surprise second run after the first ends");
-	});
-
-	it("Cmd+D right after the pop-out (before the page hook is disabled) gives one run", async () => {
-		await mount("/wolf/w/thread/a", null, <OnPageA />);
-		await act(async () => {
-			pageToggle().dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { detail: 1 }));
-			for (let i = 0; i < TICKS; i++) await Promise.resolve();
-			window.dispatchEvent(new dom.window.CustomEvent("wolfpack:kbd-toggle-dictation"));
-		});
-		await wait();
-		await wait();
-		assert.equal(FakeWS.count, 1, "one run");
-		const ws = FakeWS.last!;
-		await act(async () => ws.open());
-		await endRun(ws);
-		await wait();
-		assert.equal(FakeWS.count, 1, "no surprise second run after the first ends");
+		assert.equal(pageTa().value, "fallback words");
+		assert.equal(mem.get(ATTACHED_KEY), undefined, "dictating does not attach anything");
 	});
 
 	it("/chat/new has no thread to pop out: its own run, and leaving saves the words and stops the mic", async () => {

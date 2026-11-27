@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { ZC } from "@/lib/z-layers";
 import { createPortal } from "react-dom";
 import { ChevronRight as ChevronRightIcon, SettingsIcon } from "lucide-react";
 import { usePopoverDismiss } from "@/components/shell/popover-dismiss";
@@ -122,7 +123,7 @@ export function GraphSettingsControl({
 	const rootRef = useRef<HTMLDivElement>(null);
 	const sheetRef = useRef<HTMLDivElement>(null);
 	// Below md the panel is a bottom sheet. The toolbar it lives in is its own stacking context (z-10), under the floating chat bar
-	// (z-30), so the sheet is rendered in a portal on <body> there and sits above the chat bar. From md up it stays the popover.
+	// (z-40), so the sheet is rendered in a portal on <body> there and sits above the chat bar. From md up it stays the popover.
 	const [phone, setPhone] = useState(false);
 	useEffect(() => {
 		const mq = window.matchMedia("(max-width: 767px)");
@@ -173,7 +174,7 @@ export function GraphSettingsControl({
 					ref={sheetRef}
 					role="dialog"
 					aria-label="Graph settings"
-					className="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-[12px] border-t border-border/60 bg-card/80 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-200 md:absolute md:inset-x-auto md:bottom-auto md:right-0 md:top-full md:mt-2 md:max-h-[70vh] md:w-72 md:rounded-[12px] md:border md:pb-3"
+					className={`fixed inset-x-0 bottom-0 ${ZC.menu} flex max-h-[80vh] flex-col rounded-t-[12px] border-t border-border/60 bg-card/80 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-200 md:absolute md:inset-x-auto md:bottom-full md:right-0 md:top-auto md:mb-2 md:max-h-[70vh] md:w-72 md:rounded-[12px] md:border md:pb-3`}
 				>
 					<span aria-hidden className="mx-auto mb-2 h-1 w-9 shrink-0 rounded-full bg-border md:hidden" />
 					<div className="flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain pr-1">

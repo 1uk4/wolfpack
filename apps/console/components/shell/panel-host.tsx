@@ -5,6 +5,7 @@ import { ActivityIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MemoryPanel } from "@/components/memory/memory-panel";
 import { MOBILE_QUERY, MEMORY_PANEL_OPEN_KEY, RIGHT_PANEL_KEY, parseOpen, parseSelections, resolveSelected, serializeOpen, serializeSelections, withSelection } from "@/src/core";
+import { ZC } from "@/lib/z-layers";
 
 export type PanelProps = Record<string, unknown>;
 
@@ -192,7 +193,7 @@ export function RightPanelHost() {
 	// < md: open = a full-screen overlay (never a 320px column squeezing the transcript); closed = a floating 44px handle. md+ unchanged.
 	return (
 		<aside
-			className={open ? "relative flex w-80 shrink-0 flex-col border-l border-border text-sm max-md:fixed max-md:inset-0 max-md:z-50 max-md:w-full max-md:border-l-0 max-md:bg-background max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]" : "hidden"}
+			className={open ? `relative flex w-80 shrink-0 flex-col border-l border-border text-sm max-md:fixed max-md:inset-0 ${ZC.overlayPhone} max-md:w-full max-md:border-l-0 max-md:bg-background max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]` : "hidden"}
 			data-testid="panel-host"
 			data-open={open}
 			data-panel={selected}

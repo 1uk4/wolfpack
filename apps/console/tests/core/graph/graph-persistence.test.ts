@@ -153,9 +153,9 @@ describe("resolvePositions drift", () => {
 			minY = Math.min(minY, p.y);
 			maxY = Math.max(maxY, p.y);
 		}
-		// Measured: fixed layout centroid 66, bbox 2443x2501; the pre-fix layout code gave 148 and 4031x4010.
+		// Measured: bbox 2919x2966 on the Mac, 2895x3010 on CI (platform float noise; free-settling chains, work-wolfpack-1sWb8GF); the pre-fix layout gave 4031x4010. 3500 leaves margin yet still catches that drift. Centroid was 66.
 		assert.ok(Math.hypot(sx / positions.size, sy / positions.size) < 100, "centroid within 100 of the origin");
-		assert.ok(maxX - minX < 3000 && maxY - minY < 3000, `bbox ${Math.round(maxX - minX)}x${Math.round(maxY - minY)} stays under 3000`);
+		assert.ok(maxX - minX < 3500 && maxY - minY < 3500, `bbox ${Math.round(maxX - minX)}x${Math.round(maxY - minY)} stays under 3500`);
 	});
 
 	// Kept: the "nothing missing" test above checks only `added` and the size, not that

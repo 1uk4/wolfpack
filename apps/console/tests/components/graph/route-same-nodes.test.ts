@@ -4,6 +4,7 @@
  * sim keeps running and every node drags as on the normal map. Drives the
  * actual GraphCanvasRenderer on a stubbed canvas.
  */
+import { zoomIdentity } from "d3-zoom";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -61,6 +62,8 @@ async function setup() {
 		subClusters: [{ id: "x", label: null, members: nodes.map((n) => n.id), color: "#fff" }],
 		colors: { node: "#fff", edge: "#aaa", label: "#bbb", hoverText: "#ccc" }, fontFamily: "x",
 	});
+	// The first load always fits (work-wolfpack-2wEvr00) and replaces the stored camera; the pointer events below assume this view, so set it after the fit.
+	r.transform = zoomIdentity.translate(400, 300);
 	return { r, nodes };
 }
 const discs = (r: any): number[][] => r.nodeGroups.flatMap((g: any) => g.path.pts);

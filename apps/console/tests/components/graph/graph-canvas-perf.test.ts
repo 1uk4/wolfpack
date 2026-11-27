@@ -2,6 +2,7 @@
  * Graph load/frame cost guards, driven through the real GraphCanvasRenderer on a recording canvas:
  * physics tuning is compared by value (no startup re-anneal), sim frames don't re-measure labels.
  */
+import { zoomIdentity } from "d3-zoom";
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 
@@ -51,6 +52,8 @@ async function setup(count = 3, view = { k: 1, x: 400, y: 300 }) {
 		subClusters: [{ id: "x", label: null, members: nodes.map((n) => n.id), color: "#fff" }],
 		colors: { node: "#fff", edge: "#aaa", label: "#bbb", hoverText: "#ccc" }, fontFamily: "x",
 	});
+	// The first load always fits (work-wolfpack-2wEvr00) and replaces the stored camera; these tests assume the given view, so set it after the fit.
+	r.transform = zoomIdentity.translate(view.x, view.y).scale(view.k);
 	await pump();
 	return r;
 }

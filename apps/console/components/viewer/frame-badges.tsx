@@ -7,7 +7,7 @@ import { viewKey } from "./view-descriptor";
 import { dismissFrame, useFrameBadges } from "./frame-store";
 import { openView, useViewer } from "./viewer-store";
 import { setVizMode } from "./viz-mode";
-import { useEyeOpen } from "@/src/core/ui/bar-eye";
+import { useEyeOpen } from "@/components/chat-bar/use-bar-eye";
 
 /**
  * One horizontally scrolling row of eye + title badges, one per frame the wolf showed in the thread. Tap opens that frame in

@@ -132,7 +132,7 @@ const bottomComposers = () => qa('[data-testid="composer"]').filter((f) => !f.cl
 const sendBtn = () => q('[data-testid="composer"] button[type="submit"]')!;
 const switchTo = async (id: string) => {
 	await click(q('[data-testid="chat-bar-chip"]'));
-	await click(qa('[data-testid="switcher-entry"]').find((e) => e.getAttribute("data-thread") === id)!);
+	await click(qa('[data-testid="den-thread"]').find((e) => e.getAttribute("data-thread") === id)!);
 	await flush();
 };
 

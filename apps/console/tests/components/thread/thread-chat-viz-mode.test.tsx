@@ -361,7 +361,7 @@ describe("thread visualization mode", () => {
 			assert.ok(q('[data-testid="chat-bar"]'), "the bar shows for its own target");
 			assert.equal(q('[data-testid="chat-bar-needs-you"]')?.getAttribute("data-thread"), "1uk4/waiting");
 			await click(q('[data-testid="chat-bar-chip"]')!);
-			assert.ok(q('[data-testid="chat-bar-switcher"]'), "the switcher opens");
+			assert.ok(q('[data-testid="den-sheet"]'), "the switcher opens");
 		});
 	});
 

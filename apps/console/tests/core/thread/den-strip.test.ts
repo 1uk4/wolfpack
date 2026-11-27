@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Card } from "@wolfpack/client";
-import { buildDenStrip, denLabel } from "../../../src/core/thread/den-strip.ts";
+import { buildSwitcher } from "../../../src/core/thread/chat-bar.ts";
+import { buildDenSheet, buildDenStrip, denLabel } from "../../../src/core/thread/den-strip.ts";
 import type { NeedsYouItem } from "../../../src/core/thread/needs-you.ts";
 
 const card = (title: string): Card => ({ tool: "ask", title, fields: [] }) as unknown as Card;
@@ -54,9 +55,34 @@ describe("buildDenStrip", () => {
 		assert.match(strip[1]!.color, /^#[0-9a-f]{6}$/i, "automatic: one of the palette's hex colours");
 	});
 
+	it("marks only the swap wolf as swapping, and names each wolf's home thread for the sheet's move-chat button", () => {
+		const wolves = [{ name: "w" }, { name: "hal" }];
+		const threads = { w: [t("w/home", "idle", { kind: "home" }), t("w/a")], hal: [t("hal/b")] };
+		const strip = buildDenStrip(wolves, threads, [], "w");
+		assert.deepEqual(strip.map((s) => [s.wolf, s.swap, s.homeThreadId]), [["w", true, "w/home"], ["hal", false, undefined]]);
+		assert.deepEqual(buildDenStrip(wolves, threads, []).map((s) => s.swap), [false, false], "nothing to swap: every wolf shows its mark");
+	});
+
 	it("labels the button with the wolf, whether it is working and how many need you", () => {
 		assert.equal(denLabel({ wolf: "w", working: true, needsYou: 2 }), "w, working, 2 need you");
 		assert.equal(denLabel({ wolf: "w", working: false, needsYou: 1 }), "w, 1 needs you");
 		assert.equal(denLabel({ wolf: "w", working: false, needsYou: 0 }), "w");
+	});
+
+	it("sheet: the wolf's threads, home first then buildSwitcher's order, each with its own needs-you rows, the current one marked, the swap state carried", () => {
+		const wolves = [{ name: "hal" }];
+		// Newest last on the wire: b is waiting, c is the newest, a the oldest; buildSwitcher gives [b (waiting), home, c, a].
+		const threads = { hal: [t("hal/a"), t("hal/home", "idle", { kind: "home" }), t("hal/b", "needs-you"), t("hal/c")] };
+		const needs = [item("hal", "hal/b", "B", "Restart?"), item("hal", "hal/sub", "Child", "Which file?")];
+		const groups = buildSwitcher(wolves, threads);
+		const strip = buildDenStrip(wolves, threads, needs, "hal");
+		const sheet = buildDenSheet(strip[0]!, groups[0], { wolf: "hal", threadId: "hal/c" });
+		assert.deepEqual(sheet.threads.map((x) => x.threadId), ["hal/home", "hal/b", "hal/c", "hal/a"], "home first, the rest in switcher order");
+		assert.deepEqual(sheet.threads.map((x) => [x.needsYou, x.current]), [[0, false], [1, false], [0, true], [0, false]]);
+		assert.deepEqual(sheet.threads[1]!.rows.map((r) => r.summary), ["Restart?"]);
+		assert.deepEqual(sheet.other.map((r) => r.summary), ["Which file?"], "a card on a thread that is not in the list stays reachable");
+		assert.equal(sheet.swap, true);
+		assert.equal(sheet.online, true);
+		assert.deepEqual(buildDenSheet(buildDenStrip(wolves, threads, [])[0]!, undefined, null).threads, [], "a wolf with no list has no threads");
 	});
 });

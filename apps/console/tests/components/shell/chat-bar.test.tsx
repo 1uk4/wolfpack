@@ -248,7 +248,7 @@ describe("ChatBar", () => {
 		}
 		await mount("/kb", A, <Path />);
 		await click(q('[data-testid="chat-bar-chip"]'));
-		await click(q('[data-testid="switcher-action"][data-action="open-thread"]'));
+		await click((q('[data-testid="den-thread"][aria-current="true"]')!.closest('[data-testid="den-thread-group"]')!.querySelector('[data-testid="den-thread-open"]') as HTMLElement));
 		await wait();
 		assert.equal(q('[data-testid="path"]')?.textContent, "/wolf/w/thread/a");
 		assert.equal(q('[data-testid="chat-bar"]'), null);
@@ -261,7 +261,8 @@ describe("ChatBar", () => {
 		it("shows 'Swap to <thread>' on a mismatch only; none on the attached page or a non-thread page", async () => {
 			await mount("/wolf/w/thread/b", A);
 			assert.equal(swap()?.getAttribute("aria-label"), "Swap to w/b");
-			assert.match(swap()!.textContent ?? "", /Swap to w\/b/);
+			assert.equal(q('[data-testid="chat-bar-swap-wrap"]'), null, "the separate Swap pill is gone: the den button is the control");
+			assert.equal(swap()?.getAttribute("data-swap"), "true");
 			assert.equal(document.querySelectorAll('[data-testid="chat-bar"]').length, 1);
 			await act(async () => root?.unmount());
 			document.body.innerHTML = "";
@@ -285,7 +286,6 @@ describe("ChatBar", () => {
 			await mount("/wolf/w/thread/b", A);
 			assert.equal(swap()?.getAttribute("aria-label"), "Answer w/b");
 			assert.equal(swap()?.getAttribute("data-needs-you"), "true");
-			assert.match(swap()!.textContent ?? "", /^Answer w\/b$/);
 			await click(swap());
 			await wait();
 			assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/b");
@@ -479,7 +479,7 @@ describe("real keydown through KeyboardShortcuts", () => {
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "open");
 		await keydown({ key: "j", metaKey: true, shiftKey: true });
 		await wait();
-		assert.equal(q('[data-testid="chat-bar-switcher"]')?.getAttribute("data-layout"), "popover");
+		assert.equal(q('[data-testid="den-sheet"]')?.getAttribute("data-layout"), "inline");
 	});
 	it("Cmd+J is left to the browser with nothing attached", async () => {
 		await mountWithKeys("/kb");

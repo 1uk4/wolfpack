@@ -345,50 +345,50 @@ describe("ChatBar on a phone", () => {
 		assert.equal(ta().value, "keep me");
 	});
 
-	it("the switcher is a bottom sheet with 44px rows on phone and a popover on desktop", async () => {
+	it("the tree has 44px rows and always-on icon buttons on phone, inside the bar on both layouts", async () => {
 		await mount();
 		await click(q('[data-testid="chat-bar-chip"]'));
-		assert.equal(q('[data-testid="chat-bar-switcher"]')!.getAttribute("data-layout"), "sheet");
-		assert.match(q('[data-testid="switcher-entry"]')!.className, /min-h-11/);
-		assert.match(q('[data-testid="switcher-action"]')!.className, /min-h-11/);
-		await click(q('[data-testid="switcher-close"]'));
-		assert.equal(q('[data-testid="chat-bar-switcher"]'), null);
+		assert.equal(q('[data-testid="den-sheet"]')!.getAttribute("data-layout"), "inline");
+		assert.match(q('[data-testid="den-thread"]')!.className, /min-h-11/);
+		assert.match(q('[data-testid="den-thread-open"]')!.className, /max-md:min-h-11/);
+		await click(q('[data-testid="chat-bar-chip"]'));
+		assert.equal(q('[data-testid="den-sheet"]'), null);
 		await resize(false);
 		await click(q('[data-testid="chat-bar-chip"]'));
-		assert.equal(q('[data-testid="chat-bar-switcher"]')!.getAttribute("data-layout"), "popover");
-		assert.equal(q('[data-testid="switcher-close"]'), null);
+		assert.equal(q('[data-testid="den-sheet"]')!.getAttribute("data-layout"), "inline");
 	});
 
 	it("the switcher lists the thread waiting on the owner first with an amber count, and picking it attaches the bar to it", async () => {
 		threadStatus = { "w/c": "needs-you" };
 		await mount();
 		await click(q('[data-testid="chat-bar-chip"]'));
-		assert.equal(q('[data-testid="switcher-wolf-count"]')!.textContent, "1");
-		const entries = qa('[data-testid="switcher-entry"]');
-		assert.equal(entries[0]!.getAttribute("data-thread"), "w/c");
-		assert.equal(entries[0]!.querySelector('[data-testid="switcher-entry-waiting"]')!.getAttribute("aria-label"), "waiting on you");
-		await click(entries[0]!);
+		assert.equal(q('[data-testid="den-sheet-count"]')!.textContent, "1");
+		const entries = qa('[data-testid="den-thread"]');
+		assert.equal(entries[0]!.getAttribute("data-thread"), "w/home", "the home thread leads");
+		assert.equal(entries[1]!.getAttribute("data-thread"), "w/c", "then the waiting thread");
+		assert.equal(entries[1]!.querySelector('[data-testid="den-thread-count"]')!.getAttribute("aria-label"), "1 waiting for you");
+		await click(entries[1]!);
 		await flush();
 		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/c");
-		assert.equal(q('[data-testid="chat-bar-switcher"]'), null, "the switcher closes after a pick");
+		assert.equal(q('[data-testid="den-sheet"]'), null, "the switcher closes after a pick");
 	});
 
 	it("the open switcher keeps its order when a status changes, showing the new status in place; the next open re-sorts", async () => {
 		threadStatus = { "w/c": "needs-you" };
 		await mount();
 		await click(q('[data-testid="chat-bar-chip"]'));
-		const order = () => qa('[data-testid="switcher-entry"]').map((e) => e.getAttribute("data-thread"));
+		const order = () => qa('[data-testid="den-thread"]').map((e) => e.getAttribute("data-thread"));
 		const before = order();
-		assert.equal(before[0], "w/c");
-		const b = () => qa('[data-testid="switcher-entry"]').find((e) => e.getAttribute("data-thread") === "w/b")!;
-		assert.equal(b().querySelector('[data-testid="switcher-entry-waiting"]'), null);
+		assert.equal(before[1], "w/c");
+		const b = () => qa('[data-testid="den-thread"]').find((e) => e.getAttribute("data-thread") === "w/b")!;
+		assert.equal(b().querySelector('[data-testid="den-thread-count"]'), null);
 		await emit("needs-you-changed", { wolf: "w", threadId: "w/b", status: "needs-you" });
 		assert.deepEqual(order(), before, "nothing jumps under the pointer");
-		assert.equal(b().querySelector('[data-testid="switcher-entry-waiting"]')?.getAttribute("aria-label"), "waiting on you", "the live status shows in place");
-		assert.equal(q('[data-testid="switcher-wolf-count"]')!.textContent, "2", "the wolf's count is live too");
-		await click(q('[data-testid="switcher-close"]'));
+		assert.equal(b().querySelector('[data-testid="den-thread-count"]')?.getAttribute("aria-label"), "1 waiting for you", "the live status shows in place");
+		assert.equal(q('[data-testid="den-sheet-count"]')!.textContent, "2", "the wolf's count is live too");
 		await click(q('[data-testid="chat-bar-chip"]'));
-		assert.deepEqual(order().slice(0, 2).sort(), ["w/b", "w/c"], "the next open puts both waiting threads first");
+		await click(q('[data-testid="chat-bar-chip"]'));
+		assert.deepEqual(order().slice(1, 3).sort(), ["w/b", "w/c"], "the next open puts both waiting threads right after home");
 	});
 
 	it("picking a thread waiting on the owner shows its questionnaire in the bar", async () => {
@@ -398,7 +398,7 @@ describe("ChatBar on a phone", () => {
 		await mount();
 		assert.equal(q('[data-testid="bar-card"]'), null);
 		await click(q('[data-testid="chat-bar-chip"]'));
-		await click(qa('[data-testid="switcher-entry"]').find((e) => e.getAttribute("data-thread") === "w/c")!);
+		await click(qa('[data-testid="den-thread"]').find((e) => e.getAttribute("data-thread") === "w/c")!);
 		await until(() => q('[data-testid="bar-card"]'), "the questionnaire");
 		assert.match(q('[data-testid="bar-card"]')!.textContent!, /Which color\?/, "the question is in the bar");
 	});
@@ -410,13 +410,13 @@ describe("ChatBar on a phone", () => {
 		const press = () => act(async () => void window.dispatchEvent(new dom.window.CustomEvent(kbdEventForAction("chat-bar-switcher"), { detail: {} })));
 		await mount();
 		await press();
-		assert.ok(q('[data-testid="chat-bar-switcher"]'), "the shortcut opens it");
-		await click(q('[data-testid="switcher-action"][data-action="open-thread"]')); // closes it
+		assert.ok(q('[data-testid="den-sheet"]'), "the shortcut opens it");
+		await click((q('[data-testid="den-thread"][aria-current="true"]')!.closest('[data-testid="den-thread-group"]')!.querySelector('[data-testid="den-thread-open"]') as HTMLElement)); // closes it
 		setVizActive({ wolf: "w", threadId: "w/a" });
 		try {
 			await flush();
 			await press();
-			assert.equal(q('[data-testid="chat-bar-switcher"]'), null);
+			assert.equal(q('[data-testid="den-sheet"]'), null);
 		} finally {
 			setVizActive(null);
 		}
@@ -495,7 +495,7 @@ describe("ChatBar on a phone", () => {
 		assert.equal(reserve(), "");
 	});
 
-	it("the dock hides on the attached thread's own page (the page composer is the chat); on another thread's page it floats with a thumb-sized swap pill and reserves its height for the page; the desktop pill does the same; other pages keep it", async () => {
+	it("the dock hides on the attached thread's own page (the page composer is the chat); on another thread's page it floats with a thumb-sized swap den button and reserves its height for the page; the desktop pill does the same; other pages keep it", async () => {
 		const top = () => document.documentElement.style.getPropertyValue("--chat-bar-top");
 		const over = () => document.documentElement.style.getPropertyValue("--chat-bar-over");
 		// The pad is measured from the viewport bottom up to the bar's top (or the pill's, which floats 40px above the bar): an 800px viewport, a 90px bar.
@@ -513,16 +513,17 @@ describe("ChatBar on a phone", () => {
 		startPath = "/wolf/w/thread/b";
 		await mount(A);
 		assert.equal(bar().getAttribute("data-layout"), "dock", "another thread page: the dock floats");
-		assert.match(q('[data-testid="chat-bar-swap"]')!.className, /min-h-11/, "swap pill is thumb-sized");
-		assert.equal(over(), "130px", "the page pads its bottom by the dock's height and the pill above it");
+		assert.match(q('[data-testid="chat-bar-swap"]')!.className, /max-md:size-11/, "the swap den button is thumb-sized");
+		assert.equal(q('[data-testid="chat-bar-swap-wrap"]'), null, "no separate swap pill any more");
+		assert.equal(over(), "90px", "the page pads its bottom by the dock's height");
 		await act(async () => root?.unmount());
 		root = null;
 		document.body.innerHTML = "";
 		phone = false;
 		await mount(A);
 		assert.ok(q('[data-testid="chat-bar-swap"]'), "desktop: the pill floats over another thread page too");
-		assert.equal(over(), "142px", "pill: the bar's height, its 12px float and the swap pill above it");
-		assert.equal(top(), "142px", "--chat-bar-top reaches the swap pill, the same as the page pad");
+		assert.equal(over(), "102px", "the bar's height plus its 12px float");
+		assert.equal(top(), "102px", "--chat-bar-top is the bar top plus its 12px offset, the same as the page pad");
 		await act(async () => root?.unmount());
 		root = null;
 		document.body.innerHTML = "";
@@ -551,7 +552,7 @@ describe("ChatBar on a phone", () => {
 		};
 		startPath = "/wolf/w/thread/b";
 		await mount(A);
-		assert.equal(over(), "130px");
+		assert.equal(over(), "90px");
 		top = 200; // the keyboard lifts the dock far up: 800 - 160 = 640 would squeeze the page to nothing
 		await fire("resize");
 		await flush();
@@ -560,7 +561,7 @@ describe("ChatBar on a phone", () => {
 		await fire("scroll");
 		await fire("resize");
 		await flush();
-		assert.equal(over(), "190px", "re-measured");
+		assert.equal(over(), "150px", "re-measured");
 		await click(q('[data-testid="bar-sheet-open"]'));
 		await flush();
 		assert.equal(bar().getAttribute("data-state"), "sheet");

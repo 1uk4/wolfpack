@@ -38,6 +38,7 @@ import { newRepeller, repelStep, setRep, type Repeller } from "./live-repel";
 import { redact } from "@/src/core";
 import { emptyKbLife, isKbVerb, kbLifeRate, reduceKbLife, stepKbLife } from "@/src/core";
 import { drawKbLife, type KbFocus } from "./kb-life-draw";
+import { isMotionReduced, type MotionMode } from "@/src/core/graph/live/motion-mode";
 
 export interface Pt { x: number; y: number }
 export interface OverlayHost {
@@ -57,8 +58,8 @@ export interface OverlayHost {
 	colors: { node: string; edge: string; label: string; hoverText: string };
 	fontFamily: string;
 }
-export interface OverlaySettings { enabled: boolean; intensity: number; trailSec: number; subagentFadeSec: number }
-export const LIVE_DEFAULTS: OverlaySettings = { enabled: true, intensity: 1, trailSec: 15, subagentFadeSec: 15 };
+export interface OverlaySettings { enabled: boolean; intensity: number; trailSec: number; subagentFadeSec: number; motion: MotionMode }
+export const LIVE_DEFAULTS: OverlaySettings = { enabled: true, intensity: 1, trailSec: 15, subagentFadeSec: 15, motion: "follow" };
 
 /** `settings.live ?? defaults`, typed loosely so it works before and after the settings panel gains the field. */
 export function liveSettingsOf(settings: unknown): OverlaySettings {
@@ -69,6 +70,7 @@ export function liveSettingsOf(settings: unknown): OverlaySettings {
 		intensity: num(l.intensity, LIVE_DEFAULTS.intensity, 1, 5),
 		trailSec: num(l.trailSec, LIVE_DEFAULTS.trailSec, 0, 300),
 		subagentFadeSec: num(l.subagentFadeSec, LIVE_DEFAULTS.subagentFadeSec, 0, 300),
+		motion: l.motion === "always" ? "always" : "follow",
 	};
 }
 
@@ -286,9 +288,9 @@ export class LiveOverlay {
 	get mobile(): boolean {
 		return this.mobileNow;
 	}
-	/** Read live, so a change of the OS setting applies without a reload. */
+	/** Movement is off: the OS asks for reduced motion and the setting follows it. State effects (rings, glows) still run, as fades. Read live. */
 	get reduced(): boolean {
-		return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		return isMotionReduced(this.settings.motion);
 	}
 
 	constructor(private readonly requestFrame: () => void) {
@@ -460,11 +462,18 @@ export class LiveOverlay {
 	needsFrames(now: number): boolean {
 		this.need = "none";
 		if (!this.settings.enabled) return false;
-		if (this.reduced) return false; // reduced motion: a still picture (rings, glows and positions are static)
 		if (typeof document !== "undefined" && document.hidden) return false; // a hidden tab animates nothing; visibilitychange wakes the loop
 		this.wall = Date.now();
-		this.need = this.classifyNeed(now);
+		this.need = this.reduced ? this.classifyReducedNeed() : this.classifyNeed(now);
 		return this.need !== "none";
+	}
+
+	/** Reduced motion: nothing moves, so only the state effects (working and needs-you rings, fading in place) ask for frames, at the slow rate. */
+	private classifyReducedNeed(): FrameNeed {
+		this.markWorking();
+		if (this.workingSet.size > 0) return "slow";
+		for (const w in this.state.wolves) if (this.state.wolves[w]!.needsYou) return "slow";
+		return "none";
 	}
 
 	/** fast > float > slow. No spreads or Object.values here: this runs on every rAF. The idle float holds the loop (at its own, lower, rate) while any wolf is shown; it also carries the needs-you ring's breathing. */
@@ -1111,6 +1120,7 @@ export class LiveOverlay {
 
 		// Trails: the path the wolf took to the thing it touched, fading over trailSec.
 		for (const t of s.trails) {
+			if (reduced) break; // no travel trails under reduced motion
 			const to = this.resolveTo(t.target, !t.subagentKey && !t.featureKey && t.wolf !== HUB_WOLF, host);
 			const from = this.trailStart(t);
 			if (!to || !from) continue;
@@ -1344,7 +1354,7 @@ export class LiveOverlay {
 			ctx.strokeStyle = rgba(color, 0.95);
 			ctx.stroke();
 		} else {
-			const pulse = st.pulse && !reduced ? 0.7 + 0.3 * Math.sin(now / 450) : 1;
+			const pulse = st.pulse ? 0.7 + 0.3 * Math.sin(now / (reduced ? 900 : 450)) : 1; // a slow fade under reduced motion
 			const a = ctx.globalAlpha;
 			ctx.beginPath();
 			safeArc(ctx, it.x, it.y, rr, 0, Math.PI * 2);
@@ -1411,7 +1421,7 @@ export class LiveOverlay {
 		if (reduced) {
 			ctx.beginPath();
 			safeArc(ctx, it.x, it.y, it.r * 1.9, 0, Math.PI * 2);
-			ctx.strokeStyle = rgba(it.color, 0.5 * it.alpha);
+			ctx.strokeStyle = rgba(it.color, (0.35 + 0.2 * Math.sin(now / 900)) * it.alpha); // fades in place, no movement
 			ctx.stroke();
 			return;
 		}

@@ -34,6 +34,7 @@
  * fine-grained log sliders (user: "very fine tunable... good as they are").
  */
 
+import { sanitizeMotionMode, type MotionMode } from "./live/motion-mode.ts";
 import {
 	CHARGE_STRENGTH,
 	CLUSTER_PULL_STRENGTH,
@@ -102,8 +103,10 @@ export interface LiveSettings {
 	trailSec: number;
 	/** Animation intensity, 1 (calm) to 5 (lively). */
 	intensity: number;
+	/** 'Live map motion': follow the system's Reduce motion switch (default) or always animate. */
+	motion: MotionMode;
 }
-export const DEFAULT_LIVE_SETTINGS: LiveSettings = { enabled: true, subagentFadeSec: 15, trailSec: 15, intensity: 1 };
+export const DEFAULT_LIVE_SETTINGS: LiveSettings = { enabled: true, subagentFadeSec: 15, trailSec: 15, intensity: 1, motion: "follow" };
 
 /** Upper end of the fade and trail sliders, seconds. */
 export const LIVE_SEC_MAX = 300;
@@ -140,6 +143,7 @@ export function sanitizeLiveSettings(input: Partial<LiveSettings> | null | undef
 		subagentFadeSec: num(input?.subagentFadeSec, d.subagentFadeSec, 0, LIVE_SEC_MAX),
 		trailSec: num(input?.trailSec, d.trailSec, 0, LIVE_SEC_MAX),
 		intensity: Math.round(num(input?.intensity, d.intensity, 1, 5)),
+		motion: sanitizeMotionMode(input?.motion),
 	};
 }
 

@@ -14,7 +14,8 @@
  * work cards next to it).
  */
 
-import type { ComponentType, ReactNode } from "react";
+import { useEffect, useState, type ComponentType, type ReactNode } from "react";
+import { osPrefersReducedMotion, type MotionMode } from "@/src/core/graph/live/motion-mode";
 import { Blend, EyeOff, Expand, Ghost, Gauge, Kanban, LayoutGrid, Layers, Radio, Route, Tags } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
 import {
@@ -203,10 +204,48 @@ function SecondsSlider({
 	);
 }
 
-/** Animation intensity 1 (minimal) to 5 (lively), a segmented control. Reduced motion still wins in the overlay. */
+/** 'Live map motion': follow the system's Reduce motion switch, or always animate. */
+function MotionControl({ value, onChange }: { value: MotionMode; onChange: (m: MotionMode) => void }) {
+	const [osReduced, setOsReduced] = useState(false);
+	useEffect(() => {
+		setOsReduced(osPrefersReducedMotion());
+	}, []);
+	const options: { id: MotionMode; label: string }[] = [
+		{ id: "follow", label: "Follow system" },
+		{ id: "always", label: "Always animate" },
+	];
+	return (
+		<div className="flex flex-col gap-1 py-1">
+			<div className="flex min-h-11 items-center gap-2 md:min-h-7">
+				<span className="w-16 shrink-0 text-[11px] text-muted-foreground">Live map motion</span>
+				<div role="radiogroup" aria-label="Live map motion" className="grid min-w-0 flex-1 grid-cols-2 rounded-[8px] bg-muted/70 p-0.5 ring-1 ring-border/60">
+					{options.map((o) => (
+						<button
+							key={o.id}
+							type="button"
+							role="radio"
+							aria-checked={value === o.id}
+							onClick={() => onChange(o.id)}
+							className={`flex min-h-11 items-center justify-center rounded-[6px] px-1 text-[11px] md:min-h-6 ${
+								value === o.id ? "bg-background text-foreground shadow-sm ring-1 ring-border/60" : "text-muted-foreground hover:text-foreground"
+							}`}
+						>
+							{o.label}
+						</button>
+					))}
+				</div>
+			</div>
+			{value === "follow" && osReduced ? (
+				<p className="text-[10px] leading-snug text-muted-foreground">Your system has Reduce motion on: wolves show state but don't move.</p>
+			) : null}
+		</div>
+	);
+}
+
+/** Animation intensity 1 (minimal) to 5 (lively), a segmented control. */
 function IntensityControl({ value, onChange }: { value: number; onChange: (n: number) => void }) {
 	return (
-		<Hint label="Animation intensity: 1 is minimal, 5 is lively. Reduced motion always wins." side="bottom">
+		<Hint label="Animation intensity: 1 is minimal, 5 is lively. Reduced motion only stops movement." side="bottom">
 			<div className="flex min-h-11 items-center gap-2 md:min-h-7">
 				<Gauge className="size-3.5 shrink-0 text-muted-foreground" />
 				<span className="w-16 shrink-0 text-[11px] text-muted-foreground">Intensity</span>
@@ -356,6 +395,7 @@ export function SimpleControls({
 					value={settings.live.intensity}
 					onChange={(n) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, intensity: n } }))}
 				/>
+				<MotionControl value={settings.live.motion} onChange={(m) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, motion: m } }))} />
 			</div>
 			{children}
 		</div>

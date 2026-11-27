@@ -232,3 +232,61 @@ describe("live overlay fade clock", () => {
 		assert.ok(a !== undefined && a > 0.2 && a < 0.8, `subagent alpha ${a}`);
 	});
 });
+
+describe("live overlay motion mode", () => {
+	const host = {
+		nodePos: () => null,
+		hasNode: () => false,
+		nodeColor: () => undefined,
+		center: () => ({ x: 0, y: 0 }),
+		colors: { node: "#888", edge: "#444", label: "#fff", hoverText: "#fff" },
+		fontFamily: "sans-serif",
+	};
+	const g = globalThis as unknown as { window?: unknown };
+	let o: LiveOverlay;
+	beforeEach(() => {
+		g.window = { matchMedia: (q: string) => ({ matches: q.includes("reduced-motion") }), innerWidth: 1280 }; // the OS has Reduce motion on
+		mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now: 5_000_000_000_000 });
+		o = new LiveOverlay(() => {});
+	});
+	afterEach(() => {
+		o.stop();
+		mock.timers.reset();
+		delete g.window;
+	});
+	const wolfAt = (now: number) => o.items(host, 1, now).find((i) => i.kind === "wolf")!;
+	const settle = () => {
+		for (let i = 0; i < 40; i++) {
+			mock.timers.tick(50);
+			o.step(Date.now(), 0.05, host, 1);
+		}
+	};
+
+	it("reduced motion keeps a working wolf's state animating while the wolf itself stays put", () => {
+		o.configure(LIVE_DEFAULTS);
+		o.dispatch({ type: "event", event: ev("thread-active"), now: Date.now() });
+		settle();
+		assert.equal(o.needsFrames(0), true);
+		const a = wolfAt(Date.now());
+		const b = wolfAt(Date.now() + 700);
+		assert.deepEqual([b.x, b.y], [a.x, a.y]);
+	});
+
+	it("'Always animate' ignores the OS setting, so the wolf floats", () => {
+		o.configure({ ...LIVE_DEFAULTS, motion: "always" });
+		o.dispatch({ type: "event", event: ev("thread-active"), now: Date.now() });
+		settle();
+		const a = wolfAt(Date.now());
+		const b = wolfAt(Date.now() + 700);
+		assert.notDeepEqual([b.x, b.y], [a.x, a.y]);
+	});
+
+	it("reduced motion with nothing animating asks for no frames", () => {
+		o.configure(LIVE_DEFAULTS);
+		o.dispatch({ type: "event", event: ev("thread-active"), now: Date.now() });
+		o.dispatch({ type: "event", event: ev("thread-idle"), now: Date.now() });
+		mock.timers.tick(LIVE_DEFAULTS.subagentFadeSec * 1000 + 20_000);
+		o.step(Date.now(), 0.05, host, 1);
+		assert.equal(o.needsFrames(0), false);
+	});
+});

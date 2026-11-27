@@ -57,6 +57,7 @@ import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zo
 import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "@/src/core";
 import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, ROUTE_DONE_COLOR } from "@/src/core";
 import { redactLines } from "@/src/core";
+import { isMotionReduced, type MotionMode } from "@/src/core/graph/live/motion-mode";
 import { recentreCamera, recentreOffset } from "@/src/core";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
@@ -650,8 +651,9 @@ export function createCommitScheduler(
 
 // ─── The renderer ───────────────────────────────────────────────────────────
 
-function prefersReducedMotion(): boolean {
-	return typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+/** The shared motion-mode input: 'Always animate' ignores the OS Reduce motion switch. */
+function prefersReducedMotion(mode: MotionMode = "follow"): boolean {
+	return isMotionReduced(mode);
 }
 
 export class GraphCanvasRenderer {
@@ -953,7 +955,7 @@ export class GraphCanvasRenderer {
 	 *  for a short fixed time (PULSE_REDUCED_MS) instead of fading. Returns how many landed. */
 	pulse(ids: readonly string[], ms = PULSE_MS): number {
 		const now = performance.now();
-		const reduce = prefersReducedMotion();
+		const reduce = prefersReducedMotion(this.settings?.live.motion);
 		const len = reduce ? PULSE_REDUCED_MS : ms;
 		let n = 0;
 		for (const id of ids) {
@@ -2494,7 +2496,7 @@ export class GraphCanvasRenderer {
 			clusterScale: settings.clusterLabelSize / DEFAULT_RENDER_SETTINGS.clusterLabelSize,
 			hoverId: this.hoverNode && this.hoverTarget > 0 ? this.hoverNode.id : null,
 			selectedId: this.selectedId,
-			reduce: prefersReducedMotion(),
+			reduce: prefersReducedMotion(settings.live.motion),
 			privateView: settings.privateView,
 			textColor: data.colors.label,
 			fontFamily: data.fontFamily,

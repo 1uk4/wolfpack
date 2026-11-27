@@ -35,10 +35,16 @@ describe("live seconds slider scale", () => {
 
 describe("live settings sanitizer", () => {
 	it("clamps fade and trail to 0-300 s and intensity to a 1-5 integer", () => {
-		assert.deepEqual(sanitizeLiveSettings({ subagentFadeSec: 900, trailSec: -4, intensity: 9 }), { enabled: true, subagentFadeSec: 300, trailSec: 0, intensity: 5 });
+		assert.deepEqual(sanitizeLiveSettings({ subagentFadeSec: 900, trailSec: -4, intensity: 9 }), { enabled: true, subagentFadeSec: 300, trailSec: 0, intensity: 5, motion: "follow" });
 		assert.equal(sanitizeLiveSettings({ intensity: 2.6 }).intensity, 3);
 		assert.equal(sanitizeLiveSettings({ intensity: 0 }).intensity, 1);
 		assert.equal(sanitizeLiveSettings({ trailSec: 200 }).trailSec, 200);
+	});
+	it("live map motion defaults to following the system and keeps only 'always' as the other value", () => {
+		assert.equal(sanitizeLiveSettings(undefined).motion, "follow");
+		assert.equal(sanitizeLiveSettings({ motion: "always" }).motion, "always");
+		assert.equal(sanitizeLiveSettings({ motion: "bogus" as never }).motion, "follow");
+		assert.equal(liveSettingsOf({ live: { motion: "always" } }).motion, "always");
 	});
 	it("the overlay reads the same range", () => {
 		const l = liveSettingsOf({ live: { trailSec: 0, subagentFadeSec: 250, intensity: 4 } });

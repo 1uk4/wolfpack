@@ -425,7 +425,7 @@ describe("live map model v2", () => {
 		still.step(T0 + 30_000, 0.016, host, 1);
 		const w1 = still.items(host, 1, T0 + 17_000).find((i) => i.kind === "wolf")!;
 		assert.ok(dist(w0, w1) < 1e-9, "the wolf neither moves nor floats");
-		assert.equal(still.needsFrames(0), false);
+		assert.equal(still.needsFrames(0), true); // the working ring still fades in place
 		still.stop();
 	});
 

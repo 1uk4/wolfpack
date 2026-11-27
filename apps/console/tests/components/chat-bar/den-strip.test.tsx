@@ -184,4 +184,18 @@ describe("den strip", () => {
 		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "hal/b");
 		assert.equal(q('[data-testid="den-sheet"]'), null, "the sheet never opened");
 	});
+
+	it("hovering another wolf puts the swap icon on that wolf's button, not the attached wolf's, and leaving restores it", async () => {
+		await mount("/wolf/hal/thread/b");
+		const fire = (el: HTMLElement, name: string) => act(async () => void props(el, name)({ currentTarget: el, target: el }));
+		const icon = '[data-testid="den-swap-icon"]';
+		assert.ok(q(`[data-testid="chat-bar-swap"][data-wolf="w"] ${icon}`), "the attached wolf wears it at rest");
+		await fire(wolf("hal"), "onMouseEnter");
+		assert.ok(q(`[data-testid="den-wolf"][data-wolf="hal"] ${icon}`), "the hovered wolf wears it");
+		assert.equal(q(`[data-testid="chat-bar-swap"][data-wolf="w"] ${icon}`), null, "the attached wolf does not");
+		assert.equal(document.querySelectorAll(icon).length, 1);
+		await fire(wolf("hal"), "onMouseLeave");
+		assert.ok(q(`[data-testid="chat-bar-swap"][data-wolf="w"] ${icon}`), "back on the attached wolf");
+		assert.equal(q(`[data-testid="den-wolf"][data-wolf="hal"] ${icon}`), null);
+	});
 });

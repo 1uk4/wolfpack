@@ -26,8 +26,8 @@
  * `/?focus=<nodeId>` URL param goes through it.
  */
 
-import type { DepRouteSelection } from "@/src/core";
-import { reconcileCursor, rawWorkId, routeForNode, toRouteSelection } from "@/src/core";
+import type { DepRouteSelection, ThreadsByWolf } from "@/src/core";
+import { reconcileCursor, rawWorkId, routeForNode, threadForWorkNode, toRouteSelection } from "@/src/core";
 import { startCursor, type RouteCursor } from "@/src/core";
 import type { RouteNavModel } from "./graph-route-nav.tsx";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
@@ -54,6 +54,7 @@ import { GraphSettingsControl } from "./graph-settings-panel.tsx";
 import { useWorkReader } from "../work/work-reader.tsx";
 import { Hint } from "@/components/ui/hint";
 import { dataStore, entryIdOfNode } from "@/src/core";
+import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { useOpenView, type OpenViewFn } from "@/components/viewer/viewer-context";
 
 /** What a click on a map node does: ANY work node (collapsed features included) only opens the reader; the graph's selection,
@@ -61,6 +62,19 @@ import { useOpenView, type OpenViewFn } from "@/components/viewer/viewer-context
 export function nodeClickAction(nodeId: string): { kind: "open-work"; id: string } | { kind: "select" } {
 	const raw = rawWorkId(nodeId);
 	return raw ? { kind: "open-work", id: raw } : { kind: "select" };
+}
+
+/** A feature or task node also attaches the floating chat to its feature's thread (no navigation); true when it did. With no thread the chat stays. */
+export function attachWorkNodeThread(
+	graph: Pick<KbGraph, "nodes" | "edges">,
+	nodeId: string,
+	threads: ThreadsByWolf,
+	attach: (ref: { wolf: string; threadId: string }) => void,
+): boolean {
+	const t = threadForWorkNode(graph, nodeId, threads);
+	if (!t) return false;
+	attach(t);
+	return true;
 }
 
 /** A click on a KB entry node opens the entry in the page viewer (true); any other node, or no viewer host, is not handled (false). */
@@ -209,6 +223,9 @@ export function GraphView({
 	// Private view: a node click shows the redacted card, never the reader or viewer with the real page.
 	const privateRef = useRef(settings.privateView);
 	privateRef.current = settings.privateView;
+	const attachApi = useAttachedThread();
+	const attachApiRef = useRef(attachApi);
+	attachApiRef.current = attachApi;
 	const openView = useOpenView();
 	const openViewRef = useRef(openView);
 	openViewRef.current = openView;
@@ -303,7 +320,11 @@ export function GraphView({
 				onSelect: (nodeId) => {
 					const act = nodeClickAction(nodeId);
 					if (privateRef.current) setSelected({ id: nodeId });
-					else if (act.kind === "open-work") openWorkRef.current(act.id); // the reader only: no selection, route or camera change
+					else if (act.kind === "open-work") {
+						openWorkRef.current(act.id); // the reader: no selection, route or camera change
+						const chat = attachApiRef.current;
+						if (chat) attachWorkNodeThread(graphRef.current, nodeId, chat.threads, chat.attach); // and the floating chat follows the feature
+					}
 					else if (!openNodeInViewer(nodeId, openViewRef.current)) setSelected({ id: nodeId });
 				},
 				onStageClick: () => setSelected(null),

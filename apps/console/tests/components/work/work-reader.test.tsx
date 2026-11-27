@@ -38,7 +38,7 @@ const { WorkReaderPanel, readerUrl, useWorkReader } = await import("../../../com
 const { useOpenWorkItem, openReaderLink, settleReaderOpen, isPlainClick, shouldOpenInReader } = await import("../../../components/work/work-reader-nav.ts");
 const { WorkReaderHost } = await import("../../../components/work/work-reader.tsx");
 const { PlanGraphCard } = await import("../../../components/thread/plan-graph-card.tsx");
-const { nodeClickAction } = await import("../../../components/graph/graph-view.tsx");
+const { nodeClickAction, attachWorkNodeThread } = await import("../../../components/graph/graph-view.tsx");
 const { NavTracker, hasInAppHistory } = await import("../../../components/shell/nav-tracker.tsx");
 const { WorkNavEntry } = await import("../../../components/work/work-nav-link.tsx");
 const { WorkItemView } = await import("../../../components/work/work-item-page.tsx");
@@ -369,6 +369,19 @@ describe("a graph node click: the reader only", () => {
 		for (const id of ["work:t1", "work:f1", "work:i1"]) assert.deepEqual(nodeClickAction(id), { kind: "open-work", id: id.slice(5) });
 		assert.deepEqual(nodeClickAction("ent:x"), { kind: "select" });
 		assert.deepEqual(nodeClickAction("fac:d"), { kind: "select" });
+	});
+	it("a feature or task node click also attaches the floating chat to the feature's thread; with no thread the chat stays", () => {
+		const node = (id: string, workKind: string) => ({ id, kind: "work", label: id, depth: 3, domain: "wolfpack", workKind });
+		const graph = { nodes: [node("work:f1", "feature"), node("work:t1", "task"), node("work:f2", "feature")], edges: [{ source: "work:t1", target: "work:f1", kind: "partOf" }] } as never;
+		const threads = { "1uk4": [{ id: "1uk4/feature-work-wolfpack-f1", title: "F1", kind: "feature" }] };
+		const calls: unknown[] = [];
+		const attach = (ref: unknown) => void calls.push(ref);
+		assert.equal(attachWorkNodeThread(graph, "work:t1", threads, attach), true);
+		assert.deepEqual(calls, [{ wolf: "1uk4", threadId: "1uk4/feature-work-wolfpack-f1" }]);
+		assert.equal(attachWorkNodeThread(graph, "work:f2", threads, attach), false);
+		assert.equal(calls.length, 1);
+		const g = src("../../../components/graph/graph-view.tsx");
+		assert.match(g.slice(g.indexOf("onSelect: (nodeId)"), g.indexOf("onStageClick")), /attachWorkNodeThread\(/);
 	});
 	it("the click handler neither expands collapsed features nor selects for a work node; no double-click overlay competes", () => {
 		const g = src("../../../components/graph/graph-view.tsx");

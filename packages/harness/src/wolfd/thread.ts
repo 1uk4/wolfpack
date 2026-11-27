@@ -883,6 +883,7 @@ export class ThreadRuntime {
    */
   async submitCard(callId: string, body: SubmitCardBody = {}): Promise<SubmitAck> {
     const pending = this.pagedCard(callId);
+    this.checkCardTool(pending, body.tool);
     this.checkStepsKey(pending, body.stepsKey);
     const card = pending.card;
     const last = pageCard(card, pending.pageIndex ?? 0)!;
@@ -1023,9 +1024,10 @@ export class ThreadRuntime {
    * input, and the history folds it onto the call that raised the card. While sibling cards of the turn still wait
    * the answer is held and the ack is `queued`.
    */
-  async answerCard(callId: string, rawAnswers: CardAnswers): Promise<SubmitAck> {
+  async answerCard(callId: string, rawAnswers: CardAnswers, tool?: string): Promise<SubmitAck> {
     const pending = this.cards.get(callId);
     if (!pending) throw new HttpError("not_found", `card ${callId}`);
+    this.checkCardTool(pending, tool);
     if (pending.card.paged) throw new HttpError("invalid_request", `card ${callId} is a paged questionnaire: save its pages as drafts (saveCardPage) and send them once (submitCard)`);
     const bad = validateAnswers(pending.card, rawAnswers);
     if (bad) throw new HttpError("invalid_request", bad);
@@ -1041,6 +1043,14 @@ export class ThreadRuntime {
     // A repeated skip of an already held-skipped card changes nothing: no second announcement.
     if (pending.heldSkip) return { messageId: `card-${callId}`, disposition: "queued" };
     return this.resolveCard(callId, this.cards.skip(callId));
+  }
+
+  /** Wrong-card / stale-client guard: a caller that names a tool must name the one that raised the card, else the answer is rejected, logged, and the card stays pending. Clients that send no tool pass. */
+  private checkCardTool(pending: PendingCard, tool: string | undefined): void {
+    if (tool === undefined || tool === pending.card.tool) return;
+    const message = `card ${pending.callId} was raised by "${pending.card.tool}", not "${tool}"; answer not accepted, the card is still pending`;
+    console.error(`[wolfd] ${this.summary.id}: ${message}`);
+    throw new HttpError("invalid_request", message);
   }
 
   /** After an answer or skip was recorded: hold it while siblings wait, else submit the whole turn's resolutions. */

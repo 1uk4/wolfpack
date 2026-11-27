@@ -825,8 +825,8 @@ export class WolfServer {
         const t = this.checkThread(params.id);
         await this.assertOpen(t);
         const body = AnswerCardBodySchema.safeParse(await readJson(req));
-        if (!body.success) throw new HttpError("invalid_request", "body must be {answers: {<fieldId>: {value, other?}}}");
-        return this.json(res, 200, await t.answerCard(params.callId, body.data.answers));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {answers: {<fieldId>: {value, other?}}, tool?}");
+        return this.json(res, 200, await t.answerCard(params.callId, body.data.answers, body.data.tool));
       }
       case "saveCardPage": {
         const t = this.checkThread(params.id);
@@ -848,7 +848,7 @@ export class WolfServer {
         const t = this.checkThread(params.id);
         await this.assertOpen(t);
         const body = SubmitCardBodySchema.safeParse(await readJson(req));
-        if (!body.success) throw new HttpError("invalid_request", "body must be {answers?, note?: {text?, attachments?}, stepsKey?}");
+        if (!body.success) throw new HttpError("invalid_request", "body must be {answers?, note?: {text?, attachments?}, stepsKey?, tool?}");
         return this.json(res, 200, await t.submitCard(params.callId, body.data));
       }
       case "bindCardText": {

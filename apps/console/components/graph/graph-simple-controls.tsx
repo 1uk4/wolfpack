@@ -168,6 +168,20 @@ function SimpleSlider({
 	);
 }
 
+/** A 0.1-5 weight slider for the wolf force model. */
+function PlainSlider({ label, hint, Icon, value, onChange }: { label: string; hint: string; Icon: IconType; value: number; onChange: (v: number) => void }) {
+	return (
+		<Hint label={hint} side="bottom">
+			<label className="flex min-h-11 items-center gap-2 md:min-h-7">
+				<Icon className="size-3.5 shrink-0 text-muted-foreground" />
+				<span className="w-16 shrink-0 text-[11px] text-muted-foreground">{label}</span>
+				<input type="range" min={0.1} max={5} step={0.1} value={value} aria-label={label} onChange={(e) => onChange(Number(e.target.value))} className="h-6 w-full accent-primary md:h-1.5" />
+				<span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-foreground">{value.toFixed(1)}</span>
+			</label>
+		</Hint>
+	);
+}
+
 /** A seconds slider on the non-linear live scale (0-60 s gets most of the travel); the value shows as "15s" / "2m". */
 function SecondsSlider({
 	label,
@@ -404,6 +418,8 @@ export function SimpleControls({
 						onChange={(on) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, memory: on } }))}
 					/>
 				</div>
+				<PlainSlider label="Home pull" hint="How firmly Home pulls a wolf back to its orbit" Icon={Gauge} value={settings.live.homeSpring} onChange={(v) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, homeSpring: v } }))} />
+				<PlainSlider label="Sub pull" hint="How far a wolf's subagents push it away from Home" Icon={Gauge} value={settings.live.subPull} onChange={(v) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, subPull: v } }))} />
 				<MotionControl value={settings.live.motion} onChange={(m) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, motion: m } }))} />
 			</div>
 			{children}

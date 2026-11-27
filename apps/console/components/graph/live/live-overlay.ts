@@ -32,7 +32,7 @@ import { floatOffset, nameHash } from "./live-float";
 import { LIVE_TUNING } from "./live-tuning";
 import { badgeLook, badgeRadiusPx, badgeRing, isLightHex, parkingSpot, stateRingRadiusPx, subOrbitRadiusPx, subRadiusPx } from "./live-badge";
 import { LABEL_LEVELS, type LabelObstacle } from "@/src/core";
-import { newMotion, restSlot, tetherStrength, wolfEvent, wolfStep, type WolfMotion } from "./live-den";
+import { newMotion, orbitTarget, restSlot, tetherStrength, wolfEvent, wolfStep, type WolfMotion } from "./live-den";
 import { elasticStep, orbitPhase, pullFor, ringSlots, trailOrigin, type Elastic } from "./live-rings";
 import { newRepeller, repelStep, setRep, type Repeller } from "./live-repel";
 import { redact } from "@/src/core";
@@ -58,8 +58,8 @@ export interface OverlayHost {
 	colors: { node: string; edge: string; label: string; hoverText: string };
 	fontFamily: string;
 }
-export interface OverlaySettings { enabled: boolean; intensity: number; trailSec: number; subagentFadeSec: number; motion: MotionMode; memory: boolean }
-export const LIVE_DEFAULTS: OverlaySettings = { enabled: true, intensity: 1, trailSec: 15, subagentFadeSec: 15, motion: "follow", memory: true };
+export interface OverlaySettings { enabled: boolean; intensity: number; trailSec: number; subagentFadeSec: number; motion: MotionMode; memory: boolean; homeSpring: number; subPull: number }
+export const LIVE_DEFAULTS: OverlaySettings = { enabled: true, intensity: 1, trailSec: 15, subagentFadeSec: 15, motion: "follow", memory: true, homeSpring: 1, subPull: 1 };
 
 /** `settings.live ?? defaults`, typed loosely so it works before and after the settings panel gains the field. */
 export function liveSettingsOf(settings: unknown): OverlaySettings {
@@ -72,6 +72,8 @@ export function liveSettingsOf(settings: unknown): OverlaySettings {
 		subagentFadeSec: num(l.subagentFadeSec, LIVE_DEFAULTS.subagentFadeSec, 0, 300),
 		motion: l.motion === "always" ? "always" : "follow",
 		memory: l.memory !== false,
+		homeSpring: num(l.homeSpring, LIVE_DEFAULTS.homeSpring, 0.1, 5),
+		subPull: num(l.subPull, LIVE_DEFAULTS.subPull, 0.1, 5),
 	};
 }
 
@@ -586,7 +588,7 @@ export class LiveOverlay {
 		this.consumeTrails(host, m, den, wall);
 		for (const b of bodies) {
 			const w = s.wolves[b.name]!;
-			wolfStep(b.mot, wall, dt, { den, rest: this.restTmp.get(b.name)!, needsYou: w.needsYou, working: this.workingSet.has(b.name), reduced, tuning: T });
+			wolfStep(b.mot, wall, dt, { den, rest: this.forceTarget(b.name, this.restTmp.get(b.name)!, den, m, reduced), needsYou: w.needsYou, working: this.workingSet.has(b.name), reduced, tuning: T });
 		}
 		// Attached things are derived from their parent's position every frame (never integrated apart from it), so nothing is left behind.
 		for (const b of bodies) {
@@ -843,6 +845,21 @@ export class LiveOverlay {
 	 * running ones, the angle easing to its slot when a sibling comes or goes. A pull stretches the icon out on its elastic tether and it
 	 * snaps back to its slot when the hold ends. The position is parent + slot + offset each frame: it cannot be left behind.
 	 */
+	/** The wolf's resting target under the force model: its rest slot, pulled toward its active threads and (outward) by its running sub-agents; the Home spring bounds it. Focus pulls (KB / work nodes the home thread touches) are not wired yet. */
+	private forceTarget(name: string, rest: Pt, den: Pt, m: number, reduced: boolean): Pt {
+		const threads: Pt[] = [];
+		for (const f of this.featureItems.values()) if (f.wolf === name) threads.push({ x: f.x, y: f.y });
+		const subs: Pt[] = [];
+		const dx = rest.x - den.x;
+		const dy = rest.y - den.y;
+		const len = Math.hypot(dx, dy) || 1;
+		const out = 60 * m;
+		for (const b of this.subBodies.values()) if (b.a.wolf === name && b.a.finishedAt === undefined) subs.push({ x: rest.x + (dx / len) * out, y: rest.y + (dy / len) * out });
+		if (threads.length === 0 && subs.length === 0) return rest;
+		const T = LIVE_TUNING;
+		return orbitTarget(rest, threads, [], subs, { homeSpring: this.settings.homeSpring, threadPull: T.threadPull, focusPull: T.focusPull, subPull: this.settings.subPull * T.subPull }, reduced);
+	}
+
 	private stepSubs(now: number, dt: number, host: OverlayHost, m: number, reduced: boolean, wall: number): void {
 		const s = this.state;
 		const T = LIVE_TUNING;
@@ -1234,7 +1251,7 @@ export class LiveOverlay {
 				EFFECTS.ring!({ ctx, x: it.x, y: it.y, r: it.r, k, t: 0, color: AMBER, intensity: I, reduced, time: now, alpha: it.alpha });
 			}
 		}
-		if (this.settings.enabled && this.settings.memory) drawKbLife(ctx, this.kb, host, (n) => this.wolfItems.get(n), k, wall, reduced, this.kbFocus);
+		if (this.settings.enabled && this.settings.memory) drawKbLife(ctx, this.kb, host, (n) => this.wolfItems.get(n), k, wall, reduced, this.kbFocus, m);
 		this.drawPills(ctx, host, items, k);
 		const hl = this.highlight;
 		if (hl) {

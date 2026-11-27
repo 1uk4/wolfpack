@@ -107,8 +107,11 @@ export interface LiveSettings {
 	motion: MotionMode;
 	/** Show the memory/KB life layer (observe, consolidate, promote, curator) on the map. Default on. */
 	memory: boolean;
+	/** Wolf force model: the Home spring and sub-agent pull weights, 0.1-5 (default 1). */
+	homeSpring: number;
+	subPull: number;
 }
-export const DEFAULT_LIVE_SETTINGS: LiveSettings = { enabled: true, subagentFadeSec: 15, trailSec: 15, intensity: 1, motion: "follow", memory: true };
+export const DEFAULT_LIVE_SETTINGS: LiveSettings = { enabled: true, subagentFadeSec: 15, trailSec: 15, intensity: 1, motion: "follow", memory: true, homeSpring: 1, subPull: 1 };
 
 /** Upper end of the fade and trail sliders, seconds. */
 export const LIVE_SEC_MAX = 300;
@@ -147,6 +150,8 @@ export function sanitizeLiveSettings(input: Partial<LiveSettings> | null | undef
 		intensity: Math.round(num(input?.intensity, d.intensity, 1, 5)),
 		motion: sanitizeMotionMode(input?.motion),
 		memory: input?.memory !== false,
+		homeSpring: num(input?.homeSpring, d.homeSpring, 0.1, 5),
+		subPull: num(input?.subPull, d.subPull, 0.1, 5),
 	};
 }
 

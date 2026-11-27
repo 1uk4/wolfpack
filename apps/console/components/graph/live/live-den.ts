@@ -83,6 +83,30 @@ export function restSlot(i: number, n: number, tSec: number, online: boolean, de
 	return { x: den.x + Math.cos(a) * r, y: den.y + Math.sin(a) * r };
 }
 
+export interface OrbitWeights { homeSpring: number; threadPull: number; focusPull: number; subPull: number }
+/**
+ * THE FORCE MODEL (pure): the wolf's equilibrium round Home. Its rest slot (on the rest orbit) anchors a spring of weight `homeSpring`;
+ * every active thread, focus node (KB entry / work item its home thread reads or writes) and own sub-agent pulls with its kind's weight.
+ * The result is the weighted mean of rest and the pull points, so it always lies between them: the spring bounds how far a pull takes it.
+ * Callers ease toward it (wolfStep) and snap to it under reduced motion.
+ */
+export function orbitTarget(rest: Pt, threads: readonly Pt[], focus: readonly Pt[], subs: readonly Pt[], w: OrbitWeights, _reduced: boolean): Pt {
+	let fx = 0;
+	let fy = 0;
+	let sum = w.homeSpring;
+	const add = (ps: readonly Pt[], k: number) => {
+		for (const p of ps) {
+			fx += k * (p.x - rest.x);
+			fy += k * (p.y - rest.y);
+			sum += k;
+		}
+	};
+	add(threads, w.threadPull);
+	add(focus, w.focusPull);
+	add(subs, w.subPull);
+	return { x: rest.x + fx / sum, y: rest.y + fy / sum };
+}
+
 /** Whether the return is due (never while a question waits). */
 function returnDue(m: WolfMotion, now: number, c: WolfCtx): boolean {
 	if (c.needsYou) return false;

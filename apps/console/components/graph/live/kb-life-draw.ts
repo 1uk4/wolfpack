@@ -7,6 +7,10 @@
  */
 import { curatorBusy, displayFill, KB_FILL_EASE_MS, topicsOf, type KbFlight, type KbLife, type KbResult } from "@/src/core";
 import { rgba } from "./live-effects";
+import { LIVE_TUNING } from "./live-tuning";
+
+/** The overlay unit (live-overlay OVERLAY_UNIT), duplicated to avoid a circular import. */
+const KB_UNIT = 0.55;
 
 export interface Pt { x: number; y: number }
 export interface KbDrawHost {
@@ -25,14 +29,9 @@ const AMBER = "#ffd166";
 const smooth = (t: number) => { const c = Math.max(0, Math.min(1, t)); return c * c * (3 - 2 * c); };
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
-/** The curator mark's position. */
-export function curatorPos(kb: KbLife, host: KbDrawHost): Pt {
-	const c = host.center();
-	const pts = kb.domains.map((d) => host.nodePos(`dom:${d}`)).filter((p): p is Pt => p !== null);
-	if (pts.length === 0) return c;
-	const mx = pts.reduce((a, p) => a + p.x, 0) / pts.length;
-	const my = pts.reduce((a, p) => a + p.y, 0) / pts.length;
-	return { x: lerp(mx, c.x, 0.5), y: lerp(my, c.y, 0.5) };
+/** The curator IS Home: its position is the graph centre the wolves orbit. */
+export function curatorPos(_kb: KbLife, host: KbDrawHost): Pt {
+	return host.center();
 }
 
 /** Where a result lands: the entry's node, else its section, else its domain; null when the map has none of them. */
@@ -42,12 +41,14 @@ export function resultPos(host: KbDrawHost, r: KbResult | undefined, domain?: st
 	return null;
 }
 
-function slotPos(cur: Pt, slot: number, wall: number, k: number, reduced: boolean): Pt {
+/** The inner ring round Home (kbRingPx, scaled by the overlay unit m): items circle Home here until the curator files them. */
+function slotPos(cur: Pt, slot: number, wall: number, reduced: boolean, m: number): Pt {
 	const a = slot * 2.4 + (reduced ? 0 : wall / 4000);
-	return { x: cur.x + (Math.cos(a) * 24) / k, y: cur.y + (Math.sin(a) * 24) / k };
+	const r = LIVE_TUNING.kbRingPx * m;
+	return { x: cur.x + Math.cos(a) * r, y: cur.y + Math.sin(a) * r };
 }
 
-export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDrawHost, wolfOf: (name: string) => KbWolfBody | undefined, k: number, wall: number, reduced: boolean, focus: KbFocus | null): void {
+export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDrawHost, wolfOf: (name: string) => KbWolfBody | undefined, k: number, wall: number, reduced: boolean, focus: KbFocus | null, m = KB_UNIT): void {
 	const cur = curatorPos(kb, host);
 	const busy = curatorBusy(kb);
 	const hasLife = Object.keys(kb.wolves).length > 0 || kb.flights.length > 0 || kb.pulses.length > 0 || Object.keys(kb.curator).length > 0;
@@ -55,6 +56,7 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 	ctx.save();
 	ctx.lineCap = "round";
 
+	let shown = 0;
 	// Buffer rings: a thin arc around each wolf, fill = tokens / capacity, easing when it changes.
 	for (const [name, w] of Object.entries(kb.wolves)) {
 		const b = wolfOf(name);
@@ -81,10 +83,11 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 			ctx.stroke();
 		}
 		ctx.globalAlpha = 1;
-		// Topic dots gather beside the wolf.
+		// Topic dots gather on the inner ring round Home (about kbMaxItems visible), in the wolf's colour.
 		const topics = topicsOf(kb, name);
-		topics.forEach((t, i) => {
-			const p = beside(b, i, k);
+		topics.forEach((t) => {
+			if (shown >= LIVE_TUNING.kbMaxItems) return;
+			const p = slotPos(cur, 100 + shown++, wall, reduced, m);
 			const grow = reduced ? 1 : smooth((wall - t.born) / 700);
 			ctx.fillStyle = rgba(b.color, 0.85 * b.alpha);
 			ctx.beginPath();
@@ -94,38 +97,24 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 		});
 	}
 
-	// The curator mark: a hairline ring and a small core; amber arc shimmers while it works.
-	ctx.lineWidth = 1.2 / k;
-	ctx.strokeStyle = rgba(host.colors.label, 0.5);
-	ctx.fillStyle = rgba(host.colors.label, 0.08);
-	ctx.beginPath();
-	ctx.arc(cur.x, cur.y, 11 / k, 0, Math.PI * 2);
-	ctx.fill();
-	ctx.stroke();
-	ctx.fillStyle = rgba(host.colors.label, 0.6);
-	ctx.beginPath();
-	ctx.arc(cur.x, cur.y, 2.4 / k, 0, Math.PI * 2);
-	ctx.fill();
+	// Home is the curator: no mark of its own, just the amber shimmer round the Home disc while it works.
+	const hr = LIVE_TUNING.denRadiusPx * m;
 	if (busy) {
 		const a = reduced ? 0 : wall / 420;
 		ctx.lineWidth = 2 / k;
 		ctx.strokeStyle = rgba(AMBER, 0.9);
 		ctx.beginPath();
-		ctx.arc(cur.x, cur.y, 11 / k, a, a + (reduced ? Math.PI * 2 : 1.7));
+		ctx.arc(cur.x, cur.y, hr + 3 / k, a, a + (reduced ? Math.PI * 2 : 1.7));
 		ctx.stroke();
 		if (!reduced) {
 			const g = 0.5 + 0.5 * Math.sin(wall / 260);
 			ctx.fillStyle = rgba(AMBER, 0.08 + 0.1 * g);
 			ctx.beginPath();
-			ctx.arc(cur.x, cur.y, (16 + 4 * g) / k, 0, Math.PI * 2);
+			ctx.arc(cur.x, cur.y, hr + (6 + 4 * g) / k, 0, Math.PI * 2);
 			ctx.fill();
 		}
 	}
-	ctx.font = `${10 / k}px ${host.fontFamily}`;
-	ctx.textAlign = "center";
-	ctx.fillStyle = rgba(host.colors.label, 0.6);
-	ctx.fillText("curator", cur.x, cur.y + 24 / k);
-	if (focus?.curator) ring(ctx, cur, 16 / k, host.colors.hoverText, k);
+	if (focus?.curator) ring(ctx, cur, hr + 8 / k, host.colors.hoverText, k);
 
 	// Flights.
 	const queuedIdx = new Map<string, number>();
@@ -138,7 +127,8 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 			queuedIdx.set(f.wolf, (queuedIdx.get(f.wolf) ?? 0) + 1);
 		}
 		const start = body ? beside(body, idx, k) : cur;
-		const p = flightPos(f, start, cur, resultPos(host, f.result, f.domain), wall, k, reduced);
+		const p = flightPos(f, start, cur, resultPos(host, f.result, f.domain), wall, k, reduced, m);
+		if (f.stage !== "queued" && f.stage !== "fade" && shown++ >= LIVE_TUNING.kbMaxItems) continue;
 		const alpha = f.stage === "fade" ? 1 - smooth((wall - f.at) / Math.max(1, f.endAt - f.at)) : 1;
 		const r = 4.2 / k;
 		if (!reduced) {
@@ -194,8 +184,8 @@ function ring(ctx: CanvasRenderingContext2D, p: Pt, r: number, color: string, k:
 }
 
 /** Where a flight is at `wall` (exported for the draw tests). */
-export function flightPos(f: KbFlight, start: Pt, cur: Pt, target: Pt | null, wall: number, k: number, reduced: boolean): Pt {
-	const slot = slotPos(cur, f.slot, wall, k, reduced);
+export function flightPos(f: KbFlight, start: Pt, cur: Pt, target: Pt | null, wall: number, k: number, reduced: boolean, m = KB_UNIT): Pt {
+	const slot = slotPos(cur, f.slot, wall, reduced, m);
 	switch (f.stage) {
 		case "queued":
 			return start;

@@ -30,7 +30,7 @@ import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path
 import { AMBER, EFFECTS, rgba, safeArc, safeZoom } from "./live-effects";
 import { floatOffset, nameHash } from "./live-float";
 import { LIVE_TUNING } from "./live-tuning";
-import { badgeRadiusPx, badgeRing, isLightHex, ownerSpot, parkingSpot, stateRingRadiusPx, wolfFallbackHex } from "./live-badge";
+import { badgeRadiusPx, badgeRing, isLightHex, parkingSpot, stateRingRadiusPx, wolfFallbackHex } from "./live-badge";
 import { LABEL_LEVELS, type LabelObstacle } from "@/src/core";
 import { newMotion, restSlot, tetherStrength, wolfEvent, wolfStep, type WolfMotion } from "./live-den";
 import { elasticStep, pullFor, ringSlots, trailOrigin, type Elastic } from "./live-rings";
@@ -251,10 +251,6 @@ export class LiveOverlay {
 	private threadsByWolf = new Map<string, { t: LiveThread; alpha: number }[]>();
 	private bucketPool: unknown[][] = [];
 	private itemsOut: OverlayItem[] = [];
-	private firstNeedingYou(): OverlayItem | undefined {
-		for (const i of this.wolfItems.values()) if (i.needsYou) return i;
-		return undefined;
-	}
 	private threadItems = new Map<string, OverlayItem>();
 	private trailRef = new Map<string, TrailRef>();
 	private composer: { x: number; y: number; w: number; h: number } | null = null;
@@ -264,9 +260,6 @@ export class LiveOverlay {
 	/** The overlay thing under the pointer ("kind:key") and the camera zoom of the last step (screen px per world unit). */
 	private hoverKey: string | null = null;
 	private kNow = 1;
-	/** The owner node (world), recomputed by ownerWorld(). */
-	private ownerTmp: Pt = { x: 0, y: 0 };
-	private ownerR = 0;
 	/** Pill text widths by label (at 11 px), measured once. */
 	private pillW = new Map<string, number>();
 	private pillTheme: { colors: unknown; light: boolean } | null = null;
@@ -1233,8 +1226,7 @@ export class LiveOverlay {
 	}
 
 	/**
-	 * The den (a placeholder home icon, swappable for the owner's art), the owner node above it with its dashed link to the wolf in the
-	 * conversation (the attached chat's wolf, else one that waits for an answer), and each wolf's tether to the den: faint at rest, a dashed
+	 * The den (a placeholder home icon, swappable for the owner's art) and each wolf's tether to the den: faint at rest, a dashed
 	 * line while it works, strengthening to a solid one as it lingers.
 	 */
 	private drawDen(ctx: CanvasRenderingContext2D, host: OverlayHost, k: number, now: number, wall: number, m: number, reduced: boolean): void {
@@ -1272,34 +1264,6 @@ export class LiveOverlay {
 		ctx.strokeStyle = rgba(col, 0.85);
 		ctx.stroke(homeGlyph());
 		ctx.restore();
-		// The owner node and its dashed link.
-		const or = 13 * m;
-		const ow = ownerSpot(den, r, or, T.ownerGapPx * m);
-		this.ownerTmp.x = ow.x;
-		this.ownerTmp.y = ow.y;
-		this.ownerR = or;
-		// The dashed link is short-range: only while the owner or a wolf is hovered.
-		const hk = this.hoverKey;
-		const focus = hk === "you:owner" ? ((this.attached ? this.wolfItems.get(this.attached.wolf) : undefined) ?? this.firstNeedingYou()) : hk?.startsWith("wolf:") ? this.wolfItems.get(hk.slice(5)) : undefined;
-		if (focus) {
-			ctx.setLineDash([5 / k, 5 / k]);
-			ctx.lineWidth = 1.4 / k;
-			this.line(ctx, ow, focus, rgba(focus.color, 0.7));
-			ctx.setLineDash([]);
-		}
-		ctx.beginPath();
-		safeArc(ctx, ow.x, ow.y, or, 0, Math.PI * 2);
-		ctx.fillStyle = rgba(YOU_ACCENT, 0.2);
-		ctx.fill();
-		ctx.lineWidth = 1.3 / k;
-		ctx.strokeStyle = rgba(YOU_ACCENT, 0.85);
-		ctx.stroke();
-		const us = (or * 1.1) / 24;
-		ctx.translate(ow.x - 12 * us, ow.y - 12 * us);
-		ctx.scale(us, us);
-		ctx.lineWidth = 2;
-		ctx.strokeStyle = rgba(YOU_ACCENT, 0.95);
-		ctx.stroke(userGlyph());
 		ctx.restore();
 	}
 
@@ -1464,14 +1428,6 @@ export class LiveOverlay {
 			if (score < bestD) {
 				bestD = score;
 				best = { item: it, ring: it.needsYou && d > -2, sx: px, sy: py };
-			}
-		}
-		if (this.ownerR > 0 && (!best || bestD > 0)) {
-			const ox = this.ownerTmp.x * tr.k + tr.x;
-			const oy = this.ownerTmp.y * tr.k + tr.y;
-			if (Math.hypot(ox - sx, oy - sy) - this.ownerR * tr.k <= Math.min(slop, 4)) {
-				const item: OverlayItem = { kind: "you", key: "owner", wolf: "", x: this.ownerTmp.x, y: this.ownerTmp.y, r: this.ownerR, alpha: 1, needsYou: false, online: true, color: YOU_ACCENT, label: "You" };
-				return { item, ring: false, sx: ox, sy: oy };
 			}
 		}
 		return best;

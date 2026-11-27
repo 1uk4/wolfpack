@@ -44,9 +44,8 @@ export interface LiveTuning {
 	ringStrokePx: number;
 	arcDeg: number;
 	arcTurnSec: number;
-	/** A wolf parks this many screen px (beyond badge + node radius) from its target; the owner node sits this far (screen px) from the den disc. */
+	/** A wolf parks this many screen px (beyond badge + node radius) from its target. */
 	parkGapPx: number;
-	ownerGapPx: number;
 }
 
 export const LIVE_TUNING: LiveTuning = {
@@ -80,5 +79,4 @@ export const LIVE_TUNING: LiveTuning = {
 	arcDeg: 90,
 	arcTurnSec: 4,
 	parkGapPx: 10,
-	ownerGapPx: 14,
 };

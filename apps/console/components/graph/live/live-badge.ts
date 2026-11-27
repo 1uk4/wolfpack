@@ -69,7 +69,3 @@ export function isLightHex(hex: string): boolean {
 	return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255 > 0.55;
 }
 
-/** The owner node in WORLD space, right beside the den disc (all lengths world units). */
-export function ownerSpot(den: Pt, denR: number, ownerR: number, gap: number): Pt {
-	return { x: den.x + denR + ownerR + gap, y: den.y };
-}

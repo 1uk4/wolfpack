@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { LIVE_TUNING } from "../../components/graph/live/live-tuning.ts";
-import { badgeRadiusPx, badgeRing, ownerSpot, parkingSpot, stateRingRadiusPx } from "../../components/graph/live/live-badge.ts";
+import { badgeRadiusPx, badgeRing, parkingSpot, stateRingRadiusPx } from "../../components/graph/live/live-badge.ts";
 
 const T = LIVE_TUNING;
 
@@ -34,9 +34,3 @@ describe("parking beside the target", () => {
 	});
 });
 
-describe("owner node", () => {
-	it("sits in world space right beside the den, clear of its disc", () => {
-		const o = ownerSpot({ x: 10, y: 20 }, 30, 13, 14);
-		assert.deepEqual(o, { x: 10 + 30 + 13 + 14, y: 20 });
-	});
-});

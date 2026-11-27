@@ -331,7 +331,7 @@ export const WolfSummarySchema = z.object({
   /** Additive: this wolf has KB roots and serves the read-only graph and entry routes (a mirror when it is not the librarian). Absent = false. */
   kbReadable: z.boolean().optional(),
   /** Additive: the wolf's chosen color (a THREAD_COLOR_KEYS key, wolf.yaml `color`). Absent = automatic. */
-  color: z.lazy(() => ThreadColorSchema).optional(),
+  color: z.lazy(() => ThreadColorReadSchema),
 });
 export type WolfSummary = z.infer<typeof WolfSummarySchema>;
 
@@ -398,10 +398,12 @@ export const THREAD_COLOR_KEYS = [
 ] as const;
 export const ThreadColorSchema = z.enum(THREAD_COLOR_KEYS);
 export type ThreadColor = z.infer<typeof ThreadColorSchema>;
+/** READ paths: a key this reader does not know (a newer palette) degrades to undefined (automatic) instead of failing the whole parse. Writes use the strict ThreadColorSchema. */
+export const ThreadColorReadSchema = ThreadColorSchema.optional().catch(undefined);
 /** Per-thread composer settings. Persisted by the wolf; the defaults are `main` and auto-ship off. */
 export const ThreadSettingsSchema = z.object({
   /** Owner's colour override (a palette key). Absent = automatic (derived from the thread id). */
-  color: ThreadColorSchema.optional(),
+  color: ThreadColorReadSchema,
   tier: ThreadTierSchema,
   /** true: task_done ships in this thread without raising a ship card. false: it asks (one multi-select card). */
   autoShip: z.boolean(),

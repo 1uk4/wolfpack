@@ -8,7 +8,7 @@
  * PRIVACY: only who/what/which. Titles go through sanitizeActivityTitle. Never pass content or tool arguments.
  */
 import { randomUUID } from "node:crypto";
-import { ACTIVITY_BATCH_MAX, ACTIVITY_TTL_MAX_MS, sanitizeActivityTitle, type ActivityActor, type ActivityEvent, type ActivityTarget, type ActivityVerb } from "@wolfpack/protocol";
+import { ACTIVITY_BATCH_MAX, ACTIVITY_TTL_MAX_MS, sanitizeActivityTitle, type ActivityActor, type ActivityDetail, type ActivityEvent, type ActivityTarget, type ActivityVerb } from "@wolfpack/protocol";
 import type { HubEventsTarget } from "./hub-approvals.js";
 
 /** Default time-to-live per verb (ms). thread-active is refreshed by a heartbeat while the thread is busy. */
@@ -36,6 +36,7 @@ export type ActivityDraft = {
   target?: ActivityTarget;
   domain?: string;
   ttlMs?: number;
+  detail?: ActivityDetail;
 };
 
 export interface ActivityPublisherOptions {
@@ -92,6 +93,7 @@ export class ActivityPublisher {
         verb: d.verb,
         ...(d.target ? { target: { ...d.target, ...(d.target.title !== undefined ? { title: sanitizeActivityTitle(d.target.title) } : {}) } } : {}),
         ...(d.domain ? { domain: d.domain } : {}),
+        ...(d.detail ? { detail: d.detail } : {}),
       };
       if (this.queue.length >= this.o.queueMax) {
         this.queue.shift();

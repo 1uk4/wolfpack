@@ -36,6 +36,8 @@ import { newMotion, restSlot, tetherStrength, wolfEvent, wolfStep, type WolfMoti
 import { elasticStep, orbitPhase, pullFor, ringSlots, trailOrigin, type Elastic } from "./live-rings";
 import { newRepeller, repelStep, setRep, type Repeller } from "./live-repel";
 import { redact } from "@/src/core";
+import { emptyKbLife, isKbVerb, kbLifeRate, reduceKbLife, stepKbLife } from "@/src/core";
+import { drawKbLife, type KbFocus } from "./kb-life-draw";
 
 export interface Pt { x: number; y: number }
 export interface OverlayHost {
@@ -268,6 +270,11 @@ export class LiveOverlay {
 	private pillTheme: { colors: unknown; light: boolean } | null = null;
 	private attached: AttachedRef | null = null;
 	private highlight: OverlayHighlight | null = null;
+	/** KB life (memory pipeline motion): its own pure state, fed by the same events; drawn by kb-life-draw. */
+	private kb = emptyKbLife(Date.now());
+	/** The wall clock of the current frame (set in step, read by classifyNeed in the same frame). */
+	private wall = Date.now();
+	private kbFocus: KbFocus | null = null;
 	private settings: OverlaySettings = LIVE_DEFAULTS;
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private mobileNow = false;
@@ -388,8 +395,24 @@ export class LiveOverlay {
 		this.requestFrame();
 	}
 
+	/** Forget the KB life (flights, topics, rings): the demo ended. */
+	resetKb(): void {
+		this.kb = emptyKbLife(Date.now(), this.reduced);
+		this.requestFrame();
+	}
+
+	/** The log's hover / selection: a flying topic and / or the curator mark get a ring. */
+	setKbFocus(f: KbFocus | null): void {
+		this.kbFocus = f;
+		this.requestFrame();
+	}
+
 	dispatch(a: LiveAction): void {
 		if (!this.settings.enabled) return;
+		if (a.type === "event" && isKbVerb(a.event.verb)) {
+			this.kb = stepKbLife(reduceKbLife({ ...this.kb, reduced: this.reduced }, a.event, a.now), a.now);
+			this.requestFrame();
+		} else if (a.type === "tick") this.kb = stepKbLife(this.kb, a.now);
 		const sigBefore = liveSignature(this.state);
 		const next = reduceLive(this.state, a, this.liveOpts());
 		if (next === this.state) return; // nothing changed: no frame
@@ -435,6 +458,7 @@ export class LiveOverlay {
 		if (!this.settings.enabled) return false;
 		if (this.reduced) return false; // reduced motion: a still picture (rings, glows and positions are static)
 		if (typeof document !== "undefined" && document.hidden) return false; // a hidden tab animates nothing; visibilitychange wakes the loop
+		this.wall = Date.now();
 		this.need = this.classifyNeed(now);
 		return this.need !== "none";
 	}
@@ -442,13 +466,15 @@ export class LiveOverlay {
 	/** fast > float > slow. No spreads or Object.values here: this runs on every rAF. The idle float holds the loop (at its own, lower, rate) while any wolf is shown; it also carries the needs-you ring's breathing. */
 	private classifyNeed(now: number): FrameNeed {
 		const s = this.state;
-		if (this.highlight || s.pulses.length > 0) return "fast";
-		const wall = Date.now();
+		const kbRate = kbLifeRate(this.kb, this.wall);
+		if (this.highlight || s.pulses.length > 0 || kbRate === "fast") return "fast";
+		const wall = this.wall;
 		// Subagents darting to a target, launching from a hub or reeling back are fast motion; the wolves' slow roam is not.
 		for (const b of this.subList) if (Math.abs(b.off.vx) + Math.abs(b.off.vy) > 0.4 || Math.abs(b.off.x) + Math.abs(b.off.y) > 1 || wall - b.born < LAUNCH_MS) return "fast";
 		for (const g of this.groups.values()) if (Math.abs(g.vx) + Math.abs(g.vy) > 0.4 || Math.abs(g.x) + Math.abs(g.y) > 1) return "fast";
 		for (const b of this.bodies.values()) if (b.mot.phase === "working" || b.mot.phase === "returning") return "fast";
 		for (const r of this.repelList) if (Math.abs(r.rvx) + Math.abs(r.rvy) > 0.4) return "fast"; // badges bouncing off each other
+		if (kbRate === "float") return "float"; // KB flights waiting or the curator shimmering: the low rate
 		for (const w in s.wolves) return "float"; // any wolf at all
 		const fade = this.settings.subagentFadeSec;
 		// Trails and fades keep frames coming only while they are still visibly fading.
@@ -507,6 +533,9 @@ export class LiveOverlay {
 		this.syncReplaced(host);
 		if (!this.settings.enabled) return;
 		this.kNow = k;
+		// ONE wall clock per frame for the KB life: its events and phases are stamped with Date.now(), while rAF `now` is performance.now().
+		this.wall = Date.now();
+		this.kb = stepKbLife(this.kb, this.wall);
 		const s = this.state;
 		const { m } = scaleFor(k);
 		const reduced = this.reduced;
@@ -1216,6 +1245,7 @@ export class LiveOverlay {
 				EFFECTS.ring!({ ctx, x: it.x, y: it.y, r: it.r, k, t: 0, color: AMBER, intensity: I, reduced, time: now, alpha: it.alpha });
 			}
 		}
+		if (this.settings.enabled) drawKbLife(ctx, this.kb, host, (n) => this.wolfItems.get(n), k, wall, reduced, this.kbFocus);
 		this.drawPills(ctx, host, items, k);
 		const hl = this.highlight;
 		if (hl) {

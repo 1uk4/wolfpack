@@ -154,6 +154,8 @@ describe("hub curator", () => {
     expect(types).toContain("kb.changed");
     expect(events.text()).toContain(id);
     expect(events.text()).toContain('"decision":{"outcome":"create"');
+    // sweep_item says where the entry landed (the live map and log group by it)
+    expect(events.text()).toMatch(new RegExp(`"type":"sweep_item"[^\\n]*"domain":"wp"`));
     // the receipt is relayed back over the link
     await until(() => conn.frame("receipt"), "receipt frame");
     expect(conn.frame("receipt")).toMatchObject({ wolf: "alpha", content: expect.stringContaining("outcome: create") });

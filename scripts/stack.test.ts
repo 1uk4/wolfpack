@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -203,6 +204,101 @@ describe("stack commands against a fake launchctl", () => {
 		const idle = fakeMac(tmp, { loaded: true, running: false });
 		await stack.main(["restart"], idle.env, idle.deps);
 		expect([idle.spawned, idle.launchctl()]).toEqual([[], ["kickstart gui/501/com.wolfpack.stack"]]);
+	});
+
+	// Runs the helper restart spawned, for real (/bin/sh), against a stub launchctl on PATH that records its argv.
+	// `print` succeeds until `bootout` ran; `bootstrap` fails the first `failFirst` times, or always while the plist holds the new content.
+	const runHelper = (m: ReturnType<typeof fakeMac>, opts: { failFirst?: number; failNew?: boolean; printPolls?: number } = {}) => {
+		const bin = path.join(tmp, "stubbin");
+		fs.mkdirSync(bin, { recursive: true });
+		const argv = path.join(tmp, "argv.txt");
+		fs.writeFileSync(path.join(bin, "launchctl"), `#!/bin/sh
+echo "$*" >> "${argv}"
+case "$1" in
+  bootout) touch "${tmp}/gone"; exit 0;;
+  print) if [ -f "${tmp}/gone" ]; then
+           p=$(cat "${tmp}/polls" 2>/dev/null || echo 0); echo $((p+1)) > "${tmp}/polls"
+           [ "$p" -lt ${opts.printPolls ?? 0} ] || exit 113
+         fi; printf '\\tstate = running\\n\\tpid = 4242\\n'; exit 0;;
+  bootstrap)
+    n=$(cat "${tmp}/boots" 2>/dev/null || echo 0); echo $((n+1)) > "${tmp}/boots"
+    [ "$n" -lt ${opts.failFirst ?? 0} ] && { echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }
+    ${opts.failNew ? 'grep -q WORKERD_KEY_FILE "$3" && { echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }' : ":"}
+    exit 0;;
+esac
+`, { mode: 0o755 });
+		const sp = m.spawned[0];
+		const r = spawnSync(sp.cmd, sp.args, { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STACK_NAP: "0" }, timeout: 60000 });
+		const logFile = sp.args[3];
+		return { status: r.status, argv: fs.readFileSync(argv, "utf8").trim().split("\n"), log: fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "" };
+	};
+	const oldPlistMac = async () => {
+		const m = fakeMac(tmp, { loaded: true, running: true });
+		fs.mkdirSync(path.dirname(m.plist), { recursive: true });
+		fs.writeFileSync(m.plist, "<plist>old, no key file</plist>");
+		await stack.main(["restart"], m.env, m.deps);
+		return m;
+	};
+
+	it("restart over an out-of-date plist rewrites it, and the helper really reloads it: bootout of the target, then bootstrap of the domain with the plist", async () => {
+		// test-change: replaces an assertion on the helper's positional args (which hid a $3/$4 mix-up) with a run of the real helper script
+		const m = await oldPlistMac();
+		expect(fs.readFileSync(m.plist, "utf8")).toContain("<key>WORKERD_KEY_FILE</key>");
+		expect(m.spawned).toHaveLength(1);
+		const r = runHelper(m);
+		expect(r.argv.filter((l) => !l.startsWith("print"))).toEqual(["bootout gui/501/com.wolfpack.stack", `bootstrap gui/501 ${m.plist}`]);
+	});
+
+	it("the reload helper retries a bootstrap that fails while the old job is still going away", async () => {
+		const m = await oldPlistMac();
+		const r = runHelper(m, { failFirst: 3 });
+		expect(r.argv.filter((l) => l.startsWith("bootstrap"))).toHaveLength(4);
+		expect(r.log).not.toContain("BOOTSTRAP FAILED");
+	});
+
+	it("when bootstrap never works with the new plist, the helper logs BOOTSTRAP FAILED, restores the old plist and bootstraps that, so the stack comes back", async () => {
+		const m = await oldPlistMac();
+		const r = runHelper(m, { failNew: true });
+		expect(r.log).toContain("BOOTSTRAP FAILED");
+		expect(fs.readFileSync(m.plist, "utf8")).toBe("<plist>old, no key file</plist>");
+		expect(r.argv.filter((l) => l.startsWith("bootstrap")).pop()).toBe(`bootstrap gui/501 ${m.plist}`);
+		expect(r.log).toContain("restored the old plist");
+	});
+
+	it("the reload helper waits until launchctl print stops finding the old job before it bootstraps", async () => {
+		const m = await oldPlistMac();
+		const r = runHelper(m, { printPolls: 3 });
+		const bootout = r.argv.indexOf("bootout gui/501/com.wolfpack.stack");
+		const bootstrap = r.argv.findIndex((l) => l.startsWith("bootstrap"));
+		// 3 polls still see the job, the 4th finds it gone; only then bootstrap
+		expect(r.argv.slice(bootout + 1, bootstrap).filter((l) => l.startsWith("print"))).toHaveLength(4);
+	});
+
+	it("restart.log ends with RESULT: ok after a reload, and status shows that line", async () => {
+		const m = await oldPlistMac();
+		const r = runHelper(m);
+		expect(r.log.trimEnd().split("\n").at(-1)).toMatch(/^RESULT: ok \S/);
+		await stack.main(["status"], m.env, m.deps);
+		expect(m.out.join("\n")).toMatch(/restart:\s+RESULT: ok /);
+	});
+
+	it("after a total failure restart.log ends with RESULT: FAILED, not launchctl's stderr, and status shows it", async () => {
+		const m = await oldPlistMac();
+		const r = runHelper(m, { failFirst: 1000 });
+		expect(r.log).toContain("Input/output error");
+		expect(r.log.trimEnd().split("\n").at(-1)).toMatch(/^RESULT: FAILED .+/);
+		await stack.main(["status"], m.env, m.deps);
+		expect(m.out.join("\n")).toMatch(/restart:\s+RESULT: FAILED /);
+	});
+
+	it("restart with an unchanged plist leaves it alone and takes the SIGTERM path, no reload", async () => {
+		const m = fakeMac(tmp, { loaded: true, running: true });
+		await stack.main(["install"], m.env, m.deps);
+		const before = fs.readFileSync(m.plist, "utf8");
+		await stack.main(["restart"], m.env, m.deps);
+		expect(fs.readFileSync(m.plist, "utf8")).toBe(before);
+		expect(m.spawned[0].args[1]).toContain("kill SIGTERM");
+		expect(m.spawned[0].args[1]).not.toContain("bootout");
 	});
 
 	it("stop is idempotent, and uninstall stops and removes the plist", async () => {

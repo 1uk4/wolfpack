@@ -264,9 +264,30 @@ function writePlist(cfg, d, ops) {
 	const extra = ["git", "claude"].map(ops.which).filter(Boolean).map((p) => path.dirname(p));
 	fs.mkdirSync(cfg.plistDir, { recursive: true });
 	fs.mkdirSync(path.dirname(cfg.log), { recursive: true });
-	fs.writeFileSync(cfg.plist, buildPlist(cfg, d.nodePath, servicePath(d.nodePath, extra, cfg.home)), { mode: 0o600 });
-	fs.chmodSync(cfg.plist, 0o600);
-	d.say(`wrote ${cfg.plist} (node ${d.nodePath})`);
+	const next = buildPlist(cfg, d.nodePath, servicePath(d.nodePath, extra, cfg.home));
+	const before = fs.existsSync(cfg.plist) ? fs.readFileSync(cfg.plist, "utf8") : null;
+	if (before !== next) {
+		// temp + rename: a crash never leaves a half-written plist for launchd to bootstrap
+		const tmp = `${cfg.plist}.tmp-${process.pid}`;
+		try {
+			fs.writeFileSync(tmp, next, { mode: 0o600 });
+			fs.chmodSync(tmp, 0o600);
+			fs.renameSync(tmp, cfg.plist);
+		} catch (e) {
+			fs.rmSync(tmp, { force: true }); // no leftover plist.tmp-<pid>
+			throw e;
+		}
+	}
+	d.say(before === next ? `${cfg.plist} already up to date` : `wrote ${cfg.plist} (node ${d.nodePath})`);
+	return { before, changed: before !== null && before !== next };
+}
+
+/** Last RESULT line of restart.log (the reload helper's verdict: "RESULT: ok <ts>" or "RESULT: FAILED <reason> <ts>"), or undefined. */
+function restartLogLine(file) {
+	try {
+		const lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => l.startsWith("RESULT: "));
+		return lines[lines.length - 1];
+	} catch { return undefined; }
 }
 
 /** install: (re)write the plist and nothing else. A loaded service keeps running the old one until stop + start. */
@@ -306,6 +327,37 @@ function stop(cfg, d, ops) {
 function restart(cfg, d, ops) {
 	const svc = ops.printService();
 	if (!svc?.pid) return start(cfg, d, ops);
+	// launchd keeps the environment of the plist it loaded, so a relaunch (SIGTERM + KeepAlive) never sees a newer file (that is how the
+	// Mac missed WORKERD_KEY_FILE). Refresh the file; if it changed, the helper reloads it (bootout + bootstrap) instead of signalling.
+	// A missing plist (service loaded, file deleted) is written but counts as unchanged: the plain SIGTERM path, as before.
+	const { before, changed } = writePlist(cfg, d, ops);
+	if (changed) {
+		const log = path.join(path.dirname(cfg.log), "restart.log");
+		const backup = `${cfg.plist}.prev`;
+		fs.writeFileSync(backup, before, { mode: 0o600 });
+		// STACK_NAP (seconds between steps, default 1) exists only so tests can run the real helper fast.
+		// $1 log, $2 target, $3 domain, $4 plist, $5 backup of the old plist. After bootout the job must be really gone before bootstrap
+		// (bootstrap on a job still going away fails), so wait on `launchctl print` (<= 40s), then retry bootstrap 10x. If the new plist
+		// never loads, put the old one back and bootstrap that, so the stack is not left booted out.
+		// Detachment: spawnDetached starts the helper in its own session (setsid), like the SIGTERM helper, so bootout (which kills the
+		// job's process group) does not take it along. The plist sets no AbandonProcessGroup (ProcessType Interactive only affects
+		// scheduling): that is an assumption about launchd that tests cannot show. `trap '' HUP` covers a hangup from a dying tty.
+		const rscript = `trap '' HUP; exec >>"$1" 2>&1; t=$2; dom=$3; pl=$4; bak=$5; nap=\${STACK_NAP:-1}; res=""
+echo "--- $(date) reload $t (plist changed)"; sleep $nap; launchctl bootout "$t"
+i=0; while launchctl print "$t" >/dev/null 2>&1 && [ $i -lt 40 ]; do sleep $nap; i=$((i+1)); done
+echo "old job gone after ~$i s"
+boot() { j=0; while [ $j -lt 10 ]; do launchctl bootstrap "$dom" "$pl" && return 0; j=$((j+1)); echo "bootstrap attempt $j failed"; sleep $nap; done; return 1; }
+if boot; then echo "bootstrapped"; res="ok"
+else echo "BOOTSTRAP FAILED with the new plist"
+  if [ -f "$bak" ] && cp "$bak" "$pl.tmp" && mv "$pl.tmp" "$pl"; then echo "restored the old plist"; if boot; then echo "bootstrapped the old plist"; res="FAILED new plist did not load, old plist restored"; else echo "BOOTSTRAP FAILED with the old plist too: run pnpm stack start"; res="FAILED neither plist loaded, run pnpm stack start"; fi
+  else echo "no old plist to restore: run pnpm stack start"; res="FAILED new plist did not load, no old plist to restore"; fi
+fi
+sleep $nap; echo "after:"; launchctl print "$t" 2>&1 | grep -E "^[[:space:]]*(state|pid) ="
+echo "RESULT: $res $(date)"`;
+		fs.mkdirSync(path.dirname(log), { recursive: true });
+		d.spawnDetached("/bin/sh", ["-c", rscript, "sh", log, cfg.target, cfg.domain, cfg.plist, backup]);
+		return d.say(`plist changed: reload requested (bootout + bootstrap; kills all in-flight turns, including this one). Helper output: ${log}. Check: pnpm stack status`);
+	}
 	const script = `exec >>"$1" 2>&1; t=$2; p=$3; echo "--- $(date) restart $t pid $p"; sleep 2; launchctl kill SIGTERM "$t"; i=0
 while kill -0 "$p" 2>/dev/null && [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done
 echo "old pid exited after ~$i s"
@@ -348,6 +400,8 @@ async function status(cfg, d, ops, { brief = false } = {}) {
 	}
 	d.say(`healthz:   ${health.error ? `no answer (${health.error})` : `${health.ok ? "ok" : "not ok"}; ${health.wolves.map((w) => `${w.name} ${w.state}`).join(", ") || "no wolves"}`}`);
 	d.say(`verdict:   ${v}${v === "unmanaged" ? " (workerd answers but launchd does not run it: no restart on crash)" : ""}`);
+	const lastRestart = restartLogLine(path.join(path.dirname(cfg.log), "restart.log"));
+	if (lastRestart) d.say(`restart:   ${lastRestart}`);
 	d.say(`updates:   ${autoUpdateLine(path.join(packHome(process.env, cfg.home), "auto-update/status.json"))}`);
 	if (!brief && (v !== "healthy" || lsErr)) {
 		d.say(`\nlast log lines (${cfg.log}):`);

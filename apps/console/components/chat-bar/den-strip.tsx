@@ -9,8 +9,9 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MessageCircleQuestionIcon, PawPrintIcon } from "lucide-react";
+import { MessageCircleQuestionIcon } from "lucide-react";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
+import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
 import { Hint } from "@/components/ui/hint";
 import { cn } from "@/lib/utils";
@@ -123,7 +124,7 @@ export function DenStrip({ phone = false }: { phone?: boolean }) {
 						className={cn("relative flex size-[34px] shrink-0 items-center justify-center rounded-full border bg-card/70 backdrop-blur hover:bg-accent max-md:size-11", open === s.wolf && "border-current bg-accent")}
 						{...(open === s.wolf ? { "data-selected": "true" } : {})}
 					>
-						<PawPrintIcon aria-hidden className="size-5" />
+						<WolfpackMark className="size-5" />
 						{s.working && <i aria-hidden data-testid="den-working" className="absolute bottom-px right-px size-[7px] rounded-full bg-current ring-2 ring-card motion-safe:animate-pulse" />}
 						{s.needsYou > 0 && (
 							<b data-testid="den-badge" className="absolute -right-1.5 -top-[5px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1 font-ui text-[11px] font-bold leading-none text-white ring-2 ring-card">

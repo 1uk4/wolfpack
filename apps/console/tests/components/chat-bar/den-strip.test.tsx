@@ -118,12 +118,13 @@ describe("den strip", () => {
 		assert.equal(q('[data-testid="den-sheet"]'), null, "a second click closes");
 	});
 
-	it("a row opens its thread and closes the sheet", async () => {
+	it("a needs-you row opens its thread, attaches the chat to the thread that raised it, and closes the sheet", async () => {
 		await mount();
 		await click(wolf("hal"));
 		await until(() => q('[data-testid="den-row"] a'), "the row");
 		await click(q('[data-testid="den-row"] a')!);
 		assert.equal(navLog.stack[navLog.index], "/wolf/hal/thread/b");
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "hal/b");
 		assert.equal(q('[data-testid="den-sheet"]'), null);
 	});
 

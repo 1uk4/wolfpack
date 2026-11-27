@@ -103,6 +103,7 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
   };
 
   // curator items in flight: from/denTopicId -> start time (epoch ms), so curate-done can carry the elapsed ms. Bounded.
+  const CURATING_MAX = 200;
   const curating = new Map<string, number>();
   const CURATOR_ACTOR: ActivityActor = { kind: "hub", title: "curator" };
 
@@ -111,14 +112,14 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
      * The curator's per-item events (hub bus drafts) -> curate-start (first sweep_progress of an item) and curate-done (sweep_item).
      * The sweep carries no contribution id, so `detail.ref` is the den topic id (what the wolf's memory-promote event carries in topicIds).
      */
-    onSweep(d: { type: string; from?: string; denTopicId?: string; startedAt?: number; outcome?: string; entryId?: string; domain?: string; section?: string; sectionTitle?: string; decision?: { reason?: string } }): void {
+    onSweep(d: { type: string; from?: string; denTopicId?: string; startedAt?: number; outcome?: string; entryId?: string; domain?: string; section?: string; sectionTitle?: string }): void {
       try {
         if (d.type !== "sweep_progress" && d.type !== "sweep_item") return;
         if (!d.denTopicId || !d.from) return;
         const key = d.from + "/" + d.denTopicId;
         if (d.type === "sweep_progress") {
           if (curating.has(key)) return; // the route-known update of an item already announced
-          if (curating.size > 200) curating.clear();
+          if (curating.size >= CURATING_MAX) curating.delete(curating.keys().next().value as string); // evict the oldest, never the lot
           curating.set(key, typeof d.startedAt === "number" ? d.startedAt : now());
           emit(CURATOR_ACTOR, "curate-start", undefined, undefined, { ref: d.denTopicId, topicIds: [d.denTopicId] });
           return;
@@ -130,7 +131,6 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
           ...(d.outcome ? { outcome: d.outcome } : {}),
           ...(d.section ? { section: d.section } : {}),
           ...(d.sectionTitle ? { sectionTitle: d.sectionTitle } : {}),
-          ...(d.decision?.reason ? { reason: d.decision.reason } : {}),
           ...(startedAt !== undefined ? { ms: Math.max(0, now() - startedAt) } : {}),
         };
         const target = d.entryId ? { kind: "kb-entry" as const, id: d.entryId, ...(d.domain ? { domain: d.domain } : {}) } : undefined;

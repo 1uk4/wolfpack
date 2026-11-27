@@ -113,11 +113,27 @@ describe("derive fan-out queue", () => {
     d.onSweep({ type: "sweep_progress", from: "w", denTopicId: "tp1", startedAt: 4000 });
     d.onSweep({ type: "sweep_progress", from: "w", denTopicId: "tp1", startedAt: 4000 }); // route known: same item
     t = 6500;
-    d.onSweep({ type: "sweep_item", from: "w", denTopicId: "tp1", outcome: "create", entryId: "kb-wp-aaaaaaa", domain: "wp", section: "s1", sectionTitle: "Caching", decision: { reason: "new subject" } });
+    d.onSweep({ type: "sweep_item", from: "w", denTopicId: "tp1", outcome: "create", entryId: "kb-wp-aaaaaaa", domain: "wp", section: "s1", sectionTitle: "Caching", decision: { reason: "new subject" } } as never);
     await drain();
     expect(seen.map((e) => e.verb)).toEqual(["curate-start", "curate-done"]);
     expect(seen[0]).toMatchObject({ actor: { kind: "hub" }, detail: { ref: "tp1" } });
-    expect(seen[1]).toMatchObject({ actor: { kind: "hub" }, target: { kind: "kb-entry", id: "kb-wp-aaaaaaa", domain: "wp" }, detail: { outcome: "create", section: "s1", sectionTitle: "Caching", reason: "new subject", ms: 2500, ref: "tp1" } });
+    expect(seen[1]).toMatchObject({ actor: { kind: "hub" }, target: { kind: "kb-entry", id: "kb-wp-aaaaaaa", domain: "wp" }, detail: { outcome: "create", section: "s1", sectionTitle: "Caching", ms: 2500, ref: "tp1" } });
+    expect("reason" in (seen[1]!.detail ?? {})).toBe(false); // the curator's reason is not broadcast on the activity bus
+  });
+
+  it("past 200 in-flight items the oldest is forgotten, not the rest", async () => {
+    let t = 1000;
+    const bus = createMemoryBus();
+    const seen: ActivityEvent[] = [];
+    bus.subscribe("p", (e) => seen.push(e));
+    const d = createActivityDeriver({ bus, presence: createPresenceStore(), pack: "p", now: () => t, queueMax: 10_000 });
+    for (let i = 0; i < 201; i++) d.onSweep({ type: "sweep_progress", from: "w", denTopicId: `t${i}`, startedAt: 1000 });
+    t = 4000;
+    d.onSweep({ type: "sweep_item", from: "w", denTopicId: "t0", outcome: "create" }); // evicted: no elapsed time
+    d.onSweep({ type: "sweep_item", from: "w", denTopicId: "t200", outcome: "create" }); // kept
+    await drain();
+    const done = seen.filter((e) => e.verb === "curate-done");
+    expect([done[0]!.detail?.ms, done[1]!.detail?.ms]).toEqual([undefined, 3000]);
   });
 
   it("derives at most 20 events from one ledger batch, and drains a big backlog in chunks of 50", async () => {

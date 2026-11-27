@@ -8,10 +8,10 @@ const obs = { ...base, type: "observation_captured", count: 1, summary: "s", tar
 const topic = (id: string, n: number) => ({ ...base, type: "topic_consolidated", topicId: id, observationCount: n, change: "create", target: { kind: "den", topicId: id } }) as MemoryEvent;
 const contrib = { ...base, type: "contribution_emitted", contributionId: "c-1", lane: "inbox/w", target: { kind: "den", topicId: "tp1" } } as MemoryEvent;
 
-function rig(extra: { emit?: (d: ActivityDraft) => void } = {}) {
+function rig(extra: { emit?: (d: ActivityDraft) => void; poolTokens?: () => Promise<number> } = {}) {
   const sent: ActivityDraft[] = [];
   let t = 1_000_000;
-  const l = memoryActivityListener({ emit: extra.emit ?? ((d) => void sent.push(d)) }, { wolf: "w", poolTokens: async () => 1234, capacity: 20000, now: () => t });
+  const l = memoryActivityListener({ emit: extra.emit ?? ((d) => void sent.push(d)) }, { wolf: "w", poolTokens: extra.poolTokens ?? (async () => 1234), capacity: 20000, now: () => t });
   return { sent, l, advance: (ms: number) => (t += ms) };
 }
 
@@ -25,6 +25,25 @@ describe("memory activity events", () => {
     advance(3001);
     l(obs);
     await vi.waitFor(() => expect(sent).toHaveLength(2));
+  });
+  it("a pool-size read that rejects is swallowed: no event, no unhandled rejection, and the next observation still reports", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      let fail = true;
+      const { sent, l, advance } = rig({ poolTokens: async () => { if (fail) throw new Error("pool unreadable"); return 50; } });
+      l(obs);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(sent).toHaveLength(0);
+      expect(unhandled).not.toHaveBeenCalled();
+      fail = false;
+      advance(3001);
+      l(obs);
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]!.detail).toEqual({ count: 50, capacity: 20000 });
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
   it("a consolidation batch becomes one memory-consolidate with the topic ids", () => {
     vi.useFakeTimers();

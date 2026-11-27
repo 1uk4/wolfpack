@@ -60,7 +60,6 @@ export const ActivityDetailSchema = z.object({
   outcome: cut(24).optional(),
   section: cut(80).optional(),
   sectionTitle: cut(ACTIVITY_TITLE_MAX).optional(),
-  reason: cut(160).optional(),
   tokens: z.number().int().nonnegative().optional(),
   ms: z.number().int().nonnegative().optional(),
   topicIds: z.array(z.string().min(1)).transform((a) => a.slice(0, 20)).optional(),

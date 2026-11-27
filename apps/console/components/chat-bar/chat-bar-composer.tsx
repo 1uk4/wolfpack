@@ -113,6 +113,19 @@ export default function ChatBarComposer({ phone = false, target, title, cardOpen
 
 	// While the questionnaire is expanded this composer is the NOTE's (Next / Submit); collapsing hands the note's images to the normal attachments (the text goes through the draft store).
 	const noteMode = !!session && session.active && session.expanded;
+	// Space-hold dictation (components/composer/space-dictation.ts) fires this when the owner releases after a hold: the spoken words are already in the field,
+	// so it goes through the send button's path (submit, clear the draft). Not while a questionnaire note is the composer; an empty field is a no-op (send checks).
+	const sendRef = useRef(send);
+	sendRef.current = send;
+	const noteModeRef = useRef(noteMode);
+	noteModeRef.current = noteMode;
+	useEffect(() => {
+		const onAutosend = () => {
+			if (!noteModeRef.current) void sendRef.current();
+		};
+		window.addEventListener("wolfpack:dictation-autosend", onAutosend);
+		return () => window.removeEventListener("wolfpack:dictation-autosend", onAutosend);
+	}, []);
 	useEffect(() => {
 		registerNoteSink?.((n) => setAttachments((prev) => [...prev, ...n.atts]));
 		return () => registerNoteSink?.(null);

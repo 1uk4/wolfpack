@@ -761,6 +761,21 @@ describe("one dictation path: the bar's when a thread is attached, the page's ow
 		assert.ok(prevented && focusedBar);
 	});
 
+	it("a dictation-autosend event sends what was dictated through the send path and clears the input", async () => {
+		await mount("/wolf/w/thread/a", A, <><OnPageA /><DockSlot /></>);
+		await fire(barToggle(), "click", { detail: 1 });
+		await wait();
+		const ws = await say("ship it");
+		await endRun(ws);
+		await wait();
+		assert.equal(barTa()!.value, "ship it");
+		assert.deepEqual(posts, [], "nothing sent yet");
+		await act(async () => void window.dispatchEvent(new dom.window.CustomEvent("wolfpack:dictation-autosend")));
+		await wait();
+		assert.equal((posts as string[]).filter((p) => p.includes("/submit")).length, 1, "sent once");
+		assert.equal(barTa()!.value, "", "the input is cleared");
+	});
+
 	it("with nothing attached the page's own run works and the words land in the page composer", async () => {
 		await mount("/wolf/w/thread/a", null, <OnPageA />);
 		assert.equal(mem.get(ATTACHED_KEY), undefined);

@@ -82,7 +82,7 @@ export function buildLabelTree(
 			n.level = d === 0 ? 1 : 3;
 			continue;
 		}
-		let level = d <= 0 ? 1 : d === 1 ? 2 : 2;
+		let level = d <= 0 ? 1 : 2;
 		if (n.childCount >= BIG_PARENT_CHILDREN) level -= 1;
 		n.level = Math.min(3, Math.max(1, level)) as LabelLevel;
 	}
@@ -114,6 +114,8 @@ export interface LabelCandidate {
 	below: number;
 	/** Text width at 1 px of font size (measured once, never per frame). */
 	widthEm: number;
+	/** Font scale on top of the level's px (the cluster label size setting); default 1. */
+	scale?: number;
 }
 
 interface Rect {
@@ -127,11 +129,16 @@ const LINE_EM = 1.25;
 const PAD = 3;
 const CELL = 96;
 
+/** Screen y of a label's top edge: just below the anchor by `below`, or (below 0) the text centred on it. ONE formula for the collision rect and the draw. */
+export function labelTop(sy: number, below: number, px: number): number {
+	return below === 0 ? sy - (px * LINE_EM) / 2 : sy + below;
+}
+
 function rectOf(c: LabelCandidate): Rect {
-	const px = LABEL_LEVELS[c.level]!.px;
+	const px = LABEL_LEVELS[c.level]!.px * (c.scale ?? 1);
 	const w = c.widthEm * px;
 	const h = px * LINE_EM;
-	const top = c.below === 0 ? c.sy - h / 2 : c.sy + c.below;
+	const top = labelTop(c.sy, c.below, px);
 	return { x0: c.sx - w / 2 - PAD, x1: c.sx + w / 2 + PAD, y0: top - PAD, y1: top + h + PAD };
 }
 
@@ -160,7 +167,7 @@ export function chooseLabels(
 		return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 	});
 	const grid = new Map<number, Rect[]>();
-	const keyOf = (cx: number, cy: number) => cx * 73856093 + cy * 19349663;
+	const keyOf = (cx: number, cy: number) => cx * 65536 + cy;
 	const hits = (r: Rect): boolean => {
 		for (let cx = Math.floor(r.x0 / CELL); cx <= Math.floor(r.x1 / CELL); cx++)
 			for (let cy = Math.floor(r.y0 / CELL); cy <= Math.floor(r.y1 / CELL); cy++)

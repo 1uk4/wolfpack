@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildLabelTree, chooseLabels, effectiveZoom, parentChain, type LabelCandidate } from "../../../src/core/graph/label-lod.ts";
+import { buildLabelTree, chooseLabels, effectiveZoom, labelTop, parentChain, type LabelCandidate } from "../../../src/core/graph/label-lod.ts";
 
 const cand = (id: string, level: 0 | 1 | 2 | 3, sx: number, sy: number, size = 0): LabelCandidate => ({ id, level, size, sx, sy, below: 0, widthEm: 6 });
 const view = { width: 1000, height: 800 };
@@ -61,5 +61,12 @@ describe("collisions", () => {
 		const cs = [cand("dom", 1, 500, 400), cand("leaf", 3, 500, 400)];
 		const got = chooseLabels(cs, { ...view, ze: 1, forced: new Set(["leaf", "dom"]) });
 		assert.deepEqual([...got].sort(), ["dom", "leaf"]);
+	});
+});
+
+describe("label anchor", () => {
+	it("centres a title on its anchor and hangs a node label below its disc, one formula for the collision rect and the draw", () => {
+		assert.equal(labelTop(100, 0, 20), 87.5);
+		assert.equal(labelTop(100, 6, 20), 106);
 	});
 });

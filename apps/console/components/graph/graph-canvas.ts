@@ -62,7 +62,7 @@ import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import { LabelPass, type GroupTitle } from "./label-pass.ts";
 import { computeGroupShapes, drawGroupShapes, groupAt, type GroupShape } from "./group-regions.ts";
-import { effectiveZoom, labelsOn } from "@/src/core";
+import { DEFAULT_RENDER_SETTINGS, effectiveZoom, labelsOn } from "@/src/core";
 import type { LiveOverlay, OverlayHighlight, OverlayHit, OverlayHost } from "./live/live-overlay";
 import {
 	CHARGE_STRENGTH,
@@ -196,7 +196,6 @@ export interface RendererCallbacks {
 
 // ─── Constants (ported verbatim from the sigma view) ────────────────────────
 
-const LABEL_SIZE = 12; // the reference label size the wrap-width ratio is taken against
 const LABEL_WEIGHT = "500";
 
 /** Region (cluster) labels — wave 7's session names made the labels
@@ -275,7 +274,6 @@ export function wrapRegionLabel(
 	return lines;
 }
 
-const LABEL_MAX_WIDTH = 170; // wrap width at the reference label size, world units
 const LABEL_GAP = 2.9; // world units between node edge and first label line (the 2px-at-fit reference ÷ 0.69)
 const LABEL_LINE_HEIGHT = 1.3;
 /** The node→cluster label cross-fade spans gate × this (camera-ratio
@@ -318,6 +316,7 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
  *  the jagged close-up look), there is no border to lag behind, and a
  *  live-physics frame pays one tiny blit instead of 32 clusters × 4
  *  offset polygons re-rasterized at DPR 2 (the old GPU coil-whine). */
+const EMPTY_TITLES: GroupTitle[] = [];
 const LABEL_MIN_SCREEN_PX = 6; // labels smaller than this on screen are skipped
 const LABEL_CULL_MARGIN = 150; // screen px around the viewport that still draws labels
 const SIM_FIELDS = new Set(["x", "y", "vx", "vy", "fx", "fy", "index"]); // mutated by the sim; not content
@@ -530,33 +529,6 @@ function rgbaFromHex(hex: string, alpha: number): string {
 	const g = Number.parseInt(hex.slice(3, 5), 16);
 	const b = Number.parseInt(hex.slice(5, 7), 16);
 	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-/** Word-wrap for canvas text. Never truncates: overlong single words are
- *  hard-broken by character so no line ever exceeds maxWidth. */
-function wrapLabel(context: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-	const lines: string[] = [];
-	for (const word of text.split(/\s+/).filter(Boolean)) {
-		const last = lines.length > 0 ? lines[lines.length - 1]! : null;
-		if (last !== null) {
-			const joined = `${last} ${word}`;
-			if (context.measureText(joined).width <= maxWidth) {
-				lines[lines.length - 1] = joined;
-				continue;
-			}
-		}
-		let chunk = "";
-		for (const char of word) {
-			if (chunk && context.measureText(`${chunk}${char}`).width > maxWidth) {
-				lines.push(chunk);
-				chunk = char;
-			} else {
-				chunk += char;
-			}
-		}
-		if (chunk) lines.push(chunk);
-	}
-	return lines;
 }
 
 /** World-unit sizes for the label pass, derived once per geometry build. */
@@ -795,11 +767,9 @@ export class GraphCanvasRenderer {
 	/** Value key of the tuning the sim was built with. */
 	private physicsKey = JSON.stringify(DEFAULT_PHYSICS_TUNING);
 	private regionBuiltVersion = -1;
-	private labelLines = new Map<string, string[]>();
 	private hasBlocked = false;
 	/** Content signature (no positions or sim state) of the data last applied. */
 	private dataKey = "";
-	private labelKey: { data: unknown; visible: unknown; font: string; maxW: number } | null = null;
 	private worldLabelFont = "";
 	private world: WorldSizes = { nodeR: 0, labelSize: 0, labelGap: 0 };
 
@@ -1591,9 +1561,18 @@ export class GraphCanvasRenderer {
 		return this.groupShapes;
 	}
 
+	/** The group titles for the label pass: rebuilt only when the group shapes were (same array = same identity, so the pass skips its work). */
 	private groupTitles(): GroupTitle[] {
-		return this.shapesNow().map((s) => ({ id: s.id, label: s.label, color: s.color, x: s.cx, y: s.cy, size: s.size }));
+		const shapes = this.shapesNow();
+		if (shapes.length === 0) return EMPTY_TITLES;
+		if (this.titlesFor !== shapes) {
+			this.titlesFor = shapes;
+			this.titles = shapes.map((s) => ({ id: s.id, label: s.label, color: s.color, x: s.cx, y: s.cy, size: s.size }));
+		}
+		return this.titles;
 	}
+	private titlesFor: GroupShape[] | null = null;
+	private titles: GroupTitle[] = [];
 
 	/** Zoom the camera to a group's bubble (the phone tap). True when the group exists. */
 	zoomToGroup(id: string): boolean {
@@ -1927,24 +1906,7 @@ export class GraphCanvasRenderer {
 		// low-res bitmap (see buildRegions), on their own rebuild schedule
 		// (live-sim frames skip 2 of 3 rebuilds and blit the last bitmap).
 
-		// Label wrapping: measureText once per node per geometry build,
-		// never per frame. Wrap width keeps the bigger-label/bigger-wrap
-		// behavior from the sigma era.
-		// Wrapped lines depend on data, visibility, font and wrap width, never
-		// on position, so live-sim frames reuse them.
-		const maxW = LABEL_MAX_WIDTH * (settings.labelSize / LABEL_SIZE);
-		const lk = this.labelKey;
-		if (!lk || lk.data !== data || lk.visible !== visible || lk.font !== this.worldLabelFont || lk.maxW !== maxW) {
-			this.labelKey = { data, visible, font: this.worldLabelFont, maxW };
-			this.labelLines = new Map();
-			const ctx = this.ctx;
-			const prevFont = ctx.font;
-			ctx.font = this.worldLabelFont;
-			for (const n of data.nodes) {
-				if (isVisible(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
-			}
-			ctx.font = prevFont;
-		}
+		// Node labels are the label pass's (label-pass.ts), measured lazily there.
 	}
 
 	/** (Re)create the live sim from data.nodes at their current
@@ -2487,6 +2449,8 @@ export class GraphCanvasRenderer {
 			h,
 			ze: effectiveZoom(1 / ratio, settings.labelZoom),
 			on: labelsOn(settings),
+			clusterLabels: settings.clusterLabels,
+			clusterScale: settings.clusterLabelSize / DEFAULT_RENDER_SETTINGS.clusterLabelSize,
 			hoverId: this.hoverNode && this.hoverTarget > 0 ? this.hoverNode.id : null,
 			selectedId: this.selectedId,
 			reduce: prefersReducedMotion(),

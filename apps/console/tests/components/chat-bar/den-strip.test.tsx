@@ -198,4 +198,15 @@ describe("den strip", () => {
 		assert.ok(q(`[data-testid="chat-bar-swap"][data-wolf="w"] ${icon}`), "back on the attached wolf");
 		assert.equal(q(`[data-testid="den-wolf"][data-wolf="hal"] ${icon}`), null);
 	});
+
+	it("clicking the swap icon on a hovered wolf attaches the chat to that wolf's home thread and opens no tree", async () => {
+		await mount("/wolf/hal/thread/b");
+		const fire = (el: HTMLElement, name: string) => act(async () => void props(el, name)({ currentTarget: el, target: el }));
+		await fire(wolf("hal"), "onMouseEnter");
+		await click(wolf("hal"));
+		await flush();
+		const a = JSON.parse(mem.get(ATTACHED_KEY)!);
+		assert.deepEqual([a.wolf, a.threadId], ["hal", "hal/home"]);
+		assert.equal(q('[data-testid="den-sheet"]'), null, "no tree opened");
+	});
 });

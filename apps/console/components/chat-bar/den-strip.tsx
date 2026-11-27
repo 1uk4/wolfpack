@@ -58,7 +58,7 @@ interface Props {
 export function DenStrip({ swap = null, onSwap, open, setOpen }: Props) {
 	const api = useAttachedThread()!;
 	const items = useNeedsYouItems(open !== null);
-	// While a swap is on offer the swap icon follows the pointer: it is drawn on the hovered wolf, else on the attached wolf. Only the icon moves; what each button does is unchanged.
+	// While a swap is on offer the swap icon follows the pointer: it is drawn on the hovered wolf, else on the attached wolf. A click on the icon swaps the chat to that wolf's home thread; with no hover it docks the page's thread (onSwap).
 	const [hovered, setHovered] = useState<string | null>(null);
 	const strip = useMemo(() => buildDenStrip(api.wolves, api.threads, items, swap?.wolf ?? null, api.attached?.wolf ?? null), [api.wolves, api.threads, items, swap?.wolf, api.attached?.wolf]);
 	// A wolf that leaves the strip (went offline, its cards were answered) takes its tree with it.
@@ -87,6 +87,10 @@ export function DenStrip({ swap = null, onSwap, open, setOpen }: Props) {
 								if (s.swap && swap) {
 									setOpen(null);
 									onSwap?.();
+								} else if (swap && hovered === s.wolf && s.homeThreadId) {
+									// The swap icon is on this hovered wolf: swap the chat to it (its home thread, the one the tree leads with).
+									setOpen(null);
+									api.attach({ wolf: s.wolf, threadId: s.homeThreadId });
 								} else setOpen(open === s.wolf ? null : s.wolf);
 							}}
 							style={{ color: s.color }}

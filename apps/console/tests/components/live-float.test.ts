@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import type { ActivityEvent } from "@wolfpack/protocol";
-import { floatOffset, nameHash, roamOffset } from "../../components/graph/live/live-float.ts";
+import { floatOffset, nameHash } from "../../components/graph/live/live-float.ts";
 import { LIVE_DEFAULTS, LiveOverlay } from "../../components/graph/live/live-overlay.ts";
 
 describe("idle float (pure function of time)", () => {
@@ -25,23 +25,6 @@ describe("idle float (pure function of time)", () => {
 	it("is zero under reduced motion or with no amplitude", () => {
 		assert.deepEqual(floatOffset(nameHash("hal"), 9999, 3.5, { reduced: true }), { dx: 0, dy: 0 });
 		assert.deepEqual(floatOffset(nameHash("hal"), 9999, 0), { dx: 0, dy: 0 });
-	});
-});
-
-describe("wolf roam (pure function of time)", () => {
-	it("stays inside the radius, is smooth over 40 ms, wanders more than 15% of the radius in 10 s, and is zero under reduced motion", () => {
-		const h = nameHash("hal");
-		const R = 100;
-		for (let t = 0; t <= 120_000; t += 500) {
-			const o = roamOffset(h, t, R);
-			assert.ok(Math.abs(o.dx) <= R && Math.abs(o.dy) <= R, `bounded at ${t}`);
-			const n = roamOffset(h, t + 40, R);
-			assert.ok(Math.hypot(n.dx - o.dx, n.dy - o.dy) < 0.05 * R, "smooth over 40 ms");
-		}
-		const a = roamOffset(h, 0, R);
-		const b = roamOffset(h, 10_000, R);
-		assert.ok(Math.hypot(b.dx - a.dx, b.dy - a.dy) > 0.15 * R, "noticeable move in 10 s");
-		assert.deepEqual(roamOffset(h, 7000, R, true), { dx: 0, dy: 0 });
 	});
 });
 

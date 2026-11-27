@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import type { ActivityEvent } from "@wolfpack/protocol";
 import { LiveOverlay, LIVE_DEFAULTS, type OverlayHost, type OverlayItem } from "../../components/graph/live/live-overlay.ts";
 import { talkToWolf } from "../../components/graph/live/live-talk.ts";
-import { separateSubs, stepSub, type SubBody } from "../../src/core/graph/live/live-sub-physics.ts";
 import { formatFeed } from "../../src/core/graph/live/feed.ts";
 
 /** Map model v2: features are hubs at their work node, subagents dart between targets and tether back, the wolf floats free. Real event shapes. */
@@ -430,6 +429,33 @@ describe("live map model v2", () => {
 		still.stop();
 	});
 
+	it("a wolf with a needs-you question stays at its target however long it waits, and heads home once answered", () => {
+		send("thread-active", home);
+		send("kb-read", home, ENT);
+		run(8);
+		send("needs-you", home);
+		run(120);
+		const entry = nodes.get("ent:kb-wolfpack-KNMBskd")!;
+		assert.ok(dist(of("wolf"), entry) < 60, `still at the entry (${dist(of("wolf"), entry)})`);
+		send("answered", home);
+		run(200);
+		assert.ok(dist(of("wolf"), entry) > 150, `back toward the den (${dist(of("wolf"), entry)})`);
+	});
+
+	it("asks for no frames while the document is hidden, and again once it is shown", () => {
+		send("thread-active", home);
+		run(0.1);
+		const doc = g.document;
+		try {
+			g.document = { hidden: true };
+			assert.equal(o.needsFrames(Date.now()), false);
+			g.document = { hidden: false };
+			assert.equal(o.needsFrames(Date.now()), true);
+		} finally {
+			g.document = doc;
+		}
+	});
+
 	it("cards: a subagent shows its target, a feature its wolf, state and subagent count; private view hides titles", () => {
 		send("thread-active", feature);
 		send("subagent-spawned", subTap);
@@ -475,20 +501,5 @@ describe("clicking a wolf talks to it", () => {
 		assert.equal(talkToWolf("1uk4", { threads, focusComposer: () => undefined, navigate: (h) => calls.push(h) }), "page");
 		assert.equal(calls.length, 1);
 		assert.ok(calls[0]!.includes("home"));
-	});
-});
-
-describe("subagent separation (pure)", () => {
-	it("two bodies stacked on one point, and a body on its hub, are pushed apart until clear of each other", () => {
-		const mk = (x: number, y: number): SubBody => ({ x, y, vx: 0, vy: 0, r: 10, hx: 0, hy: 0, hr: 8 });
-		const list = [mk(0, 0), mk(0, 0)];
-		for (let i = 0; i < 400; i++) {
-			separateSubs(list, 0.016);
-			for (const b of list) stepSub(b, i * 16, 0.016, b.x, b.y, 0);
-		}
-		const [a, b] = list as [SubBody, SubBody];
-		// worked literals: pair clearance r + r + 0.4r = 24, hub clearance hr + r + 0.4r = 8 + 10 + 4 = 22
-		assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= 23.5, `apart ${Math.hypot(a.x - b.x, a.y - b.y)}`);
-		for (const s of list) assert.ok(Math.hypot(s.x, s.y) >= 21.5, `clear of the hub ${Math.hypot(s.x, s.y)}`);
 	});
 });

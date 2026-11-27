@@ -149,6 +149,25 @@ export function scaleFor(k: number): OverlayScale {
 	return { wolfPx, m: wolfPx / (WOLF_SCALE * REF_PX) / k, compact: raw <= WOLF_MIN_PX };
 }
 let homePath: Path2D | null = null;
+const EMPTY_SUBS: LiveSubagent[] = [];
+/** Empty a bucket map for the next frame, keeping its arrays in `pool` for reuse. */
+function recycleBuckets<T>(map: Map<string, T[]>, pool: unknown[][]): void {
+	for (const l of map.values()) {
+		l.length = 0;
+		pool.push(l);
+	}
+	map.clear();
+}
+/** The bucket for `key`, taken from the pool when it is new. */
+function bucketOf<T>(map: Map<string, T[]>, key: string, pool: unknown[][]): T[] {
+	let l = map.get(key);
+	if (!l) {
+		l = (pool.pop() as T[] | undefined) ?? [];
+		map.set(key, l);
+	}
+	return l;
+}
+
 /** lucide house, in its 24 x 24 box: the den's placeholder icon. */
 const homeGlyph = (): Path2D => (homePath ??= new Path2D("M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"));
 let userPath: Path2D | null = null;
@@ -227,6 +246,16 @@ export class LiveOverlay {
 	private bodyList: Body[] = [];
 	/** Per-frame indexes (rebuilt by items()): the wolf and thread items by key. */
 	private wolfItems = new Map<string, OverlayItem>();
+	/** Per-frame scratch, reused (cleared, never reallocated): the buckets of stepSubs() and items(), and items()'s result. */
+	private subGroups = new Map<string, SubState[]>();
+	private subsByThread = new Map<string, LiveSubagent[]>();
+	private threadsByWolf = new Map<string, { t: LiveThread; alpha: number }[]>();
+	private bucketPool: unknown[][] = [];
+	private itemsOut: OverlayItem[] = [];
+	private firstNeedingYou(): OverlayItem | undefined {
+		for (const i of this.wolfItems.values()) if (i.needsYou) return i;
+		return undefined;
+	}
 	private threadItems = new Map<string, OverlayItem>();
 	private trailRef = new Map<string, TrailRef>();
 	private composer: { x: number; y: number; w: number; h: number } | null = null;
@@ -332,7 +361,12 @@ export class LiveOverlay {
 	start(): void {
 		this.started = true;
 		this.arm();
+		if (!this.onVisible && typeof document !== "undefined" && typeof document.addEventListener === "function") {
+			this.onVisible = () => { if (!document.hidden) this.requestFrame(); }; // motion paused while hidden: wake the loop on return
+			document.addEventListener("visibilitychange", this.onVisible);
+		}
 	}
+	private onVisible: (() => void) | null = null;
 	private started = false;
 	/** The clock runs only while something can expire; with no live data there is no timer at all. */
 	private arm(): void {
@@ -348,6 +382,8 @@ export class LiveOverlay {
 	}
 	stop(): void {
 		this.started = false;
+		if (this.onVisible && typeof document !== "undefined") document.removeEventListener?.("visibilitychange", this.onVisible);
+		this.onVisible = null;
 		if (this.timer) clearInterval(this.timer);
 		this.timer = null;
 	}
@@ -357,6 +393,7 @@ export class LiveOverlay {
 		this.need = "none";
 		if (!this.settings.enabled) return false;
 		if (this.reduced) return false; // reduced motion: a still picture (rings, glows and positions are static)
+		if (typeof document !== "undefined" && document.hidden) return false; // a hidden tab animates nothing; visibilitychange wakes the loop
 		this.need = this.classifyNeed(now);
 		return this.need !== "none";
 	}
@@ -719,16 +756,15 @@ export class LiveOverlay {
 		const T = LIVE_TUNING;
 		const list = this.subList;
 		list.length = 0;
-		const groups = new Map<string, SubState[]>();
+		const groups = this.subGroups;
+		recycleBuckets(groups, this.bucketPool);
 		for (const key in s.subagents) {
 			const b = this.subBodies.get(key);
 			if (!b) continue;
 			b.a = s.subagents[key]!;
 			list.push(b);
 			if (b.a.finishedAt !== undefined) continue;
-			const l = groups.get(b.pk);
-			if (l) l.push(b);
-			else groups.set(b.pk, [b]);
+			bucketOf(groups, b.pk, this.bucketPool).push(b);
 		}
 		for (const [pk, l] of groups) {
 			l.sort((x, y) => x.born - y.born || (x.a.key < y.a.key ? -1 : 1));
@@ -905,28 +941,26 @@ export class LiveOverlay {
 	/** Wolves, thread satellites and subagent satellites at their current positions (world). */
 	items(host: OverlayHost, k: number, now: number): OverlayItem[] {
 		const s = this.state;
-		const out: OverlayItem[] = [];
+		const out = this.itemsOut; // reused across frames: callers read it within the frame
+		out.length = 0;
 		const sc = scaleFor(k);
 		const m = sc.m;
 		const fade = this.settings.subagentFadeSec;
 		const reduced = this.reduced;
 		// Indexes built once per call: subagents by parent thread, visible threads by wolf.
-		const subsByThread = new Map<string, LiveSubagent[]>();
+		const subsByThread = this.subsByThread;
+		recycleBuckets(subsByThread, this.bucketPool);
 		for (const id in s.subagents) {
 			const a = s.subagents[id]!;
-			const key = threadKey(a.wolf, a.parentThreadId ?? "");
-			const list = subsByThread.get(key);
-			if (list) list.push(a);
-			else subsByThread.set(key, [a]);
+			bucketOf(subsByThread, threadKey(a.wolf, a.parentThreadId ?? ""), this.bucketPool).push(a);
 		}
-		const threadsByWolf = new Map<string, { t: LiveThread; alpha: number }[]>();
+		const threadsByWolf = this.threadsByWolf;
+		recycleBuckets(threadsByWolf, this.bucketPool);
 		for (const id in s.threads) {
 			const t = s.threads[id]!;
-			const alpha = threadAlpha(s, t, now, fade, subsByThread.get(threadKey(t.wolf, t.id)) ?? []);
+			const alpha = threadAlpha(s, t, now, fade, subsByThread.get(threadKey(t.wolf, t.id)) ?? EMPTY_SUBS);
 			if (alpha <= 0) continue;
-			const list = threadsByWolf.get(t.wolf);
-			if (list) list.push({ t, alpha });
-			else threadsByWolf.set(t.wolf, [{ t, alpha }]);
+			bucketOf(threadsByWolf, t.wolf, this.bucketPool).push({ t, alpha });
 		}
 		this.wolfItems.clear();
 		this.threadItems.clear();
@@ -1204,7 +1238,7 @@ export class LiveOverlay {
 		ctx.restore();
 		// The owner node and its dashed link.
 		const ow = { x: den.x, y: den.y - T.ownerOffsetPx * m };
-		const focus = (this.attached ? this.wolfItems.get(this.attached.wolf) : undefined) ?? [...this.wolfItems.values()].find((i) => i.needsYou);
+		const focus = (this.attached ? this.wolfItems.get(this.attached.wolf) : undefined) ?? this.firstNeedingYou();
 		if (focus) {
 			ctx.setLineDash([5 / k, 5 / k]);
 			ctx.lineWidth = 1.4 / k;

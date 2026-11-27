@@ -6,31 +6,38 @@
  * thread's submit route (steering when a turn runs), aborts through the abort route, and shows "working…" from the
  * events channel (see attached-thread.tsx). Drafts share the thread page's key.
  *
- * On the attached thread's own page the bar is hidden (the page composer takes over; Cmd/Ctrl+J focuses it), EXCEPT while
- * dictating: then it shows there too, in full, REPLACING the page composer (ThreadChat unmounts its composer while the chat
- * owns the input). Stopping on that page docks it and the composer returns with the text; stopping anywhere else leaves it showing the words. Only the chip, the switcher and the shortcuts are eager; the input half (chat-bar-composer.tsx) loads on first expand.
+ * Docking is automatic (there is no pop-out/dock button). On the attached thread's own page the bar renders nothing: the page
+ * composer IS the chat (Cmd/Ctrl+J focuses it), except in viz mode where the bar shows there and replaces it. On any OTHER thread
+ * page the bar floats over it with a "Swap to <thread>" pill; the page's composer steps aside (thread-chat.tsx pads its strips by
+ * --chat-bar-over), so there is only ever one composer, and the pill attaches that page's thread, which docks into it.
+ * Only the chip, the switcher and the shortcuts are eager; the input half (chat-bar-composer.tsx) loads on first expand.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getPageNoteAppend } from "@/components/composer/use-thread-dictation";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
-import { ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon, PictureInPicture2Icon } from "lucide-react";
+import { ArrowLeftRightIcon, EyeIcon, MessageCircleQuestionIcon, ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon } from "lucide-react";
+import { Hint } from "@/components/ui/hint";
+import { useSubagentChildren } from "@/components/thread/use-subagent-children";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
-import { abortThread as abortBarThread, onOwnThreadPage } from "@/components/chat-bar/chat-bar-io";
+import { abortThread as abortBarThread, onOwnThreadPage, swapTarget } from "@/components/chat-bar/chat-bar-io";
 import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/composer/dictation";
 import { appendToDraft, draftKey } from "@/lib/composer-draft";
-import { getVizActive, useVizActive } from "@/components/viewer/viz-mode";
+import { setVizMode, useVizActive } from "@/components/viewer/viz-mode";
+import { useFrameBadges } from "@/components/viewer/frame-store";
 import { FrameBadges } from "@/components/viewer/frame-badges";
+import { BarIcon } from "@/components/chat-bar/bar-icon";
+import { BarSettings } from "@/components/chat-bar/bar-settings";
 import { useThreadColor } from "@/components/thread/use-thread-color";
 import { useBarCards, type BarCards } from "@/components/chat-bar/chat-bar-cards";
 import type { Answering } from "@/components/ask/ask-sheet";
 import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask/ask-session";
 import { replyLabel } from "@/components/ask/ask-reply";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
-import { attachable, BAR_EXTRAS, kbdEventForAction, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
+import { attachable, inFrozenOrder, switcherOrder, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar/chat-bar-io";
 
@@ -80,8 +87,8 @@ export function useWide(): boolean {
 	return useSyncExternalStore(subscribeWide, () => (canMatch() ? window.matchMedia(WIDE_QUERY).matches : true), () => true);
 }
 
-/** A thread page has its own composer at the bottom, which the bar would cover, so the bar stays off those pages (phone dock and wide pill alike); the attached chat is a strip row there until it is opened. */
-const THREAD_PAGE = /^\/wolf\/[^/]+\/thread(\/|$)|^\/chat\/new(\/|$)/;
+/** The new-chat page is all composer: the bar stays off it (a thread page is different: the bar floats over it, or the page composer IS the chat). */
+const NEW_CHAT = /^\/chat\/new(\/|$)/;
 
 /** Phone keyboard: how far the visual viewport's bottom sits above the layout viewport's bottom (iOS does not resize the layout, so a fixed dock would stay under the keyboard). 0 when the layout itself resizes (Android, interactive-widget=resizes-content). */
 function useKeyboardInset(enabled: boolean): number {
@@ -114,17 +121,22 @@ export function ChatBar() {
 	const [switcher, setSwitcher] = useState(false);
 	const chipRef = useRef<HTMLButtonElement | null>(null);
 	const wrapRef = useRef<HTMLDivElement | null>(null);
-	const minimized = api?.minimized ?? false;
-	const phoneSheet = api?.phoneSheet ?? false;
-	// A thread page's strip row can ask for the sheet (phoneSheet); otherwise the dock stays off there.
-	// Wide: a requested bar that gets collapsed goes back to the row, not to a pill over the composer.
-	const threadPage = !!pathname && THREAD_PAGE.test(pathname);
-	const dockless = threadPage && !vizHere && (!phoneSheet || (wide && minimized));
+	// Another thread's page: the bar floats over it with a "Swap to <thread>" pill (the page's own composer steps aside).
+	// On the attached thread's own page the page composer is the docked chat and this bar renders nothing (except in viz mode).
+	// swapTarget is the one predicate thread-chat.tsx also reads to step its composer aside, so a hidden composer always has its pill.
+	const page = swapTarget(pathname, attached);
+	const pageThreadId = page ? (resolveThreadId(page.wolf, page.slug, api?.threads[page.wolf] ?? []) ?? `${page.wolf}/${page.slug}`) : null;
+	const swap = page && pageThreadId ? { wolf: page.wolf, slug: page.slug, threadId: pageThreadId } : null;
+	// The pill is the way to type to that page's thread, so a minimized bar still opens over a thread page.
+	const minimized = (api?.minimized ?? false) && !swap;
+	const dockless = !!pathname && NEW_CHAT.test(pathname);
 	const scrolls = !!pathname && SCROLLING.test(pathname);
 
 	// Shortcuts: the dispatcher hands over the KeyboardEvent; the browser's own key (Cmd+J = downloads) is swallowed only
 	// when the bar (or, on its own thread's page, the page composer) actually answers.
-	const live = useRef({ attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dock: api?.dock, dictating: false, threadPage, setPhoneSheet: api?.setPhoneSheet });
+	// Visualization mode on the attached thread (anywhere): the bar has no switcher then, so its shortcut does nothing either.
+	const vizAttached = !!viz && !!attached && viz.wolf === attached.wolf && viz.threadId === attached.threadId;
+	const live = useRef({ attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dictating: false, vizAttached });
 
 	// Dictation lives HERE, not in the composer: ChatBar stays mounted across page changes (and while the composer is
 	// unmounted: minimized, or the phone on a thread page), so a run keeps listening while the owner browses. The
@@ -154,8 +166,8 @@ export function ChatBar() {
 	// itself (thread-chat.tsx). Leaving the page mid-run makes `onOwn` false, and the bar appears with the run live.
 	const dictating = dictation.active;
 	const own = onOwn;
-	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dock: api?.dock, dictating, threadPage, setPhoneSheet: api?.setPhoneSheet };
-	const full = !!attached && !own && !dockless && (!wide || !minimized);
+	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dictating, vizAttached };
+	const full = !!attached && !own && !dockless && !minimized;
 	const shown = !!attached && !own && !dockless;
 
 	// Published so the popped-out thread's own page shows and drives the same run (use-thread-dictation.ts). Every field
@@ -167,68 +179,9 @@ export function ChatBar() {
 	}, [dictation.phase, dictation.error, dictation.active, dictation.levelRef, dictation.toggle, dictation.stop, dictation.finish, dictation.cancel, shown]);
 	useEffect(() => () => publishBarDictation(null), []);
 
-	// Landing on the popped-out thread's own page docks it (its page composer shows the draft), unless a run is live:
-	// dictation keeps going and the bar stays. Only a navigation does this, so popping out on the page itself leaves it popped out.
-	const setPhoneSheet = api?.setPhoneSheet;
-	useEffect(() => setPhoneSheet?.(false), [pathname, setPhoneSheet]); // a requested sheet does not follow the owner to another page
-	useEffect(() => {
-		if (!attached) setPhoneSheet?.(false); // docked while the sheet was open: the flag must not outlive the bar
-	// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on whether a thread is attached, not on the attached object identity
-	}, [!!attached, setPhoneSheet]);
-	useEffect(() => {
-		if (wide && minimized) setPhoneSheet?.(false); // collapsed: the request is spent, the row is all that shows
-	}, [wide, minimized, setPhoneSheet]);
-	useEffect(() => {
-		const l = live.current;
-		if (api?.ready && onOwnThreadPage(pathname, l.attached) && !l.dictating && !getVizActive()) afterBarDictation(l.dock);
-	}, [pathname, api?.ready]);
+	// Docking is automatic and never clears the attachment: on the attached thread's own page the page composer IS the chat
+	// (this bar renders nothing there), on any other thread page the bar floats with a swap pill, elsewhere it floats as is.
 
-	// Stopping decides where the chat goes (mic, Cmd+D, Esc cancel, Enter-to-send all end the run the same way): stopped on
-	// the thread's own page it docks back into the thread (the words are already in the thread's draft, which the page
-	// composer shows); stopped anywhere else it stays, showing the words in its input. A failed start (error) leaves it be.
-	// The target is the thread the run STARTED on, not whatever is attached at stop time: a handoff A→B (A finishes, B is
-	// attached in the same batch) must not dock B because A's stop was seen with B attached.
-	const wasDictating = useRef(false);
-	const runThread = useRef<AttachedRef | null>(null);
-	useEffect(() => {
-		const was = wasDictating.current;
-		wasDictating.current = dictating;
-		if (!was && dictating) runThread.current = live.current.attached;
-		if (was && !dictating) {
-			const t = runThread.current;
-			runThread.current = null;
-			const a = live.current.attached;
-			if (t && a && a.wolf === t.wolf && a.threadId === t.threadId && live.current.onOwn && !dictation.error) live.current.dock?.();
-		}
-	// eslint-disable-next-line react-hooks/exhaustive-deps -- fires on dictating flips only; error is read at that moment, not a trigger
-	}, [dictating]);
-
-	// Using another thread's composer docks the floating chat. Only a USER action counts: a pointerdown in a composer
-	// outside the bar, or typing (keydown / beforeinput) into one. Focus alone never docks, so a page whose composer
-	// autofocuses (a thread page, /chat/new) can be viewed without docking. Not the bar's own textarea, not a textarea
-	// outside a composer, and not on the popped-out thread's own page (landing there already docked it). The bar composer
-	// flushes its draft on unmount, so the text stays unsent in that thread's draft store.
-	useEffect(() => {
-		const other = (e: Event): boolean => {
-			const t = e.target as HTMLElement | null;
-			if (!t || !t.closest || t.closest('[data-testid="chat-bar"]')) return false;
-			const box = t.closest('[data-testid="composer"]');
-			return !!box && (t.tagName === "TEXTAREA" || e.type === "pointerdown");
-		};
-		const onUse = (e: Event) => {
-			if (e.type === "keydown") {
-				const k = e as KeyboardEvent;
-				if (k.metaKey || k.ctrlKey || k.altKey || k.key === "Tab" || k.key === "Escape" || k.key === "Shift") return; // shortcuts and focus moves are not typing
-			}
-			const l = live.current;
-			if (l.attached && !l.onOwn && other(e)) afterBarDictation(l.dock);
-		};
-		const evs = ["pointerdown", "keydown", "beforeinput"] as const;
-		for (const n of evs) document.addEventListener(n, onUse, true);
-		return () => {
-			for (const n of evs) document.removeEventListener(n, onUse, true);
-		};
-	}, []);
 	useEffect(() => {
 		const focusInput = (n = 0) => {
 			const el = document.querySelector('[data-testid="chat-bar"] textarea') as HTMLTextAreaElement | null;
@@ -249,13 +202,12 @@ export function ChatBar() {
 			if (!l.attached || !l.wide) return;
 			kev?.preventDefault();
 			if (l.minimized) l.setMinimized?.(false);
-			if (l.threadPage) l.setPhoneSheet?.(true); // another thread's page: Cmd+J opens the row's chat over it
 			focusInput();
 		};
 		const onSwitcher = (e: Event) => {
 			const kev = (e as CustomEvent<{ event?: KeyboardEvent }>).detail?.event;
 			const l = live.current;
-			if (!BAR_EXTRAS.switcher || !l.attached || !l.wide || l.onOwn) return;
+			if (!BAR_EXTRAS.switcher || !l.attached || !l.wide || l.onOwn || l.vizAttached) return;
 			kev?.preventDefault();
 			if (l.minimized) l.setMinimized?.(false);
 			setSwitcher(true);
@@ -289,6 +241,53 @@ export function ChatBar() {
 			root.style.removeProperty("--chat-bar-reserve");
 		};
 	}, [full, scrolls, wide, attached?.wolf, attached?.threadId]);
+
+	// Over another thread's page: that page's dock (sub-agent strip, pinned strip) pads its bottom by the bar's real height
+	// (--chat-bar-over, read in thread-chat.tsx) so nothing of it peeks out under or behind the bar.
+	const overPage = !!swap && shown;
+	useLayoutEffect(() => {
+		const root = document.documentElement;
+		if (!overPage || !wrapRef.current) {
+			root.style.removeProperty("--chat-bar-over");
+			return;
+		}
+		const el = wrapRef.current;
+		// How far the bar (and the swap pill above it) reaches up from the bottom edge: measured, not guessed, so the pad is right for the
+		// floating pill (12px gap), the phone dock (flush, lifted by the keyboard inset) and a pill that wraps. The full-screen sheet covers the page: no pad.
+		const set = () => {
+			if (el.dataset.state === "sheet") return void root.style.removeProperty("--chat-bar-over");
+			const pill = el.querySelector<HTMLElement>('[data-testid="chat-bar-swap-wrap"]');
+			const top = Math.min(el.getBoundingClientRect().top, pill ? pill.getBoundingClientRect().top : Infinity);
+			// Clamped: with the iOS keyboard up the dock rides high, and the page's strips must not be squeezed to nothing.
+			const pad = Math.min(Math.max(0, Math.ceil(window.innerHeight - top)), Math.floor(0.6 * window.innerHeight));
+			root.style.setProperty("--chat-bar-over", `${pad}px`);
+		};
+		set();
+		// visualViewport fires resize/scroll in bursts while the keyboard animates: one measure per frame.
+		let frame = 0;
+		const schedule = () => {
+			if (frame) return;
+			frame = requestAnimationFrame(() => {
+				frame = 0;
+				set();
+			});
+		};
+		const ro = new ResizeObserver(schedule);
+		ro.observe(el);
+		// The phone keyboard lifts the dock (bottom: inset) without resizing it: re-measure when the visual viewport moves.
+		const vv = window.visualViewport;
+		vv?.addEventListener("resize", schedule);
+		vv?.addEventListener("scroll", schedule);
+		window.addEventListener("resize", schedule);
+		return () => {
+			if (frame) cancelAnimationFrame(frame);
+			ro.disconnect();
+			vv?.removeEventListener("resize", schedule);
+			vv?.removeEventListener("scroll", schedule);
+			window.removeEventListener("resize", schedule);
+			root.style.removeProperty("--chat-bar-over");
+		};
+	}, [overPage, minimized, wide, attached?.wolf, attached?.threadId]);
 
 	// Viz mode: the viewer's scroller pads its bottom by the bar's real height (--chat-bar-h) so the last lines clear the floating bar.
 	useLayoutEffect(() => {
@@ -337,9 +336,8 @@ export function ChatBar() {
 	// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on whether a thread is attached, not on the attached object identity
 	}, [!!attached]);
 
-	// Thread pages show the attached chat as a row in the subagent strip (attached-strip-row.tsx), never a pill.
 	if (!api || !attached || own || dockless) return null;
-	return <Bar key={`${attached.wolf}/${attached.threadId}`} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
+	return <Bar key={`${attached.wolf}/${attached.threadId}`} swap={swap} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
 }
 
 export function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttachedThread>>, a: AttachedRef): string {
@@ -350,10 +348,12 @@ export function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttach
 /** A downward swipe of at least this many px on the sheet's handle closes it. */
 const SWIPE_CLOSE_PX = 60;
 
-function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
+function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
 	dictation: Dictation;
 	registerAppend: (fn: ((t: string) => void) | null) => void;
 	target: AttachedRef;
+	/** The thread page the bar floats over, when it is not the attached thread: the bar offers a swap to it. */
+	swap: { wolf: string; slug: string; threadId: string } | null;
 	phone: boolean;
 	wrapRef: React.RefObject<HTMLDivElement | null>;
 	chipRef: React.RefObject<HTMLButtonElement | null>;
@@ -363,7 +363,8 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 }) {
 	const api = useAttachedThread()!;
 	const { setMinimized, working, attachedThread, groups } = api;
-	const minimized = api.minimized;
+	const minimized = api.minimized && !swap;
+	const needsYouTotal = groups.reduce((n, g) => n + g.needsYou, 0);
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
 	const wolfColor = api.wolves.find((w) => w.name === target.wolf)?.color;
 	const color = useThreadColor({ id: target.threadId, ...(attachedThread?.kind ? { kind: attachedThread.kind } : {}), ...(attachedThread?.parentThreadId ? { parentThreadId: attachedThread.parentThreadId } : {}) }, all, wolfColor).hex;
@@ -405,9 +406,14 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 			noteSink.current?.(n);
 		},
 	});
+	// Phone only: the dock can expand into a full-screen sheet (chevron). A pending questionnaire does NOT open it: it renders inline in the dock, above the composer, as in the thread.
+	const [sheet, setSheet] = useState(false);
+	const inset = useKeyboardInset(phone);
+	// Inline, the ask scrolls inside the visible area: 55% of the viewport, less the iOS keyboard (the dock sits above it, `inset` is its height).
+	const inlineCap = `min(55dvh, 55vh, calc((100dvh - ${inset}px) * 0.55))`;
 	const sheetCard = askCard ? (
 		session.expanded ? (
-			<div data-testid="ask-sheet-host" data-composing={composing ? "true" : undefined} style={phone || composing ? undefined : { borderColor: color }} className={cn("flex min-h-0 flex-col overflow-hidden bg-card", phone ? "flex-1" : cn("rounded-t-2xl border border-b-0 shadow-lg", composing ? "max-h-[85vh]" : "max-h-[70vh]"))}>
+			<div data-testid="ask-sheet-host" data-composing={composing ? "true" : undefined} style={phone ? (sheet ? undefined : { maxHeight: inlineCap }) : composing ? undefined : { borderColor: color }} className={cn("flex min-h-0 flex-col overflow-hidden bg-card", phone ? (sheet ? "flex-1" : "shrink-0") : cn("rounded-t-2xl border border-b-0 shadow-lg", composing ? "max-h-[85vh]" : "max-h-[70vh]"))}>
 				<AskSheet key={askCard.callId} target={target} session={session} queue={queue} answering={answering} setAnswering={setAnswering} dictation={dictation} />
 			</div>
 		) : (
@@ -421,13 +427,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 	const approvals = useApprovalEntries(BAR_EXTRAS.badge && api.attached !== null);
 	const waiting = useMemo(() => (BAR_EXTRAS.badge ? oldestFirst(waitingElsewhere(api.threads, target), raised) : []), [api.threads, target, raised]);
 	const title = attachedThread ? (attachedThread.kind === "home" ? target.wolf : attachedThread.title) : target.slug;
-	// Phone only: the dock expands into a full-screen sheet. The composer stays at the same spot in the tree, so the draft survives both ways.
-	const [sheet, setSheet] = useState(api.phoneSheet);
-	useEffect(() => {
-		if (!sheet) api.setPhoneSheet(false);
-	// eslint-disable-next-line react-hooks/exhaustive-deps -- fires on sheet changes only; api is read at that moment and a new api object must not re-run it
-	}, [sheet]);
-	const inset = useKeyboardInset(phone);
+	// The composer stays at the same spot in the tree, so the draft survives both ways.
 	const swipeFrom = useRef<{ x: number; y: number } | null>(null);
 	const opener = useRef<"strip" | "chevron">("chevron");
 	const wasSheet = useRef(false);
@@ -491,18 +491,27 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 			first.focus();
 		}
 	};
-	// The questionnaire sheet opens by itself on a phone when an ask arrives.
-	const askId = askCard?.callId;
-	useEffect(() => {
-		if (askId && phone && !minimized) openSheet(true);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [askId, phone]);
 	const hasSurface = (BAR_EXTRAS.cards || BAR_EXTRAS.peek) && (cards.pending.length > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error);
 
 	// Visualization mode: chat and questionnaires only (no needs-you badge, no thread switcher), and on the phone the dock sits over the viewer's full-screen sheet (z-60).
 	const vizActive = useVizActive();
 	const vizOn = !!vizActive && vizActive.wolf === target.wolf && vizActive.threadId === target.threadId;
 	const badge = BAR_EXTRAS.badge && !vizOn && (waiting.length > 0 || approvals.length > 0) ? <NeedsYouBadge waiting={waiting} all={all} approvals={approvals} /> : null;
+	// Same source as the thread page's strip, so the two always agree on what is running.
+	const running = useSubagentChildren(target.wolf, target.slug, target.threadId).filter((c) => c.state === "running");
+	const subagentChip = running.length > 0 && !vizOn ? (
+		<Hint label={`Running: ${running.map((c) => c.agent ?? "agent").join(", ")}`}>
+			<button type="button" data-testid="chat-bar-subagents" aria-label={`${running.length} sub-agent${running.length === 1 ? "" : "s"} running`} onClick={() => router.push(threadHref(target.wolf, target.threadId))} className="flex shrink-0 items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 font-ui text-xs text-muted-foreground hover:bg-accent max-md:min-h-11">
+				<BrailleSpinner />
+				{running.length}
+			</button>
+		</Hint>
+	) : null;
+	const lead = badge || subagentChip ? <>{badge}{subagentChip}</> : null;
+	// Every badge of the bar (frame chips, needs-you, approvals, running sub-agents) rides one scrolling row inside the bar's surface, between the card slot and the header.
+	const chipRow = (
+		<FrameBadges bar wolf={target.wolf} threadId={target.threadId} vizOn={vizOn} lead={lead} onNavigate={onThreadPage ? undefined : (view) => router.push(`${threadHref(target.wolf, target.threadId)}?view=${encodeURIComponent(view)}`)} />
+	);
 	const chip = (
 		<button
 			ref={chipRef}
@@ -510,7 +519,7 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 			data-testid="chat-bar-chip"
 			aria-haspopup={BAR_EXTRAS.switcher ? "dialog" : undefined}
 			aria-expanded={BAR_EXTRAS.switcher ? switcher : undefined}
-			onClick={() => (minimized ? setMinimized(false) : BAR_EXTRAS.switcher ? (vizOn ? undefined : setSwitcher((s) => !s)) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
+			onClick={() => (BAR_EXTRAS.switcher ? (vizOn ? undefined : setSwitcher((s) => !s)) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
 			className={cn("flex items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-11 max-w-[60vw]" : "max-w-56")}
 			title={`${target.wolf} · ${title}`}
 		>
@@ -522,11 +531,53 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 		</button>
 	);
 
-	const dockBtn = (cls: string) => (
-		<button type="button" aria-label="Dock chat" title="Dock: keeps your draft" data-testid="chat-bar-dock" onClick={() => afterBarDictation(api.dock)} className={cls}>
-			<PictureInPicture2Icon className="size-4" />
-		</button>
-	);
+	const swapThread = swap ? api.threads[swap.wolf]?.find((t) => t.id === swap.threadId) : undefined;
+	const swapTitle = swap ? (swapThread ? (swapThread.kind === "home" ? swap.wolf : swapThread.title) : swap.slug) : "";
+	// The page's thread is waiting on the owner: the thread list says needs-you, OR the page itself reports a pending paged ask (page-pending.ts; the list can lag
+	// after a reconnect). Its ask sheet is hidden under the bar (thread-chat.tsx), so the pill turns amber and says Answer; choosing it docks into the page.
+	// Covers asks only: approvals are work-request scoped (/api/needs-you has no thread), so they cannot be tied to this thread and show in the badge row instead.
+	const pageAsk = useSyncExternalStore(subscribePagePending, () => (swap ? hasPagePendingAsk(swap.wolf, swap.threadId) : false), () => false);
+	const swapNeedsYou = swapThread?.status === "needs-you" || pageAsk;
+	const swapLabel = swapNeedsYou ? `Answer ${swapTitle}` : `Swap to ${swapTitle}`;
+	// Not while a send's POST is in flight: a failed send puts the text back into this bar's composer, which a swap would have unmounted.
+	// Narrow gap left: if the attachment changes elsewhere (another tab/wolf) mid-send, the keyed Bar remounts and `sending` resets.
+	const [sending, setSending] = useState(false);
+	// A pill above the send button, on the right: one tap attaches to the thread whose page is open, and the bar steps aside for that page's own composer.
+	const swapPill = swap && !minimized ? (
+		<div data-testid="chat-bar-swap-wrap" className={cn("pointer-events-none absolute bottom-full z-10 mb-2 flex justify-end", phone ? "right-3" : "right-2")}>
+			<Hint label={swapLabel}>
+				<button
+					type="button"
+					data-testid="chat-bar-swap"
+					data-needs-you={swapNeedsYou ? "true" : undefined}
+					aria-label={swapLabel}
+					disabled={sending}
+					aria-busy={sending || undefined}
+					onClick={() => void (!sending && afterBarDictation(() => api.attach({ wolf: swap.wolf, threadId: swap.threadId, slug: swap.slug })))}
+					className={cn("pointer-events-auto flex max-w-[16rem] items-center gap-1.5 rounded-full border bg-card px-3 py-1.5 font-ui text-xs shadow-md transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60 motion-reduce:transition-none motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-200", swapNeedsYou && "border-amber-500/40 text-amber-600 dark:text-amber-400", phone && "min-h-11")}
+				>
+					{swapNeedsYou ? <MessageCircleQuestionIcon aria-hidden className="size-3.5 shrink-0" /> : <ArrowLeftRightIcon aria-hidden className="size-3.5 shrink-0" />}
+					<span className="truncate">{swapLabel}</span>
+				</button>
+			</Hint>
+		</div>
+	) : null;
+
+	// Collapsed: a small draggable icon on every screen size. It keeps the bar's `chat-bar` test id and "minimized" state; over another thread's page the bar never collapses (`minimized` is false then), because the swap pill is the way to type there.
+	if (minimized) {
+		return (
+			<BarIcon
+				phone={phone}
+				label={needsYouTotal > 0 ? `Expand chat bar (${needsYouTotal} waiting for you)` : "Expand chat bar"}
+				color={color}
+				wolfStatus={api.wolves.find((w) => w.name === target.wolf)?.status ?? "online"}
+				needsYou={needsYouTotal}
+				working={working}
+				dictation={dictation}
+				onExpand={() => setMinimized(false)}
+			/>
+		);
+	}
 
 	if (phone) {
 		const bottomPad = inset > 0 ? 0 : "env(safe-area-inset-bottom)";
@@ -546,6 +597,8 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 				style={{ bottom: inset, paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
 			>
+				{!sheet && swapPill}
+				{!sheet && !minimized && sheetCard && <div data-testid="bar-ask-inline" className="flex min-h-0 shrink-0 flex-col px-2 pb-1 pt-2">{sheetCard}</div>}
 				{sheet && !minimized && (
 					<div
 						data-testid="bar-sheet-handle"
@@ -576,87 +629,69 @@ function Bar({ target, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwit
 						{hasSurface ? <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} /> : sheetCard ? null : BAR_EXTRAS.cards || BAR_EXTRAS.peek ? <p className="px-2 py-3 font-ui text-sm text-muted-foreground">Nothing waiting. Write a message below.</p> : null}
 					</div>
 				)}
-				{!sheet && !minimized && (hasSurface || askCard) && (
+				{!sheet && !minimized && hasSurface && (
 					<button
 						type="button"
 						data-testid="bar-strip"
-						onClick={() => openSheet(pendingCount > 0)}
+						onClick={() => openSheet(cards.pending.length > 0)}
 						className="flex min-h-11 w-full items-center justify-between gap-2 border-b px-3 text-left font-ui text-sm hover:bg-accent"
 					>
-						<span className="truncate">{pendingCount > 0 ? (pendingCount === 1 ? "1 card waiting" : `${pendingCount} cards waiting`) : cards.error ? "Could not send. Tap to see" : cards.superseded.length > 0 ? "Replied instead. Tap to see" : "New reply. Tap to read"}</span>
+						<span className="truncate">{cards.pending.length > 0 ? (cards.pending.length === 1 ? "1 card waiting" : `${cards.pending.length} cards waiting`) : cards.error ? "Could not send. Tap to see" : cards.superseded.length > 0 ? "Replied instead. Tap to see" : "New reply. Tap to read"}</span>
 						<ChevronUpIcon className="size-4 shrink-0 text-muted-foreground" />
 					</button>
 				)}
+				{!minimized && !sheet && chipRow}
 				<div className="relative flex items-center gap-1 px-1.5">
 					{chip}
-					{badge}
-					{working && !minimized && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
-					{minimized && <CompactMeter dictation={dictation} />}
-					{minimized ? (
-						<button type="button" aria-label="Expand chat bar" data-testid="chat-bar-expand" onClick={() => setMinimized(false)} className={cn(tap, "ml-auto")}>
-							<MessageSquareIcon className="size-4" />
-						</button>
-					) : (
-						<div className="ml-auto flex items-center">
-							{!sheet && (
-								<button type="button" aria-label="Open full screen" data-testid="bar-sheet-open" onClick={() => openSheet(false)} className={tap}>
-									<ChevronUpIcon className="size-5" />
-								</button>
-							)}
-							{dockBtn(tap)}
+					{sheet && badge}
+					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
+					<div className="ml-auto flex items-center">
+						{!sheet && (
+							<button type="button" aria-label="Open full screen" data-testid="bar-sheet-open" onClick={() => openSheet(false)} className={tap}>
+								<ChevronUpIcon className="size-5" />
+							</button>
+						)}
+						<BarSettings wolf={target.wolf} slug={target.slug} phone buttonClass={tap} />
+						<Hint label="Minimize">
 							<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className={tap}>
 								<ChevronDownIcon className="size-4" />
 							</button>
-						</div>
-					)}
+						</Hint>
+					</div>
 				</div>
-				{!minimized && !sheet && <div className="pt-1"><FrameBadges wolf={target.wolf} threadId={target.threadId} vizOn={vizOn} onNavigate={onThreadPage ? undefined : (view) => router.push(`${threadHref(target.wolf, target.threadId)}?view=${encodeURIComponent(view)}`)} /></div>}
-				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
-				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
+				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer phone target={target} onSending={setSending} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
+				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 			</>
 		);
 	}
 
-	if (minimized) {
-		return (
-			<div data-testid="chat-bar" data-state="minimized" className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2">
-				<div className="relative rounded-full border bg-card shadow-md focus-within:ring-1 focus-within:ring-(color:--thread-accent)" style={{ borderColor: color }}>
-					<div className="flex items-center">
-						{chip}
-						<CompactMeter dictation={dictation} />
-						{badge}
-						{dockBtn("rounded-full p-1 text-muted-foreground hover:bg-accent")}
-						<button type="button" aria-label="Expand chat bar" data-testid="chat-bar-expand" onClick={() => setMinimized(false)} className="mr-1 rounded-full p-1 text-muted-foreground hover:bg-accent">
-							<MessageSquareIcon className="size-3.5" />
-						</button>
-					</div>
-					{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
-				</div>
-			</div>
-		);
-	}
-
 	return (
 		<div ref={wrapRef} data-testid="chat-bar" data-state="open" className="fixed bottom-3 left-1/2 z-30 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2">
+			{swapPill}
 			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>
 				{sheetCard}
 				{hasSurface && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
 			</div>
-			<FrameBadges wolf={target.wolf} threadId={target.threadId} vizOn={vizOn} onNavigate={onThreadPage ? undefined : (view) => router.push(`${threadHref(target.wolf, target.threadId)}?view=${encodeURIComponent(view)}`)} />
 			<div className={cn("relative rounded-2xl border bg-card shadow-lg", askCard && session.expanded ? "rounded-t-none border-t-0" : "focus-within:ring-1 focus-within:ring-(color:--thread-accent)")} style={composing ? undefined : { borderColor: color }}>
+				{chipRow}
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}
-					{badge}
 					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
-					{dockBtn("ml-auto rounded-md p-1 text-muted-foreground hover:bg-accent")}
-					<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="rounded-md p-1 text-muted-foreground hover:bg-accent">
-						<ChevronDownIcon className="size-4" />
-					</button>
+					<div className="ml-auto flex items-center gap-0.5">
+						<BarSettings wolf={target.wolf} slug={target.slug} phone={false} buttonClass="rounded-md p-1 text-muted-foreground hover:bg-accent" />
+						{!swap && (
+							<Hint label="Minimize">
+								<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="rounded-md p-1 text-muted-foreground hover:bg-accent">
+									<ChevronDownIcon className="size-4" />
+								</button>
+							</Hint>
+						)}
+					</div>
 				</div>
-				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />}
-				{BAR_EXTRAS.switcher && switcher && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
+				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} onSending={setSending} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />}
+				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
 			</div>
 		</div>
 	);
@@ -743,7 +778,7 @@ export function NeedsYouBadge({ waiting, all, approvals }: { waiting: (BarThread
 	const color = useThreadColor(first ? { id: first.id, ...(first.kind ? { kind: first.kind } : {}), ...(first.parentThreadId ? { parentThreadId: first.parentThreadId } : {}) } : { id: "" }, all, first ? api.wolves.find((w) => w.name === first.wolf)?.color : undefined).hex;
 	const total = waiting.length + approvals.length;
 	return (
-		<span className="flex min-w-0 items-center gap-1">
+		<span className="flex shrink-0 items-center gap-1">
 			<button
 				type="button"
 				data-testid="chat-bar-needs-you"
@@ -751,13 +786,13 @@ export function NeedsYouBadge({ waiting, all, approvals }: { waiting: (BarThread
 				title={first ? `${total} waiting for you · oldest: ${first.title}` : `${total} waiting for you · ${approvals[0]!.label}`}
 				aria-label={first ? `${total} waiting for you. Attach the bar to ${first.title}` : `${total} waiting for you. Open ${approvals[0]!.label}`}
 				onClick={() => (first ? api.attach({ wolf: first.wolf, threadId: first.id }) : router.push(approvals[0]!.href))}
-				className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 font-ui text-[11px] text-amber-400 hover:bg-amber-500/25"
+				className="flex shrink-0 items-center gap-1 rounded-full border border-amber-500/40 bg-card px-2.5 py-1 font-ui text-xs text-amber-400 hover:bg-accent max-md:min-h-11"
 			>
 				<span className="size-1.5 rounded-full" style={{ backgroundColor: color }} />
 				{total}
 			</button>
 			{approvals.slice(0, 2).map((a) => (
-				<button key={a.requestId} type="button" data-testid="chat-bar-approval" title={a.label} onClick={() => router.push(a.href)} className="min-w-0 max-w-[30vw] truncate rounded-full bg-amber-500/10 px-2 py-0.5 font-ui text-[11px] text-amber-400 hover:bg-amber-500/25">
+				<button key={a.requestId} type="button" data-testid="chat-bar-approval" title={a.label} onClick={() => router.push(a.href)} className="max-w-[12rem] shrink-0 truncate rounded-full border border-amber-500/40 bg-card px-2.5 py-1 font-ui text-xs text-amber-400 hover:bg-accent max-md:min-h-11">
 					{a.label}
 				</button>
 			))}
@@ -765,11 +800,20 @@ export function NeedsYouBadge({ waiting, all, approvals }: { waiting: (BarThread
 	);
 }
 
-/** The thread switcher: home + needs-you + recent feature threads, grouped by wolf. A dialog: focus moves in, arrows walk the entries, Esc / outside click close and return focus to the chip. */
-export function Switcher({ groups, current, onClose, sheet = false }: { groups: SwitcherGroup[]; current: Pick<AttachedRef, "wolf" | "threadId">; onClose: () => void; sheet?: boolean }) {
+/**
+ * The wolf and thread switcher, opened from the chip (the wolf's name): wolves with status dots and their threads, the ones waiting on the owner first with an amber count.
+ * A compact popover on desktop, a bottom sheet (rows of at least 44px) on the phone. A dialog: focus moves in, arrows walk the entries, Esc / outside click close and return focus to the chip.
+ * The footer opens the attached wolf's visualizations, and the attached thread's own page.
+ */
+export function Switcher({ groups: liveGroups, current, onClose, sheet = false }: { groups: SwitcherGroup[]; current: Pick<AttachedRef, "wolf" | "threadId">; onClose: () => void; sheet?: boolean }) {
+	// The order is frozen while it is open (nothing jumps under the pointer); statuses and counts stay live, and the next open re-sorts.
+	const [frozen] = useState(() => switcherOrder(liveGroups));
+	const groups = useMemo(() => inFrozenOrder(liveGroups, frozen), [liveGroups, frozen]);
 	const api = useAttachedThread();
+	const router = useRouter();
+	const frames = useFrameBadges(current.wolf, current.threadId);
 	const ref = useRef<HTMLDivElement | null>(null);
-	const items = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-testid="switcher-entry"]') ?? []);
+	const items = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-testid="switcher-entry"], [data-testid="switcher-action"]:not(:disabled)') ?? []);
 	useEffect(() => {
 		const list = items();
 		(list.find((b) => b.getAttribute("aria-current") === "true") ?? list[0] ?? ref.current)?.focus();
@@ -797,20 +841,36 @@ export function Switcher({ groups, current, onClose, sheet = false }: { groups: 
 		const i = list.indexOf(document.activeElement as HTMLElement);
 		list[(i + (e.key === "ArrowDown" ? 1 : -1) + list.length) % list.length]!.focus();
 	};
+	const row = cn("flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none", sheet && "min-h-11");
+	// Leaving for the thread page waits for a running dictation to finish first (so its words land in the draft), like the chip used to.
+	const threadHere = (vizOn = false) =>
+		afterBarDictation(() => {
+			// Visualization mode is the stored per-thread choice; the thread page reads it on arrival (viz-mode.ts).
+			if (vizOn) setVizMode(current.wolf, current.threadId, true);
+			onClose();
+			router.push(threadHref(current.wolf, current.threadId));
+		});
+	const visualizations = () => threadHere(true);
 	return (
-		<div ref={ref} role="dialog" aria-label="Attach the bar to a thread" tabIndex={-1} onKeyDown={onKeyDown} data-testid="chat-bar-switcher" data-layout={sheet ? "sheet" : "popover"} className={cn("z-50 overflow-y-auto bg-popover p-1 outline-none", sheet ? "fixed inset-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]" : "absolute bottom-full left-0 z-40 mb-2 max-h-80 w-72 rounded-xl border shadow-lg")}>
-			<div className="flex items-center justify-between">
-				<p className="px-2 py-1 font-ui text-[10px] uppercase tracking-wide text-muted-foreground">Attach the bar to…</p>
-				{sheet && (
+		<>
+		{sheet && <button type="button" tabIndex={-1} aria-label="Close" data-testid="switcher-backdrop" onClick={onClose} className="fixed inset-0 z-[49] bg-black/40 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200" />}
+		<div ref={ref} role="dialog" aria-label="Switch wolf or thread" tabIndex={-1} onKeyDown={onKeyDown} data-testid="chat-bar-switcher" data-layout={sheet ? "sheet" : "popover"} className={cn("z-50 overflow-y-auto border bg-popover/95 p-1 outline-none backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150", sheet ? "fixed inset-x-0 bottom-0 max-h-[70dvh] rounded-t-2xl border-b-0 pb-[env(safe-area-inset-bottom)] shadow-2xl motion-safe:slide-in-from-bottom-4" : "absolute bottom-full left-0 z-40 mb-2 max-h-80 w-72 rounded-xl shadow-lg motion-safe:zoom-in-95")}>
+			{sheet && (
+				<div className="flex min-h-11 items-center justify-between">
+					<span aria-hidden className="ml-2 h-1 w-10 rounded-full bg-muted-foreground/40" />
 					<button type="button" aria-label="Close" data-testid="switcher-close" onClick={onClose} className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-muted-foreground hover:bg-accent">
 						<ChevronDownIcon className="size-5" />
 					</button>
-				)}
-			</div>
+				</div>
+			)}
 			{groups.length === 0 && <p className="px-2 py-2 text-xs text-muted-foreground">No threads yet.</p>}
 			{groups.map((g) => (
-				<div key={g.wolf} role="group" aria-label={g.wolf} data-testid="switcher-group" data-wolf={g.wolf}>
-					<p className="px-2 pt-1.5 font-ui text-[10px] uppercase tracking-wide text-muted-foreground">{g.wolf}</p>
+				<div key={g.wolf} role="group" aria-label={g.wolf} data-testid="switcher-group" data-wolf={g.wolf} data-needs-you={g.needsYou > 0 ? g.needsYou : undefined}>
+					<p className="flex items-center gap-1.5 px-2 pt-1.5 font-ui text-[10px] uppercase tracking-wide text-muted-foreground">
+						<span role="img" aria-label={g.status === "offline" ? "offline" : "online"} data-testid="switcher-wolf-dot" data-status={g.status} className={cn("size-1.5 shrink-0 rounded-full", g.status === "offline" ? "bg-muted-foreground/40" : "bg-emerald-500")} />
+						<span className="min-w-0 flex-1 truncate">{g.wolf}</span>
+						{g.needsYou > 0 && <span data-testid="switcher-wolf-count" aria-label={`${g.needsYou} waiting for you`} className="rounded-full bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">{g.needsYou}</span>}
+					</p>
 					{g.entries.map((e) => (
 						<button
 							key={e.threadId}
@@ -823,15 +883,27 @@ export function Switcher({ groups, current, onClose, sheet = false }: { groups: 
 								api?.attach({ wolf: e.wolf, threadId: e.threadId, slug: e.slug });
 								onClose();
 							}}
-							className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-accent", sheet && "min-h-11", "focus-visible:bg-accent focus-visible:outline-none", e.wolf === current.wolf && e.threadId === current.threadId && "bg-accent")}
+							className={cn(row, e.wolf === current.wolf && e.threadId === current.threadId && "bg-accent")}
 						>
 							<span className="min-w-0 flex-1 truncate">{e.title}</span>
-							{e.status === "needs-you" && <span className="font-ui text-[10px] text-amber-400">needs you</span>}
-							{e.status === "busy" && <span className="font-ui text-[10px] text-muted-foreground">working</span>}
+							{e.needsYou && <span role="img" aria-label="waiting on you" data-testid="switcher-entry-waiting" className="size-2 shrink-0 rounded-full bg-amber-500" />}
+							{!e.needsYou && e.status === "busy" && <BrailleSpinner />}
 						</button>
 					))}
 				</div>
 			))}
+			<div role="group" aria-label="Actions" className="mt-1 border-t pt-1">
+				<button type="button" data-testid="switcher-action" data-action="visualizations" disabled={frames.length === 0} onClick={visualizations} className={cn(row, "disabled:opacity-40")}>
+					<EyeIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+					<span className="min-w-0 flex-1 truncate">Open visualizations</span>
+					{frames.length > 0 && <span className="font-ui text-[10px] text-muted-foreground">{frames.length}</span>}
+				</button>
+				<button type="button" data-testid="switcher-action" data-action="open-thread" onClick={() => threadHere()} className={row}>
+					<MessageSquareIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+					<span className="min-w-0 flex-1 truncate">Open thread page</span>
+				</button>
+			</div>
 		</div>
+		</>
 	);
 }

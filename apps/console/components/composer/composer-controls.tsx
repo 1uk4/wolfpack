@@ -4,28 +4,46 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { MenuShell } from "@/components/shell/menu-shell";
 import { Toggle } from "@/components/settings/controls";
-import { changeSettings, DEFAULT_SETTINGS, fetchSettings, putSettings, TIERS, type SettingsPatch, type Tier, type ThreadSettingsState } from "@/components/composer/composer-settings";
+import { changeSettings, DEFAULT_SETTINGS, fetchSettings, publishSettings, putSettings, settingsVersion, subscribeSettings, TIERS, type SettingsPatch, type Tier, type ThreadSettingsState } from "@/components/composer/composer-settings";
 import { settingsUrl } from "@/components/thread/thread-transport";
 
 /** The thread's settings from the wolf, with an optimistic `change` that rolls back (and reports) when the wolf refuses. */
 export function useThreadSettings(wolf: string, slug: string) {
 	const [settings, setSettings] = useState<ThreadSettingsState>(DEFAULT_SETTINGS);
 	const [loaded, setLoaded] = useState(false);
+	const [loadFailed, setLoadFailed] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const ref = useRef(settings);
 	ref.current = settings;
 	const url = settingsUrl(wolf, slug);
 
+	// The same thread's settings shown elsewhere (the floating chat's gear, the thread page's composer) stay in step through the shared channel.
+	useEffect(
+		() =>
+			subscribeSettings(url, (s) => {
+				if (s === ref.current) return;
+				ref.current = s;
+				setSettings(s);
+			}),
+		[url],
+	);
+
 	useEffect(() => {
 		let alive = true;
+		const startedAt = settingsVersion(url);
 		fetchSettings(url)
 			.then((s) => {
 				if (!alive) return;
-				setSettings(s);
+				// A fetch updates only this holder, and only if no change or rollback was published since it started (it would be stale).
+				if (settingsVersion(url) === startedAt) {
+					ref.current = s;
+					setSettings(s);
+				}
 				setLoaded(true);
 			})
 			.catch(() => {
-				/* no controls without a readable setting: the composer works without them */
+				// no controls without a readable setting: the composer works without them; the gear's menu says so
+				if (alive) setLoadFailed(true);
 			});
 		return () => {
 			alive = false;
@@ -39,13 +57,18 @@ export function useThreadSettings(wolf: string, slug: string) {
 				current: ref.current,
 				patch,
 				put: (p) => putSettings(url, p),
-				set: (update) => setSettings((s) => update(s)),
+				set: (update) => {
+					const next = update(ref.current);
+					ref.current = next;
+					setSettings(next);
+					publishSettings(url, next);
+				},
 			});
 			if (!r.ok) setError(r.error);
 		},
 		[url],
 	);
-	return { settings, loaded, error, change };
+	return { settings, loaded, loadFailed, error, change };
 }
 
 /**

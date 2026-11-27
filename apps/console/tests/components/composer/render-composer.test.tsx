@@ -14,7 +14,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { Composer, enterAction } from "../../../components/composer/composer.tsx";
 
 function render(
-	opts: { busy?: boolean; canSend?: boolean; placeholder?: string; sendLabel?: string } = {},
+	opts: { dictating?: boolean; finishing?: boolean; busy?: boolean; canSend?: boolean; placeholder?: string; sendLabel?: string } = {},
 ) {
 	return renderToStaticMarkup(
 		<Composer
@@ -24,6 +24,8 @@ function render(
 			onSend={() => {}}
 			onStop={() => {}}
 			canSend={opts.canSend ?? true}
+			{...(opts.dictating ? { dictating: true } : {})}
+			{...(opts.finishing ? { finishing: true } : {})}
 			{...(opts.sendLabel ? { sendLabel: opts.sendLabel } : {})}
 			{...(opts.placeholder ? { placeholder: opts.placeholder } : {})}
 		/>,
@@ -92,6 +94,20 @@ describe("Composer send button", () => {
 		assert.ok(empty.includes('aria-label="Stop"'));
 		assert.doesNotMatch(empty, /Reply instead/);
 		assert.doesNotMatch(empty, /<button type="submit"[^>]* disabled=""/);
+	});
+});
+
+describe("main button while dictating", () => {
+	it("is a Stop dictation mic, never the wolf Stop, even with a turn running", () => {
+		const html = render({ dictating: true, busy: true, canSend: false });
+		assert.match(html, /aria-label="Stop dictation"/);
+		assert.doesNotMatch(html, /aria-label="Stop"/);
+	});
+
+	it("while the last words flush it is a disabled spinner, not the wolf Stop, even with a turn running and nothing to send", () => {
+		const html = render({ finishing: true, busy: true, canSend: false });
+		assert.match(html, /<button type="submit"[^>]*aria-label="Finishing dictation"[^>]* disabled=""/);
+		assert.doesNotMatch(html, /aria-label="Stop"/);
 	});
 });
 

@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
+import { createLongPress } from "@/components/ui/long-press"
 import { bindingForAction, formatBinding, type KeyAction } from "@/src/core"
 
 /**
@@ -29,6 +30,8 @@ interface HintProps {
 	 *  submits the form the button belongs to). */
 	binding?: string
 	side?: "top" | "bottom" | "left" | "right"
+	/** The child holds selectable text (an input): skip the touch no-select/no-callout class. */
+	selectable?: boolean
 	children: React.ReactElement
 }
 
@@ -43,11 +46,47 @@ export function hintText(label: string, action?: KeyAction, binding?: string): s
 	return live ? `${label} (${live})` : label
 }
 
-export function Hint({ label, action, binding, side = "top", children }: HintProps) {
+export function Hint({ label, action, binding, side = "top", selectable = false, children }: HintProps) {
+	// Controlled so a phone long-press (Radix ignores touch) can open it; hover and focus still go through onOpenChange.
+	const [open, setOpen] = React.useState(false)
+	const press = React.useMemo(() => createLongPress(() => setOpen(true), () => setOpen(false)), [])
+	React.useEffect(() => press.dispose, [press])
+	// Radix closes a tooltip on pointerleave, which a touch fires right after the finger lifts; the long-press tip is closed only by its
+	// own timer or a press outside.
+	React.useEffect(() => {
+		if (!open) return
+		const outside = () => press.dismiss()
+		document.addEventListener("pointerdown", outside, true)
+		return () => document.removeEventListener("pointerdown", outside, true)
+	}, [open, press])
 	return (
 		<TooltipProvider>
-			<Tooltip>
-				<TooltipTrigger asChild>{children}</TooltipTrigger>
+			<Tooltip open={open} onOpenChange={(next) => {
+				if (!next && press.showing()) return
+				setOpen(next)
+			}}>
+				<TooltipTrigger
+					asChild
+					// iOS has no contextmenu on long-press: suppress its callout and text selection (touch devices only).
+					className={selectable ? undefined : "[@media(pointer:coarse)]:[-webkit-touch-callout:none] [@media(pointer:coarse)]:select-none"}
+					onPointerDown={(e) => press.down(e)}
+					onPointerMove={(e) => press.move(e)}
+					onPointerUp={press.end}
+					onPointerCancel={press.end}
+					// The click that ends the long-press which opened the tip must not also fire the control.
+					onClickCapture={(e) => {
+						if (press.swallowClick()) {
+							e.preventDefault()
+							e.stopPropagation()
+						}
+					}}
+					// The OS long-press menu would cover the tip.
+					onContextMenu={(e) => {
+						if ((e.nativeEvent as PointerEvent).pointerType === "touch") e.preventDefault()
+					}}
+				>
+					{children}
+				</TooltipTrigger>
 				<TooltipContent side={side}>{hintText(label, action, binding)}</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>

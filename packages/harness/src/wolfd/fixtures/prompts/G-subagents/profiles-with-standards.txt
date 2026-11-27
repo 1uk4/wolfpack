@@ -971,7 +971,7 @@ End your response with the frame result block (the orchestrator then calls `show
 ```
 FRAME:
 path: <file name relative to your working directory, e.g. pack-health.html>
-title: <short title>
+title: <one or two words, e.g. Live map, Prompts, Usage>
 ```
 
 Put a short explanation (3–5 lines: what the picture shows, the key relationships, and anything you omitted or where brief and code disagreed) before that block.

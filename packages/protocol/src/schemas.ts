@@ -622,7 +622,7 @@ export const ShowViewParamsSchema = z
     id: z.string().min(1).optional().describe("work-item and kb-entry: the full id (e.g. work-wolfpack-AbC1234)"),
     wolf: z.string().min(1).optional().describe("frame: your own wolf name"),
     path: z.string().min(1).optional().describe("frame: the .html file, relative to your frames dir (e.g. pack-health.html)"),
-    title: z.string().optional().describe("Optional title for the card and the chip"),
+    title: z.string().optional().describe("One or two words for the chip, e.g. \"Live map\", \"Prompts\", \"Usage\" (longer is clipped)"),
     pinned: SHOW_PINNED,
     objectId: z.string().min(1).describe("Stable id for this view; call again with the same id to point it at something else (for a frame: to reload it after the file changed)"),
   })

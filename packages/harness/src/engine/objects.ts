@@ -29,7 +29,8 @@ const DESCRIPTIONS: Record<ObjectToolName, string> = {
     "Open a work item (kind work-item) or a KB entry (kind kb-entry) in the owner's viewer panel and leave a small card in the " +
     "transcript. Pass the full id. Calling it again with the same objectId revises it in place; pinned: true also pins it as a chip. Do not pin frames unless the owner asks. " +
     "Kind frame shows an HTML file the visualizer wrote in your frames dir: pass wolf (your own name) and path (relative to the frames dir, e.g. pack-health.html). " +
-    "For visuals, delegate to the visualizer, then call show_view with kind frame and the path it returns; after it rewrites the file, call again with the same objectId to reload.",
+    "For visuals, delegate to the visualizer, then call show_view with kind frame and the path it returns; after it rewrites the file, call again with the same objectId to reload. " +
+    "Pass a title of one or two words (e.g. \"Live map\", \"Prompts\", \"Usage\"): it is the chip's label, and a longer one is clipped.",
 };
 
 const NAMES = Object.keys(OBJECT_TOOL_PARAMS) as ObjectToolName[];

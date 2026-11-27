@@ -15,8 +15,10 @@ export interface FrameBadge {
 	objectId: string;
 	/** The frame view descriptor (kind "frame", id = path inside the wolf's frames dir). */
 	descriptor: ViewDescriptor;
-	/** The latest rev's title, else the file name without `.html`. */
+	/** The chip text: the latest rev's title (else the file name without `.html`) clipped by shortTitle. */
 	label: string;
+	/** The unclipped title, for the tooltip. */
+	fullTitle: string;
 }
 
 interface StoredFrame {
@@ -148,7 +150,15 @@ export function dismissFrame(threadId: string, objectId: string): void {
 	emit();
 }
 
-const labelOf = (f: StoredFrame) => f.title || (f.path.split("/").pop() ?? f.path).replace(/\.html$/i, "");
+/** The chip text for a title: its first two words, at most 16 characters (an ellipsis replaces the cut). The full title stays in the tooltip. */
+export function shortTitle(title: string): string {
+	const two = title.trim().split(/\s+/).slice(0, 2).join(" ");
+	// By code points, so an emoji or other surrogate pair is never cut in half.
+	const chars = Array.from(two);
+	return chars.length > 16 ? `${chars.slice(0, 15).join("")}\u2026` : two;
+}
+
+const fullLabelOf = (f: StoredFrame) => f.title?.trim() || (f.path.split("/").pop() ?? f.path).replace(/\.html$/i, "");
 
 /** The thread's visible frame badges (not dismissed), in the order the frames first appeared. */
 export function useFrameBadges(wolf: string, threadId: string): FrameBadge[] {
@@ -161,8 +171,9 @@ export function useFrameBadges(wolf: string, threadId: string): FrameBadge[] {
 				.filter((f) => !isFrameDismissed(threadId, f.objectId))
 				.map((f) => ({
 					objectId: f.objectId,
-					label: labelOf(f),
-					descriptor: { kind: "frame", id: f.path, wolf, ...(f.title ? { title: f.title } : {}), ...(f.rev !== undefined ? { rev: f.rev } : {}) },
+					label: shortTitle(fullLabelOf(f)),
+					fullTitle: fullLabelOf(f),
+					descriptor: { kind: "frame", id: f.path, wolf, ...(f.title?.trim() ? { title: f.title.trim() } : {}), ...(f.rev !== undefined ? { rev: f.rev } : {}) },
 				})),
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- `v` is the store's change counter
 		[wolf, threadId, v, mounted],

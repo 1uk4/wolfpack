@@ -79,7 +79,8 @@ const { ThreadChat } = await import("../../../components/thread/thread-chat.tsx"
 const { MemoryEventsProvider } = await import("../../../components/memory/memory-events.tsx");
 const { FakeNav } = await import("../../helpers/fake-nav.tsx");
 const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
-const { AttachedThreadProvider } = await import("../../../components/chat-bar/attached-thread.tsx");
+const { dataStore } = await import("../../../src/core/data-store.ts");
+const { AttachedThreadProvider, useAttachedThread } = await import("../../../components/chat-bar/attached-thread.tsx");
 const { ChatBar } = await import("../../../components/chat-bar/chat-bar.tsx");
 const { registerViewRenderer } = await import("../../../components/viewer/registry.tsx");
 const vs = await import("../../../components/viewer/viewer-store.ts");
@@ -105,20 +106,33 @@ const VIZ = vizKey("1uk4", TID);
 const DRAFT = `wolfpack:draft:1uk4:${TID}`;
 
 const th = (id: string, status = "idle") => ({ id, title: id, kind: "feature", status });
+let homeStatus = "idle"; // the status the thread list gives this page's thread (needs-you: a pending ask)
+let attachApi: ReturnType<typeof useAttachedThread> = null;
+function Probe() {
+	attachApi = useAttachedThread();
+	return null;
+}
 let lists = false; // the wolf and thread lists (the badge and switcher need them); off, they 404 like the other tests
 const barFetch = (async (input: RequestInfo | URL) => {
 	const url = String(input);
 	if (url.includes("/api/stt/token")) return new Response(JSON.stringify({ token: "tok" }), { status: 200 });
 	if (lists && url === "/api/wolves") return Response.json({ wolves: [{ name: "1uk4" }] });
-	if (lists && url === "/api/wolves/1uk4/threads") return Response.json({ threads: [th("1uk4/other"), th("1uk4/waiting", "needs-you")] });
+	if (lists && url === "/api/wolves/1uk4/threads") return Response.json({ threads: [th("1uk4/other"), th("1uk4/waiting", "needs-you"), th("1uk4/home", homeStatus)] });
 	if (lists && url === "/api/needs-you") return Response.json({ items: [] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
 
-async function mount(opts: { chat?: boolean; start?: string } = {}) {
+const PAGED_ASK = { tool: "ask", paged: true, fields: [{ id: "q1", kind: "single", label: "Pick one", options: [{ label: "Alpha", value: "a" }, { label: "Beta", value: "b" }] }], steps: [{ title: "First", fields: ["q1"] }] };
+
+async function mount(opts: { chat?: boolean; start?: string; ask?: boolean } = {}) {
 	globalThis.fetch = barFetch;
 	const client = new MockConsoleClient({ delayMs: 0, script: [{ kind: "text", text: "ok" }] });
 	const detail = await client.getThread(TID);
+	if (opts.ask) {
+		const asked = { id: "entry-ask", role: "assistant" as const, text: "", at: new Date().toISOString(), tools: [{ callId: "call-ask", name: "ask", args: { question: "q" }, result: "The operator was asked.", card: PAGED_ASK }] };
+		detail.messages = [asked, ...detail.messages] as never;
+		(detail as { pendingCards?: unknown[] }).pendingCards = [{ callId: "call-ask", threadId: TID, card: PAGED_ASK, raisedAt: new Date().toISOString() }];
+	}
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
@@ -128,6 +142,7 @@ async function mount(opts: { chat?: boolean; start?: string } = {}) {
 				<ServerEventsProvider connect={() => ({ close() {}, onOpen() {}, onEvent() {} })}>
 					<AttachedThreadProvider>
 						<ChatBar />
+						<Probe />
 						<MemoryEventsProvider connect={inertSource}>
 							<Gate>
 								{opts.chat === false ? null : <ThreadChat wolf="1uk4" slug="home" threadId={TID} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />}
@@ -157,6 +172,8 @@ after(() => {
 	globalThis.fetch = realFetch;
 });
 afterEach(async () => {
+	homeStatus = "idle";
+	dataStore.clear(); // the thread list goes through the client store: the next test must not read this one's list
 	await act(async () => root?.unmount());
 	root = null;
 	setVizActive(null);
@@ -358,5 +375,86 @@ describe("thread visualization mode", () => {
 		await settle(80);
 		const page = q('[data-testid="thread-main"] [data-testid="composer"] textarea') as HTMLTextAreaElement;
 		assert.equal(page.value, "spoken in viz");
+	});
+});
+
+describe("automatic docking: one composer on a thread page", () => {
+	const OTHER = { wolf: "1uk4", slug: "other", threadId: "1uk4/other" };
+	const composers = () => document.querySelectorAll('[data-testid="composer"]').length;
+	beforeEach(() => void (lists = true));
+	afterEach(() => void (lists = false));
+
+	it("attached == the page's thread: the page composer is the docked chat, the only composer, no bar and no pill", async () => {
+		store.set(ATTACHED_KEY, JSON.stringify({ wolf: "1uk4", slug: "home", threadId: TID }));
+		await mount();
+		assert.equal(composers(), 1);
+		assert.ok(q('[data-testid="thread-main"] [data-testid="composer"]'), "in the thread's chat panel");
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(q('[data-testid="chat-bar-swap"]'), null);
+	});
+
+	it("another thread attached: the bar floats with a swap pill and the page composer steps aside, so there is one composer", async () => {
+		store.set(ATTACHED_KEY, JSON.stringify(OTHER));
+		await mount();
+		assert.equal(composers(), 1);
+		assert.ok(q('[data-testid="chat-bar"] [data-testid="composer"]'), "the bar's composer is the one");
+		assert.equal(q('[data-testid="thread-composer-card"]'), null);
+		assert.equal(q('[data-testid="chat-bar-swap"]')!.getAttribute("aria-label"), "Swap to 1uk4/home");
+	});
+
+	it("swapping attaches the page's thread and docks: still one composer, now the page's; the other thread's draft stays with it", async () => {
+		store.set(ATTACHED_KEY, JSON.stringify(OTHER));
+		await mount();
+		await typeIn(q('[data-testid="chat-bar"] textarea') as HTMLTextAreaElement, "for other");
+		await click(q('[data-testid="chat-bar-swap"]')!);
+		await settle(80);
+		assert.equal(JSON.parse(store.get(ATTACHED_KEY)!).threadId, TID);
+		assert.equal(composers(), 1);
+		assert.ok(q('[data-testid="thread-main"] [data-testid="composer"]'), "docked into the page");
+		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal((q('[data-testid="thread-main"] textarea') as HTMLTextAreaElement).value, "", "the page's own draft is its own");
+		assert.equal(store.get("wolfpack:draft:1uk4:1uk4/other"), "for other", "the other thread's draft stays with it");
+	});
+
+	it("the page's thread waits on the owner: its ask sheet is hidden under the bar, so the pill turns amber (Answer); swapping docks and shows the sheet", async () => {
+		store.set(ATTACHED_KEY, JSON.stringify(OTHER));
+		homeStatus = "needs-you";
+		await mount({ ask: true });
+		assert.equal(q('[data-testid="thread-main"] [data-testid="ask-sheet"]'), null, "hidden while the bar floats over the page");
+		const pill = q('[data-testid="chat-bar-swap"]')!;
+		assert.equal(pill.getAttribute("data-needs-you"), "true");
+		assert.equal(pill.getAttribute("aria-label"), "Answer 1uk4/home");
+		await click(pill);
+		await settle(80);
+		assert.equal(JSON.parse(store.get(ATTACHED_KEY)!).threadId, TID);
+		assert.ok(q('[data-testid="thread-main"] [data-testid="ask-sheet"]'), "the questionnaire shows in the docked page");
+		assert.equal(composers(), 1);
+	});
+
+	it("the page holds a pending ask while the thread list still says idle: the pill is amber (Answer) all the same", async () => {
+		store.set(ATTACHED_KEY, JSON.stringify(OTHER));
+		await mount({ ask: true }); // homeStatus stays idle: a stale list
+		const pill = q('[data-testid="chat-bar-swap"]')!;
+		assert.equal(pill.getAttribute("data-needs-you"), "true");
+		assert.equal(pill.getAttribute("aria-label"), "Answer 1uk4/home");
+	});
+
+	it("text typed in the page composer inside the debounce window survives the chat moving to another thread and back", async () => {
+		store.set(ATTACHED_KEY, JSON.stringify({ wolf: "1uk4", slug: "home", threadId: TID }));
+		await mount();
+		await typeIn(q('[data-testid="thread-main"] textarea') as HTMLTextAreaElement, "typed just before");
+		await act(async () => attachApi!.attach(OTHER)); // well inside the 300ms debounce
+		await settle(450); // the timer fires with the bar owning the page's input
+		assert.equal(store.get(DRAFT), "typed just before", "flushed before ownership moved");
+		await click(q('[data-testid="chat-bar-swap"]')!);
+		await settle(80);
+		assert.equal((q('[data-testid="thread-main"] textarea') as HTMLTextAreaElement).value, "typed just before");
+	});
+
+	it("a deeper path under the thread page has no pill, so it must not hide the page composer either", async () => {
+		store.set(ATTACHED_KEY, JSON.stringify(OTHER));
+		await mount({ start: "/wolf/1uk4/thread/home/files" });
+		assert.equal(q('[data-testid="chat-bar-swap"]'), null);
+		assert.ok(q('[data-testid="thread-composer-card"]'), "the page composer stays");
 	});
 });

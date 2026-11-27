@@ -135,6 +135,18 @@ describe("frame badges", () => {
 		assert.deepEqual(labels(), ["New", "plan"]);
 	});
 
+	it("a long title is clipped to two words / 16 characters on the chip, with the full title as its accessible name", async () => {
+		await mount([framePart("f1", 1, "a.html", "Pack health and sync flow"), framePart("f2", 1, "b.html", "Internationalization"), framePart("f3", 1, "c.html", "Live map")]);
+		assert.deepEqual(labels(), ["Pack health", "Internationaliz…", "Live map"]);
+		assert.deepEqual(qa('[data-testid="frame-badge-open"]').map((b) => b.getAttribute("aria-label")), ["Pack health and sync flow", "Internationalization", "Live map"]);
+	});
+
+	it("a blank title falls back to the file name, and an emoji title is clipped without splitting a character", async () => {
+		const party = "\u{1F389}".repeat(18);
+		await mount([framePart("f1", 1, "plan.html", "   "), framePart("f2", 1, "b.html", party)]);
+		assert.deepEqual(labels(), ["plan", "\u{1F389}".repeat(15) + "\u2026"]);
+	});
+
 	it("the row sits directly above the page composer", async () => {
 		await mount([framePart("f1", 1, "a.html", "A")]);
 		const row = q('[data-testid="thread-main"] [data-testid="frame-badges"]')!;
@@ -156,7 +168,7 @@ describe("frame badges", () => {
 		assert.equal(q('[data-testid="viz-toggle"]'), null, "the header eye is hidden for a frame");
 		const bar = q('[data-testid="chat-bar"]')!;
 		assert.equal(bar.querySelector('[data-testid="frame-badges-chat"]')?.parentElement, bar.querySelector('[data-testid="frame-badges"]'));
-		assert.equal(bar.querySelector('[data-testid="frame-badges"]')!.nextElementSibling?.querySelector("textarea") !== null, true, "the row is right above the bar's input");
+		assert.equal(bar.querySelector('[data-testid="frame-badges"]')!.nextElementSibling?.contains(bar.querySelector('[data-testid="chat-bar-chip"]')), true, "the row is right above the bar's header, inside its surface");
 		await click(bar.querySelector('[data-testid="frame-badges-chat"]')!);
 		await settle(60);
 		assert.equal(mainHidden(), false);

@@ -621,6 +621,32 @@ describe("ChatBar needs-you badge", () => {
 	});
 });
 
+describe("ChatBar chip row", () => {
+	const after = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & 4); // b follows a in the document
+
+	it("keeps the frame chip and the needs-you badge in one row inside the bar's surface, above the header, with and without an open card", async () => {
+		mem.set("wolfpack:frames:w/a", JSON.stringify([{ objectId: "f1", path: "a.html", title: "Viewer step 3c: frame polish", rev: 1 }]));
+		threadStatus = { "w/b": "needs-you" };
+		await mount();
+		for (const withCard of [false, true]) {
+			if (withCard) {
+				raise("a", q1("c1"));
+				await emit("needs-you-changed", { wolf: "w", threadId: "w/a", status: "needs-you" });
+				await until(() => q('[data-testid="bar-card"]'), "the card");
+			}
+			const rows = qa('[data-testid="frame-badges"]');
+			assert.equal(rows.length, 1);
+			const row = rows[0]!;
+			assert.equal(row.querySelectorAll('[data-testid="frame-badge"]').length, 1);
+			assert.ok(row.querySelector('[data-testid="chat-bar-needs-you"]'), "the needs-you badge sits in the same row");
+			const header = q('[data-testid="chat-bar-chip"]')!.parentElement!;
+			assert.equal(row.parentElement, header.parentElement, "the row is a child of the bar's surface, like the header");
+			assert.ok(after(slot(), row), "the row follows the card slot");
+			assert.ok(after(row, header), "the row precedes the header");
+		}
+	});
+});
+
 describe("ChatBar needs-you badge order", () => {
 	it("taps to the thread whose oldest card was raised first, even when list order disagrees", async () => {
 		threadStatus = { "w/b": "needs-you", "w/c": "needs-you" };

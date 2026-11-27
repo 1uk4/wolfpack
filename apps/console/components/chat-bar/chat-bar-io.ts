@@ -36,3 +36,23 @@ export function abortThread(ref: Pick<AttachedRef, "wolf" | "slug">, fetchFn: ty
 export function onOwnThreadPage(pathname: string | null, ref: Pick<AttachedRef, "wolf" | "threadId"> | null): boolean {
 	return !!ref && pathname === threadHref(ref.wolf, ref.threadId);
 }
+
+/** The thread a /wolf/<wolf>/thread/<slug> page shows (null on every other page). */
+export function pageThreadOf(pathname: string | null): { wolf: string; slug: string } | null {
+	const m = pathname?.match(/^\/wolf\/([^/]+)\/thread\/([^/]+)\/?$/);
+	if (!m) return null;
+	try {
+		return { wolf: decodeURIComponent(m[1]!), slug: decodeURIComponent(m[2]!) };
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The ONE predicate for "the floating chat floats over another thread's page": the thread page this path shows, when a different thread is attached.
+ * The swap pill (chat-bar.tsx) and the page composer stepping aside (thread-chat.tsx) both read it, so the composer never hides without a pill.
+ */
+export function swapTarget(pathname: string | null, attached: Pick<AttachedRef, "wolf" | "threadId"> | null): { wolf: string; slug: string } | null {
+	const page = pageThreadOf(pathname);
+	return page && attached && !onOwnThreadPage(pathname, attached) ? page : null;
+}

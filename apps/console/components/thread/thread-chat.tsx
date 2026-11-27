@@ -17,11 +17,10 @@ import { TaskPinToggle, applyAgentTaskPin, lastAgentTaskPin, syncTaskPin } from 
 import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread/thread-compaction-divider";
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/thread/subagent-message";
-import { parseSubagentMessage } from "@/src/core";
+import { parseSubagentMessage, setPagePendingAsk } from "@/src/core";
 import { TurnTimer, useTurnStart } from "@/components/thread/turn-timer";
 import { useOwnAsk } from "@/components/thread/thread-ask";
-import { submitToThread } from "@/components/chat-bar/chat-bar-io";
-import { useAttachedStripRow } from "@/components/chat-bar/attached-strip-row";
+import { submitToThread, swapTarget } from "@/components/chat-bar/chat-bar-io";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/thread/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/shell/panel-host";
 import { ViewerPanel } from "@/components/viewer/viewer-panel";
@@ -48,7 +47,7 @@ import { cardAnswerUrl, cardSkipUrl, attachmentUrl, diagramUrl, threadTransport,
 import { useOptionalServerEvent } from "@/components/shell/server-events";
 import { TopBar } from "@/components/shell/top-bar";
 import { ThreadGitRow } from "@/components/thread/thread-git-tree";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { RemoveThreadDialog, ThreadActionsMenu, closedByOwner, threadCloseApi } from "@/components/thread/thread-close-actions";
 import { ThreadContextChip } from "@/components/thread/thread-context";
 import type { ThreadWorkspace } from "@wolfpack/client";
@@ -487,9 +486,18 @@ function ThreadChatInner({
 	// Dictating on this thread's own page does NOT do this: the composer stays and highlights itself.
 	const attachedApi = useAttachedThread();
 	const barShown = useBarShown();
-	const barOwnsInput = !!attachedApi?.attached && attachedApi.attached.wolf === wolf && attachedApi.attached.threadId === threadId && barShown;
-	const ownedByBar = useRef(false);
-	ownedByBar.current = barOwnsInput;
+	// The attached thread's own page: the page composer IS the docked chat (one composer); only viz mode / a shown bar replaces it.
+	// Any other thread attached: the floating chat sits over this page with a swap pill, so this composer steps aside (its strips
+	// pad their bottom by the bar's height, --chat-bar-over) and returns, re-reading its draft, when the owner swaps to this thread.
+	const attachedHere = !!attachedApi?.attached && attachedApi.attached.wolf === wolf && attachedApi.attached.threadId === threadId;
+	// The same predicate that draws the bar's swap pill (chat-bar-io swapTarget), so this composer never steps aside without a pill to bring it back.
+	const pageSwap = swapTarget(usePathname(), attachedApi?.attached ?? null);
+	const barOverPage = !attachedHere && !!pageSwap && pageSwap.wolf === wolf && pageSwap.slug === slug;
+	const barOwnsInput = barOverPage || (attachedHere && barShown);
+	// `ownedByBar` follows barOwnsInput, but only from a layout effect (below, after the draft hook), never during render: on the commit where
+	// ownership moves to the bar that effect first flushes the pending debounced draft, then sets the flag, so the draft hook's 300ms timer
+	// is never left to find the flag set and skip the write.
+	const ownedByBar = useRef(barOwnsInput); // a mount is not a move: nothing typed yet, and the stored draft must not be overwritten
 
 	// Visualization mode: the owner's per-thread choice (localStorage `wolfpack:viz:<wolf>:<threadId>`) while a view is open. The transcript
 	// and the page composer hide, the viewer fills the width, and the floating chat bar attaches to this thread and shows over it. The
@@ -499,7 +507,7 @@ function ThreadChatInner({
 	const viewOpen = viewerState.open && viewerState.stack.length > 0;
 	const viz = vizChoice && viewOpen;
 	const vizAttach = attachedApi?.attach;
-	const vizDock = attachedApi?.dock;
+	const vizDock = attachedApi?.detach;
 	const vizWasOn = useRef(false);
 	// Only a real open -> closed transition clears the stored choice: on a reload the viewer hydrates after this effect first runs.
 	const prevViewOpen = useRef(viewOpen);
@@ -544,6 +552,10 @@ function ThreadChatInner({
 		ownedByBar,
 	);
 	scheduleDraft.current = draftSchedule;
+	useLayoutEffect(() => {
+		if (barOwnsInput && !ownedByBar.current) draftSchedule.flush();
+		ownedByBar.current = barOwnsInput;
+	});
 	// Voice dictation: finals append to the composer unless a card field claims the target (see AskCard).
 	// Leaving the page mid-run saves what was heard into this thread's draft. This hook MUST stay declared after
 	// useComposerDraft: cleanups run in declaration order, so the composer's unmount flush runs first and the orphan
@@ -642,8 +654,7 @@ function ThreadChatInner({
 	const busy = status === "submitted" || status === "streaming";
 	const turnStart = useTurnStart(threadId, busy, turnStartedAt, initialTurnStartedAt);
 	const subagents = useSubagentChildren(wolf, slug, threadId);
-	const attachedRow = useAttachedStripRow(wolf, threadId);
-	const stripReserve = stripReservePx(subagents, Date.now(), attachedRow);
+	const stripReserve = stripReservePx(subagents, Date.now());
 	const subagentOrigins = useMemo(
 		() => messages.map((m) => (m.role === "user" ? parseSubagentMessage(m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")) : undefined)),
 		[messages],
@@ -672,6 +683,12 @@ function ThreadChatInner({
 		if (n.atts.length > 0) setAttachments((prev) => [...prev, ...n.atts]);
 	}, initialCards.pending);
 	const session = ask.session;
+	// Tell the floating chat (over another thread's page) this page's own pending ask: authoritative, unlike the list's status, which lags.
+	const askPending = ask.pending;
+	useEffect(() => {
+		setPagePendingAsk(wolf, threadId, askPending);
+		return () => setPagePendingAsk(wolf, threadId, false);
+	}, [wolf, threadId, askPending]);
 	/** The composer is the questionnaire note's (Next / Submit), not the chat's. */
 	const noteMode = ask.pending && ask.sheetShown && session.expanded && !ask.composing;
 	noteAppendRef.current = noteMode ? session.appendNoteText : null;
@@ -971,11 +988,11 @@ function ThreadChatInner({
 								style={dockHeight !== null ? { height: dockHeight } : stripReserve ? { marginTop: stripReserve } : undefined}
 							/>
 						</ConversationContent>
-						<div ref={setDockEl} className="pointer-events-none absolute inset-x-0 bottom-0 flex max-h-[calc(100%-0.75rem)] flex-col">
+						<div ref={setDockEl} className="pointer-events-none absolute inset-x-0 bottom-0 flex max-h-[calc(100%-0.75rem)] flex-col" style={barOverPage ? { paddingBottom: "var(--chat-bar-over, 0px)" } : undefined}>
 							<div className={ask.covers ? "h-0" : "h-16"} data-testid="dock-fade" style={{ background: `linear-gradient(to top, ${tintSolid}, transparent)` }} />
 							<div className="flex min-h-0 flex-col pb-4 max-md:pb-0" style={{ backgroundColor: tintSolid }}>
 								<div className={`${DOCK} flex min-h-0 flex-col [&>*:not([data-testid=ask-sheet-host])]:shrink-0`}>
-									<SubagentStrip wolf={wolf} slug={slug} items={subagents} attached={attachedRow} />
+									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />
 									{closedReason !== undefined ? (
 										<div data-testid="thread-closed" className="pointer-events-auto rounded-2xl border bg-card px-4 py-3 text-sm shadow-lg">
 											<div className="font-medium">{closedByOwner(closedReason) ? closedReason : FEATURE_GRADUATED}</div>
@@ -1021,6 +1038,7 @@ function ThreadChatInner({
 											// Send: deviation from chat.tsx, Stop stays available (the tail is sent once text exists).
 											canSend={noteMode ? !session.action.disabled : canSendWith(text, attachments) || (dictation.active && !busy)}
 											finishing={dictation.phase === "stopping"}
+											dictating={dictation.phase === "recording" || dictation.phase === "connecting"}
 											recording={recordingHere}
 											onEscape={dictation.active ? dictation.cancel : undefined}
 											// Enter while dictating finishes and steers the spoken text; the button stays Stop.

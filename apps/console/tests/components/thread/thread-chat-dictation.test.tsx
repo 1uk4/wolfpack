@@ -697,12 +697,12 @@ describe("ThreadChat dictation", () => {
 		assert.equal(q('[data-testid="dictation-bar"]'), null, "run stopped");
 	});
 
-	it("while a turn runs, a live dictation keeps Stop available (not Send)", async () => {
+	it("while a turn runs, a live dictation turns the main button into Stop dictation (not the wolf Stop, not Send)", async () => {
 		await mount(new CardClient(null), { inFlight: true });
 		await click(toggle());
 		await settle();
-		const btn = document.querySelector('[data-testid="composer"] button[aria-label="Stop"], [data-testid="composer"] button[aria-label="Send"]')!;
-		assert.equal(btn.getAttribute("aria-label"), "Stop");
+		const btn = document.querySelector('[data-testid="composer"] button[aria-label="Stop dictation"], [data-testid="composer"] button[aria-label="Stop"], [data-testid="composer"] button[aria-label="Send"]')!;
+		assert.equal(btn.getAttribute("aria-label"), "Stop dictation");
 	});
 
 	it("multi Other is a target: dictated text lands in the pending entry and is folded on Submit", async () => {
@@ -762,10 +762,10 @@ describe("ThreadChat dictation", () => {
 		assert.deepEqual(answers[0]!.body.answers.envs, { value: ["canary ring"], other: ["canary ring"] });
 	});
 
-	it("Enter while busy and dictating stops the run and fills the field without steering; the next Enter steers (the button stays Stop)", async () => {
+	it("Enter while busy and dictating stops the run and fills the field without steering; the next Enter steers (the button is Stop dictation meanwhile)", async () => {
 		await mount(new CardClient(null), { inFlight: true });
 		const ws = await recording("spoken steer");
-		assert.equal(document.querySelector('[data-testid="composer"] button[aria-label="Stop"]')?.getAttribute("aria-label"), "Stop");
+		assert.equal(document.querySelector('[data-testid="composer"] button[aria-label="Stop dictation"]')?.getAttribute("aria-label"), "Stop dictation");
 		await press(composer(), { key: "Enter" });
 		await closeSocket(ws);
 		await settle();
@@ -779,13 +779,13 @@ describe("ThreadChat dictation", () => {
 		assert.match(JSON.stringify(sent[0]!.body), /spoken steer/);
 	});
 
-	it("clicking Stop while busy and dictating aborts the turn", async () => {
+	it("clicking the main button while busy and dictating ends the dictation and never aborts the turn", async () => {
 		await mount(new CardClient(null), { inFlight: true });
 		await recording("ignored");
 		await act(async () => {
 			composer().closest("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
 		});
-		assert.equal(posts.filter((p) => p.url.includes("abort")).length, 1);
+		assert.equal(posts.filter((p) => p.url.includes("abort")).length, 0);
 	});
 
 	it("an invalid multi Other tail (duplicates an option) aborts Submit: no POST, the error shows", async () => {

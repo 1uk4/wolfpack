@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { finishDictation, useBarDictation, useDictation, type Dictation } from "@/components/composer/dictation";
 
@@ -117,5 +117,15 @@ export function useThreadDictation(
 		} else if (sawPopped.current) abandon();
 	}, [poppedOut, abandon]);
 
-	return poppedOut && bar ? bar : own;
+	// The thread is already attached: the page drives the bar's own run, so the page composer's pending draft is written before each press
+	// (the floating chat takes over the input the moment the owner leaves the page).
+	const beforeRef = useRef(beforeHandoff);
+	beforeRef.current = beforeHandoff;
+	// Every way the page ends or starts the run (press, Enter, Esc, stop) flushes first: the words land in the draft the chat reads. `bar` is
+	// republished only on phase/error/active changes (the level is a ref), so this memo is rebuilt only then.
+	const driven = useMemo(
+		() => (bar ? { ...bar, toggle: () => { beforeRef.current?.(); bar.toggle(); }, stop: () => { beforeRef.current?.(); bar.stop(); }, finish: () => { beforeRef.current?.(); return bar.finish(); }, cancel: () => { beforeRef.current?.(); bar.cancel(); } } : null),
+		[bar],
+	);
+	return poppedOut && driven ? driven : own;
 }

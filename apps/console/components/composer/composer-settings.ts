@@ -15,6 +15,32 @@ export interface ThreadSettingsState {
 
 export const DEFAULT_SETTINGS: ThreadSettingsState = { tier: "main", autoShip: false };
 
+// One thread's settings live on its wolf; the thread page and the floating chat each hold a copy. Every state a holder shows is
+// published here, keyed by the settings url, so the other holder of the same thread follows at once (a change, a rollback or a refetch).
+const holders = new Map<string, Set<(s: ThreadSettingsState) => void>>();
+
+// Counts the published states per url. A fetch that started before a later publish is stale: it must not overwrite what was shown since.
+const versions = new Map<string, number>();
+
+export function settingsVersion(url: string): number {
+	return versions.get(url) ?? 0;
+}
+
+export function publishSettings(url: string, state: ThreadSettingsState): void {
+	versions.set(url, settingsVersion(url) + 1);
+	for (const h of [...(holders.get(url) ?? [])]) h(state);
+}
+
+export function subscribeSettings(url: string, onState: (s: ThreadSettingsState) => void): () => void {
+	const set = holders.get(url) ?? new Set();
+	set.add(onState);
+	holders.set(url, set);
+	return () => {
+		set.delete(onState);
+		if (set.size === 0) holders.delete(url);
+	};
+}
+
 export type SettingsPatch = Partial<Pick<ThreadSettingsState, "tier" | "autoShip">>;
 type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 

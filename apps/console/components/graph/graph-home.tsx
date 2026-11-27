@@ -17,7 +17,9 @@
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { WaypointsIcon } from "lucide-react";
+import { PanelLeftOpenIcon, WaypointsIcon } from "lucide-react";
+import { Hint } from "@/components/ui/hint";
+import { useSidebar } from "@/components/shell/sidebar";
 import {
 	activityWolves,
 	createDebounce,
@@ -56,9 +58,31 @@ function Placeholder({ title, children }: { title: string; children?: React.Reac
 
 /** Shown when the graph is read from a wolf's KB mirror because the librarian is offline. */
 export function KbMirrorLabel() {
+	const { open } = useSidebar();
 	return (
-		<div className="absolute left-3 top-3 z-10 rounded-lg border bg-card/90 px-2 py-1 text-xs text-muted-foreground shadow-lg" data-testid="kb-mirror-label" title="Live sweep activity and KB activity need the librarian">
+		<div className={`absolute ${open ? "left-3" : "left-14"} top-3 z-10 rounded-lg border bg-card/90 px-2 py-1 text-xs text-muted-foreground shadow-lg`} data-testid="kb-mirror-label" title="Live sweep activity and KB activity need the librarian">
 			{KB_MIRROR_LABEL}
+		</div>
+	);
+}
+
+/** Top-left of the graph: reopens the app sidebar while it is closed (the shell's own state and toggle; on a phone it opens the list layer). */
+export function GraphSidebarOpen() {
+	const { open, toggle } = useSidebar();
+	if (open) return null;
+	return (
+		<div className="wp-no-drag absolute left-2 top-2 z-10">
+			<Hint label="Open sidebar" action="toggle-sidebar" side="bottom">
+				<button
+					type="button"
+					aria-label="Open sidebar"
+					data-testid="graph-open-sidebar"
+					onClick={toggle}
+					className="flex size-11 items-center justify-center rounded-xl border bg-card/85 text-muted-foreground shadow-lg backdrop-blur hover:bg-accent md:size-9"
+				>
+					<PanelLeftOpenIcon className="size-4" />
+				</button>
+			</Hint>
 		</div>
 	);
 }
@@ -238,6 +262,7 @@ function GraphHomeInner() {
 	return (
 		<div className="relative h-full w-full">
 			{body}
+			<GraphSidebarOpen />
 			{(kbSource?.mirror || (kb.graph as { hubCopy?: boolean } | null)?.hubCopy === true) && kb.status !== "unavailable" && <KbMirrorLabel />}
 			{activity.map((w) => (
 				<WolfTap key={w} wolf={w} onEvent={onEvent} onResync={onResync} />

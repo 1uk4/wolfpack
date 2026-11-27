@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BrailleSpinner } from "@/components/shell/braille-spinner";
+import { CircleIcon, HelpCircleIcon, LoaderIcon } from "lucide-react";
 import { usePanelHost, usePanelState } from "@/components/shell/panel-host";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
+import { fetchWolfThreads } from "@/components/kb/kb-client";
 import { compactUrl, contextUrl } from "@/components/thread/thread-transport";
 import type { ThreadContext } from "@wolfpack/client";
 
@@ -158,13 +159,53 @@ export function ContextBar({ c }: { c: ThreadContext }) {
  * the Memory panel, whose Context row holds the Compact button. It always renders: without context (loading or a failed
  * fetch) it reads `context —`, muted, with no bar, so the panel stays reachable.
  */
-export function ThreadContextChip({ wolf, slug, threadId, refreshKey }: { wolf: string; slug: string; threadId: string; refreshKey?: unknown }) {
+export type TurnState = "idle" | "working" | "waiting";
+const TURN_LABEL: Record<TurnState, string> = { idle: "Idle", working: "Working", waiting: "Waiting on you" };
+
+/**
+ * The thread's status as the server reports it (the same list rows the sidebar's "Working…" reads): seeded from the
+ * wolf's thread list, then folded from the `needs-you-changed` status events of this thread. It knows turns this tab
+ * did not start (a steer, a sub-agent result).
+ */
+function useServerThreadStatus(wolf: string, threadId: string): "idle" | "busy" | "needs-you" | undefined {
+	const [status, setStatus] = useState<"idle" | "busy" | "needs-you">();
+	const load = useCallback(() => {
+		void fetchWolfThreads<{ threads?: { id: string; status?: "idle" | "busy" | "needs-you" }[] }>(wolf, 0)
+			.then((r) => {
+				const row = r.ok && Array.isArray(r.data.threads) ? r.data.threads.find((t) => t.id === threadId) : undefined;
+				if (row) setStatus(row.status ?? "idle");
+			})
+			.catch(() => {});
+	}, [wolf, threadId]);
+	useEffect(load, [load]);
+	useOptionalServerEvent("needs-you-changed", (p) => {
+		if (p.wolf !== wolf) return;
+		if (p.threadId !== undefined && p.threadId !== threadId) return;
+		if (p.kind === "status" && p.status !== undefined) setStatus(p.status);
+		else load();
+	});
+	return status;
+}
+
+export function ThreadContextChip({ wolf, slug, threadId, refreshKey, turn: localTurn = "idle" }: { wolf: string; slug: string; threadId: string; refreshKey?: unknown; turn?: TurnState }) {
+	const serverStatus = useServerThreadStatus(wolf, threadId);
+	// waiting > working > idle; the local turn flips the icon at once, the server state covers turns this tab did not start.
+	const turn: TurnState = localTurn === "waiting" || serverStatus === "needs-you" ? "waiting" : localTurn === "working" || serverStatus === "busy" ? "working" : "idle";
 	const { ctx, compacting } = useThreadContext(wolf, slug, threadId, refreshKey);
 	const panels = usePanelHost();
 	const { open, selected } = usePanelState();
 	const amber = ctx ? pastStartAt(ctx) : false;
 	const shown = open && selected === "memory";
 	const pct = ctx?.window ? Math.min(100, Math.round((ctx.tokens / ctx.window) * 100)) : undefined;
+	const count = ctx ? (ctx.window ? `${formatTokens(ctx.tokens)} / ${formatTokens(ctx.window)}` : formatTokens(ctx.tokens)) : "context —";
+	// Everything the header no longer shows: wolf, turn state, percent, compactions, summarising.
+	const tip = [
+		`${wolf} · ${TURN_LABEL[turn]}`,
+		ctx ? `${contextLabel(ctx)}${pct !== undefined ? ` · ${pct}%` : ""}` : undefined,
+		compacting ? "summarising…" : undefined,
+		"Toggle the Memory panel",
+	].filter(Boolean).join("\n");
+	const Icon = turn === "working" ? LoaderIcon : turn === "waiting" ? HelpCircleIcon : CircleIcon;
 	return (
 		<div className="relative ml-auto shrink-0 max-md:min-w-0 max-md:shrink" data-testid="context-chip">
 			<button
@@ -173,7 +214,8 @@ export function ThreadContextChip({ wolf, slug, threadId, refreshKey }: { wolf: 
 				data-amber={amber || undefined}
 				data-compacting={compacting || undefined}
 				aria-pressed={shown}
-				title="Thread context: toggle the Memory panel"
+				data-turn={turn}
+				title={tip}
 				onClick={() => (shown ? panels.closePanel() : void panels.openPanel("memory"))}
 				className={`flex max-md:max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-xs hover:bg-accent ${amber ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}
 			>
@@ -182,14 +224,10 @@ export function ThreadContextChip({ wolf, slug, threadId, refreshKey }: { wolf: 
 						<span className={`block h-full ${amber ? "bg-amber-500" : "bg-foreground/60"}`} style={{ width: `${pct}%` }} />
 					</span>
 				)}
-				<span data-testid="context-label" className="max-md:truncate">{ctx ? contextLabel(ctx) : "context —"}</span>
-				{pct !== undefined && <span data-testid="context-pct">{pct}%</span>}
-				{compacting && (
-					<span data-testid="context-summarising" className="flex items-center gap-1">
-						{"· summarising…"}
-						<BrailleSpinner label="Summarising" className="h-3" />
-					</span>
-				)}
+				<span data-testid="context-label" className="max-md:truncate">{count}</span>
+				<span role="img" aria-label={TURN_LABEL[turn]} data-testid="context-turn" className="flex shrink-0 items-center">
+					<Icon aria-hidden className={`h-3.5 w-3.5 ${turn === "working" ? "animate-spin" : ""}`} />
+				</span>
 			</button>
 		</div>
 	);

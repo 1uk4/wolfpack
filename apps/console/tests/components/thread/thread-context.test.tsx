@@ -25,6 +25,7 @@ type ThreadContext = import("@wolfpack/client").ThreadContext;
 const { PanelHostProvider, RightPanelHost } = await import("../../../components/shell/panel-host.tsx");
 const { ContextSection } = await import("../../../components/thread/context-section.tsx");
 const { ThreadContextChip, formatTokens, contextLabel, pastStartAt } = await import("../../../components/thread/thread-context.tsx");
+const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { threadFetch } = await import("../../helpers/thread-fetch.ts");
 
 const BASE: ThreadContext = { tokens: 312_000, window: 1_000_000, startAt: 400_000, waitAt: 983_616, compactions: { count: 0 }, compacting: false };
@@ -66,13 +67,13 @@ async function mountSection(client: CtxClient) {
 	await act(async () => root!.render(<ContextSection wolf={FIXTURE_THREAD.wolf} slug={slugOf()} threadId={FIXTURE_THREAD.id} />));
 	await settle();
 }
-async function mount(client: CtxClient) {
+async function mount(client: CtxClient, turn?: "idle" | "working" | "waiting") {
 	globalThis.fetch = threadFetch(client);
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
 	const slug = FIXTURE_THREAD.id.slice(FIXTURE_THREAD.wolf.length + 1);
-	await act(async () => root!.render(<ThreadContextChip wolf={FIXTURE_THREAD.wolf} slug={slug} threadId={FIXTURE_THREAD.id} />));
+	await act(async () => root!.render(<ThreadContextChip wolf={FIXTURE_THREAD.wolf} slug={slug} threadId={FIXTURE_THREAD.id} turn={turn} />));
 	await settle();
 }
 
@@ -94,9 +95,55 @@ describe("ThreadContextChip", () => {
 	it("shows the size against the window, not amber under startAt", async () => {
 		await mount(new CtxClient());
 		assert.equal(q('[data-testid="context-label"]')?.textContent, "312k / 1M");
-		assert.equal(q('[data-testid="context-pct"]')?.textContent, "31%");
+		assert.equal(q('[data-testid="context-pct"]'), null); // moved into the tooltip
 		assert.equal(q('[data-testid="context-chip-button"]')?.getAttribute("data-amber"), null);
-		assert.equal(q('[data-testid="context-summarising"]'), null);
+	});
+
+	it("shows only the bar, the token count and one icon whose label is the turn state; the rest is in the tooltip", async () => {
+		for (const [turn, label] of [["idle", "Idle"], ["working", "Working"], ["waiting", "Waiting on you"]] as const) {
+			await mount(new CtxClient(), turn);
+			assert.deepEqual([...document.querySelectorAll('[data-testid="context-chip"] [role="img"]')].map((e) => e.getAttribute("aria-label")), [label]);
+			assert.ok(q('[data-testid="context-chip-bar"]'));
+			assert.equal(q('[data-testid="context-label"]')?.textContent, "312k / 1M");
+			const tip = q('[data-testid="context-chip-button"]')?.getAttribute("title") ?? "";
+			assert.match(tip, /31%/);
+			assert.match(tip, new RegExp(label));
+			assert.match(tip, new RegExp(FIXTURE_THREAD.wolf));
+			act(() => root!.unmount());
+			root = null;
+			document.body.innerHTML = "";
+		}
+	});
+
+	it("reads Working from the server's thread state when this tab started no turn, and Waiting on you wins over it", async () => {
+		const status = "busy";
+		const base = threadFetch(new CtxClient());
+		globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+			String(input).endsWith("/threads")
+				? Promise.resolve(new Response(JSON.stringify({ threads: [{ id: FIXTURE_THREAD.id, title: "t", status }] }), { headers: { "content-type": "application/json" } }))
+				: base(input, init)) as typeof fetch;
+		let emit: (name: string, data: unknown) => void = () => {};
+		const connect = () => {
+			const handlers = new Map<string, (d: string) => void>();
+			emit = (name, data) => handlers.get(name)?.(JSON.stringify(data));
+			return { close() {}, onOpen() {}, onEvent: (name: string, cb: (d: string) => void) => void handlers.set(name, cb) };
+		};
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<ServerEventsProvider connect={connect}><ThreadContextChip wolf={FIXTURE_THREAD.wolf} slug={slugOf()} threadId={FIXTURE_THREAD.id} /></ServerEventsProvider>));
+		await settle();
+		const label = () => q('[data-testid="context-turn"]')?.getAttribute("aria-label");
+		const ev = (threadId: string, st: string) => act(async () => emit("needs-you-changed", { wolf: FIXTURE_THREAD.wolf, threadId, kind: "status", status: st }));
+		assert.equal(label(), "Working"); // the list says busy
+		await ev(FIXTURE_THREAD.id, "idle");
+		assert.equal(label(), "Idle");
+		await ev(FIXTURE_THREAD.id, "busy");
+		assert.equal(label(), "Working");
+		await ev("other", "idle");
+		assert.equal(label(), "Working"); // another thread's change is ignored
+		await ev(FIXTURE_THREAD.id, "needs-you");
+		assert.equal(label(), "Waiting on you");
 	});
 
 	it("turns amber past startAt", async () => {
@@ -106,12 +153,11 @@ describe("ThreadContextChip", () => {
 		assert.equal(q('[data-testid="context-chip-button"]')?.getAttribute("data-amber"), "true");
 	});
 
-	it("shows summarising… with the spinner while the wolf reports compacting", async () => {
+	it("mentions summarising… in the tooltip while the wolf reports compacting", async () => {
 		const c = new CtxClient();
 		c.ctx = { ...BASE, compacting: true };
 		await mount(c);
-		assert.match(q('[data-testid="context-summarising"]')?.textContent ?? "", /summarising…/);
-		assert.ok(q('[data-testid="context-summarising"] [data-testid="braille-spinner"]'));
+		assert.match(q('[data-testid="context-chip-button"]')?.getAttribute("title") ?? "", /summarising…/);
 	});
 
 	it("clicking the chip opens the Memory panel and clicking again closes it", async () => {

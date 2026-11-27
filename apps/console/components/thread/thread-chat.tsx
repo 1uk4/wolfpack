@@ -800,9 +800,8 @@ function ThreadChatInner({
 			<div ref={registerColumn} className={viz ? "hidden" : "flex min-w-0 flex-1 flex-col"} data-testid="thread-main">
 				<TopBar>
 					<span className="min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl">{title}</span>
-					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>
 					<TurnTimer startedAt={turnStart} />
-					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} />
+					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} turn={ask.pending ? "waiting" : busy ? "working" : "idle"} />
 					<TaskPinToggle threadId={threadId} bound={bound} />
 					{kind === "feature" && (
 						<ThreadActionsMenu

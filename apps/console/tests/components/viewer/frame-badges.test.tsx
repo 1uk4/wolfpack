@@ -112,6 +112,32 @@ describe("frame badges hydration", () => {
 	});
 });
 
+describe("the bar's eye", () => {
+	it("starts closed (the bar lists no frame chips), counts the frames, opens them on a press, remembers the choice, and is disabled with none", async () => {
+		store.set(ATTACHED_KEY, JSON.stringify({ wolf: "1uk4", slug: "home", threadId: TID }));
+		store.set(`wolfpack:frames:${TID}`, JSON.stringify([{ objectId: "f1", path: "a.html", title: "A", rev: 1 }, { objectId: "f2", path: "b.html", title: "B", rev: 1 }]));
+		await mount([], { chat: false, start: "/kb" });
+		const eye = () => q('[data-testid="bar-eye"]')!;
+		assert.equal(q('[data-testid="bar-eye-count"]')!.textContent, "2");
+		assert.equal(eye().getAttribute("aria-pressed"), "false");
+		assert.deepEqual(labels(), [], "closed: no chips");
+		await click(eye());
+		assert.deepEqual(labels(), ["A", "B"]);
+		assert.equal(eye().getAttribute("aria-pressed"), "true");
+		assert.equal(store.get("wolfpack:bar-eye-open"), "1");
+		await click(eye());
+		assert.deepEqual(labels(), []);
+		assert.equal(store.get("wolfpack:bar-eye-open"), undefined);
+		store.delete(`wolfpack:frames:${TID}`);
+		await act(async () => root?.unmount());
+		vs.resetViewerCache();
+		document.body.innerHTML = "";
+		await mount([], { chat: false, start: "/kb" });
+		assert.equal(eye().hasAttribute("disabled"), true, "no frames, no eye to press");
+		assert.equal(q('[data-testid="bar-eye-count"]')!.textContent, "0");
+	});
+});
+
 describe("frame badges from a link", () => {
 	it("opening ?view=frame:<path> adds a badge titled with the path, and a dismissed one does not come back from the same link", async () => {
 		await mount([], { start: "/wolf/1uk4/thread/home?view=frame%3Aviz%2Fa.html" });
@@ -177,6 +203,7 @@ describe("frame badges", () => {
 	});
 
 	it("× hides the badge, keeps it hidden across a remount and a new rev, and leaves viz mode when that frame was shown", async () => {
+		store.set("wolfpack:bar-eye-open", "1");
 		await mount([framePart("f1", 1, "a.html", "A"), framePart("f2", 1, "b.html", "B")]);
 		await click(qa('[data-testid="frame-badge-open"]')[0]!);
 		await settle(60);
@@ -194,6 +221,7 @@ describe("frame badges", () => {
 	});
 
 	it("a badge in the bar on another page navigates to the thread with that frame open", async () => {
+		store.set("wolfpack:bar-eye-open", "1");
 		store.set(ATTACHED_KEY, JSON.stringify({ wolf: "1uk4", slug: "home", threadId: TID }));
 		store.set(`wolfpack:frames:${TID}`, JSON.stringify([{ objectId: "f1", path: "a.html", title: "A", rev: 1 }]));
 		await mount([], { chat: false, start: "/kb" });
@@ -206,6 +234,7 @@ describe("frame badges", () => {
 	});
 
 	it("stored frames: malformed JSON gives no badges, hostile paths are dropped, and only the newest 50 are kept with older dismissals cleared", async () => {
+		store.set("wolfpack:bar-eye-open", "1");
 		store.set(ATTACHED_KEY, JSON.stringify({ wolf: "1uk4", slug: "home", threadId: TID }));
 		store.set(`wolfpack:frames:${TID}`, "{not json");
 		await mount([], { chat: false, start: "/kb" });

@@ -63,6 +63,7 @@ export * from "./thread/session-navigation.ts";
 export * from "./settings/auth-keys.ts";
 // keyboard.ts: the shortcut registry + binding normalization (pure, browser-safe).
 export * from "./ui/keyboard.ts";
+export * from "./ui/bar-eye.ts";
 export * from "./ui/bar-geometry.ts";
 export * from "./ui/bar-visibility.ts";
 export * from "./thread/home-thread.ts";

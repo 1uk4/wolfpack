@@ -35,6 +35,7 @@ import { BarIcon } from "@/components/chat-bar/bar-icon";
 import { BarSettings } from "@/components/chat-bar/bar-settings";
 import { useKeyboardInset } from "@/components/chat-bar/use-keyboard-inset";
 import { useBarHiddenReasons } from "@/components/chat-bar/bar-visibility";
+import { BarEyeButton } from "@/components/viewer/frame-badges";
 import { BarOverflow } from "@/components/chat-bar/bar-overflow";
 import { useColumnRect } from "@/components/chat-bar/column-store";
 import { useThreadColor } from "@/components/thread/use-thread-color";
@@ -757,6 +758,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	// The header's secondary controls: inline on a wide column, inside the ⋯ menu on a narrow one (where the swap pill joins them).
 	const deskControls = (
 		<>
+			<BarEyeButton wolf={target.wolf} threadId={target.threadId} />
 			<BarSettings wolf={target.wolf} slug={target.slug} phone={false} buttonClass="rounded-md p-1 text-muted-foreground hover:bg-accent" />
 			{!swap && (
 				<Hint label="Minimize">

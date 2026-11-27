@@ -7,6 +7,7 @@ import { viewKey } from "./view-descriptor";
 import { dismissFrame, useFrameBadges } from "./frame-store";
 import { openView, useViewer } from "./viewer-store";
 import { setVizMode } from "./viz-mode";
+import { useEyeOpen } from "@/src/core/ui/bar-eye";
 
 /**
  * One horizontally scrolling row of eye + title badges, one per frame the wolf showed in the thread. Tap opens that frame in
@@ -14,7 +15,10 @@ import { setVizMode } from "./viz-mode";
  * `onNavigate` is for callers that are not on the thread page (the floating bar): it gets the thread-page href with the frame open.
  */
 export function FrameBadges({ wolf, threadId, vizOn, onNavigate, lead, bar = false }: { wolf: string; threadId: string; vizOn: boolean; onNavigate?: (view: string) => void; lead?: ReactNode; bar?: boolean }) {
-	const badges = useFrameBadges(wolf, threadId);
+	const all = useFrameBadges(wolf, threadId);
+	const [eyeOpen] = useEyeOpen();
+	// The bar tucks its frame chips behind the eye button (BarEyeButton) unless the owner opened it; in the visualization mode the chips are the navigation, so they stay.
+	const badges = bar && !eyeOpen && !vizOn ? [] : all;
 	const viewer = useViewer(wolf, threadId);
 	if (badges.length === 0 && !vizOn && !lead) return null;
 	const top = viewer.stack[viewer.stack.length - 1];
@@ -85,5 +89,28 @@ export function FrameBadges({ wolf, threadId, vizOn, onNavigate, lead, bar = fal
 				);
 			})}
 		</div>
+	);
+}
+
+/** The bar header's eye: opens or tucks away the frame chips. Its badge counts the frames the wolf showed in the thread; with none it is disabled. */
+export function BarEyeButton({ wolf, threadId }: { wolf: string; threadId: string }) {
+	const count = useFrameBadges(wolf, threadId).length;
+	const [open, setOpen] = useEyeOpen();
+	const label = count === 0 ? "No frames to show" : open ? `Hide the frames (${count})` : `Show the frames (${count})`;
+	return (
+		<Hint label={label}>
+			<button
+				type="button"
+				data-testid="bar-eye"
+				aria-label={label}
+				aria-pressed={open && count > 0}
+				disabled={count === 0}
+				onClick={() => setOpen(!open)}
+				className="relative rounded-md p-1 text-muted-foreground hover:bg-accent disabled:opacity-40"
+			>
+				<EyeIcon aria-hidden className="size-4" />
+				<span data-testid="bar-eye-count" className="absolute -right-0.5 -top-0.5 min-w-3.5 rounded-full bg-primary px-1 text-center font-ui text-[10px] leading-[14px] text-primary-foreground">{count}</span>
+			</button>
+		</Hint>
 	);
 }

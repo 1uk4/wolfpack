@@ -21,6 +21,7 @@ import { pathToFileURL } from "node:url";
 import { DEFAULT_MANIFEST_URL, checkUpdates, createManifestFetcher, probeHealth, type ManifestResult, type UpdateRow } from "@wolfpack/protocol";
 import { stampedVersion, subscriptionFile } from "@wolfpack/protocol/health-lag";
 import { failedLine, mapHostStatus, plainError, STALE_AFTER_MS as HOST_STALE_AFTER_MS, type UpdateState } from "@wolfpack/protocol/update-state";
+import { macAutoUpdateDir } from "./updater-paths.ts";
 import { readSubscription } from "./subscription-api.ts";
 
 export type HostUnitState = "idle" | "updating" | "updated" | "failed" | "disabled";
@@ -151,6 +152,8 @@ export function consoleVersion(dir: string = process.cwd()): string | undefined 
 export interface UpdatesOptions {
 	env?: Record<string, string | undefined>;
 	consoleDir?: string;
+	/** Test seam: the platform whose status-file location applies (default process.platform). */
+	platform?: NodeJS.Platform;
 	probeTimeoutMs?: number;
 	/** Clock in ms (default Date.now); decides `updateStatus.stale`. */
 	now?: () => number;
@@ -177,7 +180,8 @@ export function createUpdatesHandler(o: UpdatesOptions = {}): (q?: { refresh?: b
 	const manifest = (q?: { refresh?: boolean }) => (o.manifest ?? (readSubscription(subFile).channel === "main" ? mainManifest : stableManifest))({ force: q?.refresh === true });
 	const timeoutMs = o.probeTimeoutMs ?? 3_000;
 	const own = consoleVersion(o.consoleDir);
-	const statusFile = env.WOLFPACK_AUTO_UPDATE_STATUS?.trim() || DEFAULT_AUTO_UPDATE_STATUS;
+	// On a Mac the updater (scripts/auto-update-mac.mjs) writes ~/.wolfpack/auto-update/status.json; elsewhere the sfo-01 path.
+	const statusFile = env.WOLFPACK_AUTO_UPDATE_STATUS?.trim() || ((o.platform ?? process.platform) === "darwin" ? path.join(macAutoUpdateDir(undefined, env), "status.json") : DEFAULT_AUTO_UPDATE_STATUS);
 	return async (q) => {
 		const hostStatus = readStatusFile(statusFile);
 		const channel = readSubscription(subFile).channel;
@@ -186,7 +190,9 @@ export function createUpdatesHandler(o: UpdatesOptions = {}): (q?: { refresh?: b
 			serviceVersion(base(env.WOLFPACK_HUB_URL), "hubd", timeoutMs),
 			serviceVersion(base(env.WOLFPACK_API_URL), "workerd", timeoutMs),
 		]);
-		const rows = checkUpdates(m.manifest, { console: own, hubd, workerd, wolfd: undefined });
+		// No workerd to probe (local mode, relay): the version the host updater last saw installed stands in (its units carry `current`).
+		const fromStatus = (c: string) => Object.values(hostStatus?.units ?? {}).find((u) => u?.component === c && typeof (u as { current?: unknown }).current === "string") as { current?: string } | undefined;
+		const rows = checkUpdates(m.manifest, { console: own, hubd, workerd: workerd ?? fromStatus("workerd")?.current, wolfd: undefined });
 		const components = rows.map((r) => {
 			const updateStatus = hostStatus && componentStatus(hostStatus, r.component, (o.now ?? Date.now)());
 			const updateState = hostStatus && mapHostStatus(hostStatus, r.component, { now: (o.now ?? Date.now)(), channel });

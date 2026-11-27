@@ -4,7 +4,7 @@
  * means stable + the host default mode (auto when WOLFPACK_AUTO_UPDATE=1 is in the console's env, else button, from readMachineMode, which owns the default). On sfo-01 it lives in its own root:console 0775 directory (deploy/auto-update/setup.sh), apart from the root-only updater state dir.
  * Both verbs need the same verified-device bearer as the other pack actions (`gate`).
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isSingleMac } from "../../core/single-mac.ts";
 import { readMachineMode, subscriptionFile } from "@wolfpack/protocol/health-lag";
@@ -64,7 +64,9 @@ export function createSubscriptionHandler(o: { gate: (req: Request) => Promise<s
 			try {
 				mkdirSync(path.dirname(file), { recursive: true });
 				const tmp = `${file}.${process.pid}.tmp`;
-				writeFileSync(tmp, `${JSON.stringify({ schema: 1, channel, mode })}\n`, { mode: 0o664 });
+				writeFileSync(tmp, `${JSON.stringify({ schema: 1, channel, mode })}\n`, { mode: 0o644 });
+				// World-readable on purpose (work-wolfpack-B8vtRi3): workerd runs as another user and reads the channel. No secrets in it. chmod because the umask can strip the mode above; the rename gives an old 0600 file the new mode.
+				chmodSync(tmp, 0o644);
 				renameSync(tmp, file);
 			} catch (e) {
 				return Response.json({ error: `could not save: ${(e as Error).message}`, code: "failed" }, { status: 502, headers: NO_STORE });

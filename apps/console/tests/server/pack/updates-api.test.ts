@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -43,7 +43,7 @@ describe("GET /api/updates", () => {
 		writeFileSync(join(dir, "VERSION"), "0.1.18\n");
 		try {
 			const get = createUpdatesHandler({
-				env: { ...NO_SUBSCRIPTION, WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_HUB_URL: await deadUrl(), WOLFPACK_API_URL: workerd },
+				env: { ...NO_SUBSCRIPTION, WOLFPACK_AUTO_UPDATE_STATUS: join(tmpdir(), "no-such-status.json"), WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_HUB_URL: await deadUrl(), WOLFPACK_API_URL: workerd },
 				consoleDir: dir,
 				probeTimeoutMs: 1_000,
 			});
@@ -81,6 +81,40 @@ describe("GET /api/updates", () => {
 			assert.deepEqual([(await row())?.latest, (await row())?.outdated], ["0.1.5", false]); // no file: stable
 			writeFileSync(sub, JSON.stringify({ schema: 1, channel: "main", mode: "button" }));
 			assert.deepEqual([(await row())?.latest, (await row())?.outdated], ["0.1.6-main.2", true]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("with no workerd to probe (local mode), takes the running workerd version from the host's status file so a behind Mac is outdated", async () => {
+		const main = await serve({ schema: 1, channel: "main", sha: "abc", ref: "wolf/1uk4", generatedAt: "2026-11-26T03:30:00Z", components: { workerd: entry("workerd", "0.1.16-main.4") } });
+		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
+		const sub = join(dir, "subscription.json");
+		const status = join(dir, "status.json");
+		writeFileSync(sub, JSON.stringify({ schema: 1, channel: "main", mode: "button" }));
+		writeFileSync(status, JSON.stringify({ host: "Lukas-MacBook-Pro", enabled: false, lastCheck: new Date().toISOString(), disabledReason: "mode is button: the timer installs nothing", units: { stack: { component: "workerd", current: "0.1.16-main.3", target: "0.1.16-main.3", state: "disabled" } } }));
+		try {
+			const get = createUpdatesHandler({ env: { WOLFPACK_UPDATE_MAIN_MANIFEST_URL: `${main}/main.json`, WOLFPACK_SUBSCRIPTION_FILE: sub, WOLFPACK_AUTO_UPDATE_STATUS: status }, consoleDir: dir });
+			const w = (await get()).components.find((c) => c.component === "workerd");
+			assert.deepEqual([w?.running, w?.latest, w?.outdated], ["0.1.16-main.3", "0.1.16-main.4", true]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("on a Mac the status file sits under WOLFPACK_HOME, and only workerd borrows its version from it (wolfd stays unknown)", async () => {
+		const main = await serve({ schema: 1, channel: "main", sha: "abc", ref: "wolf/1uk4", generatedAt: "2026-11-26T03:30:00Z", components: { workerd: entry("workerd", "0.1.16-main.4"), wolfd: entry("wolfd", "0.1.16-main.4") } });
+		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
+		const sub = join(dir, "subscription.json");
+		writeFileSync(sub, JSON.stringify({ schema: 1, channel: "main", mode: "button" }));
+		mkdirSync(join(dir, "auto-update"));
+		const unit = (component: string) => ({ component, current: "0.1.16-main.2", target: "0.1.16-main.2", state: "idle" });
+		writeFileSync(join(dir, "auto-update/status.json"), JSON.stringify({ host: "mac", enabled: false, lastCheck: new Date().toISOString(), units: { stack: unit("workerd"), wolfd: unit("wolfd") } }));
+		try {
+			const get = createUpdatesHandler({ platform: "darwin", env: { WOLFPACK_UPDATE_MAIN_MANIFEST_URL: `${main}/main.json`, WOLFPACK_SUBSCRIPTION_FILE: sub, WOLFPACK_HOME: dir, WOLFPACK_HUB_URL: await deadUrl(), WOLFPACK_API_URL: await deadUrl() }, consoleDir: dir });
+			const rows = (await get()).components;
+			assert.equal(rows.find((c) => c.component === "workerd")?.running, "0.1.16-main.2");
+			assert.equal(rows.find((c) => c.component === "wolfd")?.running ?? null, null);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

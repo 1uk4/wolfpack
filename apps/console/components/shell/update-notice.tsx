@@ -15,18 +15,33 @@ import { failedLine, retryLabel, stageLabel, type UpdateState } from "@wolfpack/
 import { useAppBridge } from "@/components/settings/app-bridge";
 import { useAppUpdateState } from "@/components/settings/use-app-update-state";
 import { ReleaseNotesModal, useReleaseNotes, type NotesState } from "@/components/shell/release-notes-view";
-import { updateOutcome } from "@/src/core";
+import { behindFromInventory, hostId, updateOutcome } from "@/src/core";
 
 type Row = { component: string; running: string | null; latest: string | null; outdated: boolean | null; notesUrl: string | null; updateStep?: string; updateStatus?: { state: string; host?: string }; updateState?: { state: string; progress?: number | null; error?: { message: string } } };
+
+/** The hub inventory as the notice reads it: `self` is this console's machine name (GET /api/health/inventory). */
+export type OwnInventory = { self: string; /** The name the machine card gives this machine ("Mac"); absent = the raw name. */ selfLabel?: string; rows: { machine: string; kind: string; version?: string; latest?: string | null }[] };
+
+/**
+ * Adds this machine's behind wolves and workerd (hub inventory rows of this machine with `latest`) to the /api/updates rows: they join the
+ * machine's group, and a component /api/updates already lists for it is not repeated. The machine keeps the name /api/updates uses for it.
+ */
+function withOwnInventory(rows: Row[], inv: OwnInventory | null | undefined): Row[] {
+	if (!inv?.self) return rows;
+	const machine = rows.length === 0 || rows.some((r) => r.updateStatus?.host) ? (rows.find((r) => r.updateStatus?.host && hostId(r.updateStatus.host) === hostId(inv.self))?.updateStatus?.host ?? inv.self) : "this machine"; // hostless rows are grouped as "this machine"
+	const have = rows.filter((r) => (r.updateStatus?.host || "this machine") === machine).map((r) => r.component);
+	const extra = behindFromInventory(inv.rows.filter((r) => hostId(r.machine) === hostId(inv.self)), have);
+	return [...rows, ...extra.map((e): Row => ({ component: e.component, running: e.from, latest: e.to, outdated: true, notesUrl: null, updateStatus: { state: "idle", host: machine } }))];
+}
 
 const HOUR = 60 * 60_000;
 const STORE = "wolfpack.update-notice.dismissed";
 
-type Group = { machine: string; reason: string | null; items: { component: string; latest: string | null; key: string }[]; failed: boolean; installing: boolean; notesUrl: string | null; notesTag: string | null };
+type Group = { machine: string; label: string; reason: string | null; items: { component: string; latest: string | null; key: string }[]; failed: boolean; installing: boolean; notesUrl: string | null; notesTag: string | null };
 
 const keyOf = (r: Row) => `${r.component}@${r.latest ?? "?"}`;
 
-function groupRows(rows: Row[], dismissed: ReadonlySet<string>): Group[] {
+function groupRows(rows: Row[], dismissed: ReadonlySet<string>, own?: OwnInventory | null): Group[] {
 	const by = new Map<string, Group>();
 	for (const r of rows) {
 		if (dismissed.has(keyOf(r))) continue;
@@ -34,7 +49,8 @@ function groupRows(rows: Row[], dismissed: ReadonlySet<string>): Group[] {
 		const installing = r.updateState?.state === "installing";
 		if (r.outdated !== true && !failed && !installing) continue;
 		const machine = r.updateStatus?.host || "this machine";
-		const g = by.get(machine) ?? { machine, reason: null, items: [], failed: false, installing: false, notesUrl: null, notesTag: null };
+		const isOwn = !!own?.selfLabel && (machine === "this machine" || hostId(machine) === hostId(own.self));
+		const g = by.get(machine) ?? { machine, label: isOwn ? own!.selfLabel! : machine, reason: null, items: [], failed: false, installing: false, notesUrl: null, notesTag: null };
 		g.installing ||= installing;
 		g.items.push({ component: r.component, latest: r.latest, key: keyOf(r) });
 		g.failed ||= failed;
@@ -51,11 +67,11 @@ function groupRows(rows: Row[], dismissed: ReadonlySet<string>): Group[] {
 export const updateHref = (g: Pick<Group, "machine" | "items">) => `/pack/machines?update=${encodeURIComponent(`${g.machine}:${g.items.map((i) => i.component).join(",")}`)}`;
 
 function title(g: Group): string {
-	if (g.failed) return `${g.machine}: ${failedLine({ error: g.reason ? { code: "", message: g.reason, retryable: false } : undefined })}`;
-	if (g.installing) return `${g.machine}: ${stageLabel({ state: "installing", progress: null })}`;
-	if (g.items.length > 1) return `${g.machine}: ${g.items.length} updates available`;
+	if (g.failed) return `${g.label}: ${failedLine({ error: g.reason ? { code: "", message: g.reason, retryable: false } : undefined })}`;
+	if (g.installing) return `${g.label}: ${stageLabel({ state: "installing", progress: null })}`;
+	if (g.items.length > 1) return `${g.label}: ${g.items.length} updates available`;
 	const i = g.items[0]!;
-	return `${g.machine}: ${i.component}${i.latest ? ` ${i.latest}` : ""} is available`;
+	return `${g.label}: ${i.component}${i.latest ? ` ${i.latest}` : ""} is available`;
 }
 
 /** The Mac app's own stage: shown while downloading, ready, installing or failed; idle/checking/updated stay quiet in the sidebar. */
@@ -69,14 +85,14 @@ function AppRow({ app, heading, onInstall, onRetry }: { app: UpdateState; headin
 			</div>
 			{failed && onRetry && (
 				<div className="mt-1.5 pl-[18px]">
-					<button type="button" data-testid="update-notice-app-retry" onClick={onRetry} className="rounded-sm border border-teal-500/40 bg-teal-500/15 px-2 py-0.5 font-medium text-teal-300 hover:bg-teal-500/25">
+					<button type="button" data-testid="update-notice-app-retry" onClick={onRetry} className="inline-flex items-center whitespace-nowrap rounded-sm border border-teal-500/40 bg-teal-500/15 px-2 py-0.5 font-medium text-teal-300 hover:bg-teal-500/25">
 						{retryLabel}
 					</button>
 				</div>
 			)}
 			{app.state === "ready" && onInstall && (
 				<div className="mt-1.5 pl-[18px]">
-					<button type="button" onClick={onInstall} className="rounded-sm border border-teal-500/40 bg-teal-500/15 px-2 py-0.5 font-medium text-teal-300 hover:bg-teal-500/25">
+					<button type="button" onClick={onInstall} className="inline-flex items-center whitespace-nowrap rounded-sm border border-teal-500/40 bg-teal-500/15 px-2 py-0.5 font-medium text-teal-300 hover:bg-teal-500/25">
 						Update now
 					</button>
 				</div>
@@ -87,8 +103,8 @@ function AppRow({ app, heading, onInstall, onRetry }: { app: UpdateState; headin
 
 const APP_SHOWN = new Set(["downloading", "ready", "installing", "failed"]);
 
-export function UpdateNoticeView({ appHeading, rows, dismissed, onDismiss, app, onInstall, onRetry, retrying, onRetryApp, retryError, onOpenNotes, notes, onCloseNotes }: { /** Remote mode: "This app" heads the Mac app's row. */ appHeading?: string; /** Open the release notes for a machine's row (the container fetches them); with no handler What's new stays a plain link. */ onOpenNotes?: (machine: string, tag: string) => void; /** The open notes: the machine whose row asked and the fetch state. */ notes?: { machine: string; state: NotesState } | null; onCloseNotes?: () => void; retryError?: string | null;  rows: Row[]; dismissed: ReadonlySet<string>; onDismiss: (keys: string[]) => void; app?: UpdateState | null; onInstall?: () => void; /** Retry a failed pack update on this console's own machine (clears the held failure and tries again); `retrying` while it is pending. */ onRetry?: () => void; retrying?: boolean; /** Retry a failed Mac app update (checks for updates again). */ onRetryApp?: () => void }) {
-	const groups = groupRows(rows, dismissed);
+export function UpdateNoticeView({ ownInventory, appHeading, rows: updateRows, dismissed, onDismiss, app, onInstall, onRetry, retrying, onRetryApp, retryError, onOpenNotes, notes, onCloseNotes }: { /** Remote mode: "This app" heads the Mac app's row. */ appHeading?: string; /** Open the release notes for a machine's row (the container fetches them); with no handler What's new stays a plain link. */ onOpenNotes?: (machine: string, tag: string) => void; /** The open notes: the machine whose row asked and the fetch state. */ notes?: { machine: string; state: NotesState } | null; onCloseNotes?: () => void; retryError?: string | null; /** Hub inventory of this machine: wolves behind show with the update rows. */ ownInventory?: OwnInventory | null; rows: Row[]; dismissed: ReadonlySet<string>; onDismiss: (keys: string[]) => void; app?: UpdateState | null; onInstall?: () => void; /** Retry a failed pack update on this console's own machine (clears the held failure and tries again); `retrying` while it is pending. */ onRetry?: () => void; retrying?: boolean; /** Retry a failed Mac app update (checks for updates again). */ onRetryApp?: () => void }) {
+	const groups = groupRows(withOwnInventory(updateRows, ownInventory), dismissed, ownInventory);
 	const showApp = app != null && APP_SHOWN.has(app.state) && !(app.state === "failed" && app.error?.quiet); // an offline laptop failing its background check stays quiet here; the Pack machine card still shows it
 	if (!groups.length && !showApp) return null;
 	return (
@@ -104,13 +120,13 @@ export function UpdateNoticeView({ appHeading, rows, dismissed, onDismiss, app, 
 						<span>{title(g)}</span>
 					</div>
 					{g.items.length > 1 && !g.failed && <div className="mt-0.5 pl-[18px] text-muted-foreground">{g.items.map((i) => `${i.component}${i.latest ? ` ${i.latest}` : ""}`).join(", ")}</div>}
-					<div className="mt-1.5 flex items-center gap-3 pl-[18px]">
+					<div className="mt-1.5 flex items-start gap-3 pl-[18px]">
 						{g.failed && onRetry ? (
-							<button type="button" data-testid="update-notice-retry" disabled={retrying} onClick={onRetry} className="rounded-sm border border-teal-500/40 bg-teal-500/15 px-2 py-0.5 font-medium text-teal-300 hover:bg-teal-500/25 disabled:pointer-events-none disabled:opacity-50">
+							<button type="button" data-testid="update-notice-retry" disabled={retrying} onClick={onRetry} className="inline-flex items-center whitespace-nowrap rounded-sm border border-teal-500/40 bg-teal-500/15 px-2 py-0.5 font-medium text-teal-300 hover:bg-teal-500/25 disabled:pointer-events-none disabled:opacity-50">
 								{retryLabel}
 							</button>
 						) : (
-							<Link href={updateHref(g)} className="rounded-sm border border-teal-500/40 bg-teal-500/15 px-2 py-0.5 font-medium text-teal-300 hover:bg-teal-500/25">
+							<Link href={updateHref(g)} className="inline-flex items-center whitespace-nowrap rounded-sm border border-teal-500/40 bg-teal-500/15 px-2 py-0.5 font-medium text-teal-300 hover:bg-teal-500/25">
 								Update now
 							</Link>
 						)}
@@ -154,6 +170,7 @@ function readDismissed(): Set<string> {
 export function UpdateNotice() {
 	const [rows, setRows] = useState<Row[]>([]);
 	const [reload, setReload] = useState(0);
+	const [ownInventory, setOwnInventory] = useState<OwnInventory | null>(null);
 	const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
 	useEffect(() => setDismissed(readDismissed()), []);
 	useEffect(() => {
@@ -163,8 +180,15 @@ export function UpdateNotice() {
 				.then((r) => (r.ok ? (r.json() as Promise<{ components?: Row[] }>) : null))
 				.then((b) => alive && setRows(b?.components ?? []))
 				.catch(() => {});
+		// The viewer's own hub read: which wolves of this machine are behind. Unreadable (signed out, hub down) = no extra lines.
+		const loadInventory = () =>
+			void fetch("/api/health/inventory", { cache: "no-store" })
+				.then((r) => (r.ok ? (r.json() as Promise<{ state?: string; rows?: OwnInventory["rows"]; self?: string; selfLabel?: string }>) : null))
+				.then((b) => alive && setOwnInventory(b?.state === "ok" && b.self ? { self: b.self, ...(b.selfLabel ? { selfLabel: b.selfLabel } : {}), rows: b.rows ?? [] } : null))
+				.catch(() => {});
 		load();
-		const t = setInterval(load, HOUR);
+		loadInventory();
+		const t = setInterval(() => (load(), loadInventory()), HOUR);
 		return () => {
 			alive = false;
 			clearInterval(t);
@@ -199,5 +223,5 @@ export function UpdateNotice() {
 			.finally(() => (setRetrying(false), setReload((n) => n + 1)));
 	};
 	const n = useOpenNotes();
-	return <UpdateNoticeView {...n} appHeading={bridge?.remote ? "This app" : undefined} rows={rows} dismissed={dismissed} onDismiss={dismiss} app={app} onInstall={() => void bridge?.installUpdate?.()} onRetry={retry} retrying={retrying} retryError={retryError} onRetryApp={() => void bridge?.checkForUpdates?.()} />;
+	return <UpdateNoticeView {...n} ownInventory={ownInventory} appHeading={bridge?.remote ? "This app" : undefined} rows={rows} dismissed={dismissed} onDismiss={dismiss} app={app} onInstall={() => void bridge?.installUpdate?.()} onRetry={retry} retrying={retrying} retryError={retryError} onRetryApp={() => void bridge?.checkForUpdates?.()} />;
 }

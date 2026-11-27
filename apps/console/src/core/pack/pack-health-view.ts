@@ -38,6 +38,7 @@ export interface HealthLink {
 /** What the console offers besides restart (src/server/pack/pack-health.ts HealthActions; absent from older servers). */
 export interface HealthActionsView {
 	systemd: boolean;
+	macUpdate?: boolean;
 	rollback: { service: string; from: string | null; to: string | null; last?: { result: string; exitStatus: number | null; at: string | null } | null }[];
 }
 
@@ -153,6 +154,19 @@ export interface InventoryRowView {
 	ageS: number;
 	/** The channel's newer version when this row is behind. */
 	latest: string | null;
+}
+
+/**
+ * Components of one machine that the hub inventory says are behind (a row with `latest`): wolfd and workerd, one per component (the
+ * first row names the version), skipping the components `have` already lists (from /api/updates or the update units).
+ */
+export function behindFromInventory(rows: { kind: string; version?: string; latest?: string | null }[], have: readonly string[] = []): { component: "wolfd" | "workerd"; from: string | null; to: string }[] {
+	const out: { component: "wolfd" | "workerd"; from: string | null; to: string }[] = [];
+	for (const r of rows) {
+		if ((r.kind !== "wolfd" && r.kind !== "workerd") || !r.latest || have.includes(r.kind) || out.some((o) => o.component === r.kind)) continue;
+		out.push({ component: r.kind, from: r.version ?? null, to: r.latest });
+	}
+	return out;
 }
 
 /** What the console knows about its own machine: its channel, the newer versions its update units name, and the console's own version. */
@@ -438,7 +452,7 @@ type UpdateLast = { result: string; exitStatus: number | null; at: string | null
 
 /** Update is offered only under systemd and when at least one component has a newer stable release. */
 export function updateOffered(actions: HealthActionsView | undefined, units: UpdateUnitView[]): boolean {
-	return !!actions?.systemd && units.length > 0;
+	return (!!actions?.systemd || !!actions?.macUpdate) && units.length > 0;
 }
 
 /** The confirm text: `current → target` per unit, and the warning that hubd and the console restart. */

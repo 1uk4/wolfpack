@@ -30,10 +30,12 @@
  * The bearer must be the header: the cookie mirror (proxy.ts) never applies to a POST, so a cross-site form cannot restart anything.
  */
 import { bearerOf } from "../../core/ui/hub-auth.ts";
+import { hostLabel } from "../../core/pack/pack-hosts.ts";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type PackHealth, type Restarter } from "./pack-health.ts";
 import { createReleaseReader, createRollbacker, createUpdater, type ReleaseReader, type Rollbacker, type UpdateUnit, type Updater } from "./pack-actions.ts";
 import { DEFAULT_MAIN_MANIFEST_URL, consoleVersion, createUpdatesHandler, worstHostState } from "./updates-api.ts";
 import type { UpdateState } from "@wolfpack/protocol/update-state";
+import { createMacUpdater, type MacUpdater } from "./mac-updater.ts";
 import { readInventory, type InventoryRead } from "./inventory.ts";
 import { DEFAULT_MANIFEST_URL, createManifestFetcher, type InventoryEntry } from "@wolfpack/protocol";
 import { createLagMonitor, machineName, readMachineChannel } from "@wolfpack/protocol/health-lag";
@@ -69,6 +71,12 @@ export interface HealthApiDeps {
 	restarter: Restarter;
 	rollbacker: Rollbacker;
 	updater: Updater;
+	/** Set on a Mac console: POST /api/health/update starts the launchd updater (mac-updater.ts) instead of a systemd unit. */
+	macUpdater?: MacUpdater;
+	/** This console's machine name (default: machineName()). */
+	machine?: () => string;
+	/** Test seam: the platform that decides the own machine's display name (default process.platform). */
+	platform?: NodeJS.Platform;
 	witness: SessionWitness;
 	/** Live bearer check against the hub, tried first on every restart (see RESTART AUTH). */
 	checkToken: HubTokenCheck;
@@ -156,7 +164,11 @@ export function createHealthApi(d: HealthApiDeps) {
 			} catch {
 				out = { state: "unavailable" };
 			}
-			return Response.json(out, { headers: NO_STORE });
+			// `self`: this console's machine name as the inventory rows spell it, so a client can pick its own machine's rows (the update notice).
+			if (out.state !== "ok") return Response.json(out, { headers: NO_STORE });
+			const self = (d.machine ?? machineName)();
+			// `selfLabel`: the name the machine card gives this machine ("Mac" on a Mac), so the notice names it the same way.
+			return Response.json({ ...out, self, selfLabel: hostLabel(self, { isThisConsole: true, platform: d.platform ?? process.platform }) }, { headers: NO_STORE });
 		},
 
 		stream(signal?: AbortSignal): Response {
@@ -222,6 +234,11 @@ export function createHealthApi(d: HealthApiDeps) {
 			const gate = await gateOf(req, "update");
 			if (gate instanceof Response) return gate;
 			const body = await req.json().then((b: { component?: unknown; clearFailed?: unknown } | null) => b, () => null); // no or non-JSON body = Update all
+			if (d.macUpdater) {
+				const m = await d.macUpdater.start(gate);
+				if (m.ok) return Response.json(m, { status: 202, headers: NO_STORE });
+				return failure(m, { unsupported: 501, not_installed: 409, failed: 502 }[m.code]);
+			}
 			const component = body?.component;
 			const out = await d.updater.update(gate, component, { clearFailed: body?.clearFailed === true });
 			if (out.ok) return Response.json(out, { status: 202, headers: NO_STORE });
@@ -300,7 +317,7 @@ export function packHealth(env: Record<string, string | undefined> = process.env
 			self,
 			targets: healthTargets(env),
 			...(interval >= 1000 ? { intervalMs: interval } : {}),
-			actions: () => ({ systemd: SYSTEMD, rollback: SYSTEMD ? releases() : [] }),
+			actions: () => ({ systemd: SYSTEMD, ...(process.platform === "darwin" ? { macUpdate: true as const } : {}), rollback: SYSTEMD ? releases() : [] }),
 			...(env.WOLFPACK_HEALTH_HOST_LABELS ? { hostLabels: env.WOLFPACK_HEALTH_HOST_LABELS } : {}),
 		});
 		h[MONITOR].start();
@@ -318,6 +335,7 @@ export function healthApi(env: Record<string, string | undefined> = process.env)
 			health,
 			restarter: createRestarter({ health, systemd: SYSTEMD }),
 			rollbacker: createRollbacker({ releases: releaseReader() }),
+			...(process.platform === "darwin" ? { macUpdater: createMacUpdater() } : {}),
 			updater: createUpdater({ available: availableUpdates(updates), hostState: hostUpdateState(updates) }),
 			witness: sessionWitness(env),
 			checkToken: hubTokenCheck(hubTarget(env).wolvesUrl),

@@ -24,6 +24,7 @@ import {
 	sendMachineCommand,
 	versionText,
 	updateFinished,
+	behindFromInventory,
 	updateOffered,
 	updateOutcome,
 	updateQuestion,
@@ -335,6 +336,8 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 	const recentlyDone = done !== null && now - done < 120_000;
 	const hostStage = state?.updateState && stageLabel(state.updateState) && (state.updateState.state === "installing" || state.updateState.state === "failed") ? state.updateState : null;
 	const showBanner = updateOffered(actions, units) || ui.phase !== "idle" || running || recentlyDone || hostStage !== null;
+	// Wolves (and a workerd) the hub inventory shows behind on this machine and the update units do not name: listed, not startable here.
+	const behindElsewhere = behindFromInventory(card.inventory, units.map((u) => u.component));
 	const busy = ui.phase === "sending";
 	const waitS = ui.phase === "wait" ? Math.max(0, Math.ceil((ui.until - Date.now()) / 1000)) : 0;
 	const update = (
@@ -381,6 +384,11 @@ export function ConsoleMachineCard({ card, canAct, actions, api, ...rest }: { ca
 					)}
 					{ui.phase === "error" && <p data-testid="machine-update-error" className="mt-1 text-red-600 dark:text-red-400">{ui.message}</p>}
 				</div>
+			)}
+			{behindElsewhere.length > 0 && (
+				<p data-testid="machine-wolves-behind" className="mt-2 text-muted-foreground">
+					Behind: {behindElsewhere.map((b) => `${b.component} ${b.from ? `v${b.from}` : "?"} → v${b.to}`).join(", ")}
+				</p>
 			)}
 			<div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
 				<label className="flex items-center gap-2 max-md:min-h-11">

@@ -40,6 +40,7 @@ export function macPaths(env = process.env, home = os.homedir()) {
 		channelFile: path.join(pack, "release-channel.json"),
 		statusFile: path.join(pack, "auto-update/status.json"),
 		lockFile: path.join(pack, "auto-update/run.lock"),
+		runNowFile: path.join(pack, "auto-update/run-now"),
 		disabledFile: path.join(pack, "auto-update.disabled"),
 		log: path.join(wolves, "logs/auto-update.log"),
 		plist: path.join(env.STACK_PLIST_DIR || path.join(home, "Library/LaunchAgents"), `${LABEL}.plist`),
@@ -51,6 +52,26 @@ export function macPaths(env = process.env, home = os.homedir()) {
 export function macChannel(p) {
 	const s = readSubscription(p.channelFile); // null: missing or corrupt (logged) = no file
 	return s ? { channel: s.channel, mode: s.mode } : { channel: "stable", mode: undefined };
+}
+
+/** A request older than this was not meant for this run (an old script, a kickstart that never ran): dropped, never acted on. */
+export const RUN_NOW_MAX_AGE_MS = 2 * 60_000;
+
+/**
+ * The console's Update now (apps/console mac-updater.ts) writes run-now (a ms timestamp), then `launchctl kickstart`s this agent,
+ * which cannot take `--now`. Called only after the lock is held (runAutoUpdate resolves a function `manual` then). → true when a
+ * fresh request was there and is consumed; a stale one (content timestamp, else mtime) is deleted and counts as no request.
+ */
+export function takeRunNow(p, nowMs = Date.now()) {
+	let at;
+	try {
+		const t = Number(fs.readFileSync(p.runNowFile, "utf8").trim());
+		at = Number.isFinite(t) && t > 0 ? t : fs.statSync(p.runNowFile).mtimeMs;
+	} catch {
+		return false;
+	}
+	fs.rmSync(p.runNowFile, { force: true });
+	return nowMs - at <= RUN_NOW_MAX_AGE_MS;
 }
 
 const firstLine = (f) => {
@@ -172,6 +193,13 @@ export function buildPlist(p, nodePath, home = os.homedir(), binDirs = []) {
 `;
 }
 
+/** Is the launchd agent loaded? true | false, or null when the user id is unknown (no `gui/undefined` question) or launchctl cannot run. */
+export function macTimerEnabled(uid, spawn = spawnSync) {
+	if (uid === undefined) return null;
+	const r = spawn("launchctl", ["print", `gui/${uid}/${LABEL}`], { stdio: "ignore" });
+	return r.error ? null : r.status === 0;
+}
+
 export async function main(argv, env = process.env) {
 	const [cmd, ...flags] = argv;
 	const p = macPaths(env);
@@ -212,9 +240,11 @@ export async function main(argv, env = process.env) {
 		lockFile: p.lockFile,
 		disabledFile: p.disabledFile,
 		enabled: env.WOLFPACK_AUTO_UPDATE === "1",
+		// The launchd agent is the timer: not loaded means no scheduled checks.
+		timerEnabled: () => macTimerEnabled(process.getuid?.(), spawnSync),
 		mode: sub.mode,
 		channel: sub.channel,
-		manual: flags.includes("--now"),
+		manual: flags.includes("--now") ? true : () => takeRunNow(p),
 		clearFailed: flags.includes("--clear-failed"),
 		deps: macDeps(p, env, sub.channel),
 		log: (m) => console.log(`${new Date().toISOString()} ${m}`),

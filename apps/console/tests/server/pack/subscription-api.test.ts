@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -30,6 +30,21 @@ describe("/api/health/subscription", () => {
 			writeFileSync(file, "{broken");
 			assert.deepEqual(await (await h.get(req("GET"))).json(), { exists: false, channel: "stable", mode: "button" });
 		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("saves the file world-readable (0644), even under a strict umask and over an old 0600 file, so workerd (another user) can read the channel", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "subscription-"));
+		const file = join(dir, "subscription.json");
+		writeFileSync(file, "{}", { mode: 0o600 });
+		const old = process.umask(0o077);
+		try {
+			const h = createSubscriptionHandler({ file, env: {}, gate: async () => "device abc" });
+			assert.equal((await h.put(req("PUT", { channel: "main", mode: "auto" }))).status, 200);
+			assert.equal(statSync(file).mode & 0o777, 0o644);
+		} finally {
+			process.umask(old);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

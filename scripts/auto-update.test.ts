@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { acquireLock, createReleaseVerifier, exitCodeFor, holdUnits, readStatus, readSubscription, runAutoUpdate, sfoDeps, versionAtLeast } from "./auto-update.mjs";
+import { acquireLock, createReleaseVerifier, exitCodeFor, holdUnits, readStatus, readSubscription, runAutoUpdate, sfoDeps, systemdTimerEnabled, versionAtLeast } from "./auto-update.mjs";
 
 type Entry = { version: string; tag: string };
 type Unit = { id: string; component: string };
@@ -106,6 +106,18 @@ describe("runAutoUpdate", () => {
 		expect((await h.run({ enabled: false })).result).toBe("disabled");
 		expect(h.calls).toEqual([]);
 		expect((await h.run({ enabled: false, manual: true })).result).toBe("updated");
+	});
+
+	it("a manual run with the timer off writes enabled:false and a plain reason (not a kill switch), and still installs; a timer that is on stays enabled:true", async () => {
+		const h = host({ running: { hubd: "0.1.13" }, versions: { hubd: "0.1.14" } });
+		expect((await h.run({ mode: "auto", manual: true, timerEnabled: () => false })).result).toBe("updated");
+		const off = h.status() as { enabled: boolean; disabledReason?: string };
+		expect(off.enabled).toBe(false);
+		expect(off.disabledReason).toBe("timer off");
+		const on = host({ running: { hubd: "0.1.13" }, versions: { hubd: "0.1.14" } });
+		expect((await on.run({ mode: "auto", manual: true, timerEnabled: () => true })).result).toBe("updated");
+		expect(on.status()).toMatchObject({ enabled: true });
+		expect((on.status() as { disabledReason?: string }).disabledReason).toBeUndefined();
 	});
 
 	it("gates on the mode: off is a kill switch even for --now, button installs only on --now, auto installs on the timer too", async () => {
@@ -418,5 +430,17 @@ describe("exitCodeFor", () => {
 		expect(exitCodeFor("disabled", false)).toBe(0);
 		expect(exitCodeFor("locked", false)).toBe(0);
 		expect(exitCodeFor("failed", false)).toBe(1);
+	});
+});
+
+describe("timer state parsing", () => {
+	it("systemd: only a recognised is-enabled answer is a state; an empty failure (no D-Bus, sandbox) is unknown", () => {
+		expect(systemdTimerEnabled({ status: 0, stdout: "enabled\n" })).toBe(true);
+		expect(systemdTimerEnabled({ status: 0, stdout: "enabled-runtime\n" })).toBe(true);
+		expect(systemdTimerEnabled({ status: 1, stdout: "disabled\n" })).toBe(false);
+		expect(systemdTimerEnabled({ status: 1, stdout: "masked\n" })).toBe(false);
+		expect(systemdTimerEnabled({ status: 1, stdout: "" })).toBeNull();
+		expect(systemdTimerEnabled({ status: null, stdout: "" })).toBeNull();
+		expect(systemdTimerEnabled({ error: new Error("ENOENT"), status: null, stdout: "" })).toBeNull();
 	});
 });

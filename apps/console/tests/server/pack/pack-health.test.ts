@@ -7,6 +7,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, describe, it } from "node:test";
 import { createHealthApi, hubTokenCheck } from "../../../src/server/pack/health-api.ts";
+import type { MacUpdateOutcome } from "../../../src/server/pack/mac-updater.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -722,6 +723,20 @@ const UPDATE_UNIT = "wolfpack-auto-update-now.service";
 const PENDING: UpdateUnit[] = [{ component: "hubd", from: "0.1.14", to: "0.1.15" }, { component: "console", from: "0.1.18", to: "0.1.19" }];
 
 describe("pack health: POST /api/health/update", () => {
+	it("on a Mac console starts the Mac updater instead of systemctl: 202 started, and its refusal comes back with the plain message (501 off a Mac, 409 not installed)", async () => {
+		const s = await setup();
+		const outcomes: MacUpdateOutcome[] = [{ ok: true, service: "update", at: "2026-11-09T10:00:00.000Z" }, { ok: false, service: "update", code: "not_installed", message: "The Mac updater is not turned on." }, { ok: false, service: "update", code: "unsupported", message: "no mac" }];
+		const api = createHealthApi({ health: s.health, restarter: createRestarter({ health: s.health }), rollbacker: createRollbacker({ releases: s.releases }), updater: s.updater, macUpdater: { start: async () => outcomes.shift()! }, witness: s.witness, checkToken: hubTokenCheck(undefined) });
+		s.witness.verified("tok");
+		assert.equal((await api.update(updateReq())).status, 401);
+		assert.equal((await api.update(updateReq("tok"))).status, 202);
+		const no = await api.update(updateReq("tok"));
+		assert.equal(no.status, 409);
+		assert.equal(((await no.json()) as { error: string }).error, "The Mac updater is not turned on.");
+		assert.equal((await api.update(updateReq("tok"))).status, 501);
+		assert.deepEqual(s.runs, []);
+	});
+
 	it("needs a verified device; starts exactly the manual auto-update unit (argv, no shell) naming the units that will update", async () => {
 		const s = await setup();
 		await s.tick(T0);

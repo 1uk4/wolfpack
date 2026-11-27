@@ -162,6 +162,8 @@ export interface LinkSnapshot {
 export interface HealthActions {
 	/** The console runs under systemd (journal logs, rollback units). False on the Mac: the modal shows copyable stack commands instead. */
 	systemd: boolean;
+	/** The console runs on a Mac with the launchd updater: Update now starts it (mac-updater.ts). */
+	macUpdate?: true;
 	/** Services with a kept previous release: what a rollback goes back to. */
 	rollback: { service: string; from: string | null; to: string | null; last?: { result: string; exitStatus: number | null; at: string | null } | null }[];
 }

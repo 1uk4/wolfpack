@@ -36,9 +36,9 @@ describe("readInventory (the viewer's own sign-in)", () => {
 describe("GET /api/health/inventory", () => {
 	it("reads with the request's bearer and answers the state, never an error status", async () => {
 		const seen: (string | undefined)[] = [];
-		const api = createHealthApi({ readInventory: async (t: string | undefined) => (seen.push(t), t === "good" ? { state: "ok", rows: [], hubMachine: "sfo-01" } : t ? { state: "unavailable" } : { state: "signed-out" }) } as unknown as Parameters<typeof createHealthApi>[0]);
+		const api = createHealthApi({ machine: () => "lukas-macbook-pro", platform: "darwin", readInventory: async (t: string | undefined) => (seen.push(t), t === "good" ? { state: "ok", rows: [], hubMachine: "sfo-01" } : t ? { state: "unavailable" } : { state: "signed-out" }) } as unknown as Parameters<typeof createHealthApi>[0]);
 		const get = async (auth?: string) => (await api.inventory(new Request("http://c/api/health/inventory", { headers: auth ? { authorization: auth } : {} }))).json();
-		assert.deepEqual(await get("Bearer good"), { state: "ok", rows: [], hubMachine: "sfo-01" });
+		assert.deepEqual(await get("Bearer good"), { state: "ok", rows: [], hubMachine: "sfo-01", self: "lukas-macbook-pro", selfLabel: "Mac" });
 		assert.deepEqual(await get("Bearer other"), { state: "unavailable" });
 		assert.deepEqual(await get(), { state: "signed-out" });
 		assert.deepEqual(seen, ["good", "other", undefined]);

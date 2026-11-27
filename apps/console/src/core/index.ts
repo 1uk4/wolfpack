@@ -78,6 +78,7 @@ export * from "./thread/reply-notify.ts";
 
 // chat-bar.ts: the floating chat bar's attached-thread model + switcher list. Pure.
 export * from "./thread/chat-bar.ts";
+export * from "./thread/den-strip.ts";
 export * from "./thread/page-pending.ts";
 // bar-icon.ts: the collapsed chat icon's position, clamping, edge snapping and drag threshold. Pure.
 export * from "./thread/bar-icon.ts";

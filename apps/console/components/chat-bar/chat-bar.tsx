@@ -16,6 +16,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { createPortal } from "react-dom";
 import { useDockSlot } from "@/components/chat-bar/dock-slot";
 import { useBarDrop } from "@/components/chat-bar/bar-drop";
+import { DenStrip } from "@/components/chat-bar/den-strip";
 import { getPageNoteAppend } from "@/components/composer/page-note-append";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
@@ -717,6 +718,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				onKeyDown={trapTab}
 			>
 				{!sheet && swapPill}
+				{!sheet && !minimized && !vizOn && <DenStrip phone />}
 				{!sheet && !minimized && sheetCard && <div data-testid="bar-ask-inline" className="flex min-h-0 shrink-0 flex-col px-2 pb-1 pt-2">{sheetCard}</div>}
 				{sheet && !minimized && (
 					<div
@@ -818,6 +820,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	return (
 		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-dropping={dropping ? "true" : undefined} {...dropProps} data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={docked ? undefined : { left: geo.left, width: geo.width }}>
 			{swapPill}
+			{!vizOn && <DenStrip />}
 			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>
 				{sheetCard}

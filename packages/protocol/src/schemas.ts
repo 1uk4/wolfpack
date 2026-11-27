@@ -57,6 +57,8 @@ export const ErrorCodeSchema = z.enum([
   "not_ready",
   /** Graduation: the preview token is unknown, used, expired or for another item. Preview again. */
   "preview_stale",
+  /** Graduation: the feature's thread still has a turn or sub-agents running. Wait until it is idle. */
+  "thread_running",
   /** Hub claim: the item (or its feature) is held by another wolf; `details.holder` names it. */
   "conflict",
   /** A work item already has a pending approval request; `details.requestId` names it. */
@@ -105,6 +107,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   thread_graduated: 409,
   not_ready: 409,
   preview_stale: 409,
+  thread_running: 409,
   conflict: 409,
   request_pending: 409,
   request_forbidden: 403,

@@ -123,6 +123,18 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 		overlayRef.current?.dispatch({ type: "roster", wolves: names.split("\u0000"), now: Date.now() });
 	}, [renderer, live.enabled, names, connected]);
 
+	// The wolves' own colours (the ones the sidebar uses) for their badges.
+	const colorKey = (attachedApi?.wolves ?? []).map((w) => `${w.name}\u0001${w.color ?? ""}`).join("\u0000");
+	useEffect(() => {
+		if (!renderer) return;
+		const map = new Map<string, string>();
+		for (const part of colorKey ? colorKey.split("\u0000") : []) {
+			const [name, color] = part.split("\u0001");
+			if (name && color) map.set(name, color);
+		}
+		overlayRef.current?.setWolfColors(map);
+	}, [renderer, colorKey]);
+
 	// Open feature threads from the console's own thread roster: idle ones stay on the map (dimmed) until archived. Re-sent only when that list changes (no polling of its own).
 	const rosterThreads = attachedApi?.threads;
 	const featureKey = Object.entries(rosterThreads ?? {})

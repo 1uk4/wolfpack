@@ -54,7 +54,7 @@ async function setup() {
 		colors: { node: "#fff", edge: "#aaa", label: "#bbb", hoverText: "#ccc" }, fontFamily: "x",
 	});
 	let overlayDraws = 0;
-	r.setOverlay({ step() {}, needsFrames: () => false, minFrameMs: 0, draw() { overlayDraws++; }, hitTest: () => null, setHighlight() {} });
+	r.setOverlay({ step() {}, needsFrames: () => false, minFrameMs: 0, draw() { overlayDraws++; }, hitTest: () => null, setHighlight() {}, fillObstacles: () => ({ n: 0, sig: 0 }) });
 	await pump(); // the sim settles and the base is drawn
 	return { r, overlayDraws: () => overlayDraws };
 }

@@ -86,6 +86,7 @@ export function resolvePositions(
 	known: ReadonlyMap<string, Position>,
 	opts: {
 		clusters?: ReadonlyArray<{ members: ReadonlyArray<string> }>;
+		groups?: ReadonlyArray<{ members: ReadonlyArray<string> }>;
 		depSprings?: { edges: ReadonlyArray<{ from: string; to: string }> };
 		linkLengths?: ReadonlyMap<string, number>;
 	} = {},
@@ -98,7 +99,7 @@ export function resolvePositions(
 		else missing.push(n.id);
 	}
 	if (missing.length === 0) return { positions, added: [] };
-	const laid = incrementalLayout(nodes, edges, new Map(positions), { clusters: opts.clusters, depSprings: opts.depSprings, linkLengths: opts.linkLengths });
+	const laid = incrementalLayout(nodes, edges, new Map(positions), { clusters: opts.clusters, groups: opts.groups, depSprings: opts.depSprings, linkLengths: opts.linkLengths });
 	for (const id of missing) positions.set(id, laid.get(id) ?? { x: 0, y: 0 });
 	return { positions, added: missing };
 }

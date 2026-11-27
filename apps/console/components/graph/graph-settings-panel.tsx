@@ -14,6 +14,7 @@ import { ChevronRight as ChevronRightIcon, SettingsIcon } from "lucide-react";
 import { usePopoverDismiss } from "@/components/shell/popover-dismiss";
 import { Hint } from "@/components/ui/hint";
 import { SimpleControls } from "./graph-simple-controls.tsx";
+import { GroupsEditor } from "./groups-editor.tsx";
 import {
 	CHARGE_RANGE,
 	CLUSTER_LABEL_SIZE_LADDER,
@@ -40,6 +41,7 @@ import {
 	toLadderPosition,
 	toOffSliderPosition,
 	toSliderPosition,
+	type GraphGroups,
 	type GraphRenderSettings,
 	type GroupBy,
 	type KbGraphDomain,
@@ -104,11 +106,16 @@ export function GraphSettingsControl({
 	settings,
 	changeSettings,
 	domains,
+	groups,
+	changeGroups,
 }: {
 	settings: GraphRenderSettings;
 	changeSettings: (update: (cur: RenderSettings) => RenderSettings) => void;
 	/** The domains the librarian reports (the filter's options). */
 	domains: readonly KbGraphDomain[];
+	/** Visual domain groups and how to change them (work-wolfpack-FnzgC6g); absent = no Groups section. */
+	groups?: GraphGroups;
+	changeGroups?: (update: (cur: GraphGroups) => GraphGroups) => void;
 }) {
 	const [open, setOpen] = useState(false);
 	// Click anywhere outside (or Escape) closes the panel (2026-09-17) —
@@ -172,6 +179,7 @@ export function GraphSettingsControl({
 					<span aria-hidden className="mx-auto mb-2 h-1 w-9 shrink-0 rounded-full bg-border md:hidden" />
 					<div className="flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain pr-1">
 						<SimpleControls settings={settings} changeSettings={changeSettings} domains={domains}>
+						{groups && changeGroups && <GroupsEditor groups={groups} changeGroups={changeGroups} domains={domains} />}
 						<details className="group rounded-[10px] border border-border/60 bg-background/40 px-2">
 							<summary className="flex min-h-11 cursor-pointer list-none items-center gap-1.5 text-[11px] font-medium text-muted-foreground md:min-h-7 [&::-webkit-details-marker]:hidden">
 								<ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90 motion-reduce:transition-none" />

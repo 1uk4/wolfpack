@@ -11,6 +11,9 @@ import { createGraduateClient, type GraduateClient } from "../kb/graduate-client
 import { openGraduationLink, useOpenView } from "../viewer/viewer-context";
 import { graduateStore, useGraduateJob } from "../kb/graduate-store";
 import { notifyGraduated } from "../kb/graduation-signal";
+import { HourglassIcon } from "lucide-react";
+import { Hint } from "@/components/ui/hint";
+import { THREAD_RUNNING_LABEL, useThreadRunning } from "./thread-running";
 import { getPendingPreview, graduateDirect, type GraduateVia } from "./graduate-direct-client";
 import { ZC } from "@/lib/z-layers";
 
@@ -19,6 +22,8 @@ const NO_ASSIGNEE = "This item has no assignee wolf to prepare the graduation.";
 
 export function GraduateButton({ itemId, assignee, via, title, client, onDone, testid = "graduate-button" }: { testid?: string; itemId: string; assignee?: string; via: GraduateVia; title?: string; client?: GraduateClient; onDone?: () => void }) {
 	const job = useGraduateJob(itemId);
+	// The feature thread has a turn or a running sub-agent: Graduate waits (wolfd refuses too); live, no reload.
+	const threadRunning = useThreadRunning(assignee, itemId);
 	const openView = useOpenView();
 	const [real] = useState(() => client ?? createGraduateClient());
 	const c = client ?? real;
@@ -41,6 +46,7 @@ export function GraduateButton({ itemId, assignee, via, title, client, onDone, t
 
 	const target = { id: itemId, title: title ?? itemId, ...(assignee ? { assignee } : {}) };
 	const start = async () => {
+		if (threadRunning) return;
 		setError(null);
 		if (!assignee) return void setError(NO_ASSIGNEE);
 		wanted.current = true;
@@ -51,7 +57,7 @@ export function GraduateButton({ itemId, assignee, via, title, client, onDone, t
 		if (!graduateStore.get(itemId)) await graduateStore.startPreview(c, target, assignee);
 	};
 	const confirm = async () => {
-		if (job?.phase !== "ready" || inFlight.current) return;
+		if (job?.phase !== "ready" || inFlight.current || threadRunning) return;
 		inFlight.current = true;
 		setSending(true);
 		setError(null);
@@ -86,17 +92,35 @@ export function GraduateButton({ itemId, assignee, via, title, client, onDone, t
 	const shown = error ?? (job?.phase === "error" ? job.message : null);
 	return (
 		<span className="relative inline-flex shrink-0 items-center gap-2" onClick={(e) => e.stopPropagation()}>
-			<button
-				type="button"
-				data-testid={testid}
-				data-phase={busy ? "busy" : (job?.phase ?? "idle")}
-				disabled={busy || !assignee}
-				title={assignee ? undefined : NO_ASSIGNEE}
-				onClick={() => (job?.phase === "ready" ? setOpen((o) => !o) : void start())}
-				className="rounded-md border border-emerald-400/60 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300 transition-colors hover:bg-emerald-500/25 disabled:opacity-60"
-			>
-				{label}
-			</button>
+			{threadRunning ? (
+				<Hint label={THREAD_RUNNING_LABEL}>
+					<span className="inline-flex">
+						<button
+							type="button"
+							data-testid={testid}
+							data-phase="thread-running"
+							disabled
+							aria-label={THREAD_RUNNING_LABEL}
+							className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-2 py-0.5 text-[11px] font-medium text-muted-foreground max-md:min-h-11 disabled:cursor-not-allowed"
+						>
+							<HourglassIcon className="size-3" aria-hidden />
+							{label}
+						</button>
+					</span>
+				</Hint>
+			) : (
+				<button
+					type="button"
+					data-testid={testid}
+					data-phase={busy ? "busy" : (job?.phase ?? "idle")}
+					disabled={busy || !assignee}
+					title={assignee ? undefined : NO_ASSIGNEE}
+					onClick={() => (job?.phase === "ready" ? setOpen((o) => !o) : void start())}
+					className="rounded-md border border-emerald-400/60 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300 transition-colors hover:bg-emerald-500/25 max-md:min-h-11 disabled:opacity-60"
+				>
+					{label}
+				</button>
+			)}
 			{shown && !open && (
 				<span role="alert" data-testid="graduate-error" className="text-[11px] text-destructive">
 					{shown}
@@ -118,7 +142,7 @@ export function GraduateButton({ itemId, assignee, via, title, client, onDone, t
 						<button type="button" data-testid="graduate-cancel" onClick={() => (setOpen(false), setError(null))} className="rounded-md border border-border px-2 py-0.5">
 							Cancel
 						</button>
-						<button type="button" data-testid="graduate-confirm" disabled={sending || !!job.preview.blocked} onClick={() => void confirm()} className="rounded-md border border-emerald-400/60 bg-emerald-500/20 px-2 py-0.5 font-medium text-emerald-200 disabled:opacity-60">
+						<button type="button" data-testid="graduate-confirm" disabled={sending || threadRunning || !!job.preview.blocked} onClick={() => void confirm()} className="rounded-md border border-emerald-400/60 bg-emerald-500/20 px-2 py-0.5 font-medium text-emerald-200 disabled:opacity-60">
 							{sending ? "Graduating…" : "Confirm"}
 						</button>
 					</div>

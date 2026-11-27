@@ -19,16 +19,22 @@ import {
 	type LiveAction,
 	type LiveSubagent,
 	type LiveThread,
+	type LiveTrail,
 	type LiveWolf,
 	type LiveOptions,
 	type LiveState,
 	type LiveTarget,
 } from "@/src/core";
-import { wolfSpringAnchor, ownerThreadKey, targetNodeId, threadKey, threadSlugOf, youLinkTarget } from "@/src/core";
-import { separateSubs, stepSub, SUB_PHYSICS, tetherStrength, type SubBody } from "@/src/core";
+import { ownerThreadKey, targetNodeId, threadKey, threadSlugOf, youLinkTarget } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
-import { AMBER, EFFECTS, rgba } from "./live-effects";
-import { floatOffset, nameHash, roamOffset } from "./live-float";
+import { AMBER, EFFECTS, rgba, safeArc, safeZoom } from "./live-effects";
+import { floatOffset, nameHash } from "./live-float";
+import { LIVE_TUNING } from "./live-tuning";
+import { badgeLook, badgeRadiusPx, badgeRing, isLightHex, parkingSpot, stateRingRadiusPx, subOrbitRadiusPx, subRadiusPx, wolfFallbackHex } from "./live-badge";
+import { LABEL_LEVELS, type LabelObstacle } from "@/src/core";
+import { newMotion, restSlot, tetherStrength, wolfEvent, wolfStep, type WolfMotion } from "./live-den";
+import { elasticStep, orbitPhase, pullFor, ringSlots, trailOrigin, type Elastic } from "./live-rings";
+import { newRepeller, repelStep, setRep, type Repeller } from "./live-repel";
 import { redact } from "@/src/core";
 
 export interface Pt { x: number; y: number }
@@ -44,6 +50,8 @@ export interface OverlayHost {
 	nodeLabel?(id: string): string | undefined;
 	/** Tell the base layer which node dots the overlay replaces (hubs on their work nodes). Only called when the set changes. */
 	setReplacedNodes?(ids: ReadonlySet<string>): void;
+	/** The graph's effective label zoom (label-lod effectiveZoom); the badge pills show from the leaf level on. */
+	labelZoom?(): number;
 	colors: { node: string; edge: string; label: string; hoverText: string };
 	fontFamily: string;
 }
@@ -69,31 +77,17 @@ export const WOLF_MIN_PX = 14;
 /** Everything else (dots, hubs, subagents, offsets) is drawn in reference px for the old 26 px wolf and keeps that size: m divides the 1.4x out. */
 const WOLF_SCALE = 1.4;
 const REF_PX = 26;
-/** Subagents are their own bodies: the wolf-head icon at 70% of the wolf's width (clearly bigger than a dot, a little smaller than the wolf). */
-const SUBAGENT_RATIO = 0.7;
-/** The same radius in reference px (the wolf icon is WOLF_SCALE * REF_PX wide at its cap), used by the physics through m. */
-const SUB_R_REF = (WOLF_SCALE * REF_PX * SUBAGENT_RATIO) / 2;
-/** A subagent's rest distance from its hub's centre (reference px): hub ring (~7.5) + its own radius (~12.7) + clear air. The link spring's rest length. */
-const SUB_REST = 40;
-/** A sub-agent's collision radius around its hub is the hub's drawn radius times this (the ring and its glow), and this share of a wolf's max size around a wolf. */
-const HUB_CLEAR = 1.6;
-const WOLF_CLEAR = 0.3;
-/** The slot search per parent stops here (a parent with more live sub-agents than this reuses the last slot). */
-const MAX_SUB_SLOTS = 64;
-/** Successive subagents of one parent sit this far apart in angle (the golden angle: any count spreads evenly, never stacks). */
-const SUB_SLOT_ANGLE = 2.399963;
+/** Trails older than this when first seen (a page load replaying history) move nothing. */
+const EVENT_MAX_AGE_MS = 20_000;
 /** Dot radius, orbits and offsets are in reference px (drawn for a 26 px wolf); they keep that proportion at every zoom. */
 const THREAD_DOT_R = 3.2;
 const SAT_ORBIT = 25;
-const HOME_ORBIT = 36;
-/** A subagent lingers this far from the node it went to, and idles this far outside its hub (or wolf). */
-const SUB_TARGET_OFFSET = 14;
+/** A feature group with no node of its own sits this far (ref px) from its domain node. */
+const HUB_FALLBACK_OFFSET = 34;
+/** Idle float amplitude of a wolf in reference px (through scaleFor(k).m). */
+const FLOAT_WOLF_PX = 3.5;
 /** The feature hub's radius (reference px), its distance from its node, and from the domain node when it has no node of its own. */
 const HUB_R = 7.5;
-/** A hub on its work node is drawn at least this much bigger than the node's own dot. */
-const HUB_NODE_GROW = 1.4;
-const HUB_FALLBACK_OFFSET = 34;
-const FLOAT_HUB_PX = 1.6;
 /** The launch burst when a subagent leaves its hub (ms). */
 const LAUNCH_MS = 900;
 /** The you badge (screen px): radius, gap above the composer's top edge, and its margin off the canvas bottom when there is no composer. */
@@ -105,8 +99,6 @@ const PULSE_R = 8;
 const HL_R = 9;
 const HL_PAD = 4;
 /** Idle float amplitudes in reference px (through scaleFor(k).m): wolves about 3.5, subagent icons about 2. */
-const FLOAT_WOLF_PX = 3.5;
-const FLOAT_SUB_PX = 2;
 /** Offline wolves drift smaller and slower. */
 const FLOAT_OFFLINE_AMP = 0.4;
 const FLOAT_OFFLINE_SLOW = 1.6;
@@ -116,48 +108,25 @@ const FLOAT_COMPACT_AMP = 0.3;
 const FAST_MS = 16;
 const FAST_MOBILE_MS = 30;
 const SLOW_MS = 100;
-/** Roam: the wolf wanders freely over this fraction of the whole graph's extent (it belongs to no domain). */
-const ROAM_FRAC = 0.3;
-/** Each wolf's anchor sits on a ring of this fraction of the extent radius around the centre, evenly spread by name order from a fixed rotation. */
-const ANCHOR_FRAC = 0.4;
-const RING_ROTATION = -Math.PI / 2;
-/** The anchor eases this far (0..1) toward the centroid of the wolf's recent activity, at this rate (1/s), over the last ACTIVITY_MS. */
-const ACTIVITY_BIAS = 0.35;
-const ANCHOR_EASE = 0.4;
-const ACTIVITY_MS = 3 * 60_000;
-/** Soft separation: wolves closer than this many wolf diameters are pushed apart at this rate (1/s); the offset relaxes home at SEP_RELAX (1/s). */
-const SEP_DIAMETERS = 2.5;
-const SEP_RATE = 2;
-const SEP_RELAX = 0.15;
-/** Roam clock speed: a working wolf roams at 1x, an idle one slower, an offline one nearly still (eased, so a change never jumps). */
-const ROAM_SPEED_WORKING = 1;
-const ROAM_SPEED_IDLE = 0.55;
-const ROAM_SPEED_OFFLINE = 0.08;
-/** A wolf body: the roam position plus the roam clock (ms) and its eased speed. */
+/** A wolf body: its state machine (live-den.ts) gives the position; `rep` (live-repel.ts) holds the repulsion offset on top. */
 interface Body {
 	x: number;
 	y: number;
 	name: string;
-	/** The eased anchor (ring slot biased toward recent activity), the roam offset, the separation offset, and the activity accumulators. */
-	ax: number;
-	ay: number;
-	rx: number;
-	ry: number;
-	sx: number;
-	sy: number;
-	cx: number;
-	cy: number;
-	cn: number;
-	/** Sum and count of its feature hubs (the invisible wolf-to-hub springs). */
-	hx: number;
-	hy: number;
-	hn: number;
+	mot: WolfMotion;
+	rep: Repeller;
+	gid: number;
 	placed: boolean;
-	rt?: number;
-	rs?: number;
+	/** The node the wolf is working at (world): the faint tether is drawn to it while it lingers; its radius (screen px) keeps the badge clear of the dot. */
+	target?: Pt;
+	targetRPx?: number;
 }
-/** A subagent body: spring-damper physics, when it was first seen (browser ms), the target event it last answered, and its tug target's offset angle. */
-interface SubState extends SubBody { born: number; seen: number; lastPull: number; ang: number; pk: string; idx: number }
+/** A feature group's elastic offset from its home (the hub position), its goal and when the goal lapses (wall ms). */
+interface Group extends Elastic { gx: number; gy: number; until: number; rep: Repeller; gid: number }
+/** A trail's actor: followed live, with its last position as the fallback. */
+interface TrailRef { actor: "wolf" | "chat" | "sub" | "pt"; key: string; last: Pt }
+/** A sub-agent: world position (ring slot + elastic offset), its angle on the parent's ring, and the elastic stretch goal. */
+interface SubState { rep: Repeller; x: number; y: number; off: Elastic; gx: number; gy: number; until: number; born: number; ang: number; pk: string; parentKey?: string; a: LiveSubagent }
 const FLOAT_MS = 40;
 const FLOAT_MOBILE_MS = 60;
 
@@ -175,15 +144,38 @@ export function scaleFor(k: number): OverlayScale {
 	const wolfPx = Math.min(WOLF_MAX_PX, Math.max(WOLF_MIN_PX, raw));
 	return { wolfPx, m: wolfPx / (WOLF_SCALE * REF_PX) / k, compact: raw <= WOLF_MIN_PX };
 }
-let branchPath: Path2D | null = null;
-/** lucide git-branch, in its 24 x 24 box. */
-const branchGlyph = (): Path2D => (branchPath ??= new Path2D("M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"));
+let homePath: Path2D | null = null;
+const EMPTY_SUBS: LiveSubagent[] = [];
+/** Empty a bucket map for the next frame, keeping its arrays in `pool` for reuse. */
+function recycleBuckets<T>(map: Map<string, T[]>, pool: unknown[][]): void {
+	for (const l of map.values()) {
+		l.length = 0;
+		pool.push(l);
+	}
+	map.clear();
+}
+/** The bucket for `key`, taken from the pool when it is new. */
+function bucketOf<T>(map: Map<string, T[]>, key: string, pool: unknown[][]): T[] {
+	let l = map.get(key);
+	if (!l) {
+		l = (pool.pop() as T[] | undefined) ?? [];
+		map.set(key, l);
+	}
+	return l;
+}
+
+/** lucide house, in its 24 x 24 box: the den's placeholder icon. */
+const homeGlyph = (): Path2D => (homePath ??= new Path2D("M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"));
+const DIM_FILL = "#8b9099";
 let userPath: Path2D | null = null;
 /** lucide user, in its 24 x 24 box. */
 const userGlyph = (): Path2D => (userPath ??= new Path2D("M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z"));
 /** The you badge (screen px) and its links, as the renderer and tests see them. `x,y` is where a link ends (the target, or the canvas edge when `arrow`). */
 export interface YouLink { kind: "chat"; x: number; y: number; arrow: boolean; angle: number }
 export interface YouGeometry { badge: { x: number; y: number; r: number }; links: YouLink[] }
+let botPath: Path2D | null = null;
+/** lucide bot, in its 24 x 24 box: the sub-agent glyph. */
+const botGlyph = (): Path2D => (botPath ??= new Path2D("M4 10a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM12 8V4H8M2 14h2M20 14h2M15 13v2M9 13v2"));
 let wolfHead: Path2D | null = null;
 const wolfHeadPath = (): Path2D => (wolfHead ??= new Path2D(WOLF_HEAD_PATH));
 
@@ -230,18 +222,21 @@ interface WolfMeta { w: LiveWolf; dom: string | undefined; ang: number }
 export class LiveOverlay {
 	private state: LiveState = emptyLiveState(Date.now());
 	private bodies = new Map<string, Body>();
-	private roamTmp = { dx: 0, dy: 0 };
-	/** Ring angle per wolf, recomputed only when the set of wolf names changes. */
-	private ringAng = new Map<string, number>();
+	/** Resting slot index per wolf (name order) and the count, recomputed only when the set of wolf names changes. */
+	private ringIdx = new Map<string, number>();
+	private ringCount = 1;
 	private ringKey = "";
+	private restTmp = new Map<string, Pt>();
+	private groups = new Map<string, Group>();
+	private nextGid = 0;
+	private repelList: Repeller[] = [];
+	private groupCentre = new Map<string, Pt>();
+	private groupHome = new Map<string, Pt>();
+	private seenTrails = new Set<string>();
 	private workingSet = new Set<string>();
-	private springTmp = { x: 0, y: 0 };
 	/** Subagent bodies by key (spring-damper physics) and the list the frame steps; the items they draw as, by key. */
 	private subBodies = new Map<string, SubState>();
 	private subList: SubState[] = [];
-	/** The parent position and collision radius `anchorOf` found last (scratch, no allocation per frame). */
-	private hubTmp: Pt = { x: 0, y: 0 };
-	private hubR = 0;
 	private subItems = new Map<string, OverlayItem>();
 	/** Feature hubs by thread key and by short work id (the target of a wolf's own link). */
 	private featureItems = new Map<string, OverlayItem>();
@@ -253,10 +248,24 @@ export class LiveOverlay {
 	private bodyList: Body[] = [];
 	/** Per-frame indexes (rebuilt by items()): the wolf and thread items by key. */
 	private wolfItems = new Map<string, OverlayItem>();
+	/** Per-frame scratch, reused (cleared, never reallocated): the buckets of stepSubs() and items(), and items()'s result. */
+	private subGroups = new Map<string, SubState[]>();
+	private subsByThread = new Map<string, LiveSubagent[]>();
+	private threadsByWolf = new Map<string, { t: LiveThread; alpha: number }[]>();
+	private bucketPool: unknown[][] = [];
+	private itemsOut: OverlayItem[] = [];
 	private threadItems = new Map<string, OverlayItem>();
-	private trailFrom = new Map<string, Pt>();
+	private trailRef = new Map<string, TrailRef>();
 	private composer: { x: number; y: number; w: number; h: number } | null = null;
 	private badge: { x: number; y: number; r: number } | null = null;
+	/** Wolf colours as the sidebar shows them (name -> hex); a wolf without one gets a stable fallback. */
+	private wolfColors = new Map<string, string>();
+	/** The overlay thing under the pointer ("kind:key") and the camera zoom of the last step (screen px per world unit). */
+	private hoverKey: string | null = null;
+	private kNow = 1;
+	/** Pill text widths by label (at 11 px), measured once. */
+	private pillW = new Map<string, number>();
+	private pillTheme: { colors: unknown; light: boolean } | null = null;
 	private attached: AttachedRef | null = null;
 	private highlight: OverlayHighlight | null = null;
 	private settings: OverlaySettings = LIVE_DEFAULTS;
@@ -314,6 +323,41 @@ export class LiveOverlay {
 		this.requestFrame();
 	}
 
+	/** The wolves' own colours from the console roster (hex), as the sidebar shows them. */
+	setWolfColors(colors: ReadonlyMap<string, string>): void {
+		let same = colors.size === this.wolfColors.size;
+		if (same) for (const [n, c] of colors) if (this.wolfColors.get(n) !== c) same = false;
+		if (same) return;
+		this.wolfColors = new Map(colors);
+		this.requestFrame();
+	}
+
+	/** The pointer is over this overlay thing (or nothing): its pill shows and the owner link follows. */
+	setHover(key: string | null): void {
+		if (key === this.hoverKey) return;
+		this.hoverKey = key;
+		this.requestFrame();
+	}
+
+	/**
+	 * The wolf badges as screen discs for the label pass (labels under a badge hide). Fills `out` in place and returns how many, plus a
+	 * position signature quantised to 4 px so the label choice is not redone for sub-pixel float.
+	 */
+	fillObstacles(out: LabelObstacle[], tr: { x: number; y: number; k: number }): { n: number; sig: number } {
+		let n = 0;
+		let sig = 0;
+		for (const it of this.cachedItems) {
+			if (it.kind !== "wolf" && it.kind !== "feature") continue;
+			const o = (out[n] ??= { sx: 0, sy: 0, r: 0 });
+			o.sx = it.x * tr.k + tr.x;
+			o.sy = it.y * tr.k + tr.y;
+			o.r = it.r * tr.k + 3;
+			sig = (sig * 31 + Math.round(o.sx / 4) * 7 + Math.round(o.sy / 4) * 13 + n) | 0;
+			n++;
+		}
+		return { n, sig };
+	}
+
 	configure(s: OverlaySettings): void {
 		const was = this.settings.enabled;
 		this.settings = s;
@@ -358,7 +402,12 @@ export class LiveOverlay {
 	start(): void {
 		this.started = true;
 		this.arm();
+		if (!this.onVisible && typeof document !== "undefined" && typeof document.addEventListener === "function") {
+			this.onVisible = () => { if (!document.hidden) this.requestFrame(); }; // motion paused while hidden: wake the loop on return
+			document.addEventListener("visibilitychange", this.onVisible);
+		}
 	}
+	private onVisible: (() => void) | null = null;
 	private started = false;
 	/** The clock runs only while something can expire; with no live data there is no timer at all. */
 	private arm(): void {
@@ -374,6 +423,8 @@ export class LiveOverlay {
 	}
 	stop(): void {
 		this.started = false;
+		if (this.onVisible && typeof document !== "undefined") document.removeEventListener?.("visibilitychange", this.onVisible);
+		this.onVisible = null;
 		if (this.timer) clearInterval(this.timer);
 		this.timer = null;
 	}
@@ -383,6 +434,7 @@ export class LiveOverlay {
 		this.need = "none";
 		if (!this.settings.enabled) return false;
 		if (this.reduced) return false; // reduced motion: a still picture (rings, glows and positions are static)
+		if (typeof document !== "undefined" && document.hidden) return false; // a hidden tab animates nothing; visibilitychange wakes the loop
 		this.need = this.classifyNeed(now);
 		return this.need !== "none";
 	}
@@ -393,11 +445,14 @@ export class LiveOverlay {
 		if (this.highlight || s.pulses.length > 0) return "fast";
 		const wall = Date.now();
 		// Subagents darting to a target, launching from a hub or reeling back are fast motion; the wolves' slow roam is not.
-		for (const b of this.subList) if (Math.abs(b.vx) + Math.abs(b.vy) > 0.4 || (b.tug && now - b.tug.at < 8000) || wall - b.born < LAUNCH_MS) return "fast";
+		for (const b of this.subList) if (Math.abs(b.off.vx) + Math.abs(b.off.vy) > 0.4 || Math.abs(b.off.x) + Math.abs(b.off.y) > 1 || wall - b.born < LAUNCH_MS) return "fast";
+		for (const g of this.groups.values()) if (Math.abs(g.vx) + Math.abs(g.vy) > 0.4 || Math.abs(g.x) + Math.abs(g.y) > 1) return "fast";
+		for (const b of this.bodies.values()) if (b.mot.phase === "working" || b.mot.phase === "returning") return "fast";
+		for (const r of this.repelList) if (Math.abs(r.rvx) + Math.abs(r.rvy) > 0.4) return "fast"; // badges bouncing off each other
 		for (const w in s.wolves) return "float"; // any wolf at all
 		const fade = this.settings.subagentFadeSec;
 		// Trails and fades keep frames coming only while they are still visibly fading.
-		for (const t of s.trails) if (this.trailFrom.has(t.id) && trailAlpha(t, wall, this.settings.trailSec) > 0) return "slow";
+		for (const t of s.trails) if (this.trailRef.has(t.id) && trailAlpha(t, wall, this.settings.trailSec) > 0) return "slow";
 		for (const id in s.subagents) {
 			const a = s.subagents[id]!;
 			if (a.finishedAt !== undefined && subagentAlpha(a, wall, fade) > 0.02) return "slow";
@@ -417,8 +472,9 @@ export class LiveOverlay {
 		const key = names.join("\0");
 		if (key === this.ringKey) return;
 		this.ringKey = key;
-		this.ringAng.clear();
-		names.forEach((n, i) => this.ringAng.set(n, RING_ROTATION + (Math.PI * 2 * i) / names.length));
+		this.ringIdx.clear();
+		this.ringCount = Math.max(1, names.length);
+		names.forEach((n, i) => this.ringIdx.set(n, i));
 	}
 
 	private hashOf(name: string): number {
@@ -446,22 +502,23 @@ export class LiveOverlay {
 		for (const id in s.subagents) if (s.subagents[id]!.finishedAt === undefined) ws.add(s.subagents[id]!.wolf);
 	}
 
-	step(now: number, dtSec: number, host: OverlayHost, k: number): void {
+	step(now: number, dtSec: number, host: OverlayHost, kIn: number): void {
+		const k = safeZoom(kIn);
 		this.syncReplaced(host);
 		if (!this.settings.enabled) return;
+		this.kNow = k;
 		const s = this.state;
 		const { m } = scaleFor(k);
 		const reduced = this.reduced;
 		const bodies = this.bodyList;
 		bodies.length = 0;
 		this.markWorking();
-		const center = host.center();
-		const extent = host.extentRadius?.() ?? 0;
-		const { wolfPx } = scaleFor(k);
+		const wall = Date.now();
+		const den = host.center();
+		const dt = Math.min(Math.max(dtSec, 0), 0.25);
 		this.layoutRing(s.wolves);
-		const ringR = extent > 0 ? extent * ANCHOR_FRAC : HOME_ORBIT * m;
-		let fresh = false;
-		// Pass A: a body per wolf (a new one is placed at its anchor at once, below) and the activity accumulators cleared.
+		const T = LIVE_TUNING;
+		// A body per wolf: the state machine (resting / working / lingering / returning) owns its position (live-den.ts).
 		for (const name in s.wolves) {
 			const w = s.wolves[name]!;
 			let meta = this.wolfMeta.get(w.name);
@@ -470,135 +527,202 @@ export class LiveOverlay {
 				this.wolfMeta.set(w.name, meta);
 			}
 			let b = this.bodies.get(w.name);
+			const rest = restSlot(this.ringIdx.get(w.name) ?? 0, this.ringCount, now / 1000, w.online, den, m, T, reduced);
 			if (!b) {
-				b = { x: 0, y: 0, name: w.name, ax: 0, ay: 0, rx: 0, ry: 0, sx: 0, sy: 0, cx: 0, cy: 0, cn: 0, hx: 0, hy: 0, hn: 0, placed: false };
+				b = { x: rest.x, y: rest.y, name: w.name, mot: newMotion(rest.x, rest.y), rep: newRepeller(), gid: this.nextGid++, placed: false };
 				this.bodies.set(w.name, b);
-				fresh = true;
 			}
-			b.cx = 0;
-			b.cy = 0;
-			b.cn = 0;
-			b.hx = 0;
-			b.hy = 0;
-			b.hn = 0;
 			bodies.push(b);
+			this.restTmp.set(w.name, rest);
 		}
-		// Pass B: the centroid of each wolf's recent activity: its feature hubs and the targets of its trails in the last few minutes.
-		const wall = Date.now();
-		for (const id in s.threads) {
-			const t = s.threads[id]!;
-			const b = t.feature !== undefined ? this.bodies.get(t.wolf) : undefined;
-			if (!b) continue;
-			const p = this.hubPos(t, host, m, this.anchorTmp);
-			b.hx += p.x;
-			b.hy += p.y;
-			b.hn++;
-		}
-		for (const t of s.trails) {
-			const b = wall - t.at < ACTIVITY_MS ? this.bodies.get(t.wolf) : undefined;
-			if (!b) continue;
-			const nid = targetNodeId(t.target, (n) => host.hasNode(n));
-			const p = nid ? host.nodePos(nid) : null;
-			if (!p) continue;
-			b.cx += p.x;
-			b.cy += p.y;
-			b.cn++;
-		}
-		// Pass C: anchor (ring slot eased toward the activity), roam around it, and the separation offset relaxing home.
-		const dt = Math.min(Math.max(dtSec, 0), 0.25);
-		const ease = 1 - Math.exp(-dt * ANCHOR_EASE);
+		// Groups and sub-agents first (they exist before this frame's events pull them), then the events of new trails.
+		this.stepGroups(host, m, dt, reduced, wall);
+		this.ensureSubs(wall, m);
+		this.consumeTrails(host, m, den, wall);
 		for (const b of bodies) {
 			const w = s.wolves[b.name]!;
-			const h = this.hashOf(w.name);
-			const ang = this.ringAng.get(w.name) ?? 0;
-			// The ring slot, then the invisible springs to its feature hubs settle it near their rough centre (no hubs: the slot).
-			const sp = wolfSpringAnchor(center.x + Math.cos(ang) * ringR, center.y + Math.sin(ang) * ringR, b.hx, b.hy, b.hn, this.springTmp);
-			let tx = sp.x;
-			let ty = sp.y;
-			if (b.cn > 0) {
-				tx += (b.cx / b.cn - tx) * ACTIVITY_BIAS;
-				ty += (b.cy / b.cn - ty) * ACTIVITY_BIAS;
-			}
-			if (!b.placed || reduced) {
-				b.ax = tx;
-				b.ay = ty;
-			} else {
-				b.ax += (tx - b.ax) * ease;
-				b.ay += (ty - b.ay) * ease;
-			}
-			const target = !w.online ? ROAM_SPEED_OFFLINE : this.workingSet.has(w.name) ? ROAM_SPEED_WORKING : ROAM_SPEED_IDLE;
-			// The roam clock advances at an eased speed; the offset itself is a pure function of that clock (no drift to accumulate).
-			const rs = (b.rs ?? target) + (target - (b.rs ?? target)) * (1 - Math.exp(-dtSec * 2));
-			const rt = (b.rt ?? (h % 90_000)) + dt * 1000 * rs;
-			const ro = roamOffset(h, rt, extent * ROAM_FRAC, reduced, this.roamTmp);
-			b.rs = rs;
-			b.rt = rt;
-			b.rx = ro.dx;
-			b.ry = ro.dy;
-			if (!reduced && b.placed) {
-				const f = Math.exp(-dt * SEP_RELAX);
-				b.sx *= f;
-				b.sy *= f;
-			}
+			wolfStep(b.mot, wall, dt, { den, rest: this.restTmp.get(b.name)!, needsYou: w.needsYou, working: this.workingSet.has(b.name), reduced, tuning: T });
 		}
-		// Pass D: soft separation. A first appearance and reduced motion settle it at once (static); otherwise a light push per frame.
-		const settle = fresh || reduced;
-		const minD = SEP_DIAMETERS * (wolfPx / k);
-		const rate = settle ? 1 : 1 - Math.exp(-dt * SEP_RATE);
-		for (let pass = settle ? 12 : 1; pass > 0; pass--) {
-			let moved = false;
-			for (let i = 0; i < bodies.length; i++) {
-				const a = bodies[i]!;
-				for (let j = i + 1; j < bodies.length; j++) {
-					const c = bodies[j]!;
-					let dx = a.ax + a.rx + a.sx - (c.ax + c.rx + c.sx);
-					let dy = a.ay + a.ry + a.sy - (c.ay + c.ry + c.sy);
-					let d = Math.hypot(dx, dy);
-					if (d >= minD) continue;
-					if (d < 1e-6) {
-						// Exactly stacked: split along a stable direction from the name.
-						const an = (this.hashOf(a.name) % 360) * (Math.PI / 180);
-						dx = Math.cos(an);
-						dy = Math.sin(an);
-						d = 0;
-					} else {
-						dx /= d;
-						dy /= d;
-					}
-					const push = (minD - d) * 0.5 * rate;
-					a.sx += dx * push;
-					a.sy += dy * push;
-					c.sx -= dx * push;
-					c.sy -= dy * push;
-					moved = true;
-				}
-			}
-			if (!moved) break;
-		}
+		// Attached things are derived from their parent's position every frame (never integrated apart from it), so nothing is left behind.
 		for (const b of bodies) {
-			b.x = b.ax + b.rx + b.sx;
-			b.y = b.ay + b.ry + b.sy;
+			b.x = b.mot.x + b.rep.rx;
+			b.y = b.mot.y + b.rep.ry;
 			b.placed = true;
 		}
 		if (this.bodies.size > bodies.length) for (const name of [...this.bodies.keys()]) if (!s.wolves[name]) (this.bodies.delete(name), this.wolfMeta.delete(name));
-		this.stepSubs(now, dtSec, host, k, m, reduced);
-		// Trails remember where their actor WAS when the line began: the wolf, a feature hub or a subagent (stepSubs records those).
+		this.stepSubs(now, dt, host, m, reduced, wall);
+		this.repelPass(dt, k, reduced);
+		// Trails keep a reference to their actor (wolf, feature group or sub-agent), so the line follows it; `last` is the fallback once it is gone.
 		for (const t of s.trails) {
-			if (this.trailFrom.has(t.id) || t.subagentKey) continue;
-			let from: Pt | null | undefined;
-			if (t.featureKey) {
-				const th = s.threads[t.featureKey];
-				if (th) from = this.hubPos(th, host, m, this.anchorTmp);
-			} else {
+			if (this.trailRef.has(t.id)) continue;
+			let ref: TrailRef | null = null;
+			if (t.subagentKey) {
+				const b = this.subBodies.get(t.subagentKey);
+				if (b) ref = { actor: "sub", key: t.subagentKey, last: { x: b.x, y: b.y } };
+			} else if (t.featureKey) {
+				const c = this.groupCentre.get(t.featureKey);
+				if (c) ref = { actor: "chat", key: t.featureKey, last: { x: c.x, y: c.y } };
+			} else if (t.wolf === HUB_WOLF) {
 				// A hub-side write (curator) starts at the domain hub node, drawn in the neutral node colour.
-				from = t.wolf === HUB_WOLF ? (t.target.domain ? host.nodePos(`dom:${t.target.domain}`) : null) : this.bodies.get(t.wolf);
+				const p = t.target.domain ? host.nodePos(`dom:${t.target.domain}`) : null;
+				if (p) ref = { actor: "pt", key: "", last: { x: p.x, y: p.y } };
+			} else {
+				const b = this.bodies.get(t.wolf);
+				if (b) ref = { actor: "wolf", key: t.wolf, last: { x: b.x, y: b.y } };
 			}
-			if (from) this.trailFrom.set(t.id, { x: from.x, y: from.y });
+			if (ref) this.trailRef.set(t.id, ref);
 		}
-		if (this.trailFrom.size > s.trails.length + 50) {
+		if (this.trailRef.size > s.trails.length + 50) {
 			const live = new Set(s.trails.map((t) => t.id));
-			for (const id of this.trailFrom.keys()) if (!live.has(id)) this.trailFrom.delete(id);
+			for (const id of this.trailRef.keys()) if (!live.has(id)) this.trailRef.delete(id);
 		}
+	}
+
+	/** Where a trail starts now: its actor's current position (the group's centre for the chat, the icon for a sub-agent), else where it last was. */
+	private trailStart(t: LiveTrail): Pt | null {
+		const r = this.trailRef.get(t.id);
+		if (!r) return null;
+		let centre: Pt = r.last;
+		let icon: Pt | undefined;
+		if (r.actor === "sub") icon = this.subItems.get(r.key);
+		else if (r.actor === "chat") centre = this.featureItems.get(r.key) ?? r.last;
+		else if (r.actor === "wolf") centre = this.wolfItems.get(r.key) ?? r.last;
+		const o = trailOrigin(r.actor === "sub" ? "sub" : "chat", centre, icon);
+		r.last.x = o.x;
+		r.last.y = o.y;
+		return r.last;
+	}
+
+	/**
+	 * New trails are the events: the wolf's own go to its state machine (a trip along den -> domains -> target), a feature chat pulls its
+	 * whole group, a sub-agent mostly stretches itself and the group only drifts. A feature's or sub-agent's work also keeps its wolf's
+	 * return clock fresh. Old trails (a page load replaying history) are ignored.
+	 */
+	private consumeTrails(host: OverlayHost, m: number, den: Pt, wall: number): void {
+		const s = this.state;
+		const T = LIVE_TUNING;
+		for (const t of s.trails) {
+			if (this.seenTrails.has(t.id)) continue;
+			this.seenTrails.add(t.id);
+			if (t.wolf === HUB_WOLF || wall - t.at > EVENT_MAX_AGE_MS) continue;
+			const id = targetNodeId(t.target, (n) => host.hasNode(n));
+			const tp = id ? host.nodePos(id) : null;
+			const wb = this.bodies.get(t.wolf);
+			if (!tp || !wb) continue;
+			const sub = t.subagentKey ? this.subBodies.get(t.subagentKey) : undefined;
+			const subParent = sub?.parentKey ? s.threads[sub.parentKey] : undefined;
+			const featureKey = t.featureKey ?? (subParent?.feature !== undefined ? sub!.parentKey : undefined);
+			const g = featureKey ? this.groups.get(featureKey) : undefined;
+			if (g && featureKey) {
+				const home = this.groupHome.get(featureKey) ?? den;
+				const actor = sub ? "sub" : "chat";
+				const pull = pullFor(actor, home, sub ?? home, tp, T);
+				g.gx = pull.group.x;
+				g.gy = pull.group.y;
+				g.until = wall + pull.group.holdSec * 1000;
+				if (sub && pull.self) {
+					sub.gx = pull.self.x;
+					sub.gy = pull.self.y;
+					sub.until = wall + pull.self.holdSec * 1000;
+				}
+				if (wb.mot.phase === "lingering" || wb.mot.phase === "working") wb.mot.lastEventAt = wall;
+				continue;
+			}
+			if (sub) {
+				const pull = pullFor("sub", tp, sub, tp, T);
+				sub.gx = pull.self!.x;
+				sub.gy = pull.self!.y;
+				sub.until = wall + pull.self!.holdSec * 1000;
+			}
+			wolfEvent(wb.mot, wall, this.waypoints(host, t.wolf, t.target, tp, id, wb));
+			wb.target = { x: tp.x, y: tp.y };
+			wb.targetRPx = (id ? (host.nodeRadius?.(id) ?? 0) : 0) * this.kNow;
+		}
+		if (this.seenTrails.size > 600) {
+			const live = new Set(s.trails.map((x) => x.id));
+			for (const x of this.seenTrails) if (!live.has(x)) this.seenTrails.delete(x);
+		}
+	}
+
+	/** Along the connections: the wolf's home domain (only when it is leaving the den), the target's domain, then beside the target. */
+	private waypoints(host: OverlayHost, wolf: string, target: LiveTarget, tp: Pt, nodeId: string | null, wb: Body): Pt[] {
+		const phase = wb.mot.phase;
+		const via: Pt[] = [];
+		const home = this.wolfMeta.get(wolf)?.dom;
+		const hp = home && (phase === "resting" || phase === "returning") ? host.nodePos(`dom:${home}`) : null;
+		if (hp) via.push({ x: hp.x, y: hp.y });
+		const dp = target.domain && target.domain !== home ? host.nodePos(`dom:${target.domain}`) : null;
+		if (dp) via.push({ x: dp.x, y: dp.y });
+		// It settles beside the node, on the side it came from (the last stop, else where it is), never on top of it.
+		const from = via.length > 0 ? via[via.length - 1]! : wb.mot;
+		const nodeRPx = (nodeId ? (host.nodeRadius?.(nodeId) ?? 0) : 0) * this.kNow;
+		via.push(parkingSpot(tp, from, nodeRPx, badgeRadiusPx(this.mobileNow, LIVE_TUNING, "home"), LIVE_TUNING.parkGapPx, this.kNow));
+		return via;
+	}
+
+	/** Soft-body repulsion (live-repel.ts) between every live badge; the offsets it moves are added to the positions on the NEXT frame's derivation. */
+	private repelPass(dt: number, k: number, reduced: boolean): void {
+		const T = LIVE_TUNING;
+		const unit = 1 / k;
+		const mob = this.mobileNow;
+		const list = this.repelList;
+		let n = 0;
+		const homeR = badgeRadiusPx(mob, T, "home") * unit;
+		const featR = badgeRadiusPx(mob, T, "feature") * unit;
+		const subR = subRadiusPx(mob, T) * unit;
+		for (const b of this.bodyList) {
+			const r = b.rep;
+			setRep(r, b.x, b.y, homeR, T.massHome, b.gid, T.repelRelax, Number.POSITIVE_INFINITY, 0, (this.hashOf(b.name) % 360) * (Math.PI / 180));
+			const ph = b.mot.phase;
+			if (b.target && b.targetRPx !== undefined && (ph === "lingering" || ph === "working")) {
+				r.nx = b.target.x;
+				r.ny = b.target.y;
+				r.nr = b.targetRPx * unit;
+			}
+			list[n++] = r;
+		}
+		for (const [key, g] of this.groups) {
+			const c = this.groupCentre.get(key);
+			if (!c) continue;
+			const r = g.rep;
+			setRep(r, c.x, c.y, featR, T.massFeature, g.gid, T.repelRelax, Number.POSITIVE_INFINITY, 0, (this.hashOf(key) % 360) * (Math.PI / 180));
+			list[n++] = r;
+		}
+		for (const b of this.subList) {
+			const r = b.rep;
+			const gid = (b.parentKey ? this.groups.get(b.parentKey)?.gid : this.bodies.get(b.a.wolf)?.gid) ?? -1;
+			setRep(r, b.x, b.y, subR, T.massSub, gid, T.repelSubRelax, T.repelSubMaxPx * unit, 0, (this.hashOf(b.a.key) % 360) * (Math.PI / 180));
+			list[n++] = r;
+		}
+		list.length = n;
+		repelStep(list, n, T, unit, dt, reduced);
+	}
+
+	/** The elastic offset of every feature group from its home (the hub position): pulled by its chat, snapping back when the hold ends. */
+	private stepGroups(host: OverlayHost, m: number, dt: number, reduced: boolean, wall: number): void {
+		const s = this.state;
+		const T = LIVE_TUNING;
+		this.groupCentre.clear();
+		this.groupHome.clear();
+		for (const key in s.threads) {
+			const t = s.threads[key]!;
+			if (t.feature === undefined) continue;
+			let g = this.groups.get(key);
+			if (!g) {
+				g = { x: 0, y: 0, vx: 0, vy: 0, gx: 0, gy: 0, until: 0, rep: newRepeller(), gid: this.nextGid++ };
+				this.groups.set(key, g);
+			}
+			if (wall > g.until) {
+				g.gx = 0;
+				g.gy = 0;
+			}
+			if (reduced) [g.x, g.y, g.vx, g.vy] = [g.gx, g.gy, 0, 0];
+			else elasticStep(g, g.gx, g.gy, T.groupSpring / T.paceSec, 2, dt);
+			const home = this.hubPos(t, host, m, { x: 0, y: 0 });
+			this.groupHome.set(key, home);
+			this.groupCentre.set(key, { x: home.x + g.x + g.rep.rx, y: home.y + g.y + g.rep.ry });
+		}
+		if (this.groups.size > this.groupCentre.size) for (const key of [...this.groups.keys()]) if (!this.groupCentre.has(key)) this.groups.delete(key);
 	}
 
 	/** Where a feature hub sits (world, no float): beside its work node, else beside its domain node, else near its wolf's home domain / the centre. */
@@ -656,100 +780,72 @@ export class LiveOverlay {
 		return a.parentThreadId ? threadKey(a.wolf, a.parentThreadId) : a.wolf;
 	}
 
-	/** A subagent's slot angle around its parent: a per-parent base plus its slot index times the golden angle. */
-	private slotAngle(pk: string, idx: number): number {
-		return (this.hashOf(pk) % 360) * (Math.PI / 180) + idx * SUB_SLOT_ANGLE;
-	}
-
-	/**
-	 * Where a subagent's link spring rests: SUB_REST out from its feature hub (else its wolf) on its own slot angle. The parent's position
-	 * goes to `hubTmp` and its collision radius to `hubR`.
-	 */
-	private anchorOf(a: LiveSubagent, host: OverlayHost, m: number, ang: number, out: Pt): Pt {
-		const t = a.parentThreadId ? this.state.threads[threadKey(a.wolf, a.parentThreadId)] : undefined;
-		if (t && t.feature !== undefined) {
-			this.hubPos(t, host, m, out);
-			this.hubR = HUB_R * m * HUB_CLEAR;
-		} else {
-			const wb = this.bodies.get(a.wolf) ?? host.center();
-			out.x = wb.x;
-			out.y = wb.y;
-			this.hubR = WOLF_MAX_PX * m * WOLF_CLEAR;
-		}
-		this.hubTmp.x = out.x;
-		this.hubTmp.y = out.y;
-		out.x += Math.cos(ang) * SUB_REST * m;
-		out.y += Math.sin(ang) * SUB_REST * m;
-		return out;
-	}
-
-	/**
-	 * Subagent bodies: born at their hub; a new target pulls them there hard (spring-damper), they linger, and with no target for ~10 s the
-	 * tether reels them back; a finished one flies home to its hub (and fades there). Reduced motion: snap to the target (or the hub).
-	 */
-	private stepSubs(now: number, dtSec: number, host: OverlayHost, k: number, m: number, reduced: boolean): void {
+	/** A body for every subagent of the state (and none for the gone): born on its parent's ring. */
+	private ensureSubs(wall: number, m: number): void {
 		const s = this.state;
+		for (const key in s.subagents) {
+			const a = s.subagents[key]!;
+			if (this.subBodies.has(key)) continue;
+			const pk = this.parentKeyOf(a);
+			this.subBodies.set(key, { rep: newRepeller(), x: 0, y: 0, off: { x: 0, y: 0, vx: 0, vy: 0 }, gx: 0, gy: 0, until: 0, born: wall, ang: Number.NaN, pk, parentKey: s.threads[pk]?.feature !== undefined ? pk : undefined, a });
+		}
+		for (const key of [...this.subBodies.keys()]) if (!s.subagents[key]) this.subBodies.delete(key);
+		void m;
+	}
+
+	/**
+	 * Sub-agents sit evenly spaced on their parent's ring (a feature group's ring, else a ring round the wolf): slots by spawn order among the
+	 * running ones, the angle easing to its slot when a sibling comes or goes. A pull stretches the icon out on its elastic tether and it
+	 * snaps back to its slot when the hold ends. The position is parent + slot + offset each frame: it cannot be left behind.
+	 */
+	private stepSubs(now: number, dt: number, host: OverlayHost, m: number, reduced: boolean, wall: number): void {
+		const s = this.state;
+		const T = LIVE_TUNING;
 		const list = this.subList;
 		list.length = 0;
-		const wall = Date.now();
-		const p = this.anchorTmp;
+		const groups = this.subGroups;
+		recycleBuckets(groups, this.bucketPool);
 		for (const key in s.subagents) {
-			const a = s.subagents[key]!;
-			let b = this.subBodies.get(key);
-			if (!b) {
-				// The lowest slot of this parent that no live sibling holds: distinct angles from the first frame.
-				const pk = this.parentKeyOf(a);
-				let idx = 0;
-				for (; idx < MAX_SUB_SLOTS; idx++) {
-					let used = false;
-					for (const o of this.subBodies.values()) if (o.pk === pk && o.idx === idx) used = true;
-					if (!used) break;
-				}
-				this.anchorOf(a, host, m, this.slotAngle(pk, idx), p);
-				// lastPull far in the past: with no target yet the link spring holds it at its rest length at full stiffness.
-				b = { x: p.x, y: p.y, vx: 0, vy: 0, born: wall, seen: 0, lastPull: now - SUB_PHYSICS.idleMs - SUB_PHYSICS.rampMs, ang: (this.hashOf(key + "t") % 360) * (Math.PI / 180), pk, idx };
-				this.subBodies.set(key, b);
-			}
+			const b = this.subBodies.get(key);
+			if (!b) continue;
+			b.a = s.subagents[key]!;
 			list.push(b);
+			if (b.a.finishedAt !== undefined) continue;
+			bucketOf(groups, b.pk, this.bucketPool).push(b);
 		}
-		if (this.subBodies.size > list.length) for (const key of [...this.subBodies.keys()]) if (!s.subagents[key]) this.subBodies.delete(key);
-		// A trail starts where its subagent WAS, before this frame's new target pulls it away.
-		for (const t of s.trails) {
-			if (!t.subagentKey || this.trailFrom.has(t.id)) continue;
-			const b = this.subBodies.get(t.subagentKey);
-			if (b) this.trailFrom.set(t.id, { x: b.x, y: b.y });
-		}
-		if (!reduced) separateSubs(list, dtSec); // mutual and hub repulsion, integrated by the steps below
-		for (const key in s.subagents) {
-			const a = s.subagents[key]!;
-			const b = this.subBodies.get(key)!;
-			const fin = a.finishedAt !== undefined;
-			if (fin) b.tug = undefined;
-			else if (a.target && a.targetAt !== undefined && a.targetAt > b.seen) {
-				b.seen = a.targetAt;
-				const id = targetNodeId(a.target, (n) => host.hasNode(n));
-				const at = id ? host.nodePos(id) : null;
-				if (at) {
-					const tx = at.x + Math.cos(b.ang) * SUB_TARGET_OFFSET * m;
-					const ty = at.y + Math.sin(b.ang) * SUB_TARGET_OFFSET * m;
-					if (b.tug) [b.tug.x, b.tug.y, b.tug.at] = [tx, ty, now];
-					else b.tug = { x: tx, y: ty, at: now };
-					b.lastPull = now;
+		for (const [pk, l] of groups) {
+			l.sort((x, y) => x.born - y.born || (x.a.key < y.a.key ? -1 : 1));
+			const slots = ringSlots({ x: 0, y: 0 }, 1, l.length, (this.hashOf(pk) % 360) * (Math.PI / 180));
+			l.forEach((b, i) => {
+				const want = Math.atan2(slots[i]!.y, slots[i]!.x);
+				if (Number.isNaN(b.ang) || reduced) b.ang = want;
+				else {
+					let d = want - b.ang;
+					d -= Math.PI * 2 * Math.round(d / (Math.PI * 2));
+					b.ang += d * (1 - Math.exp(-dt * 4));
 				}
-			}
-			if (b.tug && now - b.tug.at > SUB_PHYSICS.idleMs) b.tug = undefined; // nothing new for ~10 s: the tether takes over
-			const anchor = this.anchorOf(a, host, m, this.slotAngle(b.pk, b.idx), p);
-			b.r = SUB_R_REF * m;
-			b.hx = this.hubTmp.x;
-			b.hy = this.hubTmp.y;
-			b.hr = this.hubR;
-			if (reduced) {
-				const to = b.tug ?? anchor;
-				[b.x, b.y, b.vx, b.vy] = [to.x, to.y, 0, 0];
-			} else {
-				stepSub(b, now, dtSec, anchor.x, anchor.y, tetherStrength(SUB_PHYSICS, now - b.lastPull, fin), k);
-			}
+			});
 		}
+		// The whole ring turns together (one revolution per orbitSec), from the wall clock: even spacing is kept, nothing to allocate.
+		const phase = orbitPhase(wall, T.orbitSec, reduced);
+		for (const b of list) {
+			if (Number.isNaN(b.ang)) b.ang = (this.hashOf(b.a.key) % 360) * (Math.PI / 180);
+			const fc = b.parentKey ? this.groupCentre.get(b.parentKey) : undefined;
+			const wb = this.bodies.get(b.a.wolf);
+			const c = fc ?? wb ?? host.center();
+			const radius = subOrbitRadiusPx(this.mobileNow, T, fc ? "feature" : "home") / this.kNow;
+			if (b.a.finishedAt !== undefined || wall > b.until) {
+				b.gx = 0;
+				b.gy = 0;
+			}
+			if (reduced) [b.off.x, b.off.y, b.off.vx, b.off.vy] = [b.gx, b.gy, 0, 0];
+			else elasticStep(b.off, b.gx, b.gy, T.subSpring / T.paceSec, T.subDamping, dt);
+			const a = b.ang + phase;
+			b.x = c.x + Math.cos(a) * radius + b.off.x + b.rep.rx;
+			b.y = c.y + Math.sin(a) * radius + b.off.y + b.rep.ry;
+		}
+		void now;
+		void m;
 	}
 
 	/** The world point the you badge links to: the floating chat's attached thread only (no viewed-entry link, no history of earlier chats). */
@@ -845,7 +941,7 @@ export class LiveOverlay {
 			ctx.shadowColor = rgba(YOU_ACCENT, 0.55);
 			ctx.shadowBlur = 10;
 			ctx.beginPath();
-			ctx.arc(badge.x, badge.y, badge.r, 0, Math.PI * 2);
+			safeArc(ctx, badge.x, badge.y, badge.r, 0, Math.PI * 2);
 			ctx.fillStyle = rgba(YOU_ACCENT, 0.2);
 			ctx.fill();
 			ctx.shadowBlur = 0;
@@ -866,30 +962,32 @@ export class LiveOverlay {
 	private cachedItems: OverlayItem[] = [];
 
 	/** Wolves, thread satellites and subagent satellites at their current positions (world). */
-	items(host: OverlayHost, k: number, now: number): OverlayItem[] {
+	items(host: OverlayHost, kIn: number, now: number): OverlayItem[] {
+		const k = safeZoom(kIn);
 		const s = this.state;
-		const out: OverlayItem[] = [];
+		const out = this.itemsOut; // reused across frames: callers read it within the frame
+		out.length = 0;
 		const sc = scaleFor(k);
 		const m = sc.m;
+		const homeR = badgeRadiusPx(this.mobileNow, LIVE_TUNING, "home");
+		const featR = badgeRadiusPx(this.mobileNow, LIVE_TUNING, "feature");
+		const subR = subRadiusPx(this.mobileNow, LIVE_TUNING);
 		const fade = this.settings.subagentFadeSec;
 		const reduced = this.reduced;
 		// Indexes built once per call: subagents by parent thread, visible threads by wolf.
-		const subsByThread = new Map<string, LiveSubagent[]>();
+		const subsByThread = this.subsByThread;
+		recycleBuckets(subsByThread, this.bucketPool);
 		for (const id in s.subagents) {
 			const a = s.subagents[id]!;
-			const key = threadKey(a.wolf, a.parentThreadId ?? "");
-			const list = subsByThread.get(key);
-			if (list) list.push(a);
-			else subsByThread.set(key, [a]);
+			bucketOf(subsByThread, threadKey(a.wolf, a.parentThreadId ?? ""), this.bucketPool).push(a);
 		}
-		const threadsByWolf = new Map<string, { t: LiveThread; alpha: number }[]>();
+		const threadsByWolf = this.threadsByWolf;
+		recycleBuckets(threadsByWolf, this.bucketPool);
 		for (const id in s.threads) {
 			const t = s.threads[id]!;
-			const alpha = threadAlpha(s, t, now, fade, subsByThread.get(threadKey(t.wolf, t.id)) ?? []);
+			const alpha = threadAlpha(s, t, now, fade, subsByThread.get(threadKey(t.wolf, t.id)) ?? EMPTY_SUBS);
 			if (alpha <= 0) continue;
-			const list = threadsByWolf.get(t.wolf);
-			if (list) list.push({ t, alpha });
-			else threadsByWolf.set(t.wolf, [{ t, alpha }]);
+			bucketOf(threadsByWolf, t.wolf, this.bucketPool).push({ t, alpha });
 		}
 		this.wolfItems.clear();
 		this.threadItems.clear();
@@ -901,13 +999,12 @@ export class LiveOverlay {
 			const w = s.wolves[name]!;
 			const b = this.bodies.get(w.name);
 			if (!b) continue;
-			const dom = this.wolfMeta.get(w.name)?.dom ?? homeDomainOf(w, w.name);
-			const color = (dom && host.nodeColor(`dom:${dom}`)) || host.colors.node;
+			const color = this.wolfColors.get(w.name) ?? wolfFallbackHex(w.name);
 			// The idle float: a pure function of the clock, so every frame rate shows the same path.
 			const fo = floatOffset(this.hashOf(w.name), now, FLOAT_WOLF_PX * m * (sc.compact ? FLOAT_COMPACT_AMP : 1) * (w.online ? 1 : FLOAT_OFFLINE_AMP), { reduced, slow: w.online ? 1 : FLOAT_OFFLINE_SLOW });
 			const wx = b.x + fo.dx;
 			const wy = b.y + fo.dy;
-			const wolfItem: OverlayItem = { kind: "wolf", key: w.name, wolf: w.name, x: wx, y: wy, r: sc.wolfPx / 2 / k, alpha: w.online ? 1 : 0.35, needsYou: w.needsYou, online: w.online, working: w.online && this.workingSet.has(w.name), color, label: w.name };
+			const wolfItem: OverlayItem = { kind: "wolf", key: w.name, wolf: w.name, x: wx, y: wy, r: homeR / k, alpha: w.online ? 1 : 0.6, needsYou: w.needsYou, online: w.online, working: w.online && this.workingSet.has(w.name), color, label: w.name };
 			out.push(wolfItem);
 			this.wolfItems.set(w.name, wolfItem);
 			const all = threadsByWolf.get(w.name) ?? [];
@@ -926,15 +1023,12 @@ export class LiveOverlay {
 			for (const { t } of all) {
 				if (!t.feature) continue;
 				const tkey = threadKey(t.wolf, t.id);
-				const pos = this.hubPos(t, host, m, this.anchorTmp);
+				const pos = this.groupCentre.get(tkey) ?? this.hubPos(t, host, m, this.anchorTmp);
 				const nodeId = this.hubNodeId(t, host) ?? undefined;
-				// On its node the hub does not float (it is the node); a fallback hub keeps its very slight drift.
-				const hf = nodeId ? { dx: 0, dy: 0 } : floatOffset(this.hashOf(tkey), now, FLOAT_HUB_PX * m, { reduced });
-				const nodeR = nodeId ? (host.nodeRadius?.(nodeId) ?? 0) : 0;
 				let running = 0;
 				for (const a of subsByThread.get(tkey) ?? []) if (a.finishedAt === undefined) running++;
 				const working = t.active || running > 0;
-				const hub: OverlayItem = { kind: "feature", key: tkey, wolf: t.wolf, threadId: t.id, x: pos.x + hf.dx, y: pos.y + hf.dy, r: Math.max(HUB_R * m, nodeR * HUB_NODE_GROW), alpha: working ? 1 : 0.5, needsYou: t.needsYou, online: w.online, working, color, label: t.title ?? threadSlugOf(t.wolf, t.id), subCount: running, nodeId, nodeLabel: nodeId ? host.nodeLabel?.(nodeId) : undefined };
+				const hub: OverlayItem = { kind: "feature", key: tkey, wolf: t.wolf, threadId: t.id, x: pos.x, y: pos.y, r: featR / k, alpha: working ? 1 : 0.7, needsYou: t.needsYou, online: w.online, working, color, label: t.title ?? threadSlugOf(t.wolf, t.id), subCount: running, nodeId, nodeLabel: nodeId ? host.nodeLabel?.(nodeId) : undefined };
 				out.push(hub);
 				this.threadItems.set(tkey, hub);
 				this.featureItems.set(tkey, hub);
@@ -948,8 +1042,7 @@ export class LiveOverlay {
 			const b = this.subBodies.get(a.key);
 			if (!b || al <= 0.02) continue;
 			const wi = this.wolfItems.get(a.wolf);
-			const sf = floatOffset(this.hashOf(a.key), now, FLOAT_SUB_PX * m, { reduced });
-			const item: OverlayItem = { kind: "subagent", key: a.key, wolf: a.wolf, threadId: a.parentThreadId, x: b.x + sf.dx, y: b.y + sf.dy, r: (sc.wolfPx * SUBAGENT_RATIO) / 2 / k, alpha: al, needsYou: false, online: wi?.online ?? true, color: wi?.color ?? host.colors.node, label: a.title ?? a.name };
+			const item: OverlayItem = { kind: "subagent", key: a.key, wolf: a.wolf, threadId: a.parentThreadId, x: b.x, y: b.y, r: subR / k, alpha: al, needsYou: false, online: wi?.online ?? true, color: wi?.color ?? host.colors.node, label: a.title ?? a.name };
 			out.push(item);
 			this.subItems.set(a.key, item);
 		}
@@ -963,7 +1056,8 @@ export class LiveOverlay {
 	 * `now` is the renderer's monotonic clock (animation phase only). Everything stored in the state (idle and finish times, trails, pulses)
 	 * is epoch ms, so fades are computed from the wall clock here, never from `now`.
 	 */
-	draw(ctx: CanvasRenderingContext2D, host: OverlayHost, k: number, now: number): void {
+	draw(ctx: CanvasRenderingContext2D, host: OverlayHost, kIn: number, now: number): void {
+		const k = safeZoom(kIn);
 		if (!this.settings.enabled || Object.keys(this.state.wolves).length === 0) return;
 		ctx.save();
 		try {
@@ -980,11 +1074,12 @@ export class LiveOverlay {
 		const m = scaleFor(k).m;
 		const items = this.items(host, k, wall);
 		ctx.lineCap = "round";
+		this.drawDen(ctx, host, k, now, wall, m, reduced);
 
 		// Trails: the path the wolf took to the thing it touched, fading over trailSec.
 		for (const t of s.trails) {
 			const to = this.resolveTo(t.target, !t.subagentKey && !t.featureKey && t.wolf !== HUB_WOLF, host);
-			const from = this.trailFrom.get(t.id);
+			const from = this.trailStart(t);
 			if (!to || !from) continue;
 			const age = 1 - trailAlpha(t, wall, this.settings.trailSec);
 			const w = this.wolfItems.get(t.wolf);
@@ -1025,7 +1120,7 @@ export class LiveOverlay {
 				}
 			} else if (it.kind === "subagent" && !compactNow) {
 				const parent = this.featureItems.get(threadKey(it.wolf, it.threadId ?? "")) ?? this.wolfItems.get(it.wolf);
-				if (parent) {
+				if (parent && Math.hypot(it.x - parent.x, it.y - parent.y) * k > subOrbitRadiusPx(this.mobileNow, LIVE_TUNING, this.featureItems.has(threadKey(it.wolf, it.threadId ?? "")) ? "feature" : "home") * 1.5) {
 					ctx.lineWidth = 1 / k;
 					this.line(ctx, parent, it, rgba(it.color, 0.35 * it.alpha));
 					ctx.lineWidth = 1.2 / k;
@@ -1044,62 +1139,56 @@ export class LiveOverlay {
 				ctx.setLineDash([]);
 			}
 		}
-		// Glyphs.
+		// A wolf at its node: a short faint tether between its badge and the node.
+		for (const name in s.wolves) {
+			const b = this.bodies.get(name);
+			const wi = this.wolfItems.get(name);
+			if (!b || !wi || !b.target || (b.mot.phase !== "lingering" && b.mot.phase !== "working")) continue;
+			let onHub = false; // a feature hub there already has its own link
+			for (const f of this.featureItems.values()) if (Math.abs(f.x - b.target.x) < 0.5 && Math.abs(f.y - b.target.y) < 0.5) onHub = true;
+			if (onHub) continue;
+			ctx.lineWidth = 1 / k;
+			ctx.setLineDash([2 / k, 3 / k]);
+			this.line(ctx, wi, b.target, rgba(wi.color, 0.35 * wi.alpha));
+			ctx.setLineDash([]);
+		}
+		// Glyphs: wolves and feature threads are avatar badges; sub-agents small dots; thread satellites plain dots.
 		for (const it of items) {
 			ctx.globalAlpha = it.alpha;
-			if (it.kind === "wolf") {
-				if (it.online) {
-					// Working: a stronger glow that slowly breathes (static and bright under reduced motion). Idle: a calm, faint one.
-					const breath = it.working ? (reduced ? 1 : 0.8 + 0.2 * Math.sin(now / 900)) : 0.5;
-					ctx.globalAlpha = it.alpha * breath;
-					EFFECTS.glow!({ ctx, x: it.x, y: it.y, r: it.r * (it.working ? 1.25 : 1), k, t: 0, color: it.color, intensity: it.working ? Math.min(5, I + 1) : I, reduced });
-					ctx.globalAlpha = it.alpha;
-				}
-				// The Wolfpack wolf-head centred on the body in the wolf's colour (alpha dims an offline wolf).
-				ctx.save();
-				ctx.translate(it.x - it.r, it.y - it.r);
-				ctx.scale((it.r * 2) / WOLF_HEAD_BOX, (it.r * 2) / WOLF_HEAD_BOX);
-				ctx.fillStyle = rgba(it.color, 0.95);
-				ctx.fill(wolfHeadPath(), "evenodd");
-				ctx.restore();
-			} else if (it.kind === "feature") {
-				// A hub: a ring plate in the wolf's colour with the git-branch glyph; working adds the pulsing ring, idle stays dim.
-				ctx.beginPath();
-				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
-				ctx.fillStyle = rgba(it.color, it.working ? 0.3 : 0.18);
-				ctx.fill();
-				ctx.lineWidth = 1.2 / k;
-				ctx.strokeStyle = rgba(it.color, it.working ? 0.95 : 0.75);
-				ctx.stroke();
-				ctx.save();
-				const gs = (it.r * 1.25) / 24;
-				ctx.translate(it.x - it.r * 0.625, it.y - it.r * 0.625);
-				ctx.scale(gs, gs);
-				ctx.lineWidth = 2.4;
-				ctx.lineCap = "round";
-				ctx.strokeStyle = rgba(it.color, 0.95);
-				ctx.stroke(branchGlyph());
-				ctx.restore();
-				if (it.working) this.drawWorkingRing(ctx, it, k, now, reduced);
+			if (it.kind === "wolf" || it.kind === "feature") {
+				this.drawBadge(ctx, it, k, now, reduced);
 			} else if (it.kind === "thread") {
 				ctx.beginPath();
-				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
+				safeArc(ctx, it.x, it.y, it.r, 0, Math.PI * 2);
 				ctx.fillStyle = rgba(it.color, it.working ? 1 : 0.7);
 				ctx.fill();
 				if (it.working) this.drawWorkingRing(ctx, it, k, now, reduced);
 			} else if (it.kind === "subagent") {
+				ctx.beginPath();
+				safeArc(ctx, it.x, it.y, it.r, 0, Math.PI * 2);
+				ctx.fillStyle = rgba(it.color, 1);
+				ctx.fill();
+				ctx.lineWidth = 1 / k;
+				ctx.strokeStyle = "rgba(255,255,255,0.9)";
+				ctx.stroke();
+				// The white bot glyph, 62% of the disc.
+				const gr = it.r * 0.62;
 				ctx.save();
-				ctx.translate(it.x - it.r, it.y - it.r);
-				ctx.scale((it.r * 2) / WOLF_HEAD_BOX, (it.r * 2) / WOLF_HEAD_BOX);
-				ctx.fillStyle = rgba(it.color, 0.9);
-				ctx.fill(wolfHeadPath(), "evenodd");
+				ctx.translate(it.x - gr, it.y - gr);
+				ctx.scale((gr * 2) / 24, (gr * 2) / 24);
+				ctx.lineWidth = 2.2;
+				ctx.lineCap = "round";
+				ctx.lineJoin = "round";
+				ctx.strokeStyle = "#ffffff";
+				ctx.stroke(botGlyph());
 				ctx.restore();
 			}
 			ctx.globalAlpha = 1;
-			if (it.needsYou && (it.kind === "wolf" || it.kind === "thread" || it.kind === "feature")) {
+			if (it.needsYou && it.kind === "thread") {
 				EFFECTS.ring!({ ctx, x: it.x, y: it.y, r: it.r, k, t: 0, color: AMBER, intensity: I, reduced, time: now, alpha: it.alpha });
 			}
 		}
+		this.drawPills(ctx, host, items, k);
 		const hl = this.highlight;
 		if (hl) {
 			let at: Pt | null = null;
@@ -1116,7 +1205,7 @@ export class LiveOverlay {
 			if (at) {
 				const pulse = reduced ? 0 : 0.5 + 0.5 * Math.sin(now / 260);
 				ctx.beginPath();
-				ctx.arc(at.x, at.y, r + pulse * 1.5 / k, 0, Math.PI * 2);
+				safeArc(ctx, at.x, at.y, r + pulse * 1.5 / k, 0, Math.PI * 2);
 				ctx.fillStyle = rgba(color, 0.12);
 				ctx.fill();
 				ctx.lineWidth = 1.5 / k;
@@ -1124,6 +1213,48 @@ export class LiveOverlay {
 				ctx.stroke();
 			}
 		}
+	}
+
+	/**
+	 * The den (a placeholder home icon, swappable for the owner's art) and each wolf's tether to the den: faint at rest, a dashed
+	 * line while it works, strengthening to a solid one as it lingers.
+	 */
+	private drawDen(ctx: CanvasRenderingContext2D, host: OverlayHost, k: number, now: number, wall: number, m: number, reduced: boolean): void {
+		const T = LIVE_TUNING;
+		const den = host.center();
+		const col = host.colors.label;
+		ctx.save();
+		ctx.lineWidth = 1.2 / k;
+		for (const name in this.state.wolves) {
+			const it = this.wolfItems.get(name);
+			const b = this.bodies.get(name);
+			if (!it || !b) continue;
+			const act = b.mot.phase === "working" || b.mot.phase === "lingering";
+			const s0 = tetherStrength(b.mot, wall, T);
+			ctx.setLineDash(s0 < 0.5 && act ? [4 / k, 5 / k] : []);
+			ctx.lineWidth = (1 + 3 * s0) / k;
+			ctx.globalAlpha = it.online ? (act ? 0.2 + 0.7 * s0 : 0.2) : 0.08;
+			this.line(ctx, den, it, rgba(it.color, 1));
+		}
+		ctx.setLineDash([]);
+		ctx.globalAlpha = 1;
+		const r = T.denRadiusPx * m;
+		ctx.beginPath();
+		safeArc(ctx, den.x, den.y, r, 0, Math.PI * 2);
+		ctx.fillStyle = rgba(host.colors.node, 0.25);
+		ctx.fill();
+		ctx.lineWidth = 1.5 / k;
+		ctx.strokeStyle = rgba(col, 0.5);
+		ctx.stroke();
+		const gs = (r * 1.1) / 24;
+		ctx.save();
+		ctx.translate(den.x - 12 * gs, den.y - 12 * gs);
+		ctx.scale(gs, gs);
+		ctx.lineWidth = 2;
+		ctx.strokeStyle = rgba(col, 0.85);
+		ctx.stroke(homeGlyph());
+		ctx.restore();
+		ctx.restore();
 	}
 
 	/** Where a trail, pulse or bound link lands: the target's node; a wolf's own link to a feature lands on that feature's hub instead. */
@@ -1136,24 +1267,128 @@ export class LiveOverlay {
 		return id ? host.nodePos(id) : null;
 	}
 
+	/** The avatar badge of a wolf or feature thread: a disc in the wolf's colour, a white wolf glyph, a quiet shadow and hairline border, and the one state ring hugging it. */
+	private drawBadge(ctx: CanvasRenderingContext2D, it: OverlayItem, k: number, now: number, reduced: boolean): void {
+		const T = LIVE_TUNING;
+		const st = badgeRing({ online: it.online, working: !!it.working, needsYou: it.needsYou }, T);
+		const look = badgeLook(it.kind === "feature" ? "feature" : "home", T);
+		const base = st.dim ? DIM_FILL : it.color;
+		ctx.save();
+		if (look.glowPx > 0 && !st.dim) {
+			// The home wolf's quiet halo in its own colour.
+			ctx.shadowColor = rgba(base, 0.6);
+			ctx.shadowBlur = look.glowPx;
+		} else {
+			ctx.shadowColor = "rgba(0,0,0,0.28)";
+			ctx.shadowBlur = 5;
+			ctx.shadowOffsetY = 1.5;
+		}
+		ctx.beginPath();
+		safeArc(ctx, it.x, it.y, it.r, 0, Math.PI * 2);
+		ctx.fillStyle = rgba(base, look.fillAlpha);
+		ctx.fill();
+		ctx.restore();
+		ctx.lineWidth = (look.border ? 1.4 : 1) / k;
+		ctx.strokeStyle = look.border ? rgba(base, 1) : "rgba(255,255,255,0.45)";
+		ctx.stroke();
+		const wr = it.r * 0.62;
+		ctx.save();
+		ctx.translate(it.x - wr, it.y - wr);
+		ctx.scale((wr * 2) / WOLF_HEAD_BOX, (wr * 2) / WOLF_HEAD_BOX);
+		ctx.fillStyle = st.dim ? "rgba(255,255,255,0.8)" : "#ffffff";
+		ctx.fill(wolfHeadPath(), "evenodd");
+		ctx.restore();
+		if (st.kind === "none") return;
+		const rr = stateRingRadiusPx(this.mobileNow, T, it.kind === "feature" ? "feature" : "home") / k;
+		const color = st.amber ? AMBER : it.color;
+		ctx.lineCap = "round";
+		if (st.kind === "arc") {
+			const a0 = reduced ? -Math.PI / 2 - st.sweepRad / 2 : (now / 1000) * ((Math.PI * 2) / T.arcTurnSec) + (this.hashOf(it.key) % 628) / 100;
+			ctx.beginPath();
+			safeArc(ctx, it.x, it.y, rr, a0, a0 + st.sweepRad);
+			ctx.lineWidth = T.ringStrokePx / k;
+			ctx.strokeStyle = rgba(color, 0.95);
+			ctx.stroke();
+		} else {
+			const pulse = st.pulse && !reduced ? 0.7 + 0.3 * Math.sin(now / 450) : 1;
+			const a = ctx.globalAlpha;
+			ctx.beginPath();
+			safeArc(ctx, it.x, it.y, rr, 0, Math.PI * 2);
+			ctx.globalAlpha = a * 0.2 * pulse;
+			ctx.lineWidth = (T.ringStrokePx * 2.4) / k;
+			ctx.strokeStyle = rgba(color, 1);
+			ctx.stroke();
+			ctx.globalAlpha = a * pulse;
+			ctx.lineWidth = T.ringStrokePx / k;
+			ctx.stroke();
+			ctx.globalAlpha = a;
+		}
+		ctx.lineCap = "butt";
+	}
+
+	/** The name pills under wolf and feature badges: on hover, on the attached thread, and when zoomed in to the leaf label level. Screen-sized (11 px). */
+	private drawPills(ctx: CanvasRenderingContext2D, host: OverlayHost, items: OverlayItem[], k: number): void {
+		const close = (host.labelZoom?.() ?? 0) >= LABEL_LEVELS[3]!.minZoom;
+		const hk = this.hoverKey;
+		const att = this.attached;
+		if (!close && !hk && !att) return;
+		if (!this.pillTheme || this.pillTheme.colors !== host.colors) this.pillTheme = { colors: host.colors, light: !isLightHex(host.colors.hoverText) };
+		const lightSurface = this.pillTheme.light;
+		ctx.save();
+		ctx.font = `500 11px ${host.fontFamily}`;
+		ctx.textAlign = "center";
+		ctx.textBaseline = "middle";
+		for (const it of items) {
+			if (it.kind !== "wolf" && it.kind !== "feature") continue;
+			const hot = hk === it.kind + ":" + it.key || (att !== null && it.kind === "feature" && it.key === threadKey(att.wolf, att.threadId));
+			if (!hot && !close) continue;
+			const raw = this.privateView ? (it.kind === "feature" ? "feature" : it.wolf) : it.label;
+			const text = raw.length > 28 ? raw.slice(0, 27) + "…" : raw;
+			let w = this.pillW.get(text);
+			if (w === undefined) {
+				w = ctx.measureText(text).width;
+				if (this.pillW.size > 400) this.pillW.clear();
+				this.pillW.set(text, w);
+			}
+			const pw = w + 16;
+			const y0 = it.r * k + 5;
+			ctx.save();
+			ctx.translate(it.x, it.y);
+			ctx.scale(1 / k, 1 / k);
+			ctx.globalAlpha = Math.min(1, it.alpha + 0.2);
+			ctx.beginPath();
+			if (typeof ctx.roundRect === "function") ctx.roundRect(-pw / 2, y0, pw, 18, 9);
+			else ctx.rect(-pw / 2, y0, pw, 18);
+			ctx.fillStyle = lightSurface ? "rgba(255,255,255,0.84)" : "rgba(22,24,30,0.8)";
+			ctx.fill();
+			ctx.lineWidth = 1;
+			ctx.strokeStyle = "rgba(128,128,128,0.35)";
+			ctx.stroke();
+			ctx.fillStyle = lightSurface ? "#1b1d23" : "#f3f4f6";
+			ctx.fillText(text, 0, y0 + 9.5);
+			ctx.restore();
+		}
+		ctx.restore();
+	}
+
 	/** An active thread's soft pulsing ring and a short comet arc circling the dot; reduced motion: one static brighter ring. */
 	private drawWorkingRing(ctx: CanvasRenderingContext2D, it: OverlayItem, k: number, now: number, reduced: boolean): void {
 		ctx.lineWidth = 1.2 / k;
 		if (reduced) {
 			ctx.beginPath();
-			ctx.arc(it.x, it.y, it.r * 1.9, 0, Math.PI * 2);
+			safeArc(ctx, it.x, it.y, it.r * 1.9, 0, Math.PI * 2);
 			ctx.strokeStyle = rgba(it.color, 0.5 * it.alpha);
 			ctx.stroke();
 			return;
 		}
 		const ph = ((now / 1600 + (this.hashOf(it.key) % 100) / 100) % 1 + 1) % 1;
 		ctx.beginPath();
-		ctx.arc(it.x, it.y, it.r * (1.5 + 1.0 * ph), 0, Math.PI * 2);
+		safeArc(ctx, it.x, it.y, it.r * (1.5 + 1.0 * ph), 0, Math.PI * 2);
 		ctx.strokeStyle = rgba(it.color, 0.5 * (1 - ph) * it.alpha);
 		ctx.stroke();
 		const a0 = now / 650 + (this.hashOf(it.key) % 628) / 100;
 		ctx.beginPath();
-		ctx.arc(it.x, it.y, it.r * 1.9, a0, a0 + 1.1);
+		safeArc(ctx, it.x, it.y, it.r * 1.9, a0, a0 + 1.1);
 		ctx.strokeStyle = rgba(it.color, 0.75 * it.alpha);
 		ctx.lineCap = "round";
 		ctx.stroke();

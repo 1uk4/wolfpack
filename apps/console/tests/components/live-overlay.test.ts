@@ -108,7 +108,28 @@ describe("live overlay fade clock", () => {
 		assert.ok(a !== undefined && Math.abs(a - 0.45 * 0.5) < 0.02, `thread alpha ${a}`);
 	});
 
-	it("draws each wolf as the wolf-head logo path, dimmed when offline", () => {
+	it("never passes a negative or non-finite radius to ctx.arc at any zoom, so one bad value cannot disable the overlay", () => {
+		const radii: { r: number; k: number }[] = [];
+		let curK = 1;
+		const rec = new Proxy({}, {
+			get: (_t, p) => (p === "measureText" ? () => ({ width: 1 }) : p === "createRadialGradient" || p === "createLinearGradient" ? () => grad : p === "arc" ? (_x: number, _y: number, r: number) => radii.push({ r, k: curK }) : () => undefined),
+			set: () => true,
+		}) as unknown as CanvasRenderingContext2D;
+		o.dispatch({ type: "event", event: ev("thread-active", { actor: th("tz") }), now: Date.now() });
+		o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("tz", "sa") }), now: Date.now() });
+		o.dispatch({ type: "event", event: ev("needs-you", { actor: th("tz") }), now: Date.now() });
+		let t = 1;
+		for (const k of [1e-5, 1e-3, 0.02, 0.3, 1, 8, 0, -0.5]) {
+			curK = k;
+			o.step(t, 0.016, host, k);
+			o.draw(rec, host, k, t);
+			t += 400;
+		}
+		assert.ok(radii.length > 0);
+		assert.deepEqual(radii.filter((a) => !(a.r >= 0 && Number.isFinite(a.r))), []);
+	});
+
+	it("draws each wolf as a badge with the wolf-head logo path, dimmed when offline", () => {
 		const fills: { d?: string; alpha: number; scale: number }[] = [];
 		let alpha = 1;
 		let scale = 1;
@@ -125,26 +146,28 @@ describe("live overlay fade clock", () => {
 			o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("tw", "sa") }), now: Date.now() });
 			o.step(1, 0.016, host, 2);
 			o.draw(rec, host, 2, 1);
-			// At k=2 the wolf is capped at 36.4 px (1.4x the old 26) and the subagent is 70% of it (25.48 px), both the logo path (scale = px / k / 64).
-			const scales = logo().map((f) => f.scale).sort((a, b) => b - a);
-			assert.equal(scales.length, 2);
-			assert.ok(Math.abs(scales[0]! - 36.4 / 2 / 64) < 1e-9 && Math.abs(scales[1]! - 25.48 / 2 / 64) < 1e-9, `${scales}`);
-			assert.equal(logo().find((f) => Math.abs(f.scale - 36.4 / 2 / 64) < 1e-9)?.alpha, 1);
+			// The home wolf is a 34 px badge with the logo path at 62% of it (scale = px / k / 64); the subagent is an agent badge with its own glyph.
+			const scales = logo().map((f) => f.scale);
+			assert.equal(scales.length, 1);
+			assert.ok(Math.abs(scales[0]! - (34 * 0.62) / 2 / 64) < 1e-9, `${scales}`);
+			assert.equal(logo()[0]?.alpha, 1);
 			mock.timers.tick(3_600_000);
 			o.dispatch({ type: "tick", now: Date.now() });
 			fills.length = 0;
 			o.step(2, 0.016, host, 2);
 			o.draw(rec, host, 2, 2);
-			assert.equal(logo().find((f) => Math.abs(f.scale - 36.4 / 2 / 64) < 1e-9)?.alpha, 0.35);
+			assert.equal(logo()[0]?.alpha, 0.6);
 		}
 	});
 
-	it("icons scale with zoom between a 14 px floor and a 36.4 px cap (the wolf is 1.4x), keep their proportions, and thread dots hide at the floor while subagents stay as small marks", () => {
+	it("the home wolf badge stays 34 px (glyph 62% of it) and a subagent badge 14 px with its bot glyph at any zoom, while thread dots keep the old zoom scaling and hide at the floor", () => {
 		const fills: { d?: string; scale: number }[] = [];
 		let scale = 1;
 		const radii: number[] = [];
+		const strokes: string[] = [];
+		let botGlyphs = 0;
 		const rec = new Proxy({}, {
-			get: (_t, p) => (p === "measureText" ? () => ({ width: 1 }) : p === "createRadialGradient" || p === "createLinearGradient" ? () => grad : p === "scale" ? (sx: number) => (scale = sx) : p === "arc" ? (_x: number, _y: number, r: number) => radii.push(r) : p === "fill" ? (path?: { d?: string }) => fills.push({ d: path?.d, scale }) : () => undefined),
+			get: (_t, p) => (p === "measureText" ? () => ({ width: 1 }) : p === "createRadialGradient" || p === "createLinearGradient" ? () => grad : p === "scale" ? (sx: number) => (scale = sx) : p === "arc" ? (_x: number, _y: number, r: number) => radii.push(r) : p === "stroke" ? (path?: { d?: string }) => path?.d && strokes.push(path.d) : p === "fill" ? (path?: { d?: string }) => fills.push({ d: path?.d, scale }) : () => undefined),
 			set: () => true,
 		}) as unknown as CanvasRenderingContext2D;
 		o.dispatch({ type: "event", event: ev("thread-active", { actor: th("tz") }), now: Date.now() });
@@ -152,25 +175,25 @@ describe("live overlay fade clock", () => {
 		const frame = (k: number) => {
 			fills.length = 0;
 			radii.length = 0;
+			strokes.length = 0;
 			o.step(1, 0.016, host, k);
 			o.draw(rec, host, k, 1);
-			const px = fills.filter((f) => f.d?.startsWith("M8 2L24 18")).map((f) => f.scale * 64 * k).sort((a, b) => b - a);
+			const px = fills.filter((f) => f.d?.startsWith("M8 2L24 18")).map((f) => f.scale * 64 * k);
+			botGlyphs = strokes.filter((d) => d.startsWith("M4 10a2")).length;
 			const dotPx = 3.2 * Math.min(36.4, Math.max(14, 34 * k)) / 36.4;
-			return { px, dot: radii.find((r) => Math.abs(r * k - dotPx) < 1e-6) };
+			return { px, dot: radii.find((r) => Math.abs(r * k - dotPx) < 1e-6), sub: radii.find((r) => Math.abs(r * k - 7) < 1e-6), badge: radii.find((r) => Math.abs(r * k - 17) < 1e-6) };
 		};
 		const near = (a: number | undefined, b: number) => assert.ok(a !== undefined && Math.abs(a - b) < 1e-6, `${a} vs ${b}`);
-		const big = frame(4); // 34 x 4 px, capped
-		near(big.px[0], 36.4);
-		near(big.px[1], 25.48);
-		const mid = frame(0.8); // 34 x 0.8 = 27.2 px
-		near(mid.px[0], 27.2);
-		near(mid.px[1], 27.2 * 0.7);
-		assert.ok(mid.dot !== undefined, "the thread dot keeps its reference proportion");
-		const small = frame(0.1); // 34 x 0.1 = 3.4 px, floored at 14: the dots hide, the subagent stays as a small mark
-		assert.equal(small.px.length, 2);
-		near(small.px[0], 14);
-		near(small.px[1], 14 * 0.7);
-		assert.equal(small.dot, undefined);
+		for (const k of [4, 0.8, 0.1]) {
+			const f = frame(k);
+			assert.equal(f.px.length, 1, "one wolf glyph (the subagent carries the bot glyph)");
+			near(f.px[0], 34 * 0.62);
+			near(f.badge ? f.badge * k : undefined, 17);
+			near(f.sub ? f.sub * k : undefined, 7);
+			assert.equal(botGlyphs, 1, "the running subagent shows its bot glyph");
+		}
+		assert.ok(frame(0.8).dot !== undefined, "the thread dot keeps its reference proportion");
+		assert.equal(frame(0.1).dot, undefined, "thread dots hide at the floor");
 	});
 
 	it("a finished subagent is half faded 7.5 s after it finished when the renderer passes its monotonic clock to draw", () => {

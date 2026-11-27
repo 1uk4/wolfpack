@@ -120,7 +120,8 @@ describe("ask answers with images", () => {
     await w.client.bindCardText!(w.home, callId, "why", "", [await up(2)]);
     await w.client.bindCardText!(w.home, callId, "pick", "", [await up(3)]);
     // The pick answer replaces the draft's value; its image stays attached.
-    await w.client.saveCardPage!(w.home, callId, 1, { pick: { value: "a" } });
+    // Each question is its own page (name 0, why 1, tags 2, pick 3).
+    await w.client.saveCardPage!(w.home, callId, 3, { pick: { value: "a" } });
     await w.client.putCardNote!(w.home, callId, { text: "see", attachments: [await up(4)] });
     await w.client.submitCard!(w.home, callId, {});
     await drain(w);

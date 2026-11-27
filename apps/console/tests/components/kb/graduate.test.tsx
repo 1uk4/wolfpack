@@ -471,6 +471,14 @@ describe("graduate store: jobs that cannot advance", () => {
 		assert.equal(reads, 5, "no further reads");
 		assert.equal((graduateStore.get("ready") as { message: string }).message, "network down");
 	});
+	it("a status refused because the thread is running ends at once with the calm hint, not after 5 failed reads", async () => {
+		let reads = 0;
+		const g = fakeGraduate({ status: async () => (reads++, { ok: false, reason: "error", code: "thread_running", message: "thread still running: a turn is in progress" }) });
+		await graduateStore.startPreview(g, T, "hal");
+		await wait("the error", () => phaseOf() === "error");
+		assert.equal(reads, 1);
+		assert.equal((graduateStore.get("ready") as { message: string }).message, "Thread still running: graduate once it is idle");
+	});
 	it("a status read that never settles times out and counts as a failed read", async () => {
 		graduateStore.readTimeoutMs = 10;
 		let reads = 0;

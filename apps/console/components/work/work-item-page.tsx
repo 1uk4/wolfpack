@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { XIcon } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { TaskGraph } from "@/components/work/task-graph";
+import { WorkGraphSection } from "@/components/work/work-graph-section";
 import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { fetchWolves, fetchWorkList, fetchWorkRecord } from "@/components/kb/kb-client";
 import { openReaderLink, useOpenWorkItem } from "@/components/work/work-reader-nav";
@@ -24,7 +24,7 @@ export type WorkPageState =
 	| { kind: "unavailable" }
 	| { kind: "not_found" }
 	| { kind: "error"; message: string }
-	| { kind: "ready"; item: WorkRecordResponse; parent: WorkRecordResponse | null; /** Wolves a feature thread can open on (features only). */ threadWolves?: string[]; /** Per-wolf thread state (none / open / closed); without it every wolf offers "Open thread". */ threadButtons?: FeatureThreadButton[]; /** Set when the item is ready to graduate (features and initiatives): the Graduate button shows, run on the assignee wolf. */ graduate?: { assignee?: string; ready: boolean; reason: string } };
+	| { kind: "ready"; item: WorkRecordResponse; parent: WorkRecordResponse | null; /** The wolf that served the record (reads for the graph's progress panel go to it). */ wolf?: string; /** Wolves a feature thread can open on (features only). */ threadWolves?: string[]; /** Per-wolf thread state (none / open / closed); without it every wolf offers "Open thread". */ threadButtons?: FeatureThreadButton[]; /** Set when the item is ready to graduate (features and initiatives): the Graduate button shows, run on the assignee wolf. */ graduate?: { assignee?: string; ready: boolean; reason: string } };
 
 export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id: string; /** "none" hides the page top bar (title, Full page, close) when a shell hosts the page. Default "full". */ chrome?: "full" | "none"; /** Called with the item title once loaded, and again if it changes. */ onTitle?: (title: string) => void; /** Reader-panel mode: draws a close button and fills its container. */ onClose?: () => void; /** Overrides the default navigation to the full page (the reader switches item in place). */ onOpenTask?: (id: string) => void }) {
 	const { librarian, loading } = useLibrarian();
@@ -63,7 +63,7 @@ export function WorkItemPage({ id, onClose, onOpenTask, chrome, onTitle }: { id:
 				const gs = self ? graduateState({ kind: item.kind, stage: item.stage, graduated: !!self.graduated, standing: self.standing }, kids) : null;
 				if (self && gs?.show) graduate = { ...(self.assignee ? { assignee: self.assignee } : {}), ready: gs.ready, reason: gs.reason };
 			}
-			done({ kind: "ready", item, parent, threadWolves, threadButtons, ...(graduate ? { graduate } : {}) });
+			done({ kind: "ready", item, parent, wolf: hit.wolf, threadWolves, threadButtons, ...(graduate ? { graduate } : {}) });
 		})();
 		return () => {
 			cancelled = true;
@@ -108,7 +108,7 @@ export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError,
 				)}
 			</TopBar>}
 			<div className="min-h-0 flex-1 overflow-y-auto">
-				<div className="mx-auto max-w-3xl px-6 py-8">
+				<div className={`mx-auto px-6 py-8 ${item && (item.kind === "feature" || item.kind === "initiative") && (item.children?.length ?? 0) > 0 ? "max-w-6xl" : "max-w-3xl"}`}>
 					{state.kind === "loading" && <p className="text-sm text-muted-foreground">Loading…</p>}
 					{state.kind === "unavailable" && (
 						<p className="text-sm text-muted-foreground" role="status">
@@ -125,20 +125,20 @@ export function WorkItemView({ id, state, onOpenTask, onOpenThread, threadError,
 							Could not load this work item: {state.message}
 						</p>
 					)}
-					{state.kind === "ready" && <WorkBody item={state.item} parent={state.parent} onOpenTask={onOpenTask} threadWolves={state.threadWolves} threadButtons={state.threadButtons} graduate={state.graduate} onOpenThread={onOpenThread} threadError={threadError} />}
+					{state.kind === "ready" && <WorkBody item={state.item} parent={state.parent} wolf={state.wolf} onOpenTask={onOpenTask} threadWolves={state.threadWolves} threadButtons={state.threadButtons} graduate={state.graduate} onOpenThread={onOpenThread} threadError={threadError} />}
 				</div>
 			</div>
 		</div>
 	);
 }
 
-function WorkBody({ item, parent, onOpenTask, threadWolves = [], threadButtons, graduate, onOpenThread, threadError }: { graduate?: { assignee?: string; ready: boolean; reason: string }; item: WorkRecordResponse; parent: WorkRecordResponse | null; onOpenTask?: (id: string) => void; threadWolves?: string[]; threadButtons?: FeatureThreadButton[]; onOpenThread?: (b: FeatureThreadButton) => void; threadError?: string | null }) {
+function WorkBody({ wolf, item, parent, onOpenTask, threadWolves = [], threadButtons, graduate, onOpenThread, threadError }: { wolf?: string; graduate?: { assignee?: string; ready: boolean; reason: string }; item: WorkRecordResponse; parent: WorkRecordResponse | null; onOpenTask?: (id: string) => void; threadWolves?: string[]; threadButtons?: FeatureThreadButton[]; onOpenThread?: (b: FeatureThreadButton) => void; threadError?: string | null }) {
 	// Exactly `?view=graduation&wolf=<name>` (the batch card's "More details" link) shows the prepared graduation on top.
 	const params = useSearchParams();
 	const graduationWolf = params?.get("view") === "graduation" ? params.get("wolf") : null;
 	const record = workRecordView(item, parent);
 	const doc = composeItemDocument(item, { record: record.markdown, inheritedFrom: record.fromParent });
-	const graph = item.kind === "feature" ? buildTaskGraph(item, item) : null;
+	const graph = item.kind === "feature" || item.kind === "initiative" ? buildTaskGraph(item, item) : null;
 	const deps = item.dependsOn ?? [];
 	return (
 		<article>
@@ -177,11 +177,8 @@ function WorkBody({ item, parent, onOpenTask, threadWolves = [], threadButtons, 
 			</dl>
 			{graph?.kind === "graph" && graph.nodes.length > 0 && (
 				<section className="mb-8" data-section="tasks">
-					<h2 className={`${LABEL} mb-2 flex justify-between`}>
-						<span>Tasks</span>
-						<span data-testid="task-graph-progress">{graph.label}</span>
-					</h2>
-					<TaskGraph model={graph} onSelect={(taskId) => onOpenTask?.(taskId)} />
+					<h2 className={`${LABEL} mb-2`}>Tasks</h2>
+					<WorkGraphSection model={graph} wolf={wolf} domain={item.domain} onOpenTask={onOpenTask} />
 				</section>
 			)}
 			<section data-section="document">

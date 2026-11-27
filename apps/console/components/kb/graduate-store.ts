@@ -15,6 +15,8 @@ import type { GraduateClient } from "./graduate-client";
 import { notifyGraduated } from "./graduation-signal";
 import type { KbResult } from "./kb-client";
 
+const THREAD_RUNNING_HINT = "Thread still running: graduate once it is idle";
+
 export interface GraduateTarget {
 	id: string;
 	title: string;
@@ -236,7 +238,7 @@ export class GraduateStore {
 	}
 
 	private fail(id: string, base: { wolf: string; title: string; preview?: GraduationPreview }, during: "preview" | "confirm", res: Failure): void {
-		this.set(id, { phase: "error", wolf: base.wolf, title: base.title, during, message: res.message, ...(res.code ? { code: res.code } : {}), ...(base.preview ? { preview: base.preview } : {}) });
+		this.set(id, { phase: "error", wolf: base.wolf, title: base.title, during, message: res.code === "thread_running" ? THREAD_RUNNING_HINT : res.message, ...(res.code ? { code: res.code } : {}), ...(base.preview ? { preview: base.preview } : {}) });
 	}
 
 	/**
@@ -258,7 +260,8 @@ export class GraduateStore {
 			if (!cur || (cur.phase !== "previewing" && cur.phase !== "graduating")) return;
 			const during = cur.phase === "previewing" ? "preview" : "confirm";
 			if (!res.ok) {
-				if (++failures >= MAX_READ_FAILURES) return void this.fail(id, cur, during, res);
+				// The wolf refuses a stale preview while its thread runs: a calm hint, not a read failure to retry.
+				if (res.code === "thread_running" || ++failures >= MAX_READ_FAILURES) return void this.fail(id, cur, during, res);
 			} else {
 				failures = 0;
 				const s = res.data;

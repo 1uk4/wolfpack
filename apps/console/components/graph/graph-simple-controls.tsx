@@ -98,13 +98,44 @@ function Switch({
 	Icon,
 	checked,
 	onChange,
+	row = false,
 }: {
 	label: string;
 	hint: string;
 	Icon: IconType;
 	checked: boolean;
 	onChange: (on: boolean) => void;
+	/** One settings row (icon and label left, switch right) instead of a stacked tile. */
+	row?: boolean;
 }) {
+	if (row) {
+		return (
+			<Hint label={hint} side="bottom">
+				<button
+					type="button"
+					role="switch"
+					aria-checked={checked}
+					aria-label={label}
+					onClick={() => onChange(!checked)}
+					className="flex min-h-11 w-full items-center gap-2 text-left md:min-h-7"
+				>
+					<Icon className={`size-3.5 shrink-0 ${checked ? "text-foreground" : "text-muted-foreground"}`} />
+					<span className="min-w-0 flex-1 text-[11px] leading-tight text-muted-foreground">{label}</span>
+					<span
+						aria-hidden
+						className={`relative h-[18px] w-[30px] shrink-0 rounded-full ring-1 ring-border/60 transition-colors motion-reduce:transition-none ${
+							checked ? "bg-primary" : "bg-muted"
+						}`}
+					>
+						<span
+							className={`absolute left-[2px] top-[2px] size-[14px] rounded-full bg-background shadow ${SPRING}`}
+							style={{ transform: `translateX(${checked ? 12 : 0}px)` }}
+						/>
+					</span>
+				</button>
+			</Hint>
+		);
+	}
 	return (
 		<Hint label={hint} side="bottom">
 			<button
@@ -409,15 +440,14 @@ export function SimpleControls({
 					value={settings.live.intensity}
 					onChange={(n) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, intensity: n } }))}
 				/>
-				<div className="flex items-stretch gap-1">
-					<Switch
-						label="Memory"
-						hint="Show the memory and KB animations"
-						Icon={Brain}
-						checked={settings.live.memory}
-						onChange={(on) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, memory: on } }))}
-					/>
-				</div>
+				<Switch
+					row
+					label="Memory"
+					hint="Show the memory and KB animations"
+					Icon={Brain}
+					checked={settings.live.memory}
+					onChange={(on) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, memory: on } }))}
+				/>
 				<PlainSlider label="Home pull" hint="How firmly Home pulls a wolf back to its orbit" Icon={Gauge} value={settings.live.homeSpring} onChange={(v) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, homeSpring: v } }))} />
 				<PlainSlider label="Sub-agent pull" hint="How far a wolf's subagents push it away from Home" Icon={Gauge} value={settings.live.subPull} onChange={(v) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, subPull: v } }))} />
 				<MotionControl value={settings.live.motion} onChange={(m) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, motion: m } }))} />

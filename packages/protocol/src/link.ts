@@ -64,6 +64,8 @@ export const LinkWolfSchema = z.object({ name: z.string().min(1).max(64), domain
   librarian: z.boolean().optional(),
   /** Additive: this wolf has KB roots and can serve the read-only KB graph/entry routes. Absent = false / not reported. */
   kbReadable: z.boolean().optional(),
+  /** Additive: the wolf's chosen color (wolf.yaml `color`, a palette key). Absent = automatic / not reported. */
+  color: z.string().min(1).max(32).optional(),
 });
 export type LinkWolf = z.infer<typeof LinkWolfSchema>;
 

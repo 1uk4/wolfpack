@@ -148,6 +148,23 @@ function rectOf(c: LabelCandidate): Rect {
 	return { x0: c.sx - w / 2 - PAD, x1: c.sx + w / 2 + PAD, y0: top - PAD, y1: top + h + PAD };
 }
 
+/** A disc on screen that labels must not cover (a wolf badge): screen px. */
+export interface LabelObstacle {
+	sx: number;
+	sy: number;
+	r: number;
+}
+
+function hitsObstacle(r: Rect, obstacles: readonly LabelObstacle[] | undefined): boolean {
+	if (!obstacles) return false;
+	for (const o of obstacles) {
+		const dx = o.sx - Math.min(Math.max(o.sx, r.x0), r.x1);
+		const dy = o.sy - Math.min(Math.max(o.sy, r.y0), r.y1);
+		if (dx * dx + dy * dy < o.r * o.r) return true;
+	}
+	return false;
+}
+
 /**
  * The labels to draw. `forced` ids (hover / selection and their parent chain) are placed first and always shown. The rest, already
  * limited to the eligible levels by the caller or not, are placed by level (higher first), then size, then id; one that touches an
@@ -155,7 +172,7 @@ function rectOf(c: LabelCandidate): Rect {
  */
 export function chooseLabels(
 	candidates: readonly LabelCandidate[],
-	opts: { ze: number; width: number; height: number; forced?: ReadonlySet<string> },
+	opts: { ze: number; width: number; height: number; forced?: ReadonlySet<string>; obstacles?: readonly LabelObstacle[] },
 ): Set<string> {
 	const forced = opts.forced ?? new Set<string>();
 	const margin = 40;
@@ -193,7 +210,7 @@ export function chooseLabels(
 	const shown = new Set<string>();
 	for (const c of pool) {
 		const r = rectOf(c);
-		if (!forced.has(c.id) && hits(r)) continue;
+		if (!forced.has(c.id) && (hits(r) || hitsObstacle(r, opts.obstacles))) continue;
 		put(r);
 		shown.add(c.id);
 	}

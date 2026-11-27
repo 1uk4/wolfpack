@@ -25,12 +25,12 @@ import {
 	type LiveState,
 	type LiveTarget,
 } from "@/src/core";
-import { ownerThreadKey, targetNodeId, threadKey, threadSlugOf, youLinkTarget } from "@/src/core";
+import { ownerThreadKey, targetNodeId, threadKey, threadSlugOf, youLinkTarget, effectiveWolfColor, wolfColorTokens } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba, safeArc, safeZoom } from "./live-effects";
 import { floatOffset, nameHash } from "./live-float";
 import { LIVE_TUNING } from "./live-tuning";
-import { badgeLook, badgeRadiusPx, badgeRing, isLightHex, parkingSpot, stateRingRadiusPx, subOrbitRadiusPx, subRadiusPx, wolfFallbackHex } from "./live-badge";
+import { badgeLook, badgeRadiusPx, badgeRing, isLightHex, parkingSpot, stateRingRadiusPx, subOrbitRadiusPx, subRadiusPx } from "./live-badge";
 import { LABEL_LEVELS, type LabelObstacle } from "@/src/core";
 import { newMotion, restSlot, tetherStrength, wolfEvent, wolfStep, type WolfMotion } from "./live-den";
 import { elasticStep, orbitPhase, pullFor, ringSlots, trailOrigin, type Elastic } from "./live-rings";
@@ -266,7 +266,7 @@ export class LiveOverlay {
 	private trailRef = new Map<string, TrailRef>();
 	private composer: { x: number; y: number; w: number; h: number } | null = null;
 	private badge: { x: number; y: number; r: number } | null = null;
-	/** Wolf colours as the sidebar shows them (name -> hex); a wolf without one gets a stable fallback. */
+	/** Wolf colour keys as the roster has them (name -> palette key); resolved to the theme's accent when drawn. */
 	private wolfColors = new Map<string, string>();
 	/** The overlay thing under the pointer ("kind:key") and the camera zoom of the last step (screen px per world unit). */
 	private hoverKey: string | null = null;
@@ -336,7 +336,7 @@ export class LiveOverlay {
 		this.requestFrame();
 	}
 
-	/** The wolves' own colours from the console roster (hex), as the sidebar shows them. */
+	/** The wolves' colour keys from the console roster (wolf.yaml `color`); a wolf without one gets its automatic colour. */
 	setWolfColors(colors: ReadonlyMap<string, string>): void {
 		let same = colors.size === this.wolfColors.size;
 		if (same) for (const [n, c] of colors) if (this.wolfColors.get(n) !== c) same = false;
@@ -1041,7 +1041,7 @@ export class LiveOverlay {
 			const w = s.wolves[name]!;
 			const b = this.bodies.get(w.name);
 			if (!b) continue;
-			const color = this.wolfColors.get(w.name) ?? wolfFallbackHex(w.name);
+			const color = wolfColorTokens(effectiveWolfColor({ name: w.name, color: this.wolfColors.get(w.name) }))[isLightHex(host.colors.hoverText) ? "dark" : "light"].accent;
 			// The idle float: a pure function of the clock, so every frame rate shows the same path.
 			const fo = floatOffset(this.hashOf(w.name), now, FLOAT_WOLF_PX * m * (sc.compact ? FLOAT_COMPACT_AMP : 1) * (w.online ? 1 : FLOAT_OFFLINE_AMP), { reduced, slow: w.online ? 1 : FLOAT_OFFLINE_SLOW });
 			const wx = b.x + fo.dx;

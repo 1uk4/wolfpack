@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import type { ActivityEvent } from "@wolfpack/protocol";
 import { LiveOverlay, LIVE_DEFAULTS, type OverlayHost, type OverlayItem } from "../../components/graph/live/live-overlay.ts";
 import { talkToWolf } from "../../components/graph/live/live-talk.ts";
+import { effectiveWolfColor, wolfColorTokens } from "../../src/core/index.ts";
 import { formatFeed } from "../../src/core/graph/live/feed.ts";
 
 /** Map model v2: features are hubs at their work node, subagents dart between targets and tether back, the wolf floats free. Real event shapes. */
@@ -93,6 +94,20 @@ describe("live map model v2", () => {
 		to.draw(rec.ctx, host, 1, Date.now());
 		return rec.strokes;
 	};
+
+	it("a wolf is drawn in its own colour for the theme: the configured key's accent, else its automatic colour", () => {
+		const dark = host; // light hover text = dark theme
+		const light: OverlayHost = { ...host, colors: { ...host.colors, hoverText: "#111111" } };
+		const colorIn = (h: OverlayHost) => o.items(h, 1, Date.now()).find((i) => i.kind === "wolf")!.color;
+		send("thread-active", home);
+		run(0.1);
+		o.setWolfColors(new Map([["1uk4", "blue"]]));
+		assert.equal(colorIn(dark), "#6cb2f2");
+		assert.equal(colorIn(light), "#1f6fc0");
+		o.setWolfColors(new Map());
+		assert.equal(colorIn(dark), wolfColorTokens(effectiveWolfColor({ name: "1uk4" })).dark.accent);
+		assert.equal(colorIn(light), wolfColorTokens(effectiveWolfColor({ name: "1uk4" })).light.accent);
+	});
 
 	it("a feature thread is a hub at its work-item node, not on its wolf", () => {
 		send("thread-active", feature);

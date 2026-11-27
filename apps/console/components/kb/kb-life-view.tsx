@@ -252,6 +252,25 @@ export function LogStrip({ id, title, count, children }: { id: string; title: st
 
 export interface KbStrip { id: string; title: string; count: number; node: React.ReactNode }
 
+/** Phone: every strip as a chip on ONE row (title + count); the tapped one opens inline above the row, so the log keeps the column height. */
+function StripChips({ strips }: { strips: KbStrip[] }) {
+	const [open, setOpen] = useState<string | null>(null);
+	const cur = strips.find((s) => s.id === open);
+	return (
+		<div className="shrink-0 rounded-b-xl border border-t-0 border-border/50 bg-background/60 md:hidden" data-testid="kb-strip-chips">
+			{cur ? <div className="max-h-48 overflow-auto border-b border-border/50 px-2 py-1" data-testid={`kb-strip-${cur.id}`}>{cur.node}</div> : null}
+			<div className="flex gap-1.5 p-1.5">
+				{strips.map((st) => (
+					<button key={st.id} type="button" aria-pressed={open === st.id} onClick={() => setOpen((o) => (o === st.id ? null : st.id))} data-testid={`kb-chip-${st.id}`} className={`flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border/50 px-2 text-[12px] ${open === st.id ? "bg-accent text-foreground" : "text-muted-foreground"}`}>
+						{st.title}
+						<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="kb-strip-count">{st.count}</span>
+					</button>
+				))}
+			</div>
+		</div>
+	);
+}
+
 /** Map + log. The map is the graph itself (the same live layer), so /graph shows the same motion. `?kbdemo=1` (dev builds only) feeds a scripted sample cycle. */
 export function KbLifeBody({ data, extras, now, since, onSince, notice, sweeping, strips }: { data: KbActivityResponse; extras?: Readonly<Record<string, DomainExtra>>; now: number; since: KbActivitySince; onSince?: (s: KbActivitySince) => void; notice?: React.ReactNode; sweeping?: boolean; strips?: KbStrip[] }) {
 	const asked = useSearchParams()?.get("kbdemo") === "1";
@@ -267,11 +286,14 @@ export function KbLifeBody({ data, extras, now, since, onSince, notice, sweeping
 			<div className="flex min-h-0 min-w-0 flex-[4] flex-col md:flex-[3]">
 				<KbLifeLog seed={seed} reasons={reasons} now={now} since={since} onSince={onSince} notice={notice} sweeping={sweeping} />
 				{strips?.length ? (
-					<div className="max-h-[45%] shrink-0 overflow-auto rounded-b-xl border border-t-0 border-border/50 bg-background/60">
-						{strips.map((st) => (
-							<LogStrip key={st.id} id={st.id} title={st.title} count={st.count}>{st.node}</LogStrip>
-						))}
-					</div>
+					<>
+						<StripChips strips={strips} />
+						<div className="hidden max-h-[45%] shrink-0 overflow-auto rounded-b-xl border border-t-0 border-border/50 bg-background/60 md:block">
+							{strips.map((st) => (
+								<LogStrip key={st.id} id={st.id} title={st.title} count={st.count}>{st.node}</LogStrip>
+							))}
+						</div>
+					</>
 				) : null}
 			</div>
 		</div>

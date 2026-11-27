@@ -60,7 +60,7 @@ function Placeholder({ title, children }: { title: string; children?: React.Reac
 export function KbMirrorLabel({ embedded = false }: { embedded?: boolean } = {}) {
 	const { open } = useSidebar();
 	return (
-		<div className={`absolute ${embedded ? "left-3 max-md:left-16" : open ? "left-3" : "left-14"} top-3 z-10 rounded-lg border bg-card/90 px-2 py-1 text-xs text-muted-foreground shadow-lg`} data-testid="kb-mirror-label" title="Live sweep activity and KB activity need the librarian">
+		<div className={`absolute ${embedded ? "left-3 top-3 max-md:top-16" : open ? "left-3 top-3" : "left-14 top-3"} z-10 rounded-lg border bg-card/90 px-2 py-1 text-xs text-muted-foreground shadow-lg`} data-testid="kb-mirror-label" title="Live sweep activity and KB activity need the librarian">
 			{KB_MIRROR_LABEL}
 		</div>
 	);

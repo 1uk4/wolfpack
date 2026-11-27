@@ -156,6 +156,19 @@ export interface InventoryRowView {
 	latest: string | null;
 }
 
+/**
+ * Components of one machine that the hub inventory says are behind (a row with `latest`): wolfd and workerd, one per component (the
+ * first row names the version), skipping the components `have` already lists (from /api/updates or the update units).
+ */
+export function behindFromInventory(rows: { kind: string; version?: string; latest?: string | null }[], have: readonly string[] = []): { component: "wolfd" | "workerd"; from: string | null; to: string }[] {
+	const out: { component: "wolfd" | "workerd"; from: string | null; to: string }[] = [];
+	for (const r of rows) {
+		if ((r.kind !== "wolfd" && r.kind !== "workerd") || !r.latest || have.includes(r.kind) || out.some((o) => o.component === r.kind)) continue;
+		out.push({ component: r.kind, from: r.version ?? null, to: r.latest });
+	}
+	return out;
+}
+
 /** What the console knows about its own machine: its channel, the newer versions its update units name, and the console's own version. */
 export interface OwnMachineView {
 	channel: string | null;

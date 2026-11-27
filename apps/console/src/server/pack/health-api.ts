@@ -30,6 +30,7 @@
  * The bearer must be the header: the cookie mirror (proxy.ts) never applies to a POST, so a cross-site form cannot restart anything.
  */
 import { bearerOf } from "../../core/ui/hub-auth.ts";
+import { hostLabel } from "../../core/pack/pack-hosts.ts";
 import { createPackHealth, createRestarter, healthTargets, hubTarget, type PackHealth, type Restarter } from "./pack-health.ts";
 import { createReleaseReader, createRollbacker, createUpdater, type ReleaseReader, type Rollbacker, type UpdateUnit, type Updater } from "./pack-actions.ts";
 import { DEFAULT_MAIN_MANIFEST_URL, consoleVersion, createUpdatesHandler, worstHostState } from "./updates-api.ts";
@@ -72,6 +73,10 @@ export interface HealthApiDeps {
 	updater: Updater;
 	/** Set on a Mac console: POST /api/health/update starts the launchd updater (mac-updater.ts) instead of a systemd unit. */
 	macUpdater?: MacUpdater;
+	/** This console's machine name (default: machineName()). */
+	machine?: () => string;
+	/** Test seam: the platform that decides the own machine's display name (default process.platform). */
+	platform?: NodeJS.Platform;
 	witness: SessionWitness;
 	/** Live bearer check against the hub, tried first on every restart (see RESTART AUTH). */
 	checkToken: HubTokenCheck;
@@ -159,7 +164,11 @@ export function createHealthApi(d: HealthApiDeps) {
 			} catch {
 				out = { state: "unavailable" };
 			}
-			return Response.json(out, { headers: NO_STORE });
+			// `self`: this console's machine name as the inventory rows spell it, so a client can pick its own machine's rows (the update notice).
+			if (out.state !== "ok") return Response.json(out, { headers: NO_STORE });
+			const self = (d.machine ?? machineName)();
+			// `selfLabel`: the name the machine card gives this machine ("Mac" on a Mac), so the notice names it the same way.
+			return Response.json({ ...out, self, selfLabel: hostLabel(self, { isThisConsole: true, platform: d.platform ?? process.platform }) }, { headers: NO_STORE });
 		},
 
 		stream(signal?: AbortSignal): Response {

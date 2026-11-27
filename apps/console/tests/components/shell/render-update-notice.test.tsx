@@ -119,6 +119,40 @@ describe("sidebar update notice", () => {
 		assert.match(missing, /href="https:\/\/example\.test\/notes\/hubd"[^>]*>View on GitHub/);
 	});
 
+	it("also lists wolves behind on this machine from the hub inventory, one line per component, never another machine's and never workerd twice", () => {
+		const inv = (machine: string, kind: string, id: string, version: string, latest: string | null) => ({ machine, kind, id, version, latest, ageS: 1 });
+		const ownInventory = {
+			self: "lukas-macbook-pro",
+			rows: [
+				inv("lukas-macbook-pro", "wolfd", "1uk4", "0.1.24-main.3", "0.1.24-main.4"),
+				inv("lukas-macbook-pro", "wolfd", "jack", "0.1.24-main.3", "0.1.24-main.4"),
+				inv("lukas-macbook-pro", "workerd", "mac-1uk4", "0.1.10", "0.1.11"),
+				inv("lukas-macbook-pro", "hubd", "hubd", "0.1.1", null),
+				inv("sfo-01", "wolfd", "hal", "0.1.1", "0.1.2"),
+			],
+		} as never;
+		const view = (rows: ReturnType<typeof row>[]) => text(renderToStaticMarkup(<UpdateNoticeView rows={rows} ownInventory={ownInventory} dismissed={new Set()} onDismiss={() => {}} />));
+		const t = view([]);
+		assert.match(t, /lukas-macbook-pro: 2 updates available/);
+		assert.match(t, /wolfd 0\.1\.24-main\.4, workerd 0\.1\.11/);
+		assert.doesNotMatch(t, /sfo-01/);
+		// /api/updates already lists this machine's workerd: its line is not repeated, and the wolves join the same machine's card.
+		const t2 = view([row("workerd", "0.1.11", "lukas-macbook-pro")]);
+		assert.equal(t2.match(/workerd 0\.1\.11/g)?.length, 1);
+		assert.match(t2, /lukas-macbook-pro: 2 updates available/);
+	});
+
+	it("names this machine like its card (selfLabel) and does not list workerd twice when /api/updates rows carry no host", () => {
+		const inv = (kind: string, id: string, version: string, latest: string) => ({ machine: "lukas-macbook-pro", kind, id, version, latest, ageS: 1 });
+		const ownInventory = { self: "lukas-macbook-pro", selfLabel: "Mac", rows: [inv("wolfd", "1uk4", "0.1.24-main.3", "0.1.24-main.4"), inv("workerd", "mac-1uk4", "0.1.10", "0.1.11")] } as never;
+		const hostless = { component: "workerd", running: "0.1.10", latest: "0.1.11", outdated: true, notesUrl: null };
+		const h = renderToStaticMarkup(<UpdateNoticeView rows={[hostless]} ownInventory={ownInventory} dismissed={new Set()} onDismiss={() => {}} />);
+		const t = text(h);
+		assert.match(t, /Mac: 2 updates available/);
+		assert.doesNotMatch(t, /lukas-macbook-pro/);
+		assert.equal(t.match(/workerd 0\.1\.11/g)?.length, 1);
+	});
+
 	it("stays hidden for a dismissed version and returns for a newer one", () => {
 		assert.equal(html([row("hubd", "0.1.23")], ["hubd@0.1.23"]), "");
 		assert.match(text(html([row("hubd", "0.1.24")], ["hubd@0.1.23"])), /hubd 0\.1\.24 is available/);

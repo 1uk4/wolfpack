@@ -435,6 +435,16 @@ describe("Pack > Machines > Update automatically (own machine)", () => {
 		await m.unmount();
 	});
 
+	it("this console's card names wolves behind on it, from the hub inventory rows, and offers no Update for them", async () => {
+		script({ units: [] });
+		const row = (kind: string, id: string, version: string, latest: string | null) => ({ machine: "sfo-01", kind, id, version, latest, ageS: 1 });
+		const m = await mount(<ConsoleMachineCard card={host({ inventory: [row("wolfd", "1uk4", "0.1.24-main.3", "0.1.24-main.4"), row("wolfd", "hal", "0.1.24-main.3", "0.1.24-main.4"), row("workerd", "w", "0.1.10", null)] as never })} canAct actions={ACTIONS} logs={{}} />);
+		assert.match(m.q("machine-wolves-behind")!.textContent ?? "", /wolfd v0\.1\.24-main\.3 → v0\.1\.24-main\.4/);
+		assert.equal((m.q("machine-wolves-behind")!.textContent ?? "").match(/wolfd/g)?.length, 1);
+		assert.equal(m.q("machine-update-button"), null);
+		await m.unmount();
+	});
+
 	it("starts the update once when opened from the sidebar notice (?update=<this machine>:<component>) and clears the param", async () => {
 		const s = script({});
 		const m = await mount(own(), "?update=sfo-01%3Ahubd");

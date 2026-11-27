@@ -110,7 +110,7 @@ export * from "./settings/wolf-settings-form.ts";
 export * from "./pack/pack-sections.ts";
 export type { Tone, HealthLink, HealthSnapshotView, InventoryRowView, InventoryState } from "./pack/pack-health-view.ts";
 export { ageText, BACK_MS, packSummary } from "./pack/pack-health-view.ts";
-export { groupByHost } from "./pack/pack-hosts.ts";
+export { groupByHost, hostId } from "./pack/pack-hosts.ts";
 export type { HostInfo, HostCard } from "./pack/pack-hosts.ts";
 export { createHealthConnection } from "./pack/pack-health-connection.ts";
 export type { HealthConnectionDeps } from "./pack/pack-health-connection.ts";
@@ -125,7 +125,7 @@ export * from "./pack/wolves-model.ts";
 export * from "./pack/wolf-prompt-scopes.ts";
 export * from "./pack/wolf-path.ts";
 export { buildGraphs, type FlowRow, type PromptGraph } from "./settings/prompt-flows.ts";
-export { updateWarnings, updateFinished, updateOffered, updateOutcome, updateQuestion, rollbackOffered, rollbackOutcome, rollbackQuestion } from "./pack/pack-health-view.ts";
+export { behindFromInventory, updateWarnings, updateFinished, updateOffered, updateOutcome, updateQuestion, rollbackOffered, rollbackOutcome, rollbackQuestion } from "./pack/pack-health-view.ts";
 export type { HealthActionsView, UpdateUnitView } from "./pack/pack-health-view.ts";
 // Named re-exports so components/ and app/ import through the barrel (import/no-restricted-paths).
 export { RELAY_ATTACHMENT_BYTES } from "./thread/attachment-budget.ts";

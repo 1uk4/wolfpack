@@ -282,6 +282,7 @@ export function ChatBar() {
 
 	// --chat-bar-top: how far the top of the bar (swap pill included, plus the bar's own bottom offset) sits above the viewport bottom,
 	// so other pages (the graph controls) can sit above it. 0px with no bar; written once per frame; removed on cleanup.
+	const hasSwap = !!swap;
 	useLayoutEffect(() => {
 		const root = document.documentElement;
 		if (!shown || !wrapRef.current) {
@@ -318,7 +319,7 @@ export function ChatBar() {
 			window.removeEventListener("resize", schedule);
 			root.style.removeProperty("--chat-bar-top");
 		};
-	}, [shown, minimized, wide, !!swap, attached?.wolf, attached?.threadId]);
+	}, [shown, minimized, wide, hasSwap, attached?.wolf, attached?.threadId]);
 
 	// Over another thread's page: that page's dock (sub-agent strip, pinned strip) pads its bottom by the bar's real height
 	// (--chat-bar-over, read in thread-chat.tsx) so nothing of it peeks out under or behind the bar.

@@ -1,6 +1,6 @@
 "use client";
 import { useSyncExternalStore } from "react";
-import { localEyeStore, readEyeOpen, subscribeEye, writeEyeOpen } from "@/src/core/ui/bar-eye";
+import { localEyeStore, readEyeOpen, subscribeEye, writeEyeOpen } from "@/src/core";
 
 /** The eye's open state, live across every bar and row that reads it. */
 export function useEyeOpen(): [boolean, (open: boolean) => void] {

@@ -18,7 +18,8 @@ export const COMPONENTS = {
   console: "@wolfpack/console",
 };
 export const ROOT_CONFIG = [/^package-lock\.json$/, /^pnpm-lock\.yaml$/, /^pnpm-workspace\.yaml$/, /^package\.json$/, /^tsconfig[^/]*\.json$/, /^vitest\.(config|setup)\.[cm]?[jt]s$/, /^turbo\.json$/, /^\.github\/workflows\//, /^scripts\/affected\./];
-const DOC = [/\.md$/i, /^docs\//, /^LICENSE/, /^ATTRIBUTION/];
+// packages/agents/**/*.md are agent profiles, prompts and standards: prompt input (golden-tested in harness), not docs.
+const DOC = [/^(?!packages\/agents\/).*\.md$/i, /^docs\//, /^LICENSE/, /^ATTRIBUTION/];
 const ZERO = /^0+$/;
 
 /** Workspace dirs whose `packages/<x>/dist` a workspace's source/tests import by relative path (not declared as a dependency). */

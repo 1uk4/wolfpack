@@ -80,7 +80,7 @@ async function finalPassOnce(opts: PassOpts): Promise<FinalPassResult | "conflic
     const markerOnly = async (before: number): Promise<FinalPassResult> => {
       // On log_full, compact first (appendCompacting), so the pass is marked and does not re-run its model call on every graduation.
       const r = await appendCompacting({ store, engine, id: featureId, kind: feature.kind, src: opts.src, group: "Changes", lines: [{ at, src: opts.src, kind: "change", text: "final pass: nothing to tidy", ids: [marker] }] });
-      return r.ok ? { ok: true, status: "marker-only", before, after: before } : { ok: false, reason: `append failed: ${r.code}` };
+      return r.ok ? { ok: true, status: "marker-only", before, after: before } : { ok: false, reason: `append failed: ${r.code}${"message" in r ? `: ${r.message}` : ""}` };
     };
 
     const before = input.reduce((n, l) => n + l.text.length, 0);

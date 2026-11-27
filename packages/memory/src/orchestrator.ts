@@ -365,6 +365,7 @@ export function createOrchestrator(
       store: cfg.workRecordStore,
       engine,
       pending: state,
+      onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "warning"),
       src: runtime.name,
       observations: due.map((o) => ({ id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: o.work ?? "", feature: (o.feature ?? o.work)! })),
     });

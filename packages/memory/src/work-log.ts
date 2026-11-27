@@ -27,6 +27,8 @@ export interface AppendWorkLogOptions {
   observations: WorkLogObservation[];
   /** Backoff and the 404 grace period, as in `consolidateWorkRecords`. Absent: every group is tried now and a 404 discards at once. */
   pending?: WorkPendingState;
+  /** One line per failed append, with the hub's message. */
+  onProgress?: (line: string) => void;
   now?: () => Date;
   /** Label stored on every line: the wolf or agent. */
   src: string;
@@ -125,7 +127,8 @@ export async function appendWorkLog(opts: AppendWorkLogOptions): Promise<WorkLog
             outcomes.push({ work: target, target, ids, status: "pending", reason, cause: "forbidden", ...(assignee ? { assignee } : {}) });
             continue;
           }
-          pending?.pending(target, "work-api-unavailable");
+          opts.onProgress?.(`  work ${target}: append failed (${res.code}), ${ids.length} observation(s) stay pending — ${reason}`);
+          pending?.pending(target, "work-api-unavailable", { message: reason });
           const retryAt = pending?.entry(target)?.nextAttemptAt;
           outcomes.push({ work: target, target, ids, status: "pending", reason, cause: "work-api-unavailable", ...(retryAt ? { retryAt } : {}) });
           continue;

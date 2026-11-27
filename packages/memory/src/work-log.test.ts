@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { LlmInfraError, type Engine } from "@wolfpack/engine";
 import { appendWorkLog } from "./work-log.js";
+import { WorkPendingState } from "./work-pending.js";
 import { InMemoryWorkRecordStore, type AppendRecordResult, type WorkRecordItem } from "./work-record.js";
 
 const item = (over: Partial<WorkRecordItem>): WorkRecordItem => ({ id: "x", title: "T", kind: "task", stage: "in_build", body: "", ...over });
@@ -98,6 +99,17 @@ describe("appendWorkLog", () => {
     store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "forbidden", message: "not yours" });
     const out = await appendWorkLog({ engine: engineOf([{ lines: [line("t", ["o1"])] }]), store, src: "w", observations: [o("1", "a", "x")] });
     expect(out[0]).toMatchObject({ status: "pending", cause: "forbidden", reason: "not yours" });
+  });
+
+  it("records the hub's message in the pending state and reports it once when an append fails", async () => {
+    const store = new InMemoryWorkRecordStore({ a: item({ id: "a" }) });
+    store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "error", message: "more than one ## Record heading" });
+    const pending = new WorkPendingState(undefined);
+    const progress: string[] = [];
+    const out = await appendWorkLog({ engine: engineOf([{ lines: [line("t", ["o1"])] }]), store, src: "w", pending, onProgress: (m) => progress.push(m), observations: [o("1", "a", "x")] });
+    expect(out[0]).toMatchObject({ status: "pending", cause: "work-api-unavailable", reason: "more than one ## Record heading" });
+    expect(pending.entry("a")?.message).toBe("more than one ## Record heading");
+    expect(progress.filter((m) => m.includes("more than one ## Record heading"))).toHaveLength(1);
   });
 
   it("sends the recent log lines and the observation text, and maps from to observation ids", async () => {

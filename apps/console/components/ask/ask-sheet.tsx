@@ -22,7 +22,8 @@ import { make, read, type AnyA, type MultiA, type Opt, type SingleA } from "@/co
 import { askProgress, askTarget, type AskQueueView, type AskSession } from "@/components/ask/ask-session";
 import type { Dictation } from "@/components/composer/dictation";
 import { cn } from "@/lib/utils";
-import { escapeRawHtml, type AttachedRef } from "@/src/core";
+import { escapeRawHtml, visibleFields, type AttachedRef } from "@/src/core";
+import { pageBody } from "@/components/ask/ask-answers";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
 import { DIAGRAM_ID_RE } from "@wolfpack/protocol";
 
@@ -77,6 +78,9 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 		go();
 	};
 	const steps = pc.card.steps ?? [];
+	const asked = visibleFields(pc.card, draft);
+	const answeredCount = asked.filter((f) => Object.keys(pageBody([f], draft)).length > 0).length;
+	const progress = askProgress(answeredCount, asked.length);
 	// Skipped questions (optional ones the owner passed on): greyed until Answer or a click brings them back. A draft that arrives (bound text) also ends the skip.
 	const [skippedIds, setSkippedIds] = useState<ReadonlySet<string>>(new Set());
 	useEffect(() => setSkippedIds(new Set()), [pageIndex, pc.callId]);
@@ -160,8 +164,8 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 
 	return (
 		<div data-testid="ask-sheet" data-call-id={pc.callId} data-page={pageIndex} className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card text-card-foreground">
-			<div role="progressbar" aria-label="Progress through the questions" aria-valuemin={0} aria-valuemax={100} aria-valuenow={askProgress(pageIndex, steps.length)} data-testid="ask-progress" className="h-0.5 w-full shrink-0 bg-border">
-				<div className="wp-ask-progress h-full bg-(color:--thread-accent)" style={{ width: `${askProgress(pageIndex, steps.length)}%` }} />
+			<div role="progressbar" aria-label="Progress through the questions" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} aria-valuetext={`${answeredCount} of ${asked.length} answered`} data-testid="ask-progress" className="h-0.5 w-full shrink-0 bg-border">
+				<div className="wp-ask-progress h-full bg-(color:--thread-accent)" style={{ width: `${progress}%` }} />
 			</div>
 			<div className="flex shrink-0 flex-col gap-2 border-b px-4 pb-2.5 pt-3">
 				<div className="flex items-baseline justify-between gap-2">

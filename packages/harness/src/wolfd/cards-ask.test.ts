@@ -116,6 +116,7 @@ describe("ask_revise against the draft", () => {
     expect(p.map((x) => x.callId)).toEqual(["c"]); // the revise is not a card of its own
     expect(p[0].card.steps).toEqual([{ title: "P1", fields: ["q1", "pick"] }, { title: "New", fields: ["n1", "n2"] }]);
     expect(p[0].pageAnswers).toEqual({ q1: { value: "x" } });
+    expect(p[0]).toMatchObject({ pageIndex: 1, reached: 1 }); // the answered page and the cursor survive the revise
   });
 
   it("keeps the pages already reached fixed: a revise that reuses their ids changes nothing", () => {

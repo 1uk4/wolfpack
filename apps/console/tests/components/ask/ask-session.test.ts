@@ -53,11 +53,13 @@ describe("askComposerAction for a tool confirmation or subagent card (own: false
 });
 
 describe("askProgress", () => {
-	it("is the share of questions reached: 2 of 5 is 40 percent, the last is 100, a lone question is 100", () => {
-		assert.equal(askProgress(1, 5), 40);
-		assert.equal(askProgress(4, 5), 100);
-		assert.equal(askProgress(0, 1), 100);
-		assert.equal(askProgress(0, 4), 25);
+	it("is the share of questions answered: none is 0, 2 of 5 is 40, all is 100, so the last page does not read as done before submit", () => {
+		assert.equal(askProgress(0, 5), 0);
+		assert.equal(askProgress(2, 5), 40);
+		assert.equal(askProgress(5, 5), 100);
+		assert.equal(askProgress(1, 4), 25);
+		assert.equal(askProgress(0, 0), 0);
+		assert.equal(askProgress(9, 5), 100);
 	});
 });
 

@@ -16,21 +16,25 @@ export function SubagentBadgesView({ items, now, onOpen }: { items: readonly Chi
 	const { shown } = partitionChildren(items, now, false, BADGE_LINGER_MS);
 	return (
 		<>
-			{shown.map((c) => (
+			{shown.map((c) => {
+				const name = c.title || c.agent || "agent";
+				return (
 				<button
 					key={c.id}
 					type="button"
 					data-testid="subagent-badge"
 					data-state={c.state ?? ""}
-					aria-label={`${c.agent ?? "agent"}, ${stateLabel(c)}`}
+					aria-label={`${name}, ${stateLabel(c)}`}
+					title={name}
 					onClick={() => onOpen(c)}
 					className="flex shrink-0 items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 font-ui text-xs text-muted-foreground hover:bg-accent max-md:min-h-11"
 				>
 					{c.state === "running" ? <BrailleSpinner /> : <BotIcon className={cn("size-3 shrink-0", c.state === "failed" && "text-destructive")} />}
-					<span className="max-w-28 truncate font-medium text-foreground">{c.agent ?? "agent"}</span>
+					<span className="max-w-28 truncate font-medium text-foreground">{name}</span>
 					<span data-testid="subagent-badge-elapsed" className="tabular-nums">{c.startedAt ? formatChildElapsed(elapsedMs(c, now)) : "—"}</span>
 				</button>
-			))}
+				);
+			})}
 		</>
 	);
 }

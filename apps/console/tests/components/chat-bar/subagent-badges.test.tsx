@@ -14,7 +14,7 @@ const { SubagentBadgesView } = await import("../../../components/chat-bar/subage
 
 const NOW = Date.parse("2026-10-27T12:00:00.000Z");
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
-const kid = (id: string, agent: string, over: object = {}) => ({ id: `w/${id}`, wolf: "w", kind: "subagent", title: id, parentThreadId: "w/p", agent, state: "running", startedAt: ago(195_000), ...over }) as never;
+const kid = (id: string, agent: string, over: object = {}) => ({ id: `w/${id}`, wolf: "w", kind: "subagent", title: `w-${id}`, parentThreadId: "w/p", agent, state: "running", startedAt: ago(195_000), ...over }) as never;
 
 let root: Root | null = null;
 afterEach(async () => {
@@ -33,9 +33,12 @@ describe("sub-agent badges", () => {
 		await act(async () => root!.render(<SubagentBadgesView items={[kid("a", "worker"), kid("b", "reviewer", { startedAt: ago(5_000) })]} now={NOW} onOpen={(c) => void opened.push(c.id)} />));
 		const badges = [...document.querySelectorAll('[data-testid="subagent-badge"]')];
 		assert.equal(badges.length, 2);
-		assert.match(badges[0]!.textContent ?? "", /worker/);
+		assert.match(badges[0]!.textContent ?? "", /w-a/);
+		assert.doesNotMatch(badges[0]!.textContent ?? "", /worker/);
+		assert.equal(badges[0]!.getAttribute("aria-label"), "w-a, running");
+		assert.equal(badges[0]!.getAttribute("title"), "w-a");
 		assert.match(badges[0]!.textContent ?? "", /3m 15s/);
-		assert.match(badges[1]!.textContent ?? "", /reviewer/);
+		assert.match(badges[1]!.textContent ?? "", /w-b/);
 		assert.match(badges[1]!.textContent ?? "", /5s/);
 		assert.equal(document.querySelector('[data-testid="subagent-strip"]'), null);
 		await act(async () => void props(badges[1]!, "onClick")({}));

@@ -814,6 +814,8 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 
 	return (
 		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-dropping={dropping ? "true" : undefined} {...dropProps} data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={docked ? undefined : { left: geo.left, width: geo.width }}>
+			{/* Floating only: an opaque page-colour backdrop under the den strip, the bar and the gap below it, with a soft fade at its top edge, so thread text never shows through. */}
+			{!docked && <div aria-hidden data-testid="chat-bar-backdrop" className="pointer-events-none absolute -bottom-3 -top-6 -inset-x-3 -z-10 bg-gradient-to-t from-background from-[calc(100%-1.5rem)] to-transparent" />}
 			{!vizOn && <DenStrip swap={denSwap} onSwap={onDenSwap} open={BAR_EXTRAS.switcher ? switcher : null} setOpen={setSwitcher} />}
 			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>

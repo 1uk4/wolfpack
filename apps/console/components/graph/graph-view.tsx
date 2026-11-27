@@ -27,7 +27,7 @@
  */
 
 import type { DepRouteSelection, ThreadsByWolf } from "@/src/core";
-import { reconcileCursor, rawWorkId, routeForNode, threadForWorkNode, toRouteSelection } from "@/src/core";
+import { reconcileCursor, rawWorkId, routeForNode, pickOwnerWolf, threadForWorkNode, toRouteSelection } from "@/src/core";
 import { startCursor, type RouteCursor } from "@/src/core";
 import type { RouteNavModel } from "./graph-route-nav.tsx";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
@@ -70,8 +70,9 @@ export function attachWorkNodeThread(
 	nodeId: string,
 	threads: ThreadsByWolf,
 	attach: (ref: { wolf: string; threadId: string }) => void,
+	preferWolf?: string | null,
 ): boolean {
-	const t = threadForWorkNode(graph, nodeId, threads);
+	const t = threadForWorkNode(graph, nodeId, threads, preferWolf);
 	if (!t) return false;
 	attach(t);
 	return true;
@@ -323,7 +324,7 @@ export function GraphView({
 					else if (act.kind === "open-work") {
 						openWorkRef.current(act.id); // the reader: no selection, route or camera change
 						const chat = attachApiRef.current;
-						if (chat) attachWorkNodeThread(graphRef.current, nodeId, chat.threads, chat.attach); // and the floating chat follows the feature
+						if (chat) attachWorkNodeThread(graphRef.current, nodeId, chat.threads, chat.attach, pickOwnerWolf(chat.wolves)); // and the floating chat follows the feature
 					}
 					else if (!openNodeInViewer(nodeId, openViewRef.current)) setSelected({ id: nodeId });
 				},

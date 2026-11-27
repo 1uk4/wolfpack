@@ -19,6 +19,19 @@ const threads = {
 };
 
 describe("the thread behind a graph work node", () => {
+	it("reads a node keyed by the FULL work id (work:work-<domain>-<id>), as the hub's graph builds it", () => {
+		const g = { nodes: [node("work:work-wolfpack-kqnldTm", "feature"), node("work:work-wolfpack-t9", "task")], edges: [{ source: "work:work-wolfpack-t9", target: "work:work-wolfpack-kqnldTm", kind: "partOf" }] } as never;
+		const t = { "1uk4": [{ id: "1uk4/feature-work-wolfpack-kqnldTm", title: "Polish", kind: "feature" }] };
+		assert.deepEqual(threadForWorkNode(g, "work:work-wolfpack-kqnldTm", t), { wolf: "1uk4", threadId: "1uk4/feature-work-wolfpack-kqnldTm" });
+		assert.deepEqual(threadForWorkNode(g, "work:work-wolfpack-t9", t), { wolf: "1uk4", threadId: "1uk4/feature-work-wolfpack-kqnldTm" });
+	});
+
+	it("prefers the owner's own wolf when the feature has threads on several wolves", () => {
+		const g = { nodes: [node("work:work-wolfpack-f9", "feature")], edges: [] } as never;
+		const t = { hal: [{ id: "hal/feature-work-wolfpack-f9", title: "F", kind: "feature" }], "1uk4": [{ id: "1uk4/feature-work-wolfpack-f9", title: "F", kind: "feature" }] };
+		assert.deepEqual(threadForWorkNode(g, "work:work-wolfpack-f9", t, "1uk4"), { wolf: "1uk4", threadId: "1uk4/feature-work-wolfpack-f9" });
+	});
+
 	it("maps a feature node to the thread whose slug is feature-<work id>", () => {
 		assert.deepEqual(threadForWorkNode(graph, "work:feat1", threads), { wolf: "1uk4", threadId: "1uk4/feature-work-wolfpack-feat1" });
 	});

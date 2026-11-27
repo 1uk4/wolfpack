@@ -59,7 +59,7 @@ export interface LabelFrame {
 	now: number;
 }
 
-const MAX_CHARS: Record<LabelLevel, number> = { 0: 28, 1: 30, 2: 34, 3: 38 };
+const MAX_CHARS: Record<LabelLevel, number> = { 0: 28, 1: 30, 2: 34, 3: 36, 4: 38 };
 
 function clip(text: string, level: LabelLevel): string {
 	const max = MAX_CHARS[level];
@@ -123,8 +123,8 @@ export class LabelPass {
 	private groupByIdFor: readonly GroupTitle[] | null = null;
 
 	/** New hierarchy (edges parent → child, depths per node id). Measured widths stay cached by id; the choice is recomputed. */
-	setHierarchy(ids: Iterable<string>, edges: ReadonlyArray<{ from: string; to: string }>, depths: ReadonlyMap<string, number>, isBucket?: (id: string) => boolean): void {
-		this.tree = buildLabelTree(ids, edges, depths, isBucket);
+	setHierarchy(ids: Iterable<string>, edges: ReadonlyArray<{ from: string; to: string }>, depths: ReadonlyMap<string, number>): void {
+		this.tree = buildLabelTree(ids, edges, depths);
 		this.choice = null;
 	}
 

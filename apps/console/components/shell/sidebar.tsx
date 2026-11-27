@@ -14,6 +14,8 @@ import { useMultiMachine } from "@/components/shell/single-mac";
 import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { ChatBar } from "@/components/chat-bar/chat-bar";
+import { useAttachedThread } from "@/components/chat-bar/attached-thread";
+import { attachRefForHref } from "@/components/chat-bar/chat-bar-io";
 import { WorkReaderHost } from "@/components/work/work-reader";
 import { KeyboardShortcuts } from "@/components/shell/keyboard-shortcuts";
 import { shouldOpenInReader, useOpenWorkItem } from "@/components/work/work-reader-nav";
@@ -686,10 +688,14 @@ export function SessionsSidebar() {
 	const pathname = usePathname();
 	const router = useRouter();
 	const { openSubagent } = useSubagentModal();
-	/** A subagent opens its modal over this page; anything else navigates. */
+	const attachApi = useAttachedThread();
+	/** A subagent opens its modal over this page; anything else navigates and swaps the floating chat to that thread (also when the page type stays the same). */
 	const openItem = (c: SessionItem) => {
 		closeList();
-		return isChildThread(c) ? openSubagent(c.id, c.meta) : router.push(itemHref(c));
+		if (isChildThread(c)) return openSubagent(c.id, c.meta);
+		const ref = attachRefForHref(itemHref(c), attachApi?.threads[rowWolf(c)] ?? []);
+		if (ref) attachApi?.attach(ref);
+		return router.push(itemHref(c));
 	};
 
 	/* New session (owner, 2026-09-13): NO POST — the button opens the

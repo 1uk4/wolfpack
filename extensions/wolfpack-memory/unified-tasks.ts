@@ -83,7 +83,7 @@ import { WolfIdSchema } from "@wolfpack/kb/client";
 import { hubTargetFromEnv, redactUrl, turnActorHeaders } from "@wolfpack/memory";
 import { WorkClient, WorkQueuedError, handoffText, overrideNote, GRADUATION_TIMEOUT_MS, WORK_TIMEOUT_MS, shipAndRollup } from "./work-client.js";
 import { createGraduation } from "./graduation.js";
-import { registerGraduationActions, unregisterGraduationActions } from "./memory-actions.js";
+import { registerGraduationActions, unregisterGraduationActions, threadRunningCheckFor, THREAD_RUNNING_MESSAGE } from "./memory-actions.js";
 
 type WorkItemKind = "initiative" | "feature" | "task" | "issue" | "spike";
 type WorkItemStage = typeof STAGE_ORDER[number];
@@ -568,6 +568,8 @@ export default function createTasksExtension(
       // Gathering offers features and initiatives; a loose task graduates only when the owner named it.
       if (LOOSE_KINDS.includes(item.kind) && !named.has(id)) { lines.push(`${id}: not eligible (a loose task graduates only when the owner names it)`); continue; }
       const r = readinessOf(item, domains.get(item.domain as string) ?? []);
+      const running = r.ready ? threadRunningCheckFor(wolfDen)?.(id, ctx.conversationId) : undefined;
+      if (running) { lines.push(`${id}: not eligible (${THREAD_RUNNING_MESSAGE}: ${running}); offer it again once the thread is idle`); continue; }
       if (r.ready) eligible.push(item);
       else lines.push(`${id}: not eligible (${r.reason})`);
     }
@@ -579,7 +581,7 @@ export default function createTasksExtension(
     const worker = async () => {
       while (next < eligible.length) {
         const item = eligible[next++];
-        const [res] = await Promise.allSettled([graduation.preview(item.id as string)]);
+        const [res] = await Promise.allSettled([graduation.preview(item.id as string, ctx.conversationId)]);
         if (res.status === "rejected") lines.push(`${item.id}: could not be prepared (${res.reason instanceof Error ? res.reason.message : res.reason})`);
         else if (res.value.blocked) lines.push(`${item.id}: blocked (${res.value.blocked})`);
         else previews.set(item.id as string, res.value);
@@ -901,7 +903,7 @@ export default function createTasksExtension(
   const forgetCompletion = (id: string) => completionChecks.get(wolfDen)?.forget(id);
 
   // The same wiring serves wolfd's graduate routes (the console's Graduate button): see graduation.ts.
-  const graduation = createGraduation({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), fileRequest: (id, body) => fileRequest(id, body), wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion, onGraduated: (id) => { void memoryActionsFor(wolfDen)?.promoteForFeature?.(id)?.catch(() => {}); }, ...(appendMode ? { finalPass } : {}) });
+  const graduation = createGraduation({ client: client.withTimeout(GRADUATION_TIMEOUT_MS), fileRequest: (id, body) => fileRequest(id, body), wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion, threadRunning: () => threadRunningCheckFor(wolfDen), onGraduated: (id) => { void memoryActionsFor(wolfDen)?.promoteForFeature?.(id)?.catch(() => {}); }, ...(appendMode ? { finalPass } : {}) });
   registerGraduationActions(wolfDen, graduation.actions);
 
   /** Unbind everyone else on a just-shipped task. Never throws: the caller reports a failure apart from the ship. */
@@ -1831,7 +1833,7 @@ Domains: ${domainList}\n\nWork item IDs: always write the full \`work-<domain>-<
           if (!args.ids?.length) {
             const id = wanted[0];
             try {
-              const preview = await graduation.preview(id);
+              const preview = await graduation.preview(id, ctx.conversationId);
               const shown = renderGraduationPreview(preview);
               if (preview.blocked) return text(`${shown}\n\nNothing can be requested from this preview. Tell the owner and try again later.`, true);
               const { requestId, existing } = await fileRequest(id, { kind: "graduate", preview: { contributions: preview.contributions, ...(preview.summary ? { summary: preview.summary } : {}) } });

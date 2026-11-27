@@ -70,6 +70,8 @@ export type GraduationFailure =
   | "not_ready"
   /** The preview token is unknown, used, expired or for another item. */
   | "preview_stale"
+  /** The item's feature thread has a turn in progress or running sub-agents: nothing is filed or approved until it is idle. */
+  | "thread_running"
   /** No Work API, no KB roots or no model on this wolf. */
   | "unavailable"
   /** The drain/distill/write failed; nothing was archived. */
@@ -116,7 +118,7 @@ export interface GraduationActions {
   /** Distill and return the preview (writes the confirmation token). Throws GraduationError. */
   preview(id: string): Promise<GraduationPreviewResult>;
   /** Check the token, fold late observations, ship, then file a graduate approval request (the hub sends, graduates and archives on approval). Throws GraduationError. */
-  confirm(id: string, token: string): Promise<GraduationConfirmResult>;
+  confirm(id: string, token: string, callerConversation?: number): Promise<GraduationConfirmResult>;
   /** The newest stored preview of this item that has not expired (its token file survives a restart), if any. */
   pendingPreview(id: string): Promise<GraduationPreviewResult | undefined>;
   /** The pending observations in this wolf's pool a graduation of the item folds (the item and its descendants), per work item. */
@@ -143,4 +145,31 @@ export function registerGraduationActions(wolfDen: string, actions: GraduationAc
 export function unregisterGraduationActions(wolfDen: string, actions: GraduationActions): void {
   const r = getGraduationRegistry();
   if (r.get(wolfDen) === actions) r.delete(wolfDen);
+}
+
+/**
+ * Whether the feature thread bound to a work item is busy (a turn in progress, or running sub-agents). wolfd registers the
+ * check for its den; the graduation wiring and `task_graduate` ask it before filing. `exceptConversation` leaves out the
+ * caller's own turn (the agent calling task_graduate from that very thread is running by definition).
+ * Returns a short reason when busy, undefined when idle or unknown.
+ */
+export type ThreadRunningCheck = (workItemId: string, exceptConversation?: number) => string | undefined;
+
+/** The refusal text for a running thread: one wording for the tool, the routes and the console. */
+export const THREAD_RUNNING_MESSAGE = "thread still running";
+
+const THREAD_RUNNING_REGISTRY = Symbol.for("wolfpack.threadRunningCheck");
+function getThreadRunningRegistry(): Map<string, ThreadRunningCheck> {
+  const g = globalThis as Record<symbol, unknown>;
+  return (g[THREAD_RUNNING_REGISTRY] ??= new Map<string, ThreadRunningCheck>()) as Map<string, ThreadRunningCheck>;
+}
+export function threadRunningCheckFor(wolfDen: string): ThreadRunningCheck | undefined {
+  return getThreadRunningRegistry().get(wolfDen);
+}
+export function registerThreadRunningCheck(wolfDen: string, check: ThreadRunningCheck): void {
+  getThreadRunningRegistry().set(wolfDen, check);
+}
+export function unregisterThreadRunningCheck(wolfDen: string, check: ThreadRunningCheck): void {
+  const r = getThreadRunningRegistry();
+  if (r.get(wolfDen) === check) r.delete(wolfDen);
 }

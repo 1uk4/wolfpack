@@ -172,9 +172,9 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
     expect(directive).not.toContain("/wolf:crawl-run");
     const d1 = await client.getThread(home);
     expect(d1.status).toBe("needs-you");
-    expect(d1.pendingCards).toHaveLength(1); // ONE ask, two pages
+    expect(d1.pendingCards).toHaveLength(1); // ONE ask, one page per question
     const [card] = d1.pendingCards!;
-    expect(card.card).toMatchObject({ tool: "ask", paged: true, steps: [{ title: "Crawl plan: where", fields: ["domain"] }, { title: "Crawl plan: shape", fields: ["strategy", "depth", "scope"] }] });
+    expect(card.card).toMatchObject({ tool: "ask", paged: true, steps: [{ title: "Crawl plan: where", fields: ["domain"] }, { title: "Crawl plan: shape", fields: ["strategy"] }, { title: "Crawl plan: shape", fields: ["depth"] }, { title: "Crawl plan: shape", fields: ["scope"] }] });
     expect(card.card.fields.map((f) => [f.id, f.kind])).toEqual(["domain", "strategy", "depth", "scope"].map((id) => [id, "single"]));
     expect(scripted.faux.state.callCount).toBe(2);
 

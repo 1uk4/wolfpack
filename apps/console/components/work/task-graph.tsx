@@ -23,14 +23,14 @@ const STATUS_LABEL: Record<TaskStatus, string> = { shipped: "Shipped", building:
 const LEGEND: TaskStatus[] = ["building", "ready", "blocked", "shipped"];
 
 const CARD: Record<TaskStatus, string> = {
-	shipped: "border-border bg-muted/60 text-muted-foreground",
+	shipped: "border-emerald-500/50 bg-emerald-500/10 text-muted-foreground",
 	building: "border-sky-400 bg-card text-foreground",
 	ready: "border-foreground/40 bg-card text-foreground",
 	blocked: "border-dashed border-border bg-card/60 text-muted-foreground",
 	archived: "border-border bg-card/40 text-muted-foreground opacity-50",
 };
 const DOT: Record<TaskStatus, string> = {
-	shipped: "bg-muted-foreground/60",
+	shipped: "bg-emerald-500",
 	building: "bg-sky-400",
 	ready: "bg-foreground/60",
 	blocked: "border border-muted-foreground/60",
@@ -50,7 +50,7 @@ export interface TaskNodeView {
 }
 
 /** Everything a card shows, derived (pure). */
-export function taskNodeView(n: Pick<TaskNode, "id" | "title" | "kind" | "status">, bound: boolean): TaskNodeView {
+export function taskNodeView(n: Pick<TaskNode, "id" | "title" | "kind" | "status">, bound: boolean, selected = false): TaskNodeView {
 	const statusLabel = STATUS_LABEL[n.status];
 	return {
 		id: n.id,
@@ -60,7 +60,7 @@ export function taskNodeView(n: Pick<TaskNode, "id" | "title" | "kind" | "status
 		kind: n.kind,
 		bound,
 		ariaLabel: `${n.title} (${statusLabel.toLowerCase()}${bound ? ", current task" : ""})`,
-		cardClass: `${CARD[n.status]}${bound ? " ring-2 ring-yellow-400/80 shadow-[0_0_14px_2px_rgba(250,204,21,0.35)]" : ""}`,
+		cardClass: `${CARD[n.status]}${bound ? " ring-2 ring-yellow-400/80 shadow-[0_0_14px_2px_rgba(250,204,21,0.35)]" : ""}${selected ? " ring-2 ring-primary" : ""}`,
 		dotClass: DOT[n.status],
 	};
 }
@@ -136,7 +136,7 @@ const NODE_W_COMPACT = 220;
 const NODE_W_OVERLAY = 220;
 const COMPACT_MAX_H = 420;
 
-function useFlow(model: GraphModel, nodeWidth: number, maxWidth: number, onSelect: ((id: string) => void) | undefined) {
+function useFlow(model: GraphModel, nodeWidth: number, maxWidth: number, onSelect: ((id: string) => void) | undefined, selectedId: string | null = null) {
 	const layout = useMemo(() => layoutTaskGraph(model.nodes, model.edges, { nodeWidth, maxWidth }), [model.nodes, model.edges, nodeWidth, maxWidth]);
 	const nodes = useMemo<Node<CardData>[]>(() => {
 		const byId = new Map(model.nodes.map((n) => [n.id, n] as const));
@@ -146,13 +146,13 @@ function useFlow(model: GraphModel, nodeWidth: number, maxWidth: number, onSelec
 			position: { x: p.x, y: p.y },
 			width: p.w,
 			height: p.h,
-			data: { view: taskNodeView(byId.get(p.id)!, p.id === model.boundId), onSelect },
+			data: { view: taskNodeView(byId.get(p.id)!, p.id === model.boundId, p.id === selectedId), onSelect },
 			draggable: false,
 			connectable: false,
 			selectable: false,
 			focusable: false,
 		}));
-	}, [layout, model.nodes, model.boundId, onSelect]);
+	}, [layout, model.nodes, model.boundId, onSelect, selectedId]);
 	const edges = useMemo<Edge[]>(() => {
 		const status = new Map(model.nodes.map((n) => [n.id, n.status] as const));
 		return model.edges.map((e) => {
@@ -242,6 +242,45 @@ export function TaskGraphCompact({ model, onSelect }: { model: GraphModel; onSel
 				preventScrolling={false}
 				proOptions={{ hideAttribution: true }}
 			/>
+		</div>
+	);
+}
+
+/** The work page's graph: fills its container, pans and pinch-zooms (phone), nodes select (the page shows their progress inline). */
+export function TaskGraphLarge({ model, selectedId, onSelect }: { model: GraphModel; selectedId: string | null; onSelect: (id: string) => void }) {
+	const wrapRef = useRef<HTMLDivElement>(null);
+	const [width, setWidth] = useState(800);
+	useEffect(() => {
+		const el = wrapRef.current;
+		if (!el || typeof ResizeObserver === "undefined") return;
+		setWidth(el.clientWidth || 800);
+		const ro = new ResizeObserver(() => setWidth(el.clientWidth || 800));
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+	const { nodes, edges } = useFlow(model, NODE_W_OVERLAY, width - 32, onSelect, selectedId);
+	return (
+		<div ref={wrapRef} className="h-full w-full touch-none overflow-hidden rounded-xl border bg-background/60 backdrop-blur" role="group" aria-label={`Task graph: ${model.featureTitle}, ${model.label}`} data-testid="work-graph">
+			<ReactFlow
+				nodes={nodes}
+				edges={edges}
+				nodeTypes={nodeTypes}
+				style={FLOW_STYLE}
+				fitView
+				fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
+				minZoom={0.1}
+				maxZoom={2}
+				nodesDraggable={false}
+				nodesConnectable={false}
+				nodesFocusable={false}
+				edgesFocusable={false}
+				elementsSelectable={false}
+				panOnDrag
+				zoomOnPinch
+				proOptions={{ hideAttribution: true }}
+			>
+				<Controls showInteractive={false} position="bottom-right" className="max-md:hidden" />
+			</ReactFlow>
 		</div>
 	);
 }

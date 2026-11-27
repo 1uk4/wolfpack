@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
 import createTasksExtension from "./unified-tasks.js";
+import { registerThreadRunningCheck, unregisterThreadRunningCheck } from "@wolfpack/harness/memory";
 
 // task_graduate and task_stage(archived) never act: they file an owner-approval request on the hub.
 // Two in-memory servers behind fetch: the Work API (/work) and the hub's request route (/v1/work/:id/requests).
@@ -106,6 +107,24 @@ describe("task_graduate files an owner-approval request and never graduates", ()
     expect(inboxFiles()).toEqual([]);
     expect(items.get(f.id)!.graduated).toBeNull();
     expect(items.get(f.id)!.stage).toBe("shipped");
+  });
+
+  it("answers a clear thread-still-running error and files nothing while the feature's thread is busy; files again once idle", async () => {
+    const f = ready();
+    let busy: string | undefined = "a turn is in progress";
+    const check = (id: string) => (id === f.id ? busy : undefined);
+    registerThreadRunningCheck(den, check);
+    try {
+      const refused = await run("task_graduate", { id: f.id });
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0].text).toContain("thread still running: a turn is in progress");
+      expect(filed).toEqual([]);
+      busy = undefined;
+      expect((await run("task_graduate", { id: f.id })).isError).toBeUndefined();
+      expect(filed).toHaveLength(1);
+    } finally {
+      unregisterThreadRunningCheck(den, check);
+    }
   });
 
   it("a request already pending returns the existing id, not a second request", async () => {

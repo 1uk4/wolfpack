@@ -51,6 +51,8 @@ import { ActivityFeed } from "./live/activity-feed";
 import { LiveErrorBoundary } from "./live/live-error-boundary";
 import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
+import { useGraphGroups } from "./use-graph-groups";
+import type { GraphGroups } from "@/src/core";
 import { useWorkReader } from "../work/work-reader.tsx";
 import { Hint } from "@/components/ui/hint";
 import { dataStore, entryIdOfNode } from "@/src/core";
@@ -125,6 +127,8 @@ export function GraphChromeRow({
 	settings,
 	changeSettings,
 	domains = [],
+	groups,
+	changeGroups,
 }: {
 	isEmpty: boolean;
 	query: string;
@@ -136,6 +140,9 @@ export function GraphChromeRow({
 	settings: GraphRenderSettings;
 	changeSettings: (update: (cur: RenderSettings) => RenderSettings) => void;
 	domains?: KbGraph["domains"];
+	/** Visual domain groups and their editor (work-wolfpack-FnzgC6g); absent = no Groups section. */
+	groups?: GraphGroups;
+	changeGroups?: (update: (cur: GraphGroups) => GraphGroups) => void;
 }) {
 	return (
 		<>
@@ -164,7 +171,7 @@ export function GraphChromeRow({
 				</div>
 			)}
 			<div className="graph-chrome-fade-in flex shrink-0 items-center gap-2">
-				<GraphSettingsControl settings={settings} changeSettings={changeSettings} domains={domains} />
+				<GraphSettingsControl settings={settings} changeSettings={changeSettings} domains={domains} groups={groups} changeGroups={changeGroups} />
 			</div>
 		</>
 	);
@@ -222,7 +229,8 @@ export function GraphView({
 		return () => window.removeEventListener("wolfpack:kbd-find", onFind);
 	}, []);
 
-	const canvasData = useMemo(() => toCanvasData(graph, { groupBy: settings.groupBy }), [graph, settings.groupBy]);
+	const groupState = useGraphGroups();
+	const canvasData = useMemo(() => toCanvasData(graph, { groupBy: settings.groupBy, groups: groupState.groups }), [graph, settings.groupBy, groupState.groups]);
 	const visibleIds = useMemo(() => visibleNodeIds(graph.nodes, query), [graph, query]);
 	const isEmpty = graph.nodes.length === 0;
 
@@ -341,7 +349,7 @@ export function GraphView({
 		if (!renderer || isEmpty || !storedLoaded) return;
 		const known = renderer.positions();
 		for (const [id, p] of storedRef.current) if (!known.has(id)) known.set(id, p);
-		const { positions, added } = resolvePositions(canvasData.nodes, canvasData.edges, known, { clusters: canvasData.clusters, depSprings: { edges: canvasData.depSprings }, linkLengths: canvasData.linkLengths });
+		const { positions, added } = resolvePositions(canvasData.nodes, canvasData.edges, known, { clusters: canvasData.clusters, groups: canvasData.groups, depSprings: { edges: canvasData.depSprings }, linkLengths: canvasData.linkLengths });
 		if (added.length > 0) {
 			const batch: Record<string, Position> = {};
 			for (const id of added) {
@@ -359,6 +367,7 @@ export function GraphView({
 			linkLengths: canvasData.linkLengths,
 			clusters: canvasData.clusters,
 			subClusters: canvasData.subClusters,
+			groups: canvasData.groups,
 			depths: canvasData.depths,
 			colors: {
 				node: tokenHex(NODE_COLOR_TOKEN),
@@ -394,6 +403,11 @@ export function GraphView({
 		return toRouteSelection(selectedRoute, cursor, node?.domain);
 	}, [graph, selectedRoute, selectedId, cursor]);
 	const activeRoute = routeSelection ?? route;
+
+	// The selected node keeps its label and its parent chain on the map.
+	useEffect(() => {
+		rendererRef.current?.setSelectedNode(selectedId);
+	}, [selectedId, canvasData, isEmpty, storedLoaded]);
 
 	// Route selection: just marks the frame dirty (like settings).
 	useEffect(() => {
@@ -563,6 +577,8 @@ export function GraphView({
 							settings={settings}
 							changeSettings={changeSettings}
 							domains={graph.domains}
+							groups={groupState.groups}
+							changeGroups={groupState.changeGroups}
 						/>
 					</div>
 				</div>

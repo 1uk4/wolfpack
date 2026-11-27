@@ -7,6 +7,8 @@ import { multiInBounds } from "@/src/core";
 import type { CardField } from "@wolfpack/client";
 import { isSameOriginPath } from "@wolfpack/protocol";
 import { openGraduationLink, useOpenView } from "@/components/viewer/viewer-context";
+import { HourglassIcon } from "lucide-react";
+import { THREAD_RUNNING_LABEL, graduationOptionWolf, useRunningItems } from "@/components/work/thread-running";
 import { CardTextInput, Indicator, OPTION_ROW } from "./shared";
 import type { FieldRendererProps } from "./types";
 
@@ -24,6 +26,9 @@ export function MultiRenderer({
 }: FieldRendererProps<Extract<CardField, { kind: "multi" }>>) {
 	const openView = useOpenView();
 	const picked = Array.isArray(value?.value) ? value.value : [];
+	// A graduation card (its options link to the graduation view of a work item): an item whose feature thread still runs shows but cannot be picked.
+	const gradWolf = field.options.map((o) => graduationOptionWolf("href" in o ? (o.href as string | undefined) : undefined)).find((w) => w !== undefined);
+	const running = useRunningItems(gradWolf);
 	const custom = value && "other" in value && Array.isArray(value.other) ? value.other : [];
 	const atMax = field.max !== undefined && picked.length >= field.max;
 	const write = (next: string[], nextCustom: string[]) => onChange({ value: next, ...(nextCustom.length > 0 ? { other: nextCustom } : {}) });
@@ -39,6 +44,7 @@ export function MultiRenderer({
 		<div className="flex flex-col gap-1.5 text-sm" role="group" aria-labelledby={labelledBy} data-testid="card-multi">
 			{rows.map((o) => {
 				const sel = picked.includes(o.value);
+				const threadRunning = !!gradWolf && !readOnly && !o.custom && running.has(o.value);
 				const href = "href" in o ? o.href : undefined;
 				// A link is never nested in the option button (it would be invalid HTML and tick the box): it sits beside it. Same-origin paths only.
 				const link = isSameOriginPath(href) ? href : undefined;
@@ -47,7 +53,9 @@ export function MultiRenderer({
 						key={o.value}
 						type="button"
 						aria-pressed={sel}
-						disabled={readOnly || (!sel && atMax)}
+						disabled={readOnly || threadRunning || (!sel && atMax)}
+						aria-label={threadRunning ? `${o.label}: ${THREAD_RUNNING_LABEL}` : undefined}
+						title={threadRunning ? THREAD_RUNNING_LABEL : undefined}
 						data-testid="card-option"
 						data-value={o.value}
 						data-custom={o.custom ? "true" : undefined}
@@ -58,9 +66,10 @@ export function MultiRenderer({
 							readOnly && !sel && "text-muted-foreground",
 							// at max: the unpicked rows stay visible but clearly unavailable
 							!readOnly && !sel && atMax && "cursor-not-allowed opacity-50",
+							threadRunning && "cursor-not-allowed opacity-60",
 						)}
 					>
-						<Indicator shape="check" on={sel} />
+						{threadRunning ? <HourglassIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden /> : <Indicator shape="check" on={sel} />}
 						<span className="flex min-w-0 flex-col items-start">
 							<InlineMarkdown>{o.label}</InlineMarkdown>
 							{o.description && <InlineMarkdown className="block text-xs text-muted-foreground">{o.description}</InlineMarkdown>}

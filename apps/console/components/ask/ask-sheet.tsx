@@ -19,10 +19,11 @@ import { postReply } from "@/components/ask/ask-reply-send";
 import { hasUnsent, InlineAnswerComposer, useInlineAnswers, type InlineDraft } from "@/components/ask/ask-inline-composer";
 import { replyLabel } from "@/components/ask/ask-reply";
 import { make, read, type AnyA, type MultiA, type Opt, type SingleA } from "@/components/ask/ask-answers";
-import { askTarget, type AskQueueView, type AskSession } from "@/components/ask/ask-session";
+import { askProgress, askTarget, type AskQueueView, type AskSession } from "@/components/ask/ask-session";
 import type { Dictation } from "@/components/composer/dictation";
 import { cn } from "@/lib/utils";
-import { escapeRawHtml, type AttachedRef } from "@/src/core";
+import { escapeRawHtml, visibleFields, type AttachedRef } from "@/src/core";
+import { pageBody } from "@/components/ask/ask-answers";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
 import { DIAGRAM_ID_RE } from "@wolfpack/protocol";
 
@@ -77,6 +78,9 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 		go();
 	};
 	const steps = pc.card.steps ?? [];
+	const asked = visibleFields(pc.card, draft);
+	const answeredCount = asked.filter((f) => Object.keys(pageBody([f], draft)).length > 0).length;
+	const progress = askProgress(answeredCount, asked.length);
 	// Skipped questions (optional ones the owner passed on): greyed until Answer or a click brings them back. A draft that arrives (bound text) also ends the skip.
 	const [skippedIds, setSkippedIds] = useState<ReadonlySet<string>>(new Set());
 	useEffect(() => setSkippedIds(new Set()), [pageIndex, pc.callId]);
@@ -160,6 +164,9 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 
 	return (
 		<div data-testid="ask-sheet" data-call-id={pc.callId} data-page={pageIndex} className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card text-card-foreground">
+			<div role="progressbar" aria-label="Progress through the questions" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} aria-valuetext={`${answeredCount} of ${asked.length} answered`} data-testid="ask-progress" className="h-0.5 w-full shrink-0 bg-border">
+				<div className="wp-ask-progress h-full bg-(color:--thread-accent)" style={{ width: `${progress}%` }} />
+			</div>
 			<div className="flex shrink-0 flex-col gap-2 border-b px-4 pb-2.5 pt-3">
 				<div className="flex items-baseline justify-between gap-2">
 					<span className="flex min-w-0 items-center gap-1">
@@ -185,19 +192,14 @@ export function AskSheet({ target: host, session, queue, answering, setAnswering
 								</button>
 							</span>
 						)}
-						<span data-testid="ask-page-count" className="font-ui text-xs text-muted-foreground">page {pageIndex + 1} of {steps.length}</span>
+						<span data-testid="ask-page-count" className="font-ui text-xs text-muted-foreground">{pageIndex + 1} of {steps.length}</span>
 						<button type="button" data-testid="ask-collapse" aria-label="Collapse the questions" onClick={session.collapse} className={cn("flex size-6 max-md:min-h-11 max-md:min-w-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground", FOCUS)}>
 							<ChevronDownIcon aria-hidden className="size-4" />
 						</button>
 					</span>
 				</div>
-				<div aria-hidden className="flex gap-1">
-					{steps.map((_, i) => (
-						<span key={i} className={cn("h-1 flex-1 rounded-full transition-colors", i <= pageIndex ? "bg-(color:--thread-accent)" : "bg-border")} />
-					))}
-				</div>
 			</div>
-			<div key={pageIndex} className="wp-card-enter min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-4">
+			<div key={pageIndex} className="wp-card-enter wp-ask-slide min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-4">
 				{fields.map((f) => {
 					const n = pc.card.fields.findIndex((x) => x.id === f.id) + 1;
 					const labelId = `ask-${pc.callId}-${f.id}-label`;

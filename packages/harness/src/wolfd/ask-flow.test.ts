@@ -109,7 +109,7 @@ describe("ask questionnaire over /v1", () => {
     await w.client.bindCardText!(w.home, callId, "why", "because");
     await w.client.submit(w.home, "forget the form", { whenBusy: "reject" });
     await drain(w);
-    expect(seen).toContain("Page 1 of 3 (One): Name? => Ada | Page 2 of 3 (Two): Why => because (typed, not submitted); Other => unanswered | Page 3 of 3 (Three): Last => unanswered");
+    expect(seen).toContain("Page 1 of 4 (One): Name? => Ada | Page 2 of 4 (Two): Why => because (typed, not submitted) | Page 3 of 4 (Two): Other => unanswered | Page 4 of 4 (Three): Last => unanswered");
     expect((await toolResults(w, "write"))[0].isError).toBe(false);
     const user = (await w.client.getThread(w.home)).messages.filter((m) => m.role === "user").at(-1)!;
     expect(user.text).toBe("forget the form"); // the note is stripped from what the owner sees

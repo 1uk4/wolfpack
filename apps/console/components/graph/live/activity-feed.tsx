@@ -16,12 +16,42 @@ import { ActivityIcon, ChevronDownIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { feedCountReducer, feedPillLabel, formatFeed, relativeTime, type FeedLine } from "@/src/core";
+import { feedCountReducer, feedPillLabel, formatFeed, formatPool, memoryRows, pendingNotice, poolBars, relativeTime, resolveTab, tabItems, tabsFor, wolfColor, type ActivityTab, type FeedLine, type MemoryRow } from "@/src/core";
+import type { MemoryStatus } from "@wolfpack/client";
+import { fetchMemoryStatus } from "@/components/kb/kb-client";
+import { setKbHover, useKbLiveEvents } from "./kb-life-store";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
 import { liveSettingsOf, type OverlayHighlight } from "./live-overlay";
 import { useLiveActivity } from "./live-store";
 
 const KEY = "wolfpack.graph.activityFeed.collapsed";
+const TAB_KEY = "wolfpack.graph.activityFeed.tab";
+const TAB_LABEL: Record<ActivityTab, string> = { all: "All", kb: "KB", memory: "Memory" };
+const PENDING_POLL_MS = 30_000;
+
+/** One wolf's stuck-saves summary, refreshed every 30 s while the Memory tab is open. An older wolfd (no field) or an unreachable wolf shows nothing. */
+function usePending(wolves: readonly string[], active: boolean): Record<string, MemoryStatus["pending"]> {
+	const [pending, setPending] = useState<Record<string, MemoryStatus["pending"]>>({});
+	const names = wolves.join("\n");
+	useEffect(() => {
+		if (!active || !names) return;
+		let stop = false;
+		const poll = () => {
+			for (const w of names.split("\n")) {
+				void fetchMemoryStatus(w, undefined, 0).then((r) => {
+					if (!stop && r.ok) setPending((cur) => ({ ...cur, [w]: r.data.pending }));
+				});
+			}
+		};
+		poll();
+		const t = setInterval(poll, PENDING_POLL_MS);
+		return () => {
+			stop = true;
+			clearInterval(t);
+		};
+	}, [names, active]);
+	return pending;
+}
 const VISIBLE = 8;
 
 const isPhone = () =>
@@ -45,7 +75,15 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	const priv = (settings as { privateView?: boolean } | null)?.privateView === true;
 	const router = useRouter();
 	const attachApi = useAttachedThread();
-	const { recent, connected } = useLiveActivity({ enabled: live.enabled });
+	const { recent, connected, state } = useLiveActivity({ enabled: live.enabled });
+	const memoryOn = live.memory;
+	const events = useKbLiveEvents(live.enabled && memoryOn);
+	const rows = useMemo(() => memoryRows(events), [events]);
+	const bars = useMemo(() => poolBars(events), [events]);
+	const [savedTab, setSavedTab] = useState<string | null>(null);
+	const tab = resolveTab(savedTab, memoryOn);
+	const wolfNames = useMemo(() => [...new Set([...Object.keys(state.wolves), ...Object.keys(bars)])].sort(), [state.wolves, bars]);
+	const pending = usePending(wolfNames, memoryOn && tab === "memory");
 	const [count, dispatch] = useReducer(feedCountReducer, { collapsed: false, count: 0 });
 	const [ready, setReady] = useState(false);
 	const [now, setNow] = useState(() => Date.now());
@@ -56,10 +94,27 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	// Read the remembered state after mount (SSR-safe).
 	useEffect(() => {
 		if (initialCollapsed()) dispatch({ type: "collapse" });
+		try {
+			setSavedTab(localStorage.getItem(TAB_KEY));
+		} catch {
+			/* storage blocked: All */
+		}
 		setReady(true);
 	}, []);
 
 	const lines = useMemo(() => formatFeed(recent, { private: priv }), [recent, priv]);
+	const items = useMemo(() => tabItems(tab, lines, rows, memoryOn), [tab, lines, rows, memoryOn]);
+	// A memory row is drawn as a feed line; its map focus (wolf, entry, topic dot) goes through the KB hover bus.
+	const memFocus = useRef(new Map<string, MemoryRow["focus"]>());
+	const pickTab = (t: ActivityTab) => {
+		try {
+			localStorage.setItem(TAB_KEY, t);
+		} catch {
+			/* ignore */
+		}
+		setSavedTab(t);
+		highlight(null);
+	};
 
 	// Events since collapsing: everything after the last id seen.
 	useEffect(() => {
@@ -86,11 +141,12 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	useEffect(() => {
 		const el = listRef.current;
 		if (el) el.scrollTop = el.scrollHeight;
-	}, [lines.length, count.collapsed]);
+	}, [items.length, count.collapsed, tab]);
 
 	const highlight = useCallback(
 		(h: OverlayHighlight | null) => {
 			renderer?.setOverlayHighlight(h);
+			if (h === null) setKbHover(null);
 		},
 		[renderer],
 	);
@@ -129,6 +185,8 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	const enter = (l: FeedLine) => {
 		pinnedByTouch.current = lastPointer.current === "touch";
 		setActive(l.key);
+		const mf = memFocus.current.get(l.key);
+		if (mf) return void setKbHover(mf);
 		highlight({ nodeId: l.nodeId, target: l.target, wolf: l.target || l.nodeId ? undefined : l.wolf === "you" ? undefined : l.wolf });
 	};
 	const leave = () => {
@@ -149,7 +207,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	if (!live.enabled || !ready || !connected) return null;
 	const motion = reducedMotion() ? "" : "transition-[opacity,transform] duration-200 ease-[cubic-bezier(.34,1.56,.64,1)]";
 
-	if (count.collapsed || lines.length === 0) {
+	if (count.collapsed || (lines.length === 0 && rows.length === 0 && !(memoryOn && tab === "memory" && wolfNames.length > 0))) {
 		return (
 			<div className="pointer-events-none absolute bottom-[calc(var(--chat-bar-top,0px)+12px)] left-3 z-[6]">
 				<button
@@ -165,12 +223,23 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 		);
 	}
 
-	const shown = lines.slice(-50);
+	const shown: FeedLine[] = items.slice(-50).map((it) => {
+		if (it.kind === "line") return it.line;
+		memFocus.current.set(it.key, it.row.focus);
+		const wolf = it.row.wolf ?? "wolf";
+		return { key: it.key, wolf, color: wolfColor(wolf), text: it.row.wolf && !it.row.text.startsWith(wolf) ? `${wolf} · ${it.row.text}` : it.row.text, time: it.row.at, tone: "normal" };
+	});
+	const tabs = tabsFor(memoryOn);
 	return (
 		<div className="pointer-events-none absolute bottom-[calc(var(--chat-bar-top,0px)+12px)] left-3 z-[6] w-[280px] max-w-[calc(100%-1.5rem)]">
 			<div className={`pointer-events-auto overflow-hidden rounded-[12px] border border-border/50 bg-background/70 shadow-sm backdrop-blur-md ${motion}`}>
 				<div className="flex items-center justify-between px-2.5 pt-1.5 text-[11px] text-muted-foreground">
-					<span className="inline-flex items-center gap-1.5"><ActivityIcon className="size-3.5" />Activity</span>
+					<span className="inline-flex items-center gap-1" role="tablist" aria-label="Activity">
+						<ActivityIcon className="mr-0.5 size-3.5" />
+						{tabs.map((t) => (
+							<button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => pickTab(t)} className={`rounded px-1.5 py-0.5 ${tab === t ? "bg-muted/70 text-foreground" : "hover:text-foreground"}`}>{TAB_LABEL[t]}</button>
+						))}
+					</span>
 					<TooltipProvider>
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -182,7 +251,28 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 					</Tooltip>
 					</TooltipProvider>
 				</div>
+				{memoryOn && tab === "memory" && wolfNames.length > 0 && (
+					<div className="space-y-1 px-2.5 pt-1.5">
+						{wolfNames.map((w) => {
+							const bar = bars[w];
+							const warn = pendingNotice(pending[w]);
+							return (
+								<div key={w} className="text-[11px] leading-4">
+									<div className="flex items-center gap-2">
+										<span className="w-14 shrink-0 truncate text-foreground">{w}</span>
+										<span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted/60">
+											<span className="block h-full rounded-full" style={{ width: `${bar ? Math.min(100, (bar.count / Math.max(1, bar.capacity)) * 100) : 0}%`, background: wolfColor(w) }} />
+										</span>
+										<span className="shrink-0 tabular-nums text-muted-foreground">{formatPool(bar)}</span>
+									</div>
+									{warn && <div title={warn.title} className="truncate pl-16 text-amber-500">{warn.text}</div>}
+								</div>
+							);
+						})}
+					</div>
+				)}
 				<div ref={listRef} className="max-h-[168px] overflow-y-auto px-1.5 pb-1.5 pt-1" onMouseLeave={leave}>
+					{shown.length === 0 && <div className="px-1.5 py-1 text-[12px] text-muted-foreground">Quiet</div>}
 					{shown.map((l, i) => {
 						const fromEnd = shown.length - 1 - i;
 						const fade = fromEnd >= VISIBLE ? 0.35 : 1 - Math.max(0, fromEnd - 3) * 0.14;

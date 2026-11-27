@@ -26,6 +26,7 @@ export * from "./graph/live/kb-nerve.ts";
 export * from "./graph/live/kb-life-log.ts";
 export * from "./graph/live/live-physics.ts";
 export * from "./graph/live/feed.ts";
+export * from "./graph/live/memory-tab.ts";
 export * from "./graph/simple-settings.ts";
 export * from "./graph/label-lod.ts";
 export * from "./graph/groups.ts";

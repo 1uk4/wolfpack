@@ -15,8 +15,18 @@ const EMIT_MS = 250;
 
 /** The memory events seen since the page opened, oldest first, with the browser time each arrived. */
 export function useKbLiveRows(): KbLogRow[] {
+	const events = useKbLiveEvents();
+	return useMemo(() => foldEvents(events), [events]);
+}
+
+/** The raw memory events behind the rows (oldest first, with arrival ms). With enabled false it collects nothing and holds no feed reference. */
+export function useKbLiveEvents(enabled = true): { event: ActivityEvent; at: number }[] {
 	const [events, setEvents] = useState<{ event: ActivityEvent; at: number }[]>([]);
 	useEffect(() => {
+		if (!enabled) {
+			setEvents((cur) => (cur.length ? [] : cur));
+			return;
+		}
 		const release = acquireLiveFeed();
 		let buf: { event: ActivityEvent; at: number }[] = [];
 		let timer: ReturnType<typeof setTimeout> | null = null;
@@ -41,8 +51,8 @@ export function useKbLiveRows(): KbLogRow[] {
 			release();
 			if (timer) clearTimeout(timer);
 		};
-	}, []);
-	return useMemo(() => foldEvents(events), [events]);
+	}, [enabled]);
+	return events;
 }
 
 // ── reset bus: the demo ending clears the log rows and the map's KB state ──

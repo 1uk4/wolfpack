@@ -3,6 +3,7 @@
 import { ArrowUpIcon, CornerDownLeftIcon, ImageIcon, KeyboardIcon, Loader2Icon, MicIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { endOnFocus, endOnOutsideMouseDown } from "@/components/composer/caret-end";
+import { useBusyAction } from "@/components/ui/use-busy-action";
 import { Hint } from "@/components/ui/hint";
 import { RecordingMarker } from "@/components/composer/recording-marker";
 import { droppedFiles, pastedImages, PICKER_ACCEPT, type PendingAttachment } from "@/components/composer/attachments";
@@ -113,6 +114,7 @@ export function Composer({
 	sendAriaLabel,
 	voice,
 	phoneRow,
+	sending,
 }: {
 	/** Phone dock, classic states (questionnaire note): one row [attach] [field] [mic] [submit], the field one line at rest and growing to about five. */
 	phoneRow?: { mic: React.ReactNode };
@@ -131,7 +133,10 @@ export function Composer({
 	busy: boolean;
 	value: string;
 	onChange: (v: string) => void;
-	onSend: () => void;
+	/** May return a promise: the send button stays disabled with a spinner until it settles, and a second press is ignored. */
+	onSend: () => unknown;
+	/** The host knows a longer event is running (graduating, shipping): the send button is disabled with a spinner. */
+	sending?: boolean;
 	onStop: () => void;
 	canSend: boolean;
 	/** A dictation run is flushing its last words (the mic is already off): the send button shows a spinner meanwhile. */
@@ -165,15 +170,17 @@ export function Composer({
 	const mode = mainButtonMode({ dictating: dictating === true, finishing: finishing === true, busy, canSend, voice: voice !== undefined });
 	// The one-row phone layout drops the word for an icon (the aria-label and tooltip keep it), except while armed ("Send anyway?" needs its words).
 	const labelled = (mode === "send" || mode === "stop-wolf") && sendLabel !== undefined && (canSend || alwaysLabel === true) && (!phoneRow || armed !== undefined);
+	const { run: runSend, busy: sendBusy } = useBusyAction(onSend, sending === true);
+	const sendLocked = sendBusy && mode === "send";
 	const act = (viaEnter = false) => {
 		// Dictation phases never reach onStop: recording only finishes the run, flushing does nothing.
 		if (mode === "finishing") return;
-		if (mode === "stop-dictation") return onSend();
+		if (mode === "stop-dictation") return void onSend();
 		// Enter in the open field never starts the mic: with the wolf working it stays the stop shortcut.
 		if (mode === "dictate") return viaEnter ? (busy ? onStop() : undefined) : voice?.onDictate();
 		const action = viaEnter && enterSends ? "send" : enterAction({ busy, canSend });
 		if (action === "stop") onStop();
-		else if (action === "send") onSend();
+		else if (action === "send") void runSend();
 	};
 	const buttonLabel =
 		mode === "finishing" ? "Finishing dictation" : mode === "stop-dictation" ? "Stop dictation" : mode === "dictate" ? "Start dictation" : labelled ? (sendAriaLabel ?? sendLabel ?? "Send") : mode === "stop-wolf" ? "Stop" : "Send";
@@ -185,7 +192,8 @@ export function Composer({
 			data-finishing={finishing ? "true" : undefined}
 			data-dictating={mode === "stop-dictation" ? "true" : undefined}
 			aria-label={buttonLabel}
-			disabled={mode === "finishing" || (mode === "send" && !canSend)}
+			aria-busy={sendLocked || undefined}
+			disabled={mode === "finishing" || sendLocked || (mode === "send" && !canSend)}
 			className={cn(
 				"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors max-md:size-11 max-md:rounded-full",
 				voice && "max-md:size-14",
@@ -203,7 +211,7 @@ export function Composer({
 					: "bg-(color:--thread-accent) text-(color:--thread-accent-foreground) hover:opacity-90 disabled:opacity-40",
 			)}
 		>
-			{mode === "finishing" ? (
+			{mode === "finishing" || sendLocked ? (
 				<Loader2Icon className="size-5 animate-spin" />
 			) : mode === "stop-dictation" ? (
 				// Live indicator: a soft pulse while the mic records (off under prefers-reduced-motion).

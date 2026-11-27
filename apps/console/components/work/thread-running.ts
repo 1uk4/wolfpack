@@ -57,19 +57,42 @@ class ThreadRunningStore {
 	itemsOf(wolf: string | undefined): ReadonlySet<string> {
 		return (wolf && this.byWolf.get(wolf)) || EMPTY;
 	}
-	/** Read the wolf's thread list again. An unreadable list keeps the last answer. */
-	async refresh(wolf: string): Promise<void> {
-		try {
-			const next = runningItemIds(await this.load(wolf));
-			const prev = this.byWolf.get(wolf) ?? EMPTY;
-			if (next.size === prev.size && [...next].every((id) => prev.has(id))) return;
-			this.byWolf.set(wolf, next);
-			for (const fn of this.subs) fn();
-		} catch {
-			/* keeps the last answer; the wolf refuses anyway */
+	private inflight = new Map<string, Promise<void>>();
+	private again = new Set<string>();
+	private epoch = 0;
+	/**
+	 * Read the wolf's thread list again. One read per wolf is in flight at a time, shared by every caller; refreshes that arrive
+	 * meanwhile fold into ONE trailing read, so answers apply in order. An unreadable list keeps the last answer.
+	 */
+	refresh(wolf: string): Promise<void> {
+		const running = this.inflight.get(wolf);
+		if (running) {
+			this.again.add(wolf);
+			return running;
 		}
+		const p = this.drain(wolf).finally(() => this.inflight.delete(wolf));
+		this.inflight.set(wolf, p);
+		return p;
+	}
+	private async drain(wolf: string): Promise<void> {
+		do {
+			this.again.delete(wolf);
+			const epoch = this.epoch;
+			try {
+				const next = runningItemIds(await this.load(wolf));
+				if (epoch !== this.epoch) continue; // a reset overtook this answer
+				const prev = this.byWolf.get(wolf) ?? EMPTY;
+				if (next.size === prev.size && [...next].every((id) => prev.has(id))) continue;
+				this.byWolf.set(wolf, next);
+				for (const fn of this.subs) fn();
+			} catch {
+				/* keeps the last answer; the wolf refuses anyway */
+			}
+		} while (this.again.has(wolf));
 	}
 	reset() {
+		this.epoch++;
+		this.again.clear();
 		this.byWolf.clear();
 		for (const fn of this.subs) fn();
 	}

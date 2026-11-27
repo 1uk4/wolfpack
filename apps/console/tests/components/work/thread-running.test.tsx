@@ -45,6 +45,34 @@ describe("runningItemIds", () => {
 	});
 });
 
+describe("the thread list store", () => {
+	it("shares one in-flight read per wolf, re-reads once after a refresh that arrived meanwhile, and drops an answer that a reset overtook", async () => {
+		const gates: Array<(rows: unknown[]) => void> = [];
+		let calls = 0;
+		threadRunningStore.load = () => new Promise((resolve) => {
+			calls++;
+			gates.push(resolve as (rows: unknown[]) => void);
+		});
+		const busy = [{ id: "t1", kind: "feature", boundWorkItem: "work-w-A", status: "busy" }];
+		const a = threadRunningStore.refresh("hal");
+		const b = threadRunningStore.refresh("hal");
+		const c = threadRunningStore.refresh("hal");
+		assert.equal(calls, 1, "three callers, one read");
+		gates[0]!([]);
+		await new Promise((r) => setTimeout(r, 0));
+		assert.equal(calls, 2, "one trailing read for the refreshes that arrived during the first");
+		gates[1]!(busy);
+		await Promise.all([a, b, c]);
+		assert.equal(threadRunningStore.running("hal", "work-w-A"), true);
+		assert.equal(calls, 2);
+		const d = threadRunningStore.refresh("hal");
+		threadRunningStore.reset();
+		gates[2]!(busy);
+		await d;
+		assert.equal(threadRunningStore.running("hal", "work-w-A"), false, "the stale answer is not applied after the reset");
+	});
+});
+
 let root: Root | undefined;
 afterEach(() => {
 	act(() => root?.unmount());

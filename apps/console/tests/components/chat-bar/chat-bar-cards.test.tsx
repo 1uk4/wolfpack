@@ -172,7 +172,7 @@ describe("ChatBar cards", () => {
 		await click(q('[data-testid="card-submit"]'));
 		await until(() => !q('[data-testid="bar-card"]'), "the answered card to leave");
 		const post = calls.find((c) => c.url.endsWith("/threads/a/cards/c1/answer"))!;
-		assert.deepEqual(post.body, { answers: { c: { value: "blue" } } });
+		assert.deepEqual(post.body, { answers: { c: { value: "blue" } }, tool: "ask_user_question" });
 	});
 
 	it("skips through the skip route", async () => {
@@ -430,7 +430,7 @@ describe("ChatBar cards", () => {
 		assert.equal(q('[data-testid="card-submit"]')!.textContent, "OK");
 		await click(q('[data-testid="card-submit"]'));
 		await until(() => calls.some((c) => c.url.endsWith("/cards/b1/answer")), "the answer POST");
-		assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/b1/answer"))!.body, { answers: {} });
+		assert.deepEqual(calls.find((c) => c.url.endsWith("/cards/b1/answer"))!.body, { answers: {}, tool: "brief" });
 	});
 
 	describe("producers", () => {

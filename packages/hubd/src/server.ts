@@ -80,8 +80,7 @@ import { createLinkContributions, type LinkContributions } from "./link-contribu
 import { createLink, type Link, type LinkTimers } from "./link.js";
 import { createApprovalStore } from "./work-approvals.js";
 import { CreateApprovalRequestBodySchema, DirectGraduateBodySchema } from "@wolfpack/protocol";
-import { THREAD_COLOR_KEYS } from "@wolfpack/protocol";
-import { CommandRequestSchema, INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES, InventoryReportBodySchema, LINK_PATH, MachineKeyAckBodySchema, wolfForRoute } from "@wolfpack/protocol";
+import { CommandRequestSchema, THREAD_COLOR_KEYS, INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES, InventoryReportBodySchema, LINK_PATH, MachineKeyAckBodySchema, wolfForRoute } from "@wolfpack/protocol";
 import { createInventory, type Inventory } from "./inventory.js";
 import { createCommandHub, type CommandHub } from "./commands.js";
 import { createMachineKeys, type MachineKeys } from "./machine-keys.js";

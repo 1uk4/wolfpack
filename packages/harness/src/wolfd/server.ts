@@ -53,7 +53,8 @@ import {
 import {
   type EngineConversation,
 } from "../engine/index.js";
-import { graduationActionsFor, memoryActionsFor, type MemoryActions } from "../memory/actions.js";
+import { graduationActionsFor, memoryActionsFor, registerThreadRunningCheck, unregisterThreadRunningCheck, THREAD_RUNNING_MESSAGE, type MemoryActions, type ThreadRunningCheck } from "../memory/actions.js";
+import { runningReasonFor } from "./graduation-busy.js";
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import { memoryActivityListener } from "./activity-memory.js";
 import { getPoolStats } from "../memory/consolidation.js";
@@ -337,6 +338,7 @@ export class WolfServer {
     });
     this.lag ??= createLagMonitor();
     this.startApprovalWatch();
+    this.registerRunningCheck();
     this.baseUrl = `http://127.0.0.1:${(this.http.address() as AddressInfo).port}`;
     return this.baseUrl;
   }
@@ -350,6 +352,7 @@ export class WolfServer {
     });
     this.lag ??= createLagMonitor();
     this.startApprovalWatch();
+    this.registerRunningCheck();
     this.socketPath = path;
     this.baseUrl = `unix:${path}`;
     return this.baseUrl;
@@ -359,6 +362,7 @@ export class WolfServer {
     this.closing = true;
     this.stopApprovalWatch?.();
     this.unsubMemoryActivity?.();
+    if (this.opts.den && this.runningCheck) unregisterThreadRunningCheck(this.opts.den, this.runningCheck);
     this.activityTap?.stop(); // queues wolf-offline
     void this.opts.activity?.stop().catch(() => {});
     this.lag?.stop();
@@ -473,6 +477,27 @@ export class WolfServer {
     return closed;
   }
 
+  /** Why the feature thread bound to this work item is busy (a turn or live sub-agents), or undefined. The graduation wiring asks it too. */
+  threadRunningReason(workItemId: string, exceptConversation?: number): string | undefined {
+    const states = [...this.threads.values()]
+      .filter((t) => t.summary.kind === "feature" && t.summary.boundWorkItem === workItemId)
+      .map((t) => ({
+        kind: t.summary.kind,
+        boundWorkItem: t.summary.boundWorkItem,
+        conversationId: String(t.conv.id),
+        running: t.isRunning,
+        liveChildren: (this.subagents?.children(t.summary.id) ?? []).filter((c) => c.state === "queued" || c.state === "running" || c.state === "waiting").map((c) => c.title),
+      }));
+    return runningReasonFor(workItemId, states, exceptConversation);
+  }
+
+  private runningCheck: ThreadRunningCheck | undefined;
+  private registerRunningCheck(): void {
+    if (!this.opts.den || this.runningCheck) return;
+    this.runningCheck = (id, except) => this.threadRunningReason(id, except);
+    registerThreadRunningCheck(this.opts.den, this.runningCheck);
+  }
+
   private stopApprovalWatch: (() => void) | undefined;
   private startApprovalWatch(): void {
     const target = this.opts.hubEvents;
@@ -540,6 +565,7 @@ export class WolfServer {
     const message = e instanceof Error ? e.message : String(e);
     if (code === "not_ready") return { code: "not_ready", message };
     if (code === "preview_stale") return { code: "preview_stale", message };
+    if (code === "thread_running") return { code: "thread_running", message };
     if (code === "unavailable") return { code: "memory_unavailable", message };
     return { code: "engine_error", message };
   }
@@ -1254,15 +1280,21 @@ export class WolfServer {
       }
       case "graduationStatus": {
         const actions = this.graduationFor(params);
+        // A preview that could be approved is only shown while the feature thread is idle: a stale tab cannot approve a running feature.
+        const reply = (body: { state: string; [k: string]: unknown }) => {
+          const busy = body.state === "preview_ready" ? this.threadRunningReason(params.id) : undefined;
+          if (busy) throw new HttpError("thread_running", `${THREAD_RUNNING_MESSAGE}: ${busy}`);
+          return this.json(res, 200, body);
+        };
         const known = this.graduationJobs.get(params.name, params.id);
         // A confirm that failed for another reason than a stale token left the preview valid: it is ready to confirm again.
         const retryable = known?.state === "error" && known.kind === "confirm" && known.code !== "preview_stale";
-        if (known && !retryable) return this.json(res, 200, known);
+        if (known && !retryable) return reply(known);
         // No job in memory (wolfd restarted), or a failed confirm: a preview whose token file is still fresh is ready to confirm.
         const preview = await actions.pendingPreview(params.id).catch(() => undefined);
-        if (!preview && known) return this.json(res, 200, known);
-        if (preview && known?.state === "error") return this.json(res, 200, { state: "preview_ready", preview, lastError: { kind: known.kind, code: known.code, message: known.message } });
-        return this.json(res, 200, preview ? { state: "preview_ready", preview } : { state: "none" });
+        if (!preview && known) return reply(known);
+        if (preview && known?.state === "error") return reply({ state: "preview_ready", preview, lastError: { kind: known.kind, code: known.code, message: known.message } });
+        return reply(preview ? { state: "preview_ready", preview } : { state: "none" });
       }
       case "graduationObservations": {
         const actions = this.graduationFor(params);

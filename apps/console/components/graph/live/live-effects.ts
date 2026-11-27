@@ -29,6 +29,16 @@ export type EffectDrawer = (a: EffectArgs) => void;
 
 export const AMBER = "#f59e0b";
 
+/** `ctx.arc` with the radius floored at 0 (and 0 when not finite): the canvas throws IndexSizeError on a negative radius, which would disable the whole overlay. */
+export function safeArc(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, a0: number, a1: number, ccw?: boolean): void {
+	ctx.arc(x, y, r > 0 && Number.isFinite(r) ? r : 0, a0, a1, ccw);
+}
+
+/** The camera zoom as the overlay may use it: positive and finite. A resize can hand the renderer a zero or negative fit zoom, and every radius here is px / k. */
+export function safeZoom(k: number): number {
+	return k > 1e-6 && Number.isFinite(k) ? k : 1e-6;
+}
+
 const RGBA_CACHE = new Map<string, string>();
 /** `rgba()` string for a hex colour; alpha is quantised to 1/64 and the strings are memoised (drawn every frame for every wolf). */
 export function rgba(hex: string, a: number): string {
@@ -56,7 +66,7 @@ const pulse: EffectDrawer = ({ ctx, x, y, r, k, t, color, intensity, reduced, al
 	const rr = reduced ? r * 1.8 * sizeMul(intensity) : r * (1 + t * 2.4 * sizeMul(intensity));
 	const fade = reduced ? 0.7 : 1 - t;
 	ctx.beginPath();
-	ctx.arc(x, y, rr, 0, Math.PI * 2);
+	safeArc(ctx, x, y, rr, 0, Math.PI * 2);
 	ctx.fillStyle = rgba(color, 0.14 * a * fade);
 	ctx.fill();
 	ctx.lineWidth = 1.8 / k;
@@ -80,7 +90,7 @@ const trail: EffectDrawer = ({ ctx, x, y, toX, toY, k, t, color, intensity, alph
 const ring: EffectDrawer = ({ ctx, x, y, r, k, color, intensity, reduced, time = 0, alpha = 1 }) => {
 	const breath = reduced ? 0.85 : 0.65 + 0.3 * Math.sin(time / 420);
 	ctx.beginPath();
-	ctx.arc(x, y, r + (3.5 + (reduced ? 0 : 1.2 * Math.sin(time / 420))) / k, 0, Math.PI * 2);
+	safeArc(ctx, x, y, r + (3.5 + (reduced ? 0 : 1.2 * Math.sin(time / 420))) / k, 0, Math.PI * 2);
 	ctx.lineWidth = 1.6 / k;
 	ctx.strokeStyle = rgba(color, breath * Math.min(1, alphaMul(intensity) + 0.3) * alpha);
 	ctx.stroke();
@@ -127,7 +137,7 @@ const glow: EffectDrawer = ({ ctx, x, y, r, color, intensity, alpha = 1 }) => {
 	g.addColorStop(1, rgba(color, 0));
 	ctx.fillStyle = g;
 	ctx.beginPath();
-	ctx.arc(x, y, outer, 0, Math.PI * 2);
+	safeArc(ctx, x, y, outer, 0, Math.PI * 2);
 	ctx.fill();
 };
 

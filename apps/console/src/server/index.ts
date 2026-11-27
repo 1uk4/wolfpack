@@ -9,6 +9,7 @@ export * from "./kb/graph-positions.ts";
 export * from "./response-cache.ts";
 export * from "./settings/stores.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
+export { readGraphGroups, writeGraphGroups } from "../store/graph-groups.ts";
 // The settings record + prompt overrides (settings-storage wave, 2026-09-19).
 // The *Record aliases keep the app/api/settings routes explicit about which
 // seam they touch (the raw record, not the chat-section convenience view).
@@ -30,6 +31,7 @@ export * from "./thread/thread-api.ts";
 export * from "./kb/memory-api.ts";
 export * from "./kb/kb-activity-api.ts";
 export * from "./kb/render-settings-api.ts";
+export * from "./kb/groups-api.ts";
 export * from "./thread/needs-you-api.ts";
 export * from "./pack/devices-api.ts";
 export * from "./pack/presence-api.ts";

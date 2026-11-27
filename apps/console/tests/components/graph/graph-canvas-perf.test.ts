@@ -45,7 +45,7 @@ async function setup(count = 3, view = { k: 1, x: 400, y: 300 }) {
 	const { GraphCanvasRenderer } = await import("../../../components/graph/graph-canvas.ts");
 	const r: any = new GraphCanvasRenderer(canvas, { onSelect() {}, onStageClick() {}, onCommit() {}, onCameraMove() {} } as any, view);
 	const nodes = Array.from({ length: count }, (_, i) => ({ id: `n${i}`, x: (i % 10) * 300 - 1200, y: Math.floor(i / 10) * 300, label: `node ${i}` }));
-	r.setSettings({ nodeSize: 6, labelSize: 10, labelZoom: 8, edgeWidth: 1 });
+	r.setSettings({ nodeSize: 6, labelSize: 10, labelZoom: 8, edgeWidth: 1, clusterLabels: true });
 	r.setData({
 		nodes, edges: nodes.slice(1).map((n, i) => ({ from: nodes[i]!.id, to: n.id })), depEdges: [], depSprings: [], clusters: [],
 		subClusters: [{ id: "x", label: null, members: nodes.map((n) => n.id), color: "#fff" }],

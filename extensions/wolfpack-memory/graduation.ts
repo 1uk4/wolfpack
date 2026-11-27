@@ -21,7 +21,7 @@ import {
   type GraduationClient,
   type GraduationPreview,
 } from "@wolfpack/memory";
-import { GRADUATION_PREVIEW_TTL_MS, GraduationError, readPool, type GraduationConfirmResult, type GraduationObservationCount, type GraduationPreviewResult } from "./memory-actions.js";
+import { THREAD_RUNNING_MESSAGE, GRADUATION_PREVIEW_TTL_MS, GraduationError, type ThreadRunningCheck, readPool, type GraduationConfirmResult, type GraduationObservationCount, type GraduationPreviewResult } from "./memory-actions.js";
 
 /** A graduation preview waits this long for the owner's answer. */
 export const PREVIEW_TTL_MS = GRADUATION_PREVIEW_TTL_MS;
@@ -49,6 +49,8 @@ export interface GraduationDeps {
   forget?: (id: string) => void;
   /** Called once a graduation has happened (after the unbind), with the graduated item: the promote pass for its topics. Never breaks the graduation. */
   onGraduated?: (id: string) => void;
+  /** wolfd's check of the item's feature thread (a turn or sub-agents running), read at call time. Unset: no check. */
+  threadRunning?: () => ThreadRunningCheck | undefined;
 }
 
 export function createGraduation(deps: GraduationDeps) {
@@ -61,8 +63,15 @@ export function createGraduation(deps: GraduationDeps) {
     return roots;
   };
 
+  /** Refuse while the item's feature thread has a turn or running sub-agents: nothing is distilled or filed. */
+  function assertIdle(id: string, callerConversation?: number): void {
+    const why = deps.threadRunning?.()?.(id, callerConversation);
+    if (why) throw new GraduationError("thread_running", `${THREAD_RUNNING_MESSAGE}: ${why}. Graduate once it is idle.`);
+  }
+
   /** Refuse an item that is not ready with the reason, before any model work. */
-  async function assertReady(id: string): Promise<WorkItem[]> {
+  async function assertReady(id: string, callerConversation?: number): Promise<WorkItem[]> {
+    assertIdle(id, callerConversation);
     const all = await loadGraduationScope(client, id);
     const item = all.find((i) => i.id === id);
     const r = readinessOf(item, all);
@@ -81,9 +90,9 @@ export function createGraduation(deps: GraduationDeps) {
   };
 
   /** Step 1: distill, write the token file. Nothing is sent or archived. */
-  async function preview(id: string): Promise<GraduationPreview> {
+  async function preview(id: string, callerConversation?: number): Promise<GraduationPreview> {
     try {
-      const scope = await assertReady(id);
+      const scope = await assertReady(id, callerConversation);
       const roots = needRoots();
       const p = await previewGraduation({ client, engine: deps.engine(), id, roots, drain: deps.drain, finalPass: deps.finalPass, scope });
       await mkdir(previewDir(), { recursive: true });
@@ -112,11 +121,14 @@ export function createGraduation(deps: GraduationDeps) {
    * here: the hub delivers and graduates on the owner's approval. The token is used up only once the hub holds the request,
    * so a failed filing can be confirmed again.
    */
-  async function confirm(id: string, token: string): Promise<{ preview: GraduationPreview; requestId: string; existing: boolean; lateFolded: number }> {
+  async function confirm(id: string, token: string, callerConversation?: number): Promise<{ preview: GraduationPreview; requestId: string; existing: boolean; lateFolded: number }> {
     try {
+      assertIdle(id, callerConversation);
       const roots = needRoots();
       const p = await loadPreview(id, token);
-      const prepared = await prepareGraduation({ client, roots, preview: p, ship: deps.ship, drain: deps.drain, finalPass: deps.finalPass, engine: deps.engine() });
+      // The thread can become busy while the drain and distill run: check again right before the ship and again before filing.
+      const prepared = await prepareGraduation({ client, roots, preview: p, ship: deps.ship, drain: deps.drain, finalPass: deps.finalPass, engine: deps.engine(), beforeCommit: () => assertIdle(id, callerConversation) });
+      assertIdle(id, callerConversation);
       const { requestId, existing } = await deps.fileRequest(id, { kind: "graduate", preview: { contributions: prepared.preview.contributions, ...(prepared.preview.summary ? { summary: prepared.preview.summary } : {}) } });
       await unlink(previewFile(token)).catch(() => { /* used once */ });
       return { preview: prepared.preview, requestId, existing, lateFolded: prepared.lateFolded };
@@ -209,8 +221,8 @@ export function createGraduation(deps: GraduationDeps) {
     async preview(id: string): Promise<GraduationPreviewResult> {
       return toResult(await preview(id));
     },
-    async confirm(id: string, token: string): Promise<GraduationConfirmResult> {
-      const r = await confirm(id, token);
+    async confirm(id: string, token: string, callerConversation?: number): Promise<GraduationConfirmResult> {
+      const r = await confirm(id, token, callerConversation);
       return { requestId: r.requestId, status: r.existing ? "pending" : "filed", entries: r.preview.contributions.map((c) => c.id), archived: [], lateFolded: r.lateFolded, unbound: 0 };
     },
     pendingPreview,

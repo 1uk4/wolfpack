@@ -32,23 +32,3 @@ export function floatOffset(hash: number, tMs: number, amp: number, opts: { redu
 	const ay = 0.6 * Math.sin((TAU * t) / period(hash, 1) + phase(hash, 1)) + 0.4 * Math.sin((TAU * t) / period(hash, 3) + phase(hash, 3));
 	return { dx: amp * ax, dy: amp * ay };
 }
-
-/** Roam periods in ms for the n-th sine of an axis: 40-90 s from the hash. */
-const roamPeriod = (h: number, n: number) => 40_000 + ((h >>> (n * 3 + 1)) % 5001) * 10;
-const roamPhase = (h: number, n: number) => (((h >>> (n * 4 + 2)) % 628) / 100) % TAU;
-
-/**
- * The wolf's slow wander around its home: two sines per axis, periods 20-60 s, phases from the hash. A pure function of the roam clock
- * `tMs`, bounded by `radius` on each axis, so there is no drift to accumulate. Writes into `out` when given (no allocation per frame).
- * Reduced motion or no radius: zero.
- */
-export function roamOffset(hash: number, tMs: number, radius: number, reduced = false, out: FloatOffset = { dx: 0, dy: 0 }): FloatOffset {
-	if (reduced || !(radius > 0)) {
-		out.dx = 0;
-		out.dy = 0;
-		return out;
-	}
-	out.dx = radius * (0.6 * Math.sin((TAU * tMs) / roamPeriod(hash, 0) + roamPhase(hash, 0)) + 0.4 * Math.sin((TAU * tMs) / roamPeriod(hash, 2) + roamPhase(hash, 2)));
-	out.dy = radius * (0.6 * Math.sin((TAU * tMs) / roamPeriod(hash, 1) + roamPhase(hash, 1)) + 0.4 * Math.sin((TAU * tMs) / roamPeriod(hash, 3) + roamPhase(hash, 3)));
-	return out;
-}

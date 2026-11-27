@@ -634,6 +634,8 @@ export async function prepareGraduation(opts: {
   /** Needed when the drain folds anything: the entry is distilled again from the updated Record. */
   engine?: Engine;
   today?: string;
+  /** Called after the drain, final pass and re-distill, right before the irreversible ship. Throws to stop with nothing shipped. */
+  beforeCommit?: () => void;
 }): Promise<PreparedGraduation> {
   const { client, roots } = opts;
   let preview = opts.preview;
@@ -652,6 +654,7 @@ export async function prepareGraduation(opts: {
     if (preview.blocked) throw new Error(`cannot send: ${preview.blocked}`);
   }
 
+  opts.beforeCommit?.();
   if (!isComplete(item)) {
     await opts.ship(item.id as string);
     await client.note(item.id as string, "Shipped for graduation: all tasks complete.");

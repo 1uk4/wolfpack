@@ -37,7 +37,7 @@ const Question = Type.Object({
 const Page = Type.Object({ title: Type.String({ description: "Page title." }), questions: Type.Array(Question, { description: "At least one." }) });
 
 const AskParams = Type.Object({
-  pages: Type.Array(Page, { description: "The pages, answered one at a time. At least one." }),
+  pages: Type.Array(Page, { description: "The pages. The owner sees one question at a time, so put one question on each page (a page with several is split into one step per question). At least one." }),
 });
 const ReviseParams = Type.Object({
   callId: Type.String({ description: "The call id of the ask whose remaining pages you replace (given in the page result)." }),
@@ -118,6 +118,9 @@ export function askCard(args: AskArgs, revises?: string): Card {
   };
 }
 
+/** One question per page: a page holding several questions becomes one page per question, each keeping the page title. */
+export const splitPages = (pages: AskPage[]): AskPage[] => pages.flatMap((p) => p.questions.map((q) => ({ ...p, questions: [q] })));
+
 export const ASK_TURN_RULE =
   "The owner fills in the pages at their own pace, going back and forth, and submits ONCE: you then get one message with every page's answers and an optional note from the owner. Nothing arrives before that. `ask_revise` can still replace the pages the owner has not moved past yet. A plain chat message from the owner replaces the whole set and arrives with whatever was already answered.";
 
@@ -126,10 +129,10 @@ const fail = (text: string) => ({ content: [{ type: "text" as const, text }], is
 export function askResult(args: AskArgs, diagramCheck?: (id: string) => string | undefined) {
   const problem = askProblem(args, [], diagramCheck);
   if (problem) return fail(problem);
-  const n = args.pages.length;
+  const n = args.pages.reduce((a, p) => a + p.questions.length, 0);
   return {
-    content: [{ type: "text" as const, text: `Questionnaire delivered (${n} page${n > 1 ? "s" : ""}). This turn is over. ${ASK_TURN_RULE}` }],
-    card: askCard(args),
+    content: [{ type: "text" as const, text: `Questionnaire delivered (${n} page${n > 1 ? "s" : ""}, one question each). This turn is over. ${ASK_TURN_RULE}` }],
+    card: askCard({ pages: splitPages(args.pages) }),
   };
 }
 
@@ -137,8 +140,8 @@ export function reviseResult(args: { callId: string; pages: AskPage[] }, usedIds
   const problem = askProblem({ pages: args.pages }, usedIds, diagramCheck);
   if (problem) return fail(problem);
   return {
-    content: [{ type: "text" as const, text: `Remaining pages replaced (${args.pages.length}). This turn is over. ${ASK_TURN_RULE}` }],
-    card: askCard({ pages: args.pages }, args.callId),
+    content: [{ type: "text" as const, text: `Remaining pages replaced (${splitPages(args.pages).length}). This turn is over. ${ASK_TURN_RULE}` }],
+    card: askCard({ pages: splitPages(args.pages) }, args.callId),
   };
 }
 

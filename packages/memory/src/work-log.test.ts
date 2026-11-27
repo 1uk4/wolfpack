@@ -131,6 +131,29 @@ describe("appendWorkLog", () => {
     expect(stored.endsWith("\u2026")).toBe(true);
   });
 
+  it("warns again when the failure persists to the 5th try, and when the cause changes", async () => {
+    const store = new InMemoryWorkRecordStore({ a: item({ id: "a" }) });
+    store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "error", message: "boom" });
+    let t = 1_000_000;
+    const pending = new WorkPendingState(undefined, () => t);
+    const progress: string[] = [];
+    const run = async () => {
+      await appendWorkLog({ engine: engineOf([{ lines: [line("t", ["o1"])] }]), store, src: "w", pending, onProgress: (m) => progress.push(m), observations: [o("1", "a", "x")] });
+      t += 24 * 3_600_000;
+    };
+    for (let i = 0; i < 4; i++) await run();
+    expect(progress).toHaveLength(1);
+    await run();
+    expect(progress).toHaveLength(2);
+    expect(progress[1]).toContain("try 5");
+    // The cause changes (the log is full), then the same failure returns: said again.
+    store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "log_full" });
+    await run();
+    store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "error", message: "boom" });
+    await run();
+    expect(progress).toHaveLength(3);
+  });
+
   it("sends the recent log lines and the observation text, and maps from to observation ids", async () => {
     const body = "## Record\n\n- 10:00 [w·change] earlier line <!-- src:0 -->";
     const store = new InMemoryWorkRecordStore({ a: item({ id: "a", title: "Fix cache", body }) });

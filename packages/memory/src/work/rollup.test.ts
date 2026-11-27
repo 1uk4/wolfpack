@@ -84,17 +84,6 @@ whatever`;
     expect(out).toContain("<!-- /rollup:item -->");
   });
 
-  it("demotes a child's H1/H2 headings so the feature keeps one ## Record (fenced headings untouched)", () => {
-    const feature = `# F\n\n## Record\n\n- own line\n\n## Outcomes\n\n<!-- rollup:children -->\n<!-- /rollup:children -->\n`;
-    const childBody = "## Record\n\n- child line\n\n## Changes\n\n```md\n## x\n```\n\n### Keep";
-    const out = upsertRollupBlock(feature, child("t1", "2026-10-15", "Lower A"), childBody);
-    expect(out.match(/^## Record$/gm)?.length).toBe(1);
-    expect(out).toContain("#### Record");
-    expect(out).toContain("#### Changes");
-    expect(out).toContain("```md\n## x\n```");
-    expect(out).toContain("### Keep");
-  });
-
   describe("a rolled feature still accepts the hub's Record write (kb replaceSection is the truth)", () => {
     const feature = `# F\n\n## Record\n\n- own line\n\n## Outcomes\n\n<!-- rollup:children -->\n<!-- /rollup:children -->\n`;
     const cases: Record<string, string> = {
@@ -116,6 +105,14 @@ whatever`;
         expect(upsertRollupBlock(feature, child("t1", "2026-10-15", "Lower A"), inner)).toBe(out);
       });
     }
+    it("demotes ## to H4 so the feature keeps its own single ## Record; H3 stays", () => {
+      const out = upsertRollupBlock(feature, child("t1", "2026-10-15", "A"), "## Record\n\n- c\n\n## Changes\n\n### Keep");
+      expect(out.match(/^## Record$/gm)?.length).toBe(1);
+      expect(out).toContain("#### Record");
+      expect(out).toContain("#### Changes");
+      expect(out).toContain("### Keep");
+    });
+
     it("keeps fenced headings and shows setext/quote text as H4", () => {
       const out = upsertRollupBlock(feature, child("t1", "2026-10-15", "A"), "Record\n------\n\n> ## Q\n\n```\n## k\n```");
       expect(out).toContain("#### Record\n\n> #### Q\n\n```\n## k\n```");

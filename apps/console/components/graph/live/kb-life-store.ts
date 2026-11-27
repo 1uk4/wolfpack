@@ -66,6 +66,8 @@ export function subscribeKbHover(fn: () => void): () => void {
 // ── demo ──
 /** The demo plays as a made-up wolf, never a real one. */
 export const DEMO_WOLF = "demo-wolf";
+/** One demo cycle, then it repeats. */
+const DEMO_LOOP_MS = 28_000;
 const wolfActor = { kind: "wolf", wolf: DEMO_WOLF } as const;
 const hubActor = { kind: "hub", title: "curator" } as const;
 
@@ -74,15 +76,18 @@ export function demoCycle(c: number): { at: number; event: Omit<ActivityEvent, "
 	const t = (i: number) => `demo-${c}-t${i}`;
 	const wolfBase = { actor: wolfActor };
 	const out: { at: number; event: Omit<ActivityEvent, "id" | "ts" | "v" | "pack" | "ttlMs"> }[] = [];
-	[6000, 12000, 18000, 25000, 33000, 40000].forEach((count, i) => out.push({ at: 600 + i * 1400, event: { ...wolfBase, verb: "memory-observe", detail: { count, capacity: 40000 } } }));
-	out.push({ at: 10000, event: { ...wolfBase, verb: "memory-consolidate", detail: { count: 14, topicIds: [t(1), t(2), t(3)] } } });
-	[1, 2, 3].forEach((i) => out.push({ at: 12000 + i * 600, event: { ...wolfBase, verb: "memory-promote", target: { kind: "domain", id: "wolfpack" }, detail: { ref: `demo-c-${c}-${i}`, topicIds: [t(i)] } } }));
-	const outcomes = ["create", "merge", "reject"];
-	[1, 2, 3].forEach((i) => {
-		const base = 21000 + (i - 1) * 4500;
+	// Compact life (loops every DEMO_LOOP_MS): the buffer fills (0.3-1.8 s), consolidation births 5 topics at the wolf (2.5 s) that fly to the Home ring and orbit it,
+	// they are promoted one by one (6-8.4 s) and the curator files each (from 9 s).
+	[6000, 12000, 18000, 25000, 33000, 40000].forEach((count, i) => out.push({ at: 300 + i * 300, event: { ...wolfBase, verb: "memory-observe", detail: { count, capacity: 40000 } } }));
+	const ids = [1, 2, 3, 4, 5];
+	out.push({ at: 2500, event: { ...wolfBase, verb: "memory-consolidate", detail: { count: 14, topicIds: ids.map(t) } } });
+	ids.forEach((i) => out.push({ at: 6000 + (i - 1) * 600, event: { ...wolfBase, verb: "memory-promote", target: { kind: "domain", id: "wolfpack" }, detail: { ref: `demo-c-${c}-${i}`, topicIds: [t(i)] } } }));
+	const outcomes = ["create", "merge", "reject", "merge", "create"];
+	ids.forEach((i) => {
+		const base = 9000 + (i - 1) * 3000;
 		out.push({ at: base, event: { actor: hubActor, verb: "curate-start", detail: { ref: t(i), topicIds: [t(i)] } } });
 		const o = outcomes[i - 1]!;
-		out.push({ at: base + 2500, event: { actor: hubActor, verb: "curate-done", ...(o === "reject" ? {} : { target: { kind: "kb-entry", id: `kb-demo-${i}`, domain: "wolfpack", title: i === 1 ? "Demo: new topic" : "Demo: merged topic" } }), detail: { outcome: o, ref: t(i), topicIds: [t(i)], section: "demo", sectionTitle: "Demo", ms: 2400, tokens: 1800 * i } } });
+		out.push({ at: base + 2200, event: { actor: hubActor, verb: "curate-done", ...(o === "reject" ? {} : { target: { kind: "kb-entry", id: `kb-demo-${i}`, domain: "wolfpack", title: o === "create" ? "Demo: new topic" : "Demo: merged topic" } }), detail: { outcome: o, ref: t(i), topicIds: [t(i)], section: "demo", sectionTitle: "Demo", ms: 2200, tokens: 1800 * i } } });
 	});
 	return out;
 }
@@ -104,7 +109,7 @@ export function startKbDemo(): () => void {
 		const c = cycle++;
 		injectLiveAction({ type: "event", event: { v: 1, id: `demo-online-${c}`, pack: "demo", ts: Date.now(), ttlMs: 120_000, actor: wolfActor, verb: "wolf-online" } as ActivityEvent, now: Date.now() });
 		for (const s of demoCycle(c)) timers.push(setTimeout(() => !stopped && send(s.event), s.at));
-		timers.push(setTimeout(run, 50_000));
+		timers.push(setTimeout(run, DEMO_LOOP_MS));
 	};
 	run();
 	return () => {

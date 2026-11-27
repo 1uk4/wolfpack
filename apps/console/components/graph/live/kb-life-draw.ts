@@ -102,7 +102,7 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 			const grow = reduced ? smooth((wall - t.born) / 400) : 1;
 			ctx.fillStyle = rgba(b.color, 0.85 * b.alpha);
 			ctx.beginPath();
-			ctx.arc(p.x, p.y, (3.2 * grow) / k, 0, Math.PI * 2);
+			ctx.arc(p.x, p.y, (4 * grow) / k, 0, Math.PI * 2);
 			ctx.fill();
 			if (focus?.topicId === t.id) ring(ctx, p, 7 / k, host.colors.hoverText, k);
 		});

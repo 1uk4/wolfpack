@@ -26,9 +26,15 @@ export interface ThreadColorInfo {
 
 const isKey = (v: unknown): v is ThreadColor => typeof v === "string" && (THREAD_COLOR_KEYS as readonly string[]).includes(v);
 
-/** The automatic color for an id: the same id always gives the same one of the 8. */
+/**
+ * The keys the automatic hash picks from: the ORIGINAL 8, frozen. The palette grew to 18, but hashing over all of them
+ * would move every existing wolf's and thread's automatic colour. Only explicit picks use the newer keys.
+ */
+const AUTO_COLOR_KEYS: readonly ThreadColor[] = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"];
+
+/** The automatic color for an id: the same id always gives the same one of the original 8. */
 export function autoThreadColor(id: string): ThreadColor {
-	return THREAD_COLOR_KEYS[hashString(id) % THREAD_COLOR_KEYS.length]!;
+	return AUTO_COLOR_KEYS[hashString(id) % AUTO_COLOR_KEYS.length]!;
 }
 
 const info = (key: ThreadColor, overridden: boolean): ThreadColorInfo => ({ key, hex: THREAD_COLORS[key], overridden });

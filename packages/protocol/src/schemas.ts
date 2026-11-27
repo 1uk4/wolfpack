@@ -380,8 +380,22 @@ export const THREAD_COLORS = {
   blue: "#6cb2f2",
   purple: "#b69cf5",
   pink: "#f28cc4",
+  // Added later (18 in all). Appended, never reordered: the first 8 keep their hexes.
+  amber: "#fbbf24",
+  emerald: "#34d399",
+  cyan: "#22d3ee",
+  sky: "#38bdf8",
+  indigo: "#8b93f5",
+  violet: "#c084fc",
+  fuchsia: "#e879f9",
+  rose: "#fb7185",
+  slate: "#94a3b8",
+  copper: "#d08a5c",
 } as const;
-export const THREAD_COLOR_KEYS = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"] as const;
+export const THREAD_COLOR_KEYS = [
+  "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink",
+  "amber", "emerald", "cyan", "sky", "indigo", "violet", "fuchsia", "rose", "slate", "copper",
+] as const;
 export const ThreadColorSchema = z.enum(THREAD_COLOR_KEYS);
 export type ThreadColor = z.infer<typeof ThreadColorSchema>;
 /** Per-thread composer settings. Persisted by the wolf; the defaults are `main` and auto-ship off. */

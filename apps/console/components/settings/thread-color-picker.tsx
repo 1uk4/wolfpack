@@ -6,10 +6,10 @@ import { THREAD_COLORS, THREAD_COLOR_KEYS } from "@/src/core";
 /** Display names: the stored `teal` key is lime now (see THREAD_COLORS), so label it so. */
 const THREAD_COLOR_NAMES: Record<string, string> = { teal: "lime" };
 
-/** The wolf color picker (Settings): the 8 palette colors plus "Automatic" (reset). `value` is the override key; absent = automatic. */
+/** The wolf color picker (Settings): the 18 palette colors plus "Automatic" (reset). `value` is the override key; absent = automatic. */
 export function ThreadColorPicker({ value, autoHex, onPick }: { value?: string; autoHex?: string; onPick: (key: string | null) => void }) {
 	return (
-		<div data-testid="thread-color-picker" role="radiogroup" aria-label="Wolf color" className="flex flex-wrap items-center gap-1.5 py-1 max-md:gap-0">
+		<div data-testid="thread-color-picker" role="radiogroup" aria-label="Wolf color" className="grid w-fit grid-cols-9 items-center gap-1.5 py-1 max-md:grid-cols-6 max-md:gap-0">
 			{THREAD_COLOR_KEYS.map((key) => (
 				// On phones the button is a 44px tap area and the dot is drawn inside it at its usual 16px; from md up the button is the dot.
 				<button
@@ -32,7 +32,7 @@ export function ThreadColorPicker({ value, autoHex, onPick }: { value?: string; 
 				aria-checked={value === undefined}
 				data-testid="thread-color-auto"
 				onClick={() => onPick(null)}
-				className={cn("ml-1 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs max-md:min-h-11 max-md:px-3 text-muted-foreground hover:bg-muted", value === undefined && "bg-muted/60 text-foreground")}
+				className={cn("col-span-full mt-1 flex w-fit items-center gap-1 rounded-md px-1.5 py-0.5 text-xs max-md:min-h-11 max-md:px-3 text-muted-foreground hover:bg-muted", value === undefined && "bg-muted/60 text-foreground")}
 			>
 				{autoHex && <span aria-hidden className="size-2 rounded-full" style={{ backgroundColor: autoHex }} />}
 				Automatic

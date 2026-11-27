@@ -60,6 +60,8 @@ import { redactLines } from "@/src/core";
 import { recentreCamera, recentreOffset } from "@/src/core";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
+import { LabelPass, type GroupTitle } from "./label-pass.ts";
+import { effectiveZoom, labelsOn } from "@/src/core";
 import type { LiveOverlay, OverlayHighlight, OverlayHit, OverlayHost } from "./live/live-overlay";
 import {
 	CHARGE_STRENGTH,
@@ -726,6 +728,9 @@ export class GraphCanvasRenderer {
 	 *  the outgoing fade completes. */
 	private hoverNode: CanvasNode | null = null;
 	private hoverFade = 0;
+	/** Semantic-zoom labels (levels, collisions, fades): see label-pass.ts. */
+	private labels = new LabelPass();
+	private selectedId: string | null = null;
 	private hoverFrom = 0;
 	private hoverTarget = 0;
 	private hoverStart = 0;
@@ -899,6 +904,7 @@ export class GraphCanvasRenderer {
 		this.data = data;
 		this.nodeById = new Map(data.nodes.map((n) => [n.id, n]));
 		this.hasBlocked = data.nodes.some((n) => n.blocked);
+		this.labels.setHierarchy(this.nodeById.keys(), data.edges, data.depths ?? new Map());
 		this.refreshVisible();
 		let minX = Infinity;
 		let minY = Infinity;
@@ -1537,6 +1543,17 @@ export class GraphCanvasRenderer {
 		this.markDirty();
 	}
 
+	/** The selected node: its label and its parent chain stay shown (the card owner calls this). */
+	setSelectedNode(id: string | null): void {
+		if (id === this.selectedId) return;
+		this.selectedId = id;
+		this.markDirty();
+	}
+
+	private groupTitles(): GroupTitle[] {
+		return [];
+	}
+
 	private markDirty(): void {
 		if (this.destroyed) return; // a late setOverlay(null) or overlay redraw after destroy must not start a frame loop
 		this.dirty = true;
@@ -1593,7 +1610,7 @@ export class GraphCanvasRenderer {
 			// Keep frames coming ONLY while an animation is in motion (hover
 			// fade, zoom glide, or live physics); an idle graph schedules no
 			// rAF at all.
-			this.animating = baseAnim || overlayAnim;
+			this.animating = baseAnim || overlayAnim || this.labels.needsFrames();
 			this.overlayOnlyAnim = overlayAnim && !baseAnim;
 		} finally {
 			this.inTick = false;
@@ -2336,30 +2353,7 @@ export class GraphCanvasRenderer {
 		//    a Factory only) the arrows. All colours from dep-palette.
 		this.drawDependencyLayer(ctx, ratio, k, w, h);
 
-		// 6. Node labels — one global gate (per-node gate multiplier: big
-		// nodes label later), faded together. World-scaled with the graph
-		// (they grow as you zoom in, Obsidian-style).
-		// Labels off screen (plus a margin for their width) or too small to read are skipped.
-		if (nodeAlpha > 0.01 && this.world.labelSize * k >= LABEL_MIN_SCREEN_PX) {
-			const { x: ltx, y: lty } = this.transform;
-			const minX = (-LABEL_CULL_MARGIN - ltx) / k;
-			const maxX = (w + LABEL_CULL_MARGIN - ltx) / k;
-			const minY = (-LABEL_CULL_MARGIN - lty) / k;
-			const maxY = (h + LABEL_CULL_MARGIN - lty) / k;
-			ctx.save();
-			ctx.font = this.worldLabelFont;
-			if (settings.privateView) blurLabels(ctx, data.colors.label, this.world.labelSize * 0.45, k); // once for the whole batch
-			for (const [id, lines] of this.labelLines) {
-				const n = this.nodeById.get(id);
-				if (!n || n.x < minX || n.x > maxX || n.y < minY || n.y > maxY) continue;
-				const routeDone = !!this.route?.nodes.has(id) && this.route.done.has(id);
-				const a = labelAlpha(ratio, settings.labelZoom * (n.labelGate ?? 1)) * (routeDone ? DEP_STYLE.routeDoneNodeAlpha : (n.dim ? DIM_LABEL_ALPHA : 1) * this.restDim(id));
-				if (a <= 0.01) continue;
-				ctx.globalAlpha = a;
-				drawNameLines(ctx, n.x, n.y, lines, this.world, this.radiusOf(n), routeDone ? ROUTE_DONE_COLOR : data.colors.label, settings.privateView, k, true);
-			}
-			ctx.restore();
-		}
+		// 6. (Node labels moved to the semantic-zoom pass at the end of draw: label-pass.ts.)
 
 		// 7. Hover glow (topmost over content): halo in the node's colour +
 		// the brightened name, both on the SAME fade factor. World units
@@ -2381,11 +2375,6 @@ export class GraphCanvasRenderer {
 				ctx.arc(n.x, n.y, glowOuter, 0, Math.PI * 2);
 				ctx.arc(n.x, n.y, nodeR, 0, Math.PI * 2, true);
 				ctx.fill("evenodd");
-				ctx.save();
-				ctx.globalAlpha = this.hoverFade;
-				ctx.font = this.worldLabelFont;
-				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, nodeR, data.colors.hoverText, settings.privateView, k);
-				ctx.restore();
 			}
 		}
 
@@ -2431,39 +2420,29 @@ export class GraphCanvasRenderer {
 		// 7d. The overlay's screen-space pass (the you badge): device scale only, no camera.
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		this.guardOverlay((o) => o.drawScreen?.(ctx, this.overlayHost(), this.transform, { w, h }, performance.now()), undefined);
-		ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * tx, dpr * ty);
 
-		// 8. Cluster region labels — THE TOPMOST layer (user 2026-09-16:
-		// node labels and hover names drew over them before; region labels
-		// must never be occluded by content). Inverse-gated on THE zoom
-		// control (visible zoomed-out, fading as node labels come in).
-		// Viewer-relative by design (UI, not graph content): drawn at the
-		// world centroid with a font of clusterLabelSize / k — a constant
-		// size on screen at any zoom (user-tunable since 2026-09-16).
-		// Wave 7: labels are session names / file paths — pre-wrapped at
-		// the geometry build (cap + ellipsis), drawn centered on the
-		// centroid line by line.
-		if (settings.clusterLabels && regionAlpha > 0.01) {
-			ctx.save();
-			ctx.globalAlpha = regionAlpha;
-			ctx.font = `${LABEL_WEIGHT} ${settings.clusterLabelSize / k}px ${data.fontFamily}`;
-			ctx.textAlign = "center";
-			ctx.textBaseline = "middle";
-			// Screen px ÷ k = world units — the lines stay evenly spaced
-			// at a constant on-screen pitch at any zoom.
-			const lineH = (settings.clusterLabelSize * REGION_LABEL_LINE_HEIGHT) / k;
-			for (const rm of this.regionMeta) {
-				if (!rm.lines) continue;
-				ctx.fillStyle = rgbaFromHex(rm.color, 0.9);
-				const firstOffset = (-(rm.lines.length - 1) / 2) * lineH;
-				const shownLines = redactLines(rm.lines, settings.privateView);
-				if (settings.privateView) blurLabels(ctx, rgbaFromHex(rm.color, 0.9), (settings.clusterLabelSize * 0.45) / k, k);
-				for (let i = 0; i < shownLines.length; i++) {
-					ctx.fillText(shownLines[i]!, rm.cx, rm.cy + firstOffset + i * lineH);
-				}
-				ctx.shadowBlur = 0;
-			}
-			ctx.restore();
-		}
+		// 8. Labels, topmost: semantic zoom by hierarchy level, collisions resolved by level, hover/selection chain always shown.
+		this.labels.draw({
+			ctx,
+			tx,
+			ty,
+			k,
+			w,
+			h,
+			ze: effectiveZoom(1 / ratio, settings.labelZoom),
+			on: labelsOn(settings),
+			hoverId: this.hoverNode && this.hoverTarget > 0 ? this.hoverNode.id : null,
+			selectedId: this.selectedId,
+			reduce: prefersReducedMotion(),
+			privateView: settings.privateView,
+			textColor: data.colors.label,
+			fontFamily: data.fontFamily,
+			nodes: this.nodeById,
+			radiusOf: (n) => this.radiusOf(n as CanvasNode),
+			visible: this.visible,
+			groups: this.groupTitles(),
+			geoVersion: this.geoVersion,
+			now: performance.now(),
+		});
 	}
 }

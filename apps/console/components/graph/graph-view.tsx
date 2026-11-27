@@ -395,6 +395,11 @@ export function GraphView({
 	}, [graph, selectedRoute, selectedId, cursor]);
 	const activeRoute = routeSelection ?? route;
 
+	// The selected node keeps its label and its parent chain on the map.
+	useEffect(() => {
+		rendererRef.current?.setSelectedNode(selectedId);
+	}, [selectedId, canvasData, isEmpty, storedLoaded]);
+
 	// Route selection: just marks the frame dirty (like settings).
 	useEffect(() => {
 		rendererRef.current?.setRoute(activeRoute);

@@ -18,7 +18,7 @@ import { TaskPinToggle, applyAgentTaskPin, lastAgentTaskPin, syncTaskPin } from 
 import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread/thread-compaction-divider";
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/thread/subagent-message";
-import { parseSubagentMessage, setPagePendingAsk } from "@/src/core";
+import { effectiveWolfColor, hasWolfColor, parseSubagentMessage, setPagePendingAsk, wolfColorStyle } from "@/src/core";
 import { TurnTimer, useTurnStart } from "@/components/thread/turn-timer";
 import { useOwnAsk } from "@/components/thread/thread-ask";
 import { submitToThread, swapTarget } from "@/components/chat-bar/chat-bar-io";
@@ -294,6 +294,9 @@ function ThreadChatInner({
 	const own = useMemo(() => colorThreads.find((t) => t.id === threadId), [colorThreads, threadId]);
 	const tintHex = useThreadColor({ ...own, id: threadId, ...(parentThreadId !== undefined ? { parentThreadId } : {}) }, colorThreads, colorApi?.wolves.find((w) => w.name === wolf)?.color ?? wolfColor).hex;
 	const tintSolid = threadTintSolid(tintHex);
+	// The wolf's own colour (every thread of the wolf): --wolf-tint / --wolf-accent, a faint tint over the page and the accent.
+	const wolfKey = effectiveWolfColor({ name: wolf, color: colorApi?.wolves.find((w) => w.name === wolf)?.color ?? wolfColor }, colorApi?.threads[wolf]?.find((t) => t.kind === "home")?.id);
+	const wolfStyle = hasWolfColor(wolfKey) ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : null;
 	// The page canvas (html background) takes the chat colour while a thread is open, so the strip the iOS home-screen app leaves under the viewport matches it
 	useEffect(() => {
 		const root = document.documentElement;
@@ -780,7 +783,8 @@ function ThreadChatInner({
 			data-testid="thread-chat"
 			data-thread={threadId}
 			data-dragging={dragging || undefined}
-			style={{ ...(threadAccentStyle(tintHex) as CSSProperties), backgroundColor: tintSolid }}
+			data-wolf-color={wolfStyle ? wolfKey : undefined}
+			style={{ ...(threadAccentStyle(tintHex) as CSSProperties), backgroundColor: tintSolid, ...(wolfStyle as CSSProperties | null) }}
 			onDragOver={(e) => {
 				if (!dragHasFiles(e.dataTransfer)) return;
 				e.preventDefault(); // take the drop instead of the browser opening the file

@@ -8,6 +8,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApprovalRequest } from "@wolfpack/protocol";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
+import { HourglassIcon } from "lucide-react";
+import { Hint } from "@/components/ui/hint";
+import { THREAD_RUNNING_LABEL, useThreadRunning } from "./thread-running";
 
 export type Decision = { status: "approved" | "rejected"; at: string };
 
@@ -84,7 +87,10 @@ export function ApprovalSummary({ request, compact = false }: { request: Approva
 export function ApprovalButtons({ request, onDecided }: { request: ApprovalRequest; onDecided: (d: Decision) => void }) {
 	const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	// Approving a graduation waits while the feature's thread still runs (the requesting wolf's thread).
+	const threadRunning = useThreadRunning(request.kind === "graduate" ? request.requestedBy.wolf : undefined, request.workId);
 	const decide = async (verb: "approve" | "reject") => {
+		if (verb === "approve" && threadRunning) return;
 		setBusy(verb);
 		setError(null);
 		try {
@@ -102,9 +108,20 @@ export function ApprovalButtons({ request, onDecided }: { request: ApprovalReque
 	};
 	return (
 		<div className="flex flex-wrap items-center gap-2" data-testid="approval-buttons">
-			<button type="button" disabled={busy !== null} onClick={() => void decide("approve")} className="rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground disabled:opacity-60 max-md:min-h-11">
-				{busy === "approve" ? "Approving…" : "Approve"}
-			</button>
+			{threadRunning ? (
+				<Hint label={THREAD_RUNNING_LABEL}>
+					<span className="inline-flex">
+						<button type="button" disabled aria-label={THREAD_RUNNING_LABEL} data-testid="approve-thread-running" className="inline-flex items-center gap-1 rounded-md bg-muted px-3 py-1 text-sm text-muted-foreground disabled:cursor-not-allowed max-md:min-h-11">
+							<HourglassIcon className="size-3.5" aria-hidden />
+							Approve
+						</button>
+					</span>
+				</Hint>
+			) : (
+				<button type="button" disabled={busy !== null} onClick={() => void decide("approve")} className="rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground disabled:opacity-60 max-md:min-h-11">
+					{busy === "approve" ? "Approving…" : "Approve"}
+				</button>
+			)}
 			<button type="button" disabled={busy !== null} onClick={() => void decide("reject")} className="rounded-md border border-border px-3 py-1 text-sm hover:bg-accent disabled:opacity-60 max-md:min-h-11">
 				{busy === "reject" ? "Rejecting…" : "Reject"}
 			</button>

@@ -18,6 +18,7 @@ import {
 	cameraFramesWorld,
 	fitTransform,
 	labelAlpha,
+	sectionAlpha,
 	pickNearest,
 	wrapRegionLabel,
 	zoomRatioOf,
@@ -64,17 +65,13 @@ describe("labelAlpha (the single zoom gate)", () => {
 		assert.equal(labelAlpha(5, 4), 0.5); // mid-fade at the tuned gate, same relative shape
 	});
 
-	test("node labels and cluster labels cross-fade over the exact same span", () => {
-		// The renderer draws cluster labels at 1 - labelAlpha; the two must
-		// always sum to 1 within the fade and never coexist at full opacity.
-		for (const gate of [0.5, 4]) {
-			for (let ratio = 0; ratio <= 8; ratio += gate / 8) {
-				const node = labelAlpha(ratio, gate);
-				const cluster = 1 - node;
-				assert.ok(node + cluster > 0.999 && node + cluster < 1.001, `sum at gate ${gate} ratio ${ratio}`);
-				assert.ok(node <= 1 && cluster <= 1, `clamped at gate ${gate} ratio ${ratio}`);
-			}
-		}
+	test("sections fade IN as you zoom into them and are hidden zoomed out", () => {
+		// Smaller ratio = zoomed in. Same threshold and span as the labels.
+		assert.equal(sectionAlpha(0.25, 0.5), 1); // zoomed in: fully visible
+		assert.equal(sectionAlpha(0.5, 0.5), 1); // at the threshold
+		assert.equal(sectionAlpha(0.625, 0.5), 0.5); // mid-fade
+		assert.equal(sectionAlpha(0.75, 0.5), 0); // one span out: gone
+		assert.equal(sectionAlpha(2, 0.5), 0); // zoomed out: hidden
 	});
 });
 

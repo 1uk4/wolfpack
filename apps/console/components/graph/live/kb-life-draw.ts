@@ -48,6 +48,17 @@ function slotPos(cur: Pt, slot: number, wall: number, reduced: boolean, m: numbe
 	return { x: cur.x + Math.cos(a) * r, y: cur.y + Math.sin(a) * r };
 }
 
+/** How long a new memory item takes to travel from its wolf to the ring round Home (ms). */
+export const ITEM_TRAVEL_MS = 900;
+
+/** A memory item's place: born at its wolf (`start`), eased to its slot on the inner ring round Home over ITEM_TRAVEL_MS, then orbiting there. Reduced motion: on the ring at once. */
+export function itemPos(start: Pt, cur: Pt, slot: number, born: number, wall: number, m: number, reduced: boolean): Pt {
+	const ring = slotPos(cur, slot, wall, reduced, m);
+	if (reduced) return ring;
+	const t = smooth((wall - born) / ITEM_TRAVEL_MS);
+	return { x: lerp(start.x, ring.x, t), y: lerp(start.y, ring.y, t) };
+}
+
 export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDrawHost, wolfOf: (name: string) => KbWolfBody | undefined, k: number, wall: number, reduced: boolean, focus: KbFocus | null, m = KB_UNIT): void {
 	const cur = curatorPos(kb, host);
 	const busy = curatorBusy(kb);
@@ -85,10 +96,10 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 		ctx.globalAlpha = 1;
 		// Topic dots gather on the inner ring round Home (about kbMaxItems visible), in the wolf's colour.
 		const topics = topicsOf(kb, name);
-		topics.forEach((t) => {
-			if (shown >= LIVE_TUNING.kbMaxItems) return;
-			const p = slotPos(cur, 100 + shown++, wall, reduced, m);
-			const grow = reduced ? 1 : smooth((wall - t.born) / 700);
+		topics.forEach((t, i) => {
+			// Born at the wolf and flown to Home; items past the cap wait beside their wolf.
+			const p = shown >= LIVE_TUNING.kbMaxItems ? beside(b, i, k) : itemPos({ x: b.x, y: b.y }, cur, 100 + shown++, t.born, wall, m, reduced);
+			const grow = reduced ? smooth((wall - t.born) / 400) : 1;
 			ctx.fillStyle = rgba(b.color, 0.85 * b.alpha);
 			ctx.beginPath();
 			ctx.arc(p.x, p.y, (3.2 * grow) / k, 0, Math.PI * 2);

@@ -26,7 +26,7 @@ export const BAR_COMPACT_BELOW = 460;
 
 export function barGeometry({ colLeft, colWidth, viewportWidth, cap = BAR_CAP, gap = BAR_GAP }: BarGeometryInput): BarGeometry {
 	// A column that is unmeasured, or wider than the window (a horizontally scrolling page), says nothing about the screen: centre on the window.
-	const usable = colWidth > 0 && colWidth <= viewportWidth;
+	const usable = Number.isFinite(colLeft) && colWidth > 0 && colWidth <= viewportWidth;
 	const left = usable ? colLeft + colWidth / 2 : viewportWidth / 2;
 	const room = (usable ? colWidth : viewportWidth) - 2 * gap;
 	const width = Math.max(0, Math.min(cap, room));

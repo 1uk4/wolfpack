@@ -428,72 +428,37 @@ describe("ThreadChat dictation", () => {
 		assert.equal(store.get(`wolfpack:draft:1uk4:${FIXTURE_THREAD.id}`), undefined, "nothing left in the draft");
 	});
 
-	it("dictating on the thread's own page keeps the page composer in place, highlighted, with no floating chat; stopping returns it to normal with typed plus dictated text, unsent", async () => {
+	it("on the attached thread's own page the docked bar is the only composer; dictating there fills its input, unsent", async () => {
 		await mount(new CardClient(null), { poppedOut: true });
-		await typeIn(composer(), "typed");
-		await click(toggle());
-		await settle(60);
-		const ws = FakeWS.last!;
-		await act(async () => ws.open());
-		assert.equal(q('[data-testid="chat-bar"]'), null, "no floating chat");
-		assert.equal(pageComposers(), 1, "the page composer stays");
-		assert.equal(composer().value, "typed");
-		assert.equal(q('[data-testid="thread-composer-card"]')?.getAttribute("data-listening"), "true", "highlighted while listening");
-		await act(async () => ws.final("tail"));
-		await click(toggle()); // Stop
-		await closeSocket(ws);
-		await settle(60);
-		assert.equal(q('[data-testid="chat-bar"]'), null);
-		assert.equal(q('[data-testid="thread-composer-card"]')?.hasAttribute("data-listening"), false, "back to normal");
-		assert.equal(composer().value, "typed tail");
-		assert.deepEqual(posts, [], "nothing sent");
+		assert.equal(pageComposers(), 0, "the page has no composer of its own");
+		assert.ok(q('[data-testid="thread-dock-slot"] [data-testid="chat-bar"]'), "the bar sits in the page's dock slot");
+		await dictate("hello docked");
+		assert.equal(barTa()!.value, "hello docked");
+		assert.equal(posts.filter((p) => p.url.includes("/submit")).length, 0, "nothing sent");
 	});
 
-	it("dictating on the thread's page then leaving it hands the run to the floating chat, which shows the words so far in its input", async () => {
+	it("a live run keeps going when the owner leaves the page: the same bar floats on with the words in its input", async () => {
 		await mount(new CardClient(null), { poppedOut: true });
+		const ws = await recording("away");
+		await leavePage();
+		assert.ok(q('[data-testid="chat-bar"]'), "the bar follows");
+		assert.equal(ws.readyState, 1, "the run is still live");
 		await click(toggle());
-		await settle(60);
-		const ws = FakeWS.last!;
-		await act(async () => ws.open());
-		assert.equal(q('[data-testid="chat-bar"]'), null);
-		await act(async () => goTo("/graph"));
-		await settle(60);
-		assert.ok(q('[data-testid="chat-bar"]'), "the floating chat follows");
-		await act(async () => ws.final("away"));
-		await click(q('[data-testid="chat-bar"] [data-testid="dictation-toggle"]')!);
 		await closeSocket(ws);
 		await settle(400);
 		assert.equal(barTa()!.value, "away");
 	});
 
-	it("popped out, run followed off the page: a debounced page write pending at the hand-off cannot bring back text the owner cleared in the floating input", async () => {
+	it("a draft typed in the docked bar is stored under its thread and is still there after leaving the page", async () => {
 		await mount(new CardClient(null), { poppedOut: true });
-		await typeIn(composer(), "page text"); // debounce pending
-		await click(toggle());
-		await settle(60);
-		await leavePage();
-		assert.equal(barTa()!.value, "page text");
-		await typeIn(barTa()!, ""); // clearing removes the draft at once
-		await settle(500); // past the page's old debounce
-		assert.equal(DRAFT(), undefined);
-	});
-
-	it("popped out, run followed off the page: words appended to the draft from outside while the chat owns the input are not merged into the hidden page composer's stale text", async () => {
-		await mount(new CardClient(null), { poppedOut: true });
-		await typeIn(composer(), "a");
-		await click(toggle());
-		await settle(60);
-		await leavePage();
-		await typeIn(barTa()!, "a b");
+		await typeIn(barTa()!, "mine");
 		await settle(500);
-		const { appendToDraft, draftKey } = await import("../../../lib/composer-draft.ts");
-		await act(async () => appendToDraft(draftKey("1uk4", FIXTURE_THREAD.id), "X"));
-		await settle(60);
-		assert.equal(DRAFT(), "a b X");
-		assert.equal(barTa()!.value, "a b X");
+		assert.equal(DRAFT(), "mine");
+		await leavePage();
+		assert.equal(barTa()!.value, "mine");
 	});
 
-	it("popped out, run followed off the page: the floating chat says how many attachments wait in the page, and Enter there sends text only", async () => {
+	it("an attachment dropped on the docked page is announced by the bar, and Enter there sends text only", async () => {
 		await mount(new CardClient(null), { poppedOut: true, inFlight: true });
 		const prev = globalThis.fetch;
 		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
@@ -502,17 +467,9 @@ describe("ThreadChat dictation", () => {
 		const chat = q('[data-testid="thread-chat"]')!;
 		await act(async () => void chat.dispatchEvent(Object.assign(new dom.window.Event("drop", { bubbles: true, cancelable: true }), { dataTransfer: { types: ["Files"], files: [png] } })));
 		await settle(100);
-		assert.equal(document.querySelectorAll('[data-testid="attachment-chip"]').length, 1, "the page holds one attachment");
-		await click(toggle());
-		await settle(60);
-		await leavePage();
 		assert.equal(pageComposers(), 0);
 		assert.match(q('[data-testid="chat-bar-attachments-waiting"]')?.textContent ?? "", /^1 attachment waiting in the thread$/);
 		await typeIn(barTa()!, "words only");
-		await press(barTa()!, { key: "Enter" }); // the run is live: this press only stops it
-		await closeSocket(FakeWS.last!);
-		await settle(100);
-		assert.equal(posts.filter((p) => p.url.includes("/submit")).length, 0, "first press does not send");
 		await press(barTa()!, { key: "Enter" });
 		await settle(100);
 		const sent = posts.filter((p) => p.url.includes("/submit"));
@@ -567,7 +524,8 @@ describe("ThreadChat dictation", () => {
 		pagedPending = [{ callId: CALL, threadId: FIXTURE_THREAD.id, card: PAGED, raisedAt: "2026-11-09T00:00:00Z" }];
 		await mount(new CardClient(PAGED), { poppedOut: true });
 		await settle(80);
-		assert.equal(q('[data-note-mode="true"]') !== null, true, "note mode");
+		assert.equal(document.querySelectorAll('[data-testid="ask-sheet"]').length, 1, "one ask host");
+		assert.ok(q('[data-testid="chat-bar"] [data-testid="ask-sheet"]'), "and it is the docked bar's");
 		await dictate("by voice");
 		await settle(400);
 		assert.equal(composer().value, "by voice", "the note field shows the words");

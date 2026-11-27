@@ -345,7 +345,7 @@ describe("ChatBar behaviours", () => {
 		}
 	});
 
-	it("Cmd+J answers (and claims the key) only when the bar is shown", async () => {
+	it("Cmd+J answers (and claims the key) when the bar or its icon is on the page", async () => {
 		const press = (name: string) => {
 			let prevented = false;
 			window.dispatchEvent(new dom.window.CustomEvent(name, { detail: { event: { preventDefault: () => void (prevented = true) } } }));
@@ -362,7 +362,7 @@ describe("ChatBar behaviours", () => {
 		noHome = true;
 		await mount("/kb"); // nothing attached and no home thread to attach: only the icon, Cmd+J does nothing
 		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "minimized");
-		assert.equal(press("wolfpack:kbd-focus-chat-bar"), false);
+		assert.equal(press("wolfpack:kbd-focus-chat-bar"), true, "Cmd+J focuses the icon (Enter opens it)");
 	});
 
 	it("Cmd+J on the popped-out thread's own page focuses the page composer", async () => {

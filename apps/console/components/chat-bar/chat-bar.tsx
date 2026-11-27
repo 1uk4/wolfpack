@@ -13,7 +13,9 @@
  * Only the chip, the switcher and the shortcuts are eager; the input half (chat-bar-composer.tsx) loads on first expand.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { getPageNoteAppend } from "@/components/composer/use-thread-dictation";
+import { createPortal } from "react-dom";
+import { useDockSlot } from "@/components/chat-bar/dock-slot";
+import { getPageNoteAppend } from "@/components/composer/page-note-append";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import { ArrowLeftRightIcon, EyeIcon, MessageCircleQuestionIcon, ChevronDownIcon, ChevronUpIcon, MessageSquareIcon, MicIcon } from "lucide-react";
@@ -150,17 +152,19 @@ export function ChatBar() {
 	// itself (thread-chat.tsx). Leaving the page mid-run makes `onOwn` false, and the bar appears with the run live.
 	const dictating = dictation.active;
 	const own = onOwn;
+	const dockSlot = useDockSlot();
 	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dictating, vizAttached };
 	const full = !!attached && !own && !hidden && !minimized;
 	const shown = !!attached && !own && !hidden;
+	const docked = own && !!dockSlot && !hidden;
 
 	// Published so the popped-out thread's own page shows and drives the same run (use-thread-dictation.ts). Every field
 	// the page reads is a dep (phase/active/error for the state, toggle/stop/finish/cancel for the actions, levelRef for
 	// the meter); clearError only sets state, so a stale copy is as good as the current one.
 	useEffect(() => {
-		publishBarDictation(dictation, shown);
+		publishBarDictation(dictation, shown || docked);
 	// eslint-disable-next-line react-hooks/exhaustive-deps -- the listed dictation fields are the ones the page reads; the dictation object itself is new every render
-	}, [dictation.phase, dictation.error, dictation.active, dictation.levelRef, dictation.toggle, dictation.stop, dictation.finish, dictation.cancel, shown]);
+	}, [dictation.phase, dictation.error, dictation.active, dictation.levelRef, dictation.toggle, dictation.stop, dictation.finish, dictation.cancel, shown, docked]);
 	useEffect(() => () => publishBarDictation(null), []);
 
 	// Docking is automatic and never clears the attachment: on the attached thread's own page the page composer IS the chat
@@ -175,9 +179,17 @@ export function ChatBar() {
 		const onFocus = (e: Event) => {
 			const kev = (e as CustomEvent<{ event?: KeyboardEvent }>).detail?.event;
 			const l = live.current;
-			// On its own page the page composer is always the input (dictating included).
+			// Nothing attached: the icon is the chat; focus it (Enter opens it).
+			if (!l.attached) {
+				const icon = document.querySelector('[data-testid="chat-bar-expand"]') as HTMLElement | null;
+				if (!icon) return;
+				kev?.preventDefault();
+				icon.focus();
+				return;
+			}
+			// On its own page the docked bar is the input; the page's own composer only when the bar is not docked there (no slot).
 			if (l.onOwn) {
-				const page = document.querySelector('[data-testid="composer"] textarea') as HTMLTextAreaElement | null;
+				const page = (document.querySelector('[data-testid="chat-bar"] textarea') ?? document.querySelector('[data-testid="composer"] textarea')) as HTMLTextAreaElement | null;
 				if (!page) return;
 				kev?.preventDefault();
 				page.focus();
@@ -364,8 +376,10 @@ export function ChatBar() {
 	// Nothing attached (a fresh browser, the hub down): the icon is still on every page; a press attaches the owner's home thread.
 	if (!attached) return <DetachedIcon phone={!wide} dictation={dictation} />;
 	// The attached thread's own page: the page composer is the chat there.
-	if (own) return null;
-	return <Bar key={`${attached.wolf}/${attached.threadId}`} swap={swap} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
+	if (own && !dockSlot) return null;
+	const bar = <Bar key={`${attached.wolf}/${attached.threadId}`} docked={own} swap={swap} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
+	// Docked: the same Bar is portalled into the thread page's slot (the page's composer position), so one component serves both places.
+	return own && dockSlot ? createPortal(bar, dockSlot) : bar;
 }
 
 /** The icon with nothing attached: it opens the owner's home thread (the bar attaches it) when there is one. */
@@ -398,7 +412,12 @@ export function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttach
 /** A downward swipe of at least this many px on the sheet's handle closes it. */
 const SWIPE_CLOSE_PX = 60;
 
-function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
+/** FLIP: a bar that moves between the page's dock slot and floating remounts (a portal change), so the last rect is handed over here and the new mount slides from it (~200ms, never under reduced motion). */
+let lastBarRect: { rect: DOMRect; at: number } | null = null;
+
+function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
+	/** In the thread page's dock slot: static, full width of the slot, not floating. */
+	docked?: boolean;
 	dictation: Dictation;
 	registerAppend: (fn: ((t: string) => void) | null) => void;
 	target: AttachedRef;
@@ -413,6 +432,21 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 }) {
 	const api = useAttachedThread()!;
 	const { setMinimized, working, attachedThread, groups } = api;
+	useLayoutEffect(() => {
+		const el = wrapRef.current;
+		const prev = lastBarRect;
+		lastBarRect = null;
+		if (el && prev && Date.now() - prev.at < 400 && typeof el.animate === "function" && !(typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) {
+			const to = el.getBoundingClientRect();
+			const dx = prev.rect.left - to.left;
+			const dy = prev.rect.top - to.top;
+			if (Math.abs(dx) > 1 || Math.abs(dy) > 1) el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0, 0)" }], { duration: 200, easing: "ease-out" });
+		}
+		return () => {
+			if (el) lastBarRect = { rect: el.getBoundingClientRect(), at: Date.now() };
+		};
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount: the portal change remounts the Bar
+	}, [docked]);
 	const minimized = api.minimized && !swap;
 	const needsYouTotal = groups.reduce((n, g) => n + g.needsYou, 0);
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
@@ -750,7 +784,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 	);
 
 	return (
-		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-compact={compact ? "true" : undefined} className="fixed bottom-3 z-30 -translate-x-1/2" style={{ left: geo.left, width: geo.width }}>
+		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} className={docked ? "relative w-full" : "fixed bottom-3 z-30 -translate-x-1/2"} style={docked ? undefined : { left: geo.left, width: geo.width }}>
 			{swapPill}
 			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>

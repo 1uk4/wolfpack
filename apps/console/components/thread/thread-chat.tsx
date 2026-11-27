@@ -34,9 +34,11 @@ import { ViewerProvider } from "@/components/viewer/viewer-context";
 import { AttachmentChips, Composer } from "@/components/composer/composer";
 import { ComposerControls, useThreadSettings } from "@/components/composer/composer-controls";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
-import { DictationBar, joinDictation, setDictationFocus, useBarShown, recordingAt } from "@/components/composer/dictation";
+import { DictationBar, joinDictation, setDictationFocus, recordingAt } from "@/components/composer/dictation";
 import { getInlineDropSink } from "@/components/ask/ask-inline-composer";
-import { setPageNoteAppend, useThreadDictation } from "@/components/composer/use-thread-dictation";
+import { useThreadDictation } from "@/components/composer/use-thread-dictation";
+import { setPageNoteAppend } from "@/components/composer/page-note-append";
+import { setDockSlot } from "@/components/chat-bar/dock-slot";
 import { AttachmentThumbs } from "@/components/composer/attachment-thumbs";
 import { newUploadState, startUploads } from "@/components/composer/attachment-upload";
 import { canSendWith, dragHasFiles, droppedFiles, pastedImages, readyInfos, type AttachmentInfo, type PendingAttachment } from "@/components/composer/attachments";
@@ -486,7 +488,6 @@ function ThreadChatInner({
 	// overwrite or absorb the chat's); when it docks, the composer re-reads the draft via useRereadDraftWhenShown below.
 	// Dictating on this thread's own page does NOT do this: the composer stays and highlights itself.
 	const attachedApi = useAttachedThread();
-	const barShown = useBarShown();
 	// The attached thread's own page: the page composer IS the docked chat (one composer); only viz mode / a shown bar replaces it.
 	// Any other thread attached: the floating chat sits over this page with a swap pill, so this composer steps aside (its strips
 	// pad their bottom by the bar's height, --chat-bar-over) and returns, re-reading its draft, when the owner swaps to this thread.
@@ -494,7 +495,7 @@ function ThreadChatInner({
 	// The same predicate that draws the bar's swap pill (chat-bar-io swapTarget), so this composer never steps aside without a pill to bring it back.
 	const pageSwap = swapTarget(usePathname(), attachedApi?.attached ?? null);
 	const barOverPage = !attachedHere && !!pageSwap && pageSwap.wolf === wolf && pageSwap.slug === slug;
-	const barOwnsInput = barOverPage || (attachedHere && barShown);
+	const barOwnsInput = barOverPage || attachedHere;
 	// `ownedByBar` follows barOwnsInput, but only from a layout effect (below, after the draft hook), never during render: on the commit where
 	// ownership moves to the bar that effect first flushes the pending debounced draft, then sets the flag, so the draft hook's 300ms timer
 	// is never left to find the flag set and skip the write.
@@ -557,12 +558,8 @@ function ThreadChatInner({
 	// While the questionnaire's note is the composer (noteMode, below), finals join the note instead of the hidden draft.
 	const noteAppendRef = useRef<((t: string) => void) | null>(null);
 	const dictation = useThreadDictation(
-		wolf,
-		slug,
-		threadId,
 		(t) => (noteAppendRef.current ? noteAppendRef.current(t) : applyText(joinDictation(textRef.current, t))),
 		(t) => appendToDraft(draftKey(wolf, threadId), t),
-		draftSchedule.flush, // the chat's input reads the draft: write it now and drop the pending debounce
 	);
 	useRereadDraftWhenShown(barOwnsInput, wolf, threadId, textRef, (v) => {
 		textRef.current = v;
@@ -1005,6 +1002,8 @@ function ThreadChatInner({
 												</button>
 											) : null}
 										</div>
+									) : attachedHere && !viz ? (
+									<div ref={setDockSlot} data-testid="thread-dock-slot" className="pointer-events-auto" />
 									) : barOwnsInput ? null : (
 									<>
 									<FrameBadges wolf={wolf} threadId={threadId} vizOn={viz} />

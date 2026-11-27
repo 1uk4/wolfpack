@@ -14,7 +14,7 @@ import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
 import { Hint } from "@/components/ui/hint";
 import { cn } from "@/lib/utils";
-import { buildDenStrip, denLabel, type NeedsYouItem } from "@/src/core";
+import { buildDenStrip, denLabel, wolfColorStyle, type NeedsYouItem } from "@/src/core";
 
 /** The pending cards from /api/needs-you, fetched while the sheet is open and refetched on every needs-you-changed (no polling). */
 export function useNeedsYouItems(enabled: boolean): NeedsYouItem[] {
@@ -93,7 +93,8 @@ export function DenStrip({ swap = null, onSwap, open, setOpen }: Props) {
 									api.attach({ wolf: s.wolf, threadId: s.homeThreadId });
 								} else setOpen(open === s.wolf ? null : s.wolf);
 							}}
-							style={{ color: s.color }}
+							data-wolf-color={s.colorKey}
+							style={{ ...wolfColorStyle(s.colorKey), color: "var(--wolf-accent)" }}
 							className={cn("relative flex size-[34px] shrink-0 items-center justify-center rounded-full border bg-card/70 backdrop-blur hover:bg-accent max-md:size-11", open === s.wolf && "border-current bg-accent")}
 							{...(open === s.wolf ? { "data-selected": "true" } : {})}
 						>

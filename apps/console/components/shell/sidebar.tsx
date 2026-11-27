@@ -30,7 +30,7 @@ import { RemoveThreadDialog, ThreadActionsMenu, closedByOwner, slugOfHref, threa
 import { coalescedRefresh, checkRoster, foldWolfRoster, foldWolfThreads, startVisibleTimer, type WolfStatus, fuzzyScore, initialListOpen, listOpenAfterSelect, MOBILE_BACK_LABEL, MOBILE_QUERY, needsFloatingBack } from "@/src/core";
 import { settingsUrl } from "@/components/thread/thread-transport";
 import { useServerEvent, useServerResync } from "@/components/shell/server-events";
-import { THREAD_COLORS, threadColor, threadColorIndex, threadAccentStyle, threadSlug, isChildThread, rowWolf, sidebarLayout, partitionWolves, togglePinned, toggleHidden, hideWolf, showWolf, denNeedsYou, loadWolfPrefs, saveWolfPrefs, type WolfPrefs, stateLabel, threadListItem, type ChatListItem, type ChildThread, workHref } from "@/src/core";
+import { effectiveWolfColor, wolfColorStyle, THREAD_COLORS, threadColor, threadColorIndex, threadAccentStyle, threadSlug, isChildThread, rowWolf, sidebarLayout, partitionWolves, togglePinned, toggleHidden, hideWolf, showWolf, denNeedsYou, loadWolfPrefs, saveWolfPrefs, type WolfPrefs, stateLabel, threadListItem, type ChatListItem, type ChildThread, workHref } from "@/src/core";
 import { ZC } from "@/lib/z-layers";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
@@ -373,6 +373,7 @@ export function SessionRow({
 	wolfStatus,
 	onRemoved,
 	dotColor,
+	wolfKey,
 	wolfMenu,
 }: {
 	/** Pin / Hide for the wolf, on its Home row. */
@@ -380,6 +381,8 @@ export function SessionRow({
 	chat: SessionItem;
 	/** The thread's color (hex) for the dot: its override, else the id's, a subagent's = its parent's. */
 	dotColor?: string;
+	/** A Home row's wolf colour key (effectiveWolfColor): its icon uses the theme-aware accent. */
+	wolfKey?: string;
 	/** The wolf's liveness, drawn as a badge on its group header (the Home row). */
 	wolfStatus?: WolfStatus;
 	/** A feature thread was removed from its row menu (the sidebar leaves the thread if it is the open one). */
@@ -483,7 +486,7 @@ export function SessionRow({
 				    round): mono = chrome, Source Sans = human words. */}
 				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--wp-prose-size)">
 					{home && (
-						<span data-testid="orchestrator-icon" role="img" aria-label="Orchestrator" className={cn("inline-flex size-[1em] shrink-0", !dotColor && "text-muted-foreground")} style={dotColor ? { color: dotColor } : undefined}>
+						<span data-testid="orchestrator-icon" role="img" aria-label="Orchestrator" className={cn("inline-flex size-[1em] shrink-0", !dotColor && "text-muted-foreground")} data-wolf-color={wolfKey} style={wolfKey ? ({ ...wolfColorStyle(wolfKey), color: "var(--wolf-accent)" } as CSSProperties) : dotColor ? { color: dotColor } : undefined}>
 							<WolfpackMark className="size-full" />
 						</span>
 					)}
@@ -768,6 +771,7 @@ export function SessionsSidebar() {
 										key={c.id}
 										chat={c}
 										dotColor={c.href ? threadColor(colorIndex.get(c.id) ?? c, colorIndex, rosterByName.get(rowWolf(c))?.color).hex : undefined}
+										wolfKey={c.kind === "home" && c.href ? effectiveWolfColor({ name: rowWolf(c), color: rosterByName.get(rowWolf(c))?.color }, c.id) : undefined}
 										nested={nested}
 										indented={indented}
 										offline={offlineWolves.has(rowWolf(c))}

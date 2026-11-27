@@ -47,7 +47,7 @@ import type { Answering } from "@/components/ask/ask-sheet";
 import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask/ask-session";
 import { replyLabel } from "@/components/ask/ask-reply";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
-import { effectiveWolfColor, hasWolfColor, wolfColorStyle, attachable, barGeometry, barHiddenFor, pickHomeThread, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread } from "@/src/core";
+import { effectiveWolfColor, hasWolfColor, wolfColorStyle, wolfAccentForeground, attachable, barGeometry, barHiddenFor, pickHomeThread, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread } from "@/src/core";
 import { ZC } from "@/lib/z-layers";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar/chat-bar-io";
@@ -704,7 +704,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				// Docked in the thread page's slot (not a sheet): the dock is a static block that takes its own height in the page, so the last messages are never under it.
 				className={cn("flex flex-col border-t bg-card shadow-lg", dropping && "ring-2 ring-inset ring-(color:--thread-accent)", docked && !sheet ? "relative w-full" : "fixed inset-x-0", sheet ? cn(ZC.chatSheet, askCard ? "" : "rounded-t-2xl") : docked ? "" : ZC.chatBar)}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
-				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : {}), ...(composing ? {} : { borderColor: wolfTint ? "var(--wolf-accent)" : color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
+				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey), backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : {}), ...(composing ? {} : { borderColor: wolfTint ? "var(--wolf-accent)" : color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
 			>
 				{!sheet && phoneTree}
@@ -808,7 +808,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	);
 
 	return (
-		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-dropping={dropping ? "true" : undefined} {...dropProps} data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} data-wolf-color={wolfTint ? wolfKey : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={{ ...(docked ? {} : { left: geo.left, width: geo.width }), ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)" } : {}) } as CSSProperties}>
+		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-dropping={dropping ? "true" : undefined} {...dropProps} data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} data-wolf-color={wolfTint ? wolfKey : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={{ ...(docked ? {} : { left: geo.left, width: geo.width }), ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey) } : {}) } as CSSProperties}>
 			{/* Floating only: an opaque page-colour backdrop under the den strip, the bar and the gap below it, with a soft fade at its top edge, so thread text never shows through. */}
 			{!docked && <div aria-hidden data-testid="chat-bar-backdrop" className="pointer-events-none absolute -bottom-3 -top-6 -inset-x-3 -z-10 bg-gradient-to-t from-background from-[calc(100%-1.5rem)] to-transparent" />}
 			{!vizOn && <DenStrip swap={denSwap} onSwap={onDenSwap} open={BAR_EXTRAS.switcher ? switcher : null} setOpen={setSwitcher} />}

@@ -9,7 +9,7 @@
  * they stay readable on a light page. Tints are the accent at 6% (dark) / 7% (light) alpha: text contrast is unchanged.
  */
 import { THREAD_COLORS, THREAD_COLOR_KEYS, type ThreadColor } from "@wolfpack/protocol";
-import { threadColor } from "./thread-color.ts";
+import { accentForeground, threadColor } from "./thread-color.ts";
 
 export interface WolfColorPair {
 	/** A faint background colour (low alpha), meant to be layered over the page background. */
@@ -70,6 +70,13 @@ export function wolfColorTokens(key?: string | null): WolfColorTokens {
 		light: { tint: rgba(light, LIGHT_ALPHA), accent: light },
 		dark: { tint: rgba(dark, DARK_ALPHA), accent: dark },
 	};
+}
+
+/** Readable text on the wolf accent, per theme (`--thread-accent-foreground` for send buttons and filled chips); the app default for no colour. */
+export function wolfAccentForeground(key?: string | null): string {
+	const t = wolfColorTokens(key);
+	if (t === NEUTRAL) return "var(--primary-foreground)";
+	return `light-dark(${accentForeground(t.light.accent)}, ${accentForeground(t.dark.accent)})`;
 }
 
 /** The CSS variables a surface sets on its root: `--wolf-tint` and `--wolf-accent`, each `light-dark(light, dark)`. */

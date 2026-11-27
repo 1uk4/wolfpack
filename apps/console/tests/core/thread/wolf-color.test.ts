@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { THREAD_COLOR_KEYS } from "@wolfpack/protocol";
-import { effectiveWolfColor, wolfColorStyle, wolfColorTokens } from "../../../src/core/thread/wolf-color.ts";
+import { effectiveWolfColor, wolfAccentForeground, wolfColorStyle, wolfColorTokens } from "../../../src/core/thread/wolf-color.ts";
 
 describe("wolf colour tokens", () => {
 	it("maps a known key to its light and dark tint and accent", () => {
@@ -31,6 +31,11 @@ describe("wolf colour tokens", () => {
 		assert.equal(effectiveWolfColor({ name: "hal" }), "teal");
 		assert.equal(effectiveWolfColor({ name: "hal", color: "pink" }), "pink");
 		assert.equal(effectiveWolfColor({ name: "hal", color: "chartreuse" }), "teal");
+	});
+
+	it("gives the accent a readable foreground in each theme", () => {
+		assert.equal(wolfAccentForeground("blue"), "light-dark(#ffffff, #0f141a)");
+		assert.equal(wolfAccentForeground(undefined), "var(--primary-foreground)");
 	});
 
 	it("exposes the pair as theme-aware css variables", () => {

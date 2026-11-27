@@ -8,7 +8,8 @@
 import { attachable, type SwitcherEntry, type SwitcherGroup, type ThreadsByWolf, type WolfLite } from "./chat-bar.ts";
 import { threadSlug } from "./thread-adapter.ts";
 import { cardHeadline, type NeedsYouItem } from "./needs-you.ts";
-import { threadColor } from "./thread-color.ts";
+import { THREAD_COLORS, type ThreadColor } from "@wolfpack/protocol";
+import { effectiveWolfColor } from "./wolf-color.ts";
 
 /** One line of a wolf's sheet: the thread it is raised in and the card's headline. `href` opens the thread; `threadId` + `callId` name the card. */
 export interface DenRow {
@@ -24,6 +25,8 @@ export interface DenStripItem {
 	wolf: string;
 	/** The wolf's colour (hex): its chosen palette colour, else its home thread's automatic one. */
 	color: string;
+	/** The wolf's colour key (effectiveWolfColor): what theme-aware surfaces pass to wolfColorStyle. */
+	colorKey: ThreadColor;
 	working: boolean;
 	needsYou: number;
 	rows: DenRow[];
@@ -44,9 +47,11 @@ export function buildDenStrip(wolves: readonly WolfLite[], threads: ThreadsByWol
 		if ((w.status === "offline" || w.librarian) && mine.length === 0 && swapWolf !== w.name && alsoShow !== w.name) continue; // the swap wolf and the attached wolf always keep a button
 		const list = threads[w.name] ?? [];
 		const home = list.find((t) => t.kind === "home");
+		const colorKey = effectiveWolfColor(w, home?.id);
 		out.push({
 			wolf: w.name,
-			color: threadColor({ id: home?.id ?? `${w.name}/home`, kind: "home" }, [], w.color).hex,
+			color: THREAD_COLORS[colorKey],
+			colorKey,
 			homeThreadId: home?.id,
 			swap: swapWolf === w.name,
 			working: list.some((t) => t.status === "busy"),

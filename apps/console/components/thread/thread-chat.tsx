@@ -18,7 +18,7 @@ import { TaskPinToggle, applyAgentTaskPin, lastAgentTaskPin, syncTaskPin } from 
 import { THREAD_COMPACTION_PART, ThreadCompactionDivider, type ThreadCompactionData } from "@/components/thread/thread-compaction-divider";
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/thread/subagent-message";
-import { effectiveWolfColor, hasWolfColor, parseSubagentMessage, setPagePendingAsk, wolfColorStyle } from "@/src/core";
+import { effectiveWolfColor, hasWolfColor, parseSubagentMessage, setPagePendingAsk, wolfColorStyle, wolfAccentForeground } from "@/src/core";
 import { TurnTimer, useTurnStart } from "@/components/thread/turn-timer";
 import { useOwnAsk } from "@/components/thread/thread-ask";
 import { submitToThread, swapTarget } from "@/components/chat-bar/chat-bar-io";
@@ -296,7 +296,7 @@ function ThreadChatInner({
 	const tintSolid = threadTintSolid(tintHex);
 	// The wolf's own colour (every thread of the wolf): --wolf-tint / --wolf-accent, a faint tint over the page and the accent.
 	const wolfKey = effectiveWolfColor({ name: wolf, color: colorApi?.wolves.find((w) => w.name === wolf)?.color ?? wolfColor }, colorApi?.threads[wolf]?.find((t) => t.kind === "home")?.id);
-	const wolfStyle = hasWolfColor(wolfKey) ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : null;
+	const wolfStyle = hasWolfColor(wolfKey) ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey), backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : null;
 	// The page canvas (html background) takes the chat colour while a thread is open, so the strip the iOS home-screen app leaves under the viewport matches it
 	useEffect(() => {
 		const root = document.documentElement;
@@ -803,7 +803,7 @@ function ThreadChatInner({
 		>
 			<div ref={registerColumn} className={viz ? "hidden" : "flex min-w-0 flex-1 flex-col"} data-testid="thread-main">
 				<TopBar>
-					<span className="min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl">{title}</span>
+					<span data-wolf-color={wolfStyle ? wolfKey : undefined} className={`min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl${wolfStyle ? " underline decoration-(color:--wolf-accent)/50 decoration-2 underline-offset-[6px]" : ""}`}>{title}</span>
 					<TurnTimer startedAt={turnStart} />
 					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} turn={ask.pending ? "waiting" : busy ? "working" : "idle"} />
 					<TaskPinToggle threadId={threadId} bound={bound} />

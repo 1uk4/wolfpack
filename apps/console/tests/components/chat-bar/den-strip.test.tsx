@@ -103,6 +103,13 @@ describe("den strip", () => {
 		assert.equal(wolf("hal").querySelector('[data-testid="den-working"]'), null);
 	});
 
+	it("colours each wolf button with its wolf colour key and the theme-aware accent", async () => {
+		await mount();
+		assert.equal(wolf("w").getAttribute("data-wolf-color"), "red");
+		assert.equal(wolf("hal").getAttribute("data-wolf-color"), "teal");
+		assert.match(wolf("w").getAttribute("style") ?? "", /--wolf-accent:\s*light-dark\(#c93a45, #f07178\)/);
+	});
+
 	it("a click opens the wolf's sheet, Esc closes it, and a second click closes it too", async () => {
 		await mount();
 		assert.equal(q('[data-testid="den-sheet"]'), null);

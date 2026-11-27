@@ -10,7 +10,7 @@
  * Threads cannot open in the viewer panel (it shows work items and KB entries only), so they open on their own page.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { BellIcon, ExternalLinkIcon, XIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { kbdEventForAction, featureOfThread, type RosterThread } from "@/src/core";
@@ -18,7 +18,7 @@ import { talkToWolf } from "./live-talk";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
 import { acquireLiveFeed, getLiveSnapshot, onLiveAction, useLiveConnected } from "./live-store";
-import { getKbHover, onKbReset, subscribeKbHover } from "./kb-life-store";
+import { getKbHover, onKbReset, startKbDemo, subscribeKbHover } from "./kb-life-store";
 import { LiveOverlay, liveSettingsOf, type OverlayCard, type OverlayHit } from "./live-overlay";
 
 interface Shown { hit: OverlayHit; card: OverlayCard; pinned: boolean; width: number }
@@ -132,6 +132,11 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 			release();
 		};
 	}, [renderer, live.enabled]);
+
+	// `?kbdemo=1` (dev builds only) plays the scripted memory life on /graph, as the first wolf on the map (else the attached thread's wolf, else a made-up one).
+	const demoAsked = useSearchParams()?.get("kbdemo") === "1" && process.env.NODE_ENV !== "production";
+	const demoWolf = Object.keys(getLiveSnapshot().state.wolves)[0] ?? attachedApi?.wolves[0]?.name ?? attachedApi?.attached?.wolf;
+	useEffect(() => (renderer && demoAsked ? startKbDemo(demoWolf) : undefined), [renderer, demoAsked, demoWolf]);
 
 	// Every pack wolf, offline ones dimmed at home: only once the hub has answered, so with no hub the graph is exactly as before.
 	const connected = useLiveConnected();

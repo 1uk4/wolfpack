@@ -68,13 +68,12 @@ export function subscribeKbHover(fn: () => void): () => void {
 export const DEMO_WOLF = "demo-wolf";
 /** One demo cycle, then it repeats. */
 const DEMO_LOOP_MS = 28_000;
-const wolfActor = { kind: "wolf", wolf: DEMO_WOLF } as const;
 const hubActor = { kind: "hub", title: "curator" } as const;
 
 /** One scripted cycle (ms offset, event). Real event shapes; `c` makes ids unique per cycle. */
-export function demoCycle(c: number): { at: number; event: Omit<ActivityEvent, "id" | "ts" | "v" | "pack" | "ttlMs"> }[] {
+export function demoCycle(c: number, wolf: string = DEMO_WOLF): { at: number; event: Omit<ActivityEvent, "id" | "ts" | "v" | "pack" | "ttlMs"> }[] {
 	const t = (i: number) => `demo-${c}-t${i}`;
-	const wolfBase = { actor: wolfActor };
+	const wolfBase = { actor: { kind: "wolf", wolf } as const };
 	const out: { at: number; event: Omit<ActivityEvent, "id" | "ts" | "v" | "pack" | "ttlMs"> }[] = [];
 	// Compact life (loops every DEMO_LOOP_MS): the buffer fills (0.3-1.8 s), consolidation births 5 topics at the wolf (2.5 s) that fly to the Home ring and orbit it,
 	// they are promoted one by one (6-8.4 s) and the curator files each (from 9 s).
@@ -93,7 +92,9 @@ export function demoCycle(c: number): { at: number; event: Omit<ActivityEvent, "
 }
 
 /** Feed the scripted cycle (looping) through the live pipeline. Returns stop. Dev only: gated by `?kbdemo=1` in the page. */
-export function startKbDemo(): () => void {
+export function startKbDemo(wolf: string = DEMO_WOLF): () => void {
+	const wolfActor = { kind: "wolf", wolf } as const;
+	const fake = wolf === DEMO_WOLF; // a made-up wolf is brought online and offline; a real one is left alone
 	if (process.env.NODE_ENV === "production") return () => undefined; // dev only
 	let stopped = false;
 	const timers: ReturnType<typeof setTimeout>[] = [];
@@ -107,15 +108,15 @@ export function startKbDemo(): () => void {
 	const run = () => {
 		if (stopped) return;
 		const c = cycle++;
-		injectLiveAction({ type: "event", event: { v: 1, id: `demo-online-${c}`, pack: "demo", ts: Date.now(), ttlMs: 120_000, actor: wolfActor, verb: "wolf-online" } as ActivityEvent, now: Date.now() });
-		for (const s of demoCycle(c)) timers.push(setTimeout(() => !stopped && send(s.event), s.at));
+		if (fake) injectLiveAction({ type: "event", event: { v: 1, id: `demo-online-${c}`, pack: "demo", ts: Date.now(), ttlMs: 120_000, actor: wolfActor, verb: "wolf-online" } as ActivityEvent, now: Date.now() });
+		for (const s of demoCycle(c, wolf)) timers.push(setTimeout(() => !stopped && send(s.event), s.at));
 		timers.push(setTimeout(run, DEMO_LOOP_MS));
 	};
 	run();
 	return () => {
 		stopped = true;
 		timers.forEach(clearTimeout);
-		injectLiveAction({ type: "event", event: { v: 1, id: `demo-offline-${++seq}`, pack: "demo", ts: Date.now(), ttlMs: 60_000, actor: wolfActor, verb: "wolf-offline" } as ActivityEvent, now: Date.now() });
+		if (fake) injectLiveAction({ type: "event", event: { v: 1, id: `demo-offline-${++seq}`, pack: "demo", ts: Date.now(), ttlMs: 60_000, actor: wolfActor, verb: "wolf-offline" } as ActivityEvent, now: Date.now() });
 		resetKbLife(); // the injected rows and the map's flights go with the demo
 	};
 }

@@ -27,7 +27,8 @@ import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 import { abortThread as abortBarThread, onOwnThreadPage, swapTarget } from "@/components/chat-bar/chat-bar-io";
 import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/composer/dictation";
-import { appendToDraft, draftKey } from "@/lib/composer-draft";
+import { appendToDraft, draftKey, readDraft } from "@/lib/composer-draft";
+import { setSpaceContext } from "@/components/composer/space-dictation";
 import { setVizMode, useVizActive } from "@/components/viewer/viz-mode";
 import { useFrameBadges } from "@/components/viewer/frame-store";
 import { FrameBadges } from "@/components/viewer/frame-badges";
@@ -167,6 +168,16 @@ export function ChatBar() {
 	// eslint-disable-next-line react-hooks/exhaustive-deps -- the listed dictation fields are the ones the page reads; the dictation object itself is new every render
 	}, [dictation.phase, dictation.error, dictation.active, dictation.levelRef, dictation.toggle, dictation.stop, dictation.finish, dictation.cancel, shown, docked]);
 	useEffect(() => () => publishBarDictation(null), []);
+	// Space dictation needs the attached thread (the autosend is addressed to it) and its composer's draft (typed text means Space is typing).
+	useEffect(() => {
+		setSpaceContext(() => {
+			const a = live.current.attached;
+			if (!a) return null;
+			const field = document.querySelector<HTMLTextAreaElement>("[data-chat-composer] textarea");
+			return { thread: { wolf: a.wolf, threadId: a.threadId }, draft: field ? field.value : readDraft(draftKey(a.wolf, a.threadId)) };
+		});
+		return () => setSpaceContext(null);
+	}, []);
 
 	// Docking is automatic and never clears the attachment: on the attached thread's own page the page composer IS the chat
 	// (this bar renders nothing there), on any other thread page the bar floats with a swap pill, elsewhere it floats as is.

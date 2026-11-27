@@ -848,6 +848,7 @@ export function useDictation({ append, kind = "page", enabled = true, onOrphan, 
 		running: () => phaseRef.current !== "idle",
 		toggle,
 		finish: () => finishRef.current(),
+		cancel,
 	});
 	useEffect(() => {
 		window.addEventListener("wolfpack:kbd-cancel-dictation", cancel);

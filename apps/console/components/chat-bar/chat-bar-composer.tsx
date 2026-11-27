@@ -6,7 +6,7 @@
  * page, so the draft hook never runs beside the page composer (their stale flushes would overwrite each other); on every
  * mount it re-reads the draft, so text typed on the page shows up here.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AttachmentChips, Composer } from "@/components/composer/composer";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { threadBase } from "@/components/thread/thread-transport";
@@ -60,7 +60,7 @@ export default function ChatBarComposer({ phone = false, target, title, cardOpen
 
 	// The transcript lands in this input (and its draft) while the composer is mounted; while the questionnaire is expanded the input is the NOTE, so it lands there.
 	const sessionRef = useRef(session);
-	sessionRef.current = session;
+	useLayoutEffect(() => void (sessionRef.current = session));
 	useEffect(() => {
 		const fn = (t: string) => {
 			const s = sessionRef.current;
@@ -116,11 +116,19 @@ export default function ChatBarComposer({ phone = false, target, title, cardOpen
 	// Space-hold dictation (components/composer/space-dictation.ts) fires this when the owner releases after a hold: the spoken words are already in the field,
 	// so it goes through the send button's path (submit, clear the draft). Not while a questionnaire note is the composer; an empty field is a no-op (send checks).
 	const sendRef = useRef(send);
-	sendRef.current = send;
 	const noteModeRef = useRef(noteMode);
-	noteModeRef.current = noteMode;
+	const threadRef = useRef(target);
+	useLayoutEffect(() => {
+		sendRef.current = send;
+		noteModeRef.current = noteMode;
+		threadRef.current = target;
+	});
 	useEffect(() => {
-		const onAutosend = () => {
+		// The event names the thread the hold was started for: only that thread's composer sends (a draft typed elsewhere is never sent by it).
+		const onAutosend = (e: Event) => {
+			const k = (e as CustomEvent<{ wolf?: string; threadId?: string } | null>).detail;
+			const mine = threadRef.current;
+			if (!k || k.wolf !== mine.wolf || k.threadId !== mine.threadId) return;
 			if (!noteModeRef.current) void sendRef.current();
 		};
 		window.addEventListener("wolfpack:dictation-autosend", onAutosend);
@@ -188,6 +196,7 @@ export default function ChatBarComposer({ phone = false, target, title, cardOpen
 				</p>
 			)}
 			{askOpen && !noteMode && text.trim() !== "" && <p data-testid="ask-replace-hint" className="px-3 pt-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
+			<div data-chat-composer="" className="contents">
 			<Composer
 				{...(voice ? { voice } : {})}
 				{...(phone && !voice ? { phoneRow: { mic: <DictationMicButton dictation={dictation} /> } } : {})}
@@ -209,6 +218,7 @@ export default function ChatBarComposer({ phone = false, target, title, cardOpen
 				onPickFiles={noteMode ? session.addNoteFiles : onFiles}
 				chips={<AttachmentChips items={noteMode ? session.note.atts : attachments} onRemove={noteMode ? session.removeNoteAtt : (k) => setAttachments((prev) => prev.filter((a) => a.key !== k))} />}
 			/>
+			</div>
 			{!voice && !phone && (
 				<div className="px-3 pb-2" data-testid="dictation-slot">
 					<DictationBar dictation={dictation} />

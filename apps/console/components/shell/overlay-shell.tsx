@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { setBarHidden } from "@/components/chat-bar/bar-visibility";
 
 const FOCUSABLE = 'button, a[href], textarea, input, select, summary, [tabindex="0"]';
 
@@ -64,6 +65,12 @@ export function OverlayShell({
 	const closeRef = useRef<HTMLButtonElement>(null);
 	const restoreFocusRef = useRef(restoreFocus);
 	restoreFocusRef.current = restoreFocus;
+	// A full-window overlay covers the page the floating chat bar sits on: the bar stays out while it is open (one reason per instance, overlays can stack).
+	const barReason = `overlay:${useId()}`;
+	useEffect(() => {
+		setBarHidden(barReason, true);
+		return () => setBarHidden(barReason, false);
+	}, [barReason]);
 	useEffect(() => {
 		const opener = document.activeElement as HTMLElement | null;
 		const prevOverflow = document.body.style.overflow;

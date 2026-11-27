@@ -41,15 +41,34 @@ const info = (over: Partial<SpaceKeyInfo> = {}, target: Partial<SpaceKeyInfo["ta
 	modifier: false,
 	modalOpen: false,
 	phone: false,
+	draft: "",
 	target: { tag: "body", editable: false, ...target },
 	...over,
 });
 
+describe("spaceKeyMachine reset", () => {
+	it("a reset forgets the pending press, so a later release does nothing", () => {
+		const m = spaceKeyMachine({ holdMs: 300 });
+		m.send(down(0));
+		m.reset();
+		assert.equal(m.send({ type: "keyup", at: 50 }), "none");
+	});
+});
+
 describe("spaceKeyLive", () => {
-	it("is live on the body and on an empty composer textarea, not on a textarea with text", () => {
+	it("is live on the body and on an empty chat composer textarea, not on a composer textarea with text", () => {
 		assert.equal(spaceKeyLive(info()), true);
-		assert.equal(spaceKeyLive(info({}, { tag: "textarea", value: "" })), true);
-		assert.equal(spaceKeyLive(info({}, { tag: "textarea", value: "hi" })), false);
+		assert.equal(spaceKeyLive(info({}, { tag: "textarea", value: "", composer: true })), true);
+		assert.equal(spaceKeyLive(info({}, { tag: "textarea", value: "hi", composer: true })), false);
+	});
+
+	it("is not live on any other empty textarea (a note box, a card field)", () => {
+		assert.equal(spaceKeyLive(info({}, { tag: "textarea", value: "" })), false);
+	});
+
+	it("is not live from the body or a plain element while the attached composer holds a draft, so a stray Space cannot send typed text", () => {
+		assert.equal(spaceKeyLive(info({ draft: "half a message" })), false);
+		assert.equal(spaceKeyLive(info({ draft: "half a message" }, { tag: "div" })), false);
 	});
 
 	it("leaves Space alone on inputs, buttons, links, contenteditable and button-like roles", () => {

@@ -770,10 +770,24 @@ describe("one dictation path: the bar's when a thread is attached, the page's ow
 		await wait();
 		assert.equal(barTa()!.value, "ship it");
 		assert.deepEqual(posts, [], "nothing sent yet");
-		await act(async () => void window.dispatchEvent(new dom.window.CustomEvent("wolfpack:dictation-autosend")));
+		await act(async () => void window.dispatchEvent(new dom.window.CustomEvent("wolfpack:dictation-autosend", { detail: { wolf: "w", threadId: "w/a" } })));
 		await wait();
 		assert.equal((posts as string[]).filter((p) => p.includes("/submit")).length, 1, "sent once");
 		assert.equal(barTa()!.value, "", "the input is cleared");
+	});
+
+	it("a dictation-autosend event started for another thread (or carrying no thread) sends nothing from this composer", async () => {
+		await mount("/wolf/w/thread/a", A, <><OnPageA /><DockSlot /></>);
+		await fire(barToggle(), "click", { detail: 1 });
+		await wait();
+		const ws = await say("typed here");
+		await endRun(ws);
+		await wait();
+		await act(async () => void window.dispatchEvent(new dom.window.CustomEvent("wolfpack:dictation-autosend", { detail: { wolf: "w", threadId: "w/other" } })));
+		await act(async () => void window.dispatchEvent(new dom.window.CustomEvent("wolfpack:dictation-autosend")));
+		await wait();
+		assert.deepEqual(posts, [], "nothing sent");
+		assert.equal(barTa()!.value, "typed here", "the text stays");
 	});
 
 	it("with nothing attached the page's own run works and the words land in the page composer", async () => {

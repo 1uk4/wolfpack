@@ -529,7 +529,7 @@ Reviewers only check against this standard; they never commit, fix up or rebase.
 - Fold review fixes and corrections into the commit they belong to. No "address review" or "fix typo" commits.
 - Record the fix with `git commit --fixup <sha> -- <paths>` (`git add` a new file first), then squash it in:
   `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <base>`
-- `<base>` is the commit the task branch started from: `base=$(git merge-base HEAD <parent-branch>)`, where `<parent-branch>` is the branch your worktree was cut from (the brief names it, or it is the feature branch).
+- `<base>` is the commit the task branch started from: `base=$(git merge-base HEAD <parent-branch>)`, where `<parent-branch>` is the branch your worktree was cut from (the brief names it, or it is the feature branch). When the brief names a base sha, use it. Use `origin/<branch>`, not a local branch, for any branch other people merge into (`wolf/1uk4`, `stable`): the local ref can lag, and a stale base makes the rebase replay and flatten already-merged history. Before rebasing, check `git rev-list --count <base>..HEAD` matches the number of commits you expect.
   If you cannot determine it with certainty, do not rebase; report it.
 - Rebase only your own unmerged `feat/...` task branch with a clean tree. If the tree has changes that are not yours, or you are not on a task branch, do not rebase; report it.
 - Never use `--autostash`, stash or reset to get a clean tree. Never merge the parent into your branch.
@@ -1152,7 +1152,7 @@ Reviewers only check against this standard; they never commit, fix up or rebase.
 - Fold review fixes and corrections into the commit they belong to. No "address review" or "fix typo" commits.
 - Record the fix with `git commit --fixup <sha> -- <paths>` (`git add` a new file first), then squash it in:
   `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <base>`
-- `<base>` is the commit the task branch started from: `base=$(git merge-base HEAD <parent-branch>)`, where `<parent-branch>` is the branch your worktree was cut from (the brief names it, or it is the feature branch).
+- `<base>` is the commit the task branch started from: `base=$(git merge-base HEAD <parent-branch>)`, where `<parent-branch>` is the branch your worktree was cut from (the brief names it, or it is the feature branch). When the brief names a base sha, use it. Use `origin/<branch>`, not a local branch, for any branch other people merge into (`wolf/1uk4`, `stable`): the local ref can lag, and a stale base makes the rebase replay and flatten already-merged history. Before rebasing, check `git rev-list --count <base>..HEAD` matches the number of commits you expect.
   If you cannot determine it with certainty, do not rebase; report it.
 - Rebase only your own unmerged `feat/...` task branch with a clean tree. If the tree has changes that are not yours, or you are not on a task branch, do not rebase; report it.
 - Never use `--autostash`, stash or reset to get a clean tree. Never merge the parent into your branch.

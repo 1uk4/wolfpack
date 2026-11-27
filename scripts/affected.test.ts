@@ -60,6 +60,12 @@ describe("affected", () => {
     expect(r.tracer).toBe(false);
     expect(r.release).toBe(false);
   });
+  it("markdown under packages/agents is prompt input, not docs: it marks the agents package and its dependents", () => {
+    const r = run(["packages/agents/standards/git.md"]);
+    expect(r.packages).toContain("@wolfpack/agents");
+    expect(r.packages).toContain("@wolfpack/harness");
+    expect(run(["packages/agents/README.md"]).packages).toEqual([]);
+  });
   it("release scripts trigger the release job only", () => {
     const r = run(["scripts/build-wolfd-release.sh"]);
     expect(r.release).toBe(true);

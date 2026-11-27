@@ -336,7 +336,8 @@ export function GraphView({
 			}
 			renderer.destroy();
 		};
-	}, [isEmpty]);
+		// `embedded` is fixed for a mounted view (the /kb-activity panel vs /graph); listing it only satisfies the lint.
+	}, [isEmpty, embedded]);
 
 	// Feed #1 — data: nodes (with positions + styles), edges, glow groups,
 	// resolved colours. A new payload keeps every position the renderer

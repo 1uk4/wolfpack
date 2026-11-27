@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { setBarHidden } from "@/components/chat-bar/bar-visibility";
+import { ZC } from "@/lib/z-layers";
 
 const FOCUSABLE = 'button, a[href], textarea, input, select, summary, [tabindex="0"]';
 
@@ -117,7 +118,7 @@ export function OverlayShell({
 	return (
 		<div
 			ref={dialogRef}
-			className={`fixed inset-0 z-50 flex h-dvh max-h-dvh flex-col overflow-hidden bg-background${bleed ? "" : " px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]"}`}
+			className={`fixed inset-0 ${ZC.overlay} flex h-dvh max-h-dvh flex-col overflow-hidden bg-background${bleed ? "" : " px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]"}`}
 			role="dialog"
 			aria-modal
 			aria-label={labelledBy ? undefined : label}

@@ -10,6 +10,7 @@
 import { useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/shell/backdrop-dismiss";
+import { ZC } from "@/lib/z-layers";
 
 /** The reason text the wolf gives a thread the owner closed (wolfd CLOSED_BY_OWNER); anything else is a graduation. */
 export const CLOSED_BY_OWNER = "Closed by you";
@@ -50,7 +51,7 @@ export function RemoveThreadDialog({ wolf, workTitle, onCancel, onConfirm }: { w
 	const dismiss = useBackdropDismiss(onCancel);
 	if (typeof document === "undefined") return null;
 	return createPortal(
-		<div {...dismiss} data-testid="remove-thread-dialog" role="dialog" aria-modal="true" aria-label="Remove this thread?" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+		<div {...dismiss} data-testid="remove-thread-dialog" role="dialog" aria-modal="true" aria-label="Remove this thread?" className={`fixed inset-0 ${ZC.modal} flex items-center justify-center bg-black/50 p-4`}>
 			<div className="w-full max-w-sm rounded-xl border bg-card p-5 shadow-xl">
 				<h2 className="text-base font-medium">Remove this thread?</h2>
 				<p className="mt-2 text-sm text-muted-foreground">
@@ -139,13 +140,13 @@ export function ThreadActionsMenu({
 				⋯
 			</button>
 			{open && (
-				<div role="menu" data-testid={`${testid}-menu`} className="absolute right-0 top-full z-40 mt-1 min-w-36 rounded-md border bg-card p-1 shadow-lg">
+				<div role="menu" data-testid={`${testid}-menu`} className={`absolute right-0 top-full ${ZC.menu} mt-1 min-w-36 rounded-md border bg-card p-1 shadow-lg`}>
 					{!closed && item("close", "Close thread", run(onClose))}
 					{closed && canReopen && item("reopen", "Reopen", run(onReopen))}
 					{closed && item("remove", "Remove…", () => { setOpen(false); onRemove(); })}
 				</div>
 			)}
-			{error && <span role="alert" data-testid={`${testid}-error`} className="absolute right-0 top-full z-40 mt-1 w-56 rounded-md border bg-card p-2 text-xs text-destructive">{error}</span>}
+			{error && <span role="alert" data-testid={`${testid}-error`} className={`absolute right-0 top-full ${ZC.menu} mt-1 w-56 rounded-md border bg-card p-2 text-xs text-destructive`}>{error}</span>}
 		</span>
 		</span>
 	);

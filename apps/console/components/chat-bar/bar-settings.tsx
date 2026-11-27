@@ -11,6 +11,7 @@ import { Hint } from "@/components/ui/hint";
 import { Toggle } from "@/components/settings/controls";
 import { useThreadSettings } from "@/components/composer/composer-controls";
 import { cn } from "@/lib/utils";
+import { ZC } from "@/lib/z-layers";
 
 export function BarSettings({ wolf, slug, phone, buttonClass }: { wolf: string; slug: string; phone: boolean; buttonClass: string }) {
 	const [open, setOpen] = useState(false);
@@ -92,7 +93,7 @@ function SettingsMenu({ wolf, slug, phone, onClose }: { wolf: string; slug: stri
 
 	return (
 		<>
-			{phone && <button type="button" tabIndex={-1} aria-label="Close settings" data-testid="bar-settings-backdrop" onClick={onClose} className="fixed inset-0 z-[49] bg-black/40 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200" />}
+			{phone && <button type="button" tabIndex={-1} aria-label="Close settings" data-testid="bar-settings-backdrop" onClick={onClose} className={`fixed inset-0 ${ZC.chatSheet} bg-black/40 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200`} />}
 			<div
 				ref={dialog}
 				role="dialog"
@@ -102,7 +103,7 @@ function SettingsMenu({ wolf, slug, phone, onClose }: { wolf: string; slug: stri
 				data-layout={phone ? "sheet" : "popover"}
 				onKeyDown={onKeyDown}
 				className={cn(
-					"z-50 border bg-popover/95 p-1 outline-none backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150",
+					`${ZC.menu} border bg-popover/95 p-1 outline-none backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150`,
 					phone ? "fixed inset-x-0 bottom-0 rounded-t-2xl border-b-0 pb-[env(safe-area-inset-bottom)] shadow-2xl motion-safe:slide-in-from-bottom-4" : "absolute bottom-full right-0 mb-2 w-64 rounded-xl shadow-lg motion-safe:zoom-in-95",
 				)}
 			>

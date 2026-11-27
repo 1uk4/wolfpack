@@ -46,6 +46,7 @@ import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/componen
 import { replyLabel } from "@/components/ask/ask-reply";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
 import { attachable, barGeometry, barHiddenFor, pickHomeThread, inFrozenOrder, switcherOrder, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
+import { ZC } from "@/lib/z-layers";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar/chat-bar-io";
 
@@ -697,7 +698,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 		const asSheet = sheet && !minimized;
 		return (
 			<>
-			{asSheet && <button type="button" tabIndex={-1} aria-label="Close chat" data-testid="bar-sheet-backdrop" onClick={() => setSheet(false)} className="fixed inset-0 z-[46] bg-black/40" />}
+			{asSheet && <button type="button" tabIndex={-1} aria-label="Close chat" data-testid="bar-sheet-backdrop" onClick={() => setSheet(false)} className={`fixed inset-0 ${ZC.chatBackdrop} bg-black/40`} />}
 			<div
 				ref={wrapRef}
 				data-testid="chat-bar"
@@ -705,7 +706,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				data-state={minimized ? "minimized" : sheet ? "sheet" : "open"}
 				{...(sheet && !minimized ? { role: "dialog", "aria-modal": true, "aria-label": `Chat with ${title}` } : {})}
 				// Docked in the thread page's slot (not a sheet): the dock is a static block that takes its own height in the page, so the last messages are never under it.
-				className={cn("flex flex-col border-t bg-card shadow-lg", docked && !sheet ? "relative w-full" : "fixed inset-x-0", sheet ? cn("z-[47]", askCard ? "" : "rounded-t-2xl") : docked ? "" : vizOn ? "z-[45]" : "z-30")}
+				className={cn("flex flex-col border-t bg-card shadow-lg", docked && !sheet ? "relative w-full" : "fixed inset-x-0", sheet ? cn(ZC.chatSheet, askCard ? "" : "rounded-t-2xl") : docked ? "" : ZC.chatBar)}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
 				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
@@ -810,7 +811,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	);
 
 	return (
-		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} className={docked ? "relative w-full" : "fixed bottom-3 z-30 -translate-x-1/2"} style={docked ? undefined : { left: geo.left, width: geo.width }}>
+		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={docked ? undefined : { left: geo.left, width: geo.width }}>
 			{swapPill}
 			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>
@@ -987,8 +988,8 @@ export function Switcher({ groups: liveGroups, current, onClose, sheet = false }
 	const visualizations = () => threadHere(true);
 	return (
 		<>
-		{sheet && <button type="button" tabIndex={-1} aria-label="Close" data-testid="switcher-backdrop" onClick={onClose} className="fixed inset-0 z-[49] bg-black/40 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200" />}
-		<div ref={ref} role="dialog" aria-label="Switch wolf or thread" tabIndex={-1} onKeyDown={onKeyDown} data-testid="chat-bar-switcher" data-layout={sheet ? "sheet" : "popover"} className={cn("z-50 overflow-y-auto border bg-popover/95 p-1 outline-none backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150", sheet ? "fixed inset-x-0 bottom-0 max-h-[70dvh] rounded-t-2xl border-b-0 pb-[env(safe-area-inset-bottom)] shadow-2xl motion-safe:slide-in-from-bottom-4" : "absolute bottom-full left-0 z-40 mb-2 max-h-80 w-72 rounded-xl shadow-lg motion-safe:zoom-in-95")}>
+		{sheet && <button type="button" tabIndex={-1} aria-label="Close" data-testid="switcher-backdrop" onClick={onClose} className={`fixed inset-0 ${ZC.chatSheet} bg-black/40 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200`} />}
+		<div ref={ref} role="dialog" aria-label="Switch wolf or thread" tabIndex={-1} onKeyDown={onKeyDown} data-testid="chat-bar-switcher" data-layout={sheet ? "sheet" : "popover"} className={cn(`${ZC.menu} overflow-y-auto border bg-popover/95 p-1 outline-none backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150`, sheet ? "fixed inset-x-0 bottom-0 max-h-[70dvh] rounded-t-2xl border-b-0 pb-[env(safe-area-inset-bottom)] shadow-2xl motion-safe:slide-in-from-bottom-4" : `absolute bottom-full left-0 ${ZC.menu} mb-2 max-h-80 w-72 rounded-xl shadow-lg motion-safe:zoom-in-95`)}>
 			{sheet && (
 				<div className="flex min-h-11 items-center justify-between">
 					<span aria-hidden className="ml-2 h-1 w-10 rounded-full bg-muted-foreground/40" />

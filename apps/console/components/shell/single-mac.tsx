@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { PAIR_PATH } from "@/src/core";
+import { ZC } from "@/lib/z-layers";
 
 /**
  * Single-Mac mode on the client (work-wolfpack-TdmbaV4). The desktop preload exposes `window.wolfpack.singleMac === true` when the
@@ -43,7 +44,7 @@ export function leaveOnUnauthorized(): void {
 		const el = document.createElement("div");
 		el.id = "single-mac-auth-error";
 		el.setAttribute("role", "alert");
-		el.className = "fixed inset-x-0 top-0 z-[100] bg-destructive px-4 py-2 text-center text-sm text-white";
+		el.className = `fixed inset-x-0 top-0 ${ZC.fatal} bg-destructive px-4 py-2 text-center text-sm text-white`;
 		el.textContent = "Wolfpack couldn't sign in to its own services. Quit and reopen the app.";
 		document.body.appendChild(el);
 		return;

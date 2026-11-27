@@ -13,6 +13,7 @@ import { CompactMeter, type Dictation } from "@/components/composer/dictation";
 import { cn } from "@/lib/utils";
 import { useColumnRect } from "@/components/chat-bar/column-store";
 import { useKeyboardInset } from "@/components/chat-bar/use-keyboard-inset";
+import { ZC } from "@/lib/z-layers";
 
 const store = (): KeyValueStore | null => {
 	try {
@@ -142,7 +143,7 @@ export function BarIcon({ phone, label, color, wolfStatus, needsYou, working, di
 			data-testid="chat-bar"
 			data-state="minimized"
 			data-dragging={dragging ? "true" : undefined}
-			className={cn("fixed z-30 size-12", !dragging && "motion-safe:transition-[left,top] motion-safe:duration-200")}
+			className={cn(`fixed ${ZC.chatBar} size-12`, !dragging && "motion-safe:transition-[left,top] motion-safe:duration-200")}
 			style={{ left: pos?.x ?? 0, top: (pos?.y ?? 0) - inset, visibility: pos ? "visible" : "hidden" }}
 		>
 			{dictation.active && (

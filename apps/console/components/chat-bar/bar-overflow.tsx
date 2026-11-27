@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { EllipsisIcon } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
+import { ZC } from "@/lib/z-layers";
 
 export function BarOverflow({ children }: { children: ReactNode }) {
 	const [open, setOpen] = useState(false);
@@ -56,7 +57,7 @@ export function BarOverflow({ children }: { children: ReactNode }) {
 				<div
 					role="menu"
 					data-testid="chat-bar-overflow-menu"
-					className="absolute bottom-full right-0 z-50 mb-2 flex items-center gap-0.5 rounded-xl border bg-popover/95 p-1 shadow-lg backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-150"
+					className={`absolute bottom-full right-0 ${ZC.menu} mb-2 flex items-center gap-0.5 rounded-xl border bg-popover/95 p-1 shadow-lg backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-150`}
 				>
 					{children}
 				</div>

@@ -11,6 +11,7 @@ import { setExpanded, syncObjectPins, unpin, useExpanded, useThreadPins, type Pi
 import { useViewer } from "@/components/viewer/viewer-store";
 import { cn } from "@/lib/utils";
 import type { FeatureGraph } from "@/src/core";
+import { ZC } from "@/lib/z-layers";
 
 /** A collapsed object block of the transcript, as the strip reads it. */
 export interface StripObject {
@@ -137,7 +138,7 @@ export function PinnedStrip({ wolf, threadId, objects, task, onDismiss }: { wolf
 				)}
 			</div>
 			{open && body && !wide && (
-				<div data-testid="pinned-sheet" role="dialog" aria-label={open.title ?? open.kind} className="pointer-events-auto fixed inset-x-0 bottom-0 z-40 flex max-h-[80dvh] flex-col rounded-t-xl border-t bg-card text-card-foreground shadow-2xl">
+				<div data-testid="pinned-sheet" role="dialog" aria-label={open.title ?? open.kind} className={`pointer-events-auto fixed inset-x-0 bottom-0 ${ZC.menu} flex max-h-[80dvh] flex-col rounded-t-xl border-t bg-card text-card-foreground shadow-2xl`}>
 					<div className="flex shrink-0 items-center justify-between border-b px-3 py-2 text-sm font-medium">
 						<span className="truncate">{open.title ?? open.kind}</span>
 						<button type="button" aria-label="Close" data-testid="pinned-sheet-close" onClick={() => setExpanded(threadId, null)} className="flex size-7 items-center justify-center rounded-md hover:bg-accent">

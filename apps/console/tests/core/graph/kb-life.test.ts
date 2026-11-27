@@ -97,7 +97,7 @@ describe("kb life model", () => {
 describe("kb life log", () => {
 	const at = (e: ActivityEvent, ms: number) => ({ event: e, at: T0 + ms });
 	it("folds repeats of the same step on the same target within a minute into one row with a count", () => {
-		const target = { kind: "kb-entry", id: "kb-x", domain: "wolfpack", title: "Zod standard" };
+		const target = { kind: "kb-entry" as const, id: "kb-x", domain: "wolfpack", title: "Zod standard" };
 		const rows = foldEvents([at(done("t1", "merge", { target }), 0), at(done("t2", "merge", { target }), 20_000), at(done("t3", "merge", { target }), 200_000), at(observe(1), 0), at(observe(2), 3000)]);
 		assert.deepEqual(rows.map((r) => [r.verb, r.n]).sort(), [["merged", 1], ["merged", 2], ["observe", 2]]);
 	});

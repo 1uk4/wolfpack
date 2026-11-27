@@ -140,3 +140,6 @@ export function useLiveActivity(opts: { enabled?: boolean } = {}): LiveActivityS
 	useEffect(() => (enabled ? acquireLiveFeed() : undefined), [enabled]);
 	return useSyncExternalStore(subscribe, () => snapshot, () => EMPTY);
 }
+
+/** Feed one action through the shared pipeline as if it came from the stream (the dev-only KB life demo). */
+export const injectLiveAction = (a: LiveAction): void => dispatch(a);

@@ -36,6 +36,7 @@ import {
 	type KbActivityState,
 } from "@/src/core";
 import { fetchKbActivity } from "./kb-activity-client";
+import { KbLifeBody } from "./kb-life-view";
 import { PageViewer } from "../viewer/page-viewer";
 import { openKbLink, useOpenView } from "../viewer/viewer-context";
 import { useOptionalServerEvent, useOptionalServerResync } from "../shell/server-events";
@@ -248,7 +249,9 @@ export interface KbActivityTiming {
 }
 
 /** The KB activity page with the shared KB page viewer: entry links open in the side panel. */
-export function KbActivityView({ timing }: { timing?: KbActivityTiming } = {}) {
+export function KbActivityView({ timing, variant = "classic" }: { timing?: KbActivityTiming; variant?: "classic" | "life" } = {}) {
+	// "life": the map with the folded log beside it (the graph brings its own viewer).
+	if (variant === "life") return <KbActivityInner timing={timing} life />;
 	return (
 		<PageViewer scope="kb" allowedKinds={["kb", "work"]}>
 			<KbActivityInner timing={timing} />
@@ -256,7 +259,7 @@ export function KbActivityView({ timing }: { timing?: KbActivityTiming } = {}) {
 	);
 }
 
-function KbActivityInner({ timing }: { timing?: KbActivityTiming }) {
+function KbActivityInner({ timing, life = false }: { timing?: KbActivityTiming; life?: boolean }) {
 	const debounceMs = timing?.debounceMs ?? 500;
 	const pollMs = timing?.pollMs ?? 60_000;
 	const [load, setLoad] = useState<Load>({ kind: "loading" });
@@ -358,5 +361,11 @@ function KbActivityInner({ timing }: { timing?: KbActivityTiming }) {
 
 	if (load.kind === "unavailable") return <KbActivityUnavailable message={load.message} />;
 	if (load.kind === "loading" || !state) return <div className="p-6 text-sm text-muted-foreground" data-testid="kb-activity-view">Loading…</div>;
+	if (life) {
+		const stuckSince = curatorStuck(state.data);
+		const note = stuckSince ? `Curator stuck since ${kbRelativeTime(stuckSince, now)}` : curatorNote(state.data);
+		const notice = note ? <p role={stuckSince ? "alert" : undefined} className={`mx-2 mt-2 rounded-md px-2 py-1 text-[11px] ${stuckSince ? "bg-red-500/10 text-red-700 dark:text-red-300" : "text-muted-foreground"}`} data-testid={stuckSince ? "kb-curator-stuck" : "kb-curator-note"}>{note}</p> : null;
+		return <KbLifeBody data={state.data} extras={extras} now={now} since={since} onSince={setSince} notice={notice} sweeping={state.sweeping} />;
+	}
 	return <KbActivityBody state={state} now={now} since={since} extras={extras} loadingDomain={loadingDomain} onSince={setSince} onShowAll={showAll} />;
 }

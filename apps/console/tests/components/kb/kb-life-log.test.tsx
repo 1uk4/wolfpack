@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { KbLogRow } from "../../../src/core/index.ts";
-import { KbLifeLog, detailLines, seedRowsOf } from "../../../components/kb/kb-life-view.tsx";
+import { KbLifeLog, detailLines, reasonsOf, seedRowsOf } from "../../../components/kb/kb-life-view.tsx";
+import { lifeStrips } from "../../../components/kb/kb-activity-view.tsx";
 import { kbActivityFixture } from "../../fixtures/kb-activity.ts";
 
 const now = Date.parse("2026-11-05T10:00:00Z");
@@ -25,9 +26,22 @@ describe("KB life log", () => {
 		assert.deepEqual(detailLines(row({ outcome: "reject", section: "memory", reason: "dup", ms: 40, tokens: 7 })), ["outcome reject", "section memory", "reason dup", "40 ms", "7 tokens", "ids id-1"]);
 	});
 
-	it("turns the ledger history into rows under their domains", () => {
-		const rows = seedRowsOf(kbActivityFixture());
-		assert.ok(rows.length > 0);
-		assert.ok(rows.every((r) => r.seed === true && r.domain !== null && r.n === 1));
+	it("turns the ledger history into rows: entry titles, a sender label (never a topic id) for items with no entry, retired changes left out", () => {
+		const rows = seedRowsOf(kbActivityFixture()).map((r) => [r.domain, r.verb, r.title, r.entryId ?? null, r.wolf ?? null]);
+		assert.deepEqual(rows, [
+			["personal", "created", "New entry", "ent-new", "ada"],
+			["personal", "rejected", "ada → personal", null, "ada"],
+			["wolfpack", "merged", "Merged entry", "ent-merge", "hal"],
+		]);
+	});
+
+	it("takes the curator reason per topic from the ledger decisions, the only place it is kept", () => {
+		assert.deepEqual(reasonsOf(kbActivityFixture()), { "t-old": "same subject", t3: "new subject", t2: "too vague", t1: "no domain" });
+	});
+
+	it("keeps Contributions always and Needs attention only when something needs a look, each with a count", () => {
+		assert.deepEqual(lifeStrips(kbActivityFixture(), now).map((x) => [x.id, x.count]), [["contributions", 8], ["attention", 4]]);
+		const calm = kbActivityFixture({ attention: [], incoming: { total: 0, wolves: [], bad: [] } });
+		assert.deepEqual(lifeStrips(calm, now).map((x) => x.id), ["contributions"]);
 	});
 });

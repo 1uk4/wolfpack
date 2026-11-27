@@ -18,7 +18,7 @@ import { talkToWolf } from "./live-talk";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
 import { acquireLiveFeed, getLiveSnapshot, onLiveAction, useLiveConnected } from "./live-store";
-import { getKbHover, subscribeKbHover } from "./kb-life-store";
+import { getKbHover, onKbReset, subscribeKbHover } from "./kb-life-store";
 import { LiveOverlay, liveSettingsOf, type OverlayCard, type OverlayHit } from "./live-overlay";
 
 interface Shown { hit: OverlayHit; card: OverlayCard; pinned: boolean; width: number }
@@ -100,8 +100,10 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 			renderer.setOverlayHighlight(h && (h.wolf || h.target) ? { wolf: h.wolf, target: h.target } : null);
 		};
 		const off = subscribeKbHover(apply);
+		const offReset = onKbReset(() => overlayRef.current?.resetKb());
 		return () => {
 			off();
+			offReset();
 			renderer.setOverlayHighlight(null);
 		};
 	}, [renderer]);

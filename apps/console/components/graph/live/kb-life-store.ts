@@ -31,14 +31,24 @@ export function useKbLiveRows(): KbLogRow[] {
 			buf.push({ event: a.event, at: a.now });
 			if (!timer) timer = setTimeout(flush, EMIT_MS);
 		});
+		const offReset = onKbReset(() => {
+			buf = [];
+			setEvents([]);
+		});
 		return () => {
 			off();
+			offReset();
 			release();
 			if (timer) clearTimeout(timer);
 		};
 	}, []);
 	return useMemo(() => foldEvents(events), [events]);
 }
+
+// ── reset bus: the demo ending clears the log rows and the map's KB state ──
+const resetSubs = new Set<() => void>();
+export const onKbReset = (fn: () => void): (() => void) => (resetSubs.add(fn), () => void resetSubs.delete(fn));
+export const resetKbLife = (): void => resetSubs.forEach((fn) => fn());
 
 // ── hover bus ──
 let hover: KbLogFocus | null = null;
@@ -54,7 +64,9 @@ export function subscribeKbHover(fn: () => void): () => void {
 }
 
 // ── demo ──
-const wolfActor = { kind: "wolf", wolf: "1uk4" } as const;
+/** The demo plays as a made-up wolf, never a real one. */
+export const DEMO_WOLF = "demo-wolf";
+const wolfActor = { kind: "wolf", wolf: DEMO_WOLF } as const;
 const hubActor = { kind: "hub", title: "curator" } as const;
 
 /** One scripted cycle (ms offset, event). Real event shapes; `c` makes ids unique per cycle. */
@@ -70,13 +82,14 @@ export function demoCycle(c: number): { at: number; event: Omit<ActivityEvent, "
 		const base = 21000 + (i - 1) * 4500;
 		out.push({ at: base, event: { actor: hubActor, verb: "curate-start", detail: { ref: t(i), topicIds: [t(i)] } } });
 		const o = outcomes[i - 1]!;
-		out.push({ at: base + 2500, event: { actor: hubActor, verb: "curate-done", ...(o === "reject" ? {} : { target: { kind: "kb-entry", id: `kb-demo-${i}`, domain: "wolfpack", title: i === 1 ? "Demo: new topic" : "Demo: merged topic" } }), detail: { outcome: o, ref: t(i), topicIds: [t(i)], section: "demo", sectionTitle: "Demo", ms: 2400, tokens: 1800 * i, ...(o === "reject" ? { reason: "duplicate of an existing entry" } : {}) } } });
+		out.push({ at: base + 2500, event: { actor: hubActor, verb: "curate-done", ...(o === "reject" ? {} : { target: { kind: "kb-entry", id: `kb-demo-${i}`, domain: "wolfpack", title: i === 1 ? "Demo: new topic" : "Demo: merged topic" } }), detail: { outcome: o, ref: t(i), topicIds: [t(i)], section: "demo", sectionTitle: "Demo", ms: 2400, tokens: 1800 * i } } });
 	});
 	return out;
 }
 
 /** Feed the scripted cycle (looping) through the live pipeline. Returns stop. Dev only: gated by `?kbdemo=1` in the page. */
 export function startKbDemo(): () => void {
+	if (process.env.NODE_ENV === "production") return () => undefined; // dev only
 	let stopped = false;
 	const timers: ReturnType<typeof setTimeout>[] = [];
 	let cycle = 0;
@@ -97,5 +110,7 @@ export function startKbDemo(): () => void {
 	return () => {
 		stopped = true;
 		timers.forEach(clearTimeout);
+		injectLiveAction({ type: "event", event: { v: 1, id: `demo-offline-${++seq}`, pack: "demo", ts: Date.now(), ttlMs: 60_000, actor: wolfActor, verb: "wolf-offline" } as ActivityEvent, now: Date.now() });
+		resetKbLife(); // the injected rows and the map's flights go with the demo
 	};
 }

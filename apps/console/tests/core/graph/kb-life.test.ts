@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ActivityEvent } from "@wolfpack/protocol";
-import { addRow, displayFill, emptyKbLife, foldEvents, groupRows, mergeSeed, reduceKbLife, stepKbLife, type KbLife } from "../../../src/core/index.ts";
+import { KB_MAX_DOMAINS, KB_MAX_QUEUE, KB_MAX_TOPICS_PER_WOLF, addRow, displayFill, emptyKbLife, foldEvents, groupRows, kbLifeBusy, mergeSeed, reduceKbLife, stepKbLife, withReasons, withTitles, type KbLife } from "../../../src/core/index.ts";
 
 const T0 = 1_000_000;
 let n = 0;
@@ -68,12 +68,12 @@ describe("kb life model", () => {
 		assert.equal(s.flights[0]!.stage, "place");
 	});
 
-	it("reject and parked fade at the curator with no pulse; the reason is kept for the details", () => {
+	it("reject and parked fade at the curator with no pulse; ", () => {
 		let s = stepKbLife(feed([promote("t1")]), T0);
 		s = stepKbLife(s, T0 + 5000);
-		s = reduceKbLife(s, done("t1", "reject", { detail: { outcome: "reject", ref: "t1", reason: "duplicate" } }), T0 + 5000);
+		s = reduceKbLife(s, done("t1", "reject", { detail: { outcome: "reject", ref: "t1" } }), T0 + 5000);
 		s = stepKbLife(s, T0 + 5000);
-		assert.deepEqual([s.flights[0]!.stage, s.flights[0]!.result?.reason], ["fade", "duplicate"]);
+		assert.equal(s.flights[0]!.stage, "fade");
 		s = stepKbLife(s, T0 + 7000);
 		assert.deepEqual([s.flights.length, s.pulses.length], [0, 0]);
 	});
@@ -94,6 +94,35 @@ describe("kb life model", () => {
 	});
 });
 
+describe("kb life caps and idle", () => {
+	it("the promote queue never holds more than KB_MAX_QUEUE, oldest dropped first", () => {
+		const evs = Array.from({ length: KB_MAX_QUEUE + 5 }, (_, i) => promote("q" + i));
+		const s = feed(evs);
+		assert.deepEqual([s.flights.length, s.flights[0]!.id], [KB_MAX_QUEUE, "q5"]);
+	});
+
+	it("a wolf keeps at most KB_MAX_TOPICS_PER_WOLF gathered topics, the oldest forgotten", () => {
+		const ids = Array.from({ length: KB_MAX_TOPICS_PER_WOLF + 3 }, (_, i) => "g" + i);
+		const s = feed([consolidate(...ids)]);
+		assert.deepEqual([s.topics.length, s.topics[0]!.id], [KB_MAX_TOPICS_PER_WOLF, "g3"]);
+	});
+
+	it("remembers at most KB_MAX_DOMAINS domains", () => {
+		const s = feed(Array.from({ length: KB_MAX_DOMAINS + 4 }, (_, i) => promote("d" + i, "dom" + i)));
+		assert.deepEqual([s.domains.length, s.domains.includes("dom0"), s.domains.includes("dom" + (KB_MAX_DOMAINS + 3))], [KB_MAX_DOMAINS, false, true]);
+	});
+
+	it("goes idle once every flight, pulse, shimmer and ring ease has settled", () => {
+		let s = feed([observe(10_000), promote("t1")]);
+		assert.equal(kbLifeBusy(s, T0), true);
+		s = stepKbLife(s, T0);
+		s = stepKbLife(s, T0 + 5000);
+		s = reduceKbLife(s, done("t1", "merge", { target: { kind: "kb-entry", id: "kb-y" } }), T0 + 5000);
+		for (const t of [5000, 8000, 11_000, 20_000, 60_000]) s = stepKbLife(s, T0 + t);
+		assert.equal(kbLifeBusy(s, T0 + 60_000), false);
+	});
+});
+
 describe("kb life log", () => {
 	const at = (e: ActivityEvent, ms: number) => ({ event: e, at: T0 + ms });
 	it("folds repeats of the same step on the same target within a minute into one row with a count", () => {
@@ -102,20 +131,42 @@ describe("kb life log", () => {
 		assert.deepEqual(rows.map((r) => [r.verb, r.n]).sort(), [["merged", 1], ["merged", 2], ["observe", 2]]);
 	});
 
-	it("puts processing under the domain its promote named, wolves' own steps in a null group", () => {
-		const rows = foldEvents([at(observe(1), 0), at(promote("t1", "snapjack"), 100), at(start("t1"), 200)]);
-		const groups = groupRows(rows);
-		assert.deepEqual(groups.map((g) => [g.domain, g.rows.map((r) => r.verb).sort()]).sort(), [["snapjack", ["processing", "promote"]], [null, ["observe"]]].sort());
+	it("one row per item: promote, start and done of a topic join, the state moves on, and the title is the entry title", () => {
+		const target = { kind: "kb-entry" as const, id: "kb-x", domain: "snapjack", title: "Zod standard" };
+		const sent = foldEvents([at(observe(1), 0), at(promote("t1", "snapjack"), 100)]);
+		assert.deepEqual(sent.map((r) => [r.verb, r.domain, r.title]).sort(), [["observe", null, "1uk4 observed"], ["promote", "snapjack", "1uk4 → snapjack"]].sort());
+		const rows = foldEvents([at(promote("t1", "snapjack"), 100), at(start("t1"), 200), at(done("t1", "create", { target }), 3000)]);
+		assert.deepEqual(rows.map((r) => [r.verb, r.domain, r.title, r.n, r.entryId]), [["created", "snapjack", "Zod standard", 1, "kb-x"]]);
+		assert.ok(["t1", "c-t1"].every((id) => rows[0]!.ids.includes(id))); // ids stay in the details
 	});
 
-	it("carries ids, outcome, reason, tokens and ms on the row for the details", () => {
-		const [r] = foldEvents([at(done("t1", "reject", { detail: { outcome: "reject", ref: "t1", reason: "dup", ms: 5, tokens: 77 } }), 0)]);
-		assert.deepEqual([r!.verb, r!.reason, r!.tokens, r!.ms, r!.ids.includes("t1")], ["rejected", "dup", 77, 5, true]);
+	it("a merged row without an event title takes the ledger entry title, else shows the entry id; the section title is never the title", () => {
+		const target = { kind: "kb-entry" as const, id: "kb-x", domain: "snapjack" };
+		const [r] = foldEvents([at(done("t1", "merge", { target }), 0)]);
+		assert.deepEqual([r!.title, r!.sectionTitle], ["kb-x", "Memory"]);
+		assert.equal(withTitles([r!], new Map([["kb-x", "Zod standard"]]))[0]!.title, "Zod standard");
+	});
+
+	it("a rejected item keeps the sender label (no raw topic id), and the reason joins in from the ledger by topic id", () => {
+		const rows = foldEvents([at(promote("t1", "snapjack"), 100), at(start("t1"), 200), at(done("t1", "reject"), 900)]);
+		assert.deepEqual(rows.map((r) => [r.verb, r.title]), [["rejected", "1uk4 → snapjack"]]);
+		assert.equal(withReasons(rows, { t1: "duplicate" })[0]!.reason, "duplicate");
+		assert.equal(withReasons(rows, {})[0]!.reason, undefined);
+	});
+
+	it("puts a topic under the domain its promote named, wolves' own steps in a null group", () => {
+		const groups = groupRows(foldEvents([at(observe(1), 0), at(promote("t1", "snapjack"), 100), at(start("t1"), 200)]));
+		assert.deepEqual(groups.map((g) => [g.domain, g.rows.map((r) => r.verb)]).sort(), [["snapjack", ["processing"]], [null, ["observe"]]].sort());
+	});
+
+	it("carries ids, outcome, tokens and ms on the row for the details", () => {
+		const [r] = foldEvents([at(done("t1", "reject", { detail: { outcome: "reject", ref: "t1", ms: 5, tokens: 77 } }), 0)]);
+		assert.deepEqual([r!.verb, r!.tokens, r!.ms, r!.ids.includes("t1")], ["rejected", 77, 5, true]);
 	});
 
 	it("drops a history row the live feed already shows and keeps older ones, newest first", () => {
 		const live = foldEvents([at(done("t1", "merge", { target: { kind: "kb-entry", id: "k", domain: "wolfpack", title: "A" } }), 0)]);
-		const seed = (title: string, ms: number) => ({ ...live[0]!, key: title + ms, title, at: T0 + ms, firstAt: T0 + ms, fold: `merged|${title}`, seed: true as const });
+		const seed = (title: string, ms: number) => ({ ...live[0]!, topic: undefined, entryId: undefined, key: title + ms, title, at: T0 + ms, firstAt: T0 + ms, fold: `merged|${title}`, seed: true as const });
 		const rows = mergeSeed(live, [seed("A", -5000), seed("B", -999_999)]);
 		assert.deepEqual(rows.map((r) => r.title), ["A", "B"]);
 		assert.equal(addRow([], live[0]!).length, 1);

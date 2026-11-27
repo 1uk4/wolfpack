@@ -57,10 +57,10 @@ function Placeholder({ title, children }: { title: string; children?: React.Reac
 }
 
 /** Shown when the graph is read from a wolf's KB mirror because the librarian is offline. */
-export function KbMirrorLabel() {
+export function KbMirrorLabel({ embedded = false }: { embedded?: boolean } = {}) {
 	const { open } = useSidebar();
 	return (
-		<div className={`absolute ${open ? "left-3" : "left-14"} top-3 z-10 rounded-lg border bg-card/90 px-2 py-1 text-xs text-muted-foreground shadow-lg`} data-testid="kb-mirror-label" title="Live sweep activity and KB activity need the librarian">
+		<div className={`absolute ${embedded ? "left-3 max-md:left-16" : open ? "left-3" : "left-14"} top-3 z-10 rounded-lg border bg-card/90 px-2 py-1 text-xs text-muted-foreground shadow-lg`} data-testid="kb-mirror-label" title="Live sweep activity and KB activity need the librarian">
 			{KB_MIRROR_LABEL}
 		</div>
 	);
@@ -138,7 +138,7 @@ function useActivityWolves(librarian: string | null): { wolves: string[]; refres
 	return { wolves: wolves.length > 0 || !librarian ? wolves : [librarian], refresh };
 }
 
-function GraphHomeInner() {
+function GraphHomeInner({ embedded = false }: { embedded?: boolean } = {}) {
 	const router = useRouter();
 	const params = useSearchParams();
 	const { librarian, kbSource } = useLibrarian();
@@ -256,14 +256,15 @@ function GraphHomeInner() {
 				focusId={present ? focusParam : null}
 				onFocusHandled={() => router.replace("/graph", { scroll: false })}
 				controllerRef={controllerRef}
+				embedded={embedded}
 			/>
 		);
 
 	return (
 		<div className="relative h-full w-full">
 			{body}
-			<GraphSidebarOpen />
-			{(kbSource?.mirror || (kb.graph as { hubCopy?: boolean } | null)?.hubCopy === true) && kb.status !== "unavailable" && <KbMirrorLabel />}
+			{embedded ? null : <GraphSidebarOpen />}
+			{(kbSource?.mirror || (kb.graph as { hubCopy?: boolean } | null)?.hubCopy === true) && kb.status !== "unavailable" && <KbMirrorLabel embedded={embedded} />}
 			{activity.map((w) => (
 				<WolfTap key={w} wolf={w} onEvent={onEvent} onResync={onResync} />
 			))}
@@ -284,12 +285,12 @@ function GraphHomeInner() {
 	);
 }
 
-export function GraphHome() {
+export function GraphHome({ embedded = false }: { embedded?: boolean } = {}) {
 	// useSearchParams needs a Suspense boundary (the page is prerendered).
 	return (
 		<Suspense fallback={null}>
 			<PageViewer scope="kb" allowedKinds={["kb", "work"]}>
-				<GraphHomeInner />
+				<GraphHomeInner embedded={embedded} />
 			</PageViewer>
 		</Suspense>
 	);

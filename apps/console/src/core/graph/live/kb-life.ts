@@ -29,11 +29,14 @@ export const KB_WAIT_MAX_MS = 60_000;
 export const KB_CURATOR_TTL_MS = 30_000;
 export const KB_FILL_EASE_MS = 600;
 export const KB_MAX_TOPICS_PER_WOLF = 8;
+/** Domains kept (where the curator mark sits); past this the oldest is forgotten. */
+export const KB_MAX_DOMAINS = 50;
+const withDomain = (list: string[], d: string | undefined): string[] => (d && !list.includes(d) ? [...list, d].slice(-KB_MAX_DOMAINS) : list);
 
 export interface KbWolf { count: number; capacity: number; fill: number; prevFill: number; changedAt: number }
 export interface KbTopic { id: string; wolf: string; born: number }
 export type KbOutcome = "create" | "merge" | "reject" | "parked";
-export interface KbResult { outcome: string; entryId?: string; domain?: string; section?: string; sectionTitle?: string; reason?: string; ms?: number; tokens?: number }
+export interface KbResult { outcome: string; entryId?: string; domain?: string; section?: string; sectionTitle?: string; ms?: number; tokens?: number }
 export type FlightStage = "queued" | "travel" | "wait" | "place" | "fade";
 export interface KbFlight {
 	/** The den topic id (the correlation key). */
@@ -106,7 +109,7 @@ export function reduceKbLife(s: KbLife, e: ActivityEvent, now: number): KbLife {
 			if (!wolf || !id) return s;
 			const domain = e.target?.id ?? e.domain;
 			const topics = s.topics.filter((t) => t.id !== id);
-			const domains = domain && !s.domains.includes(domain) ? [...s.domains, domain] : s.domains;
+			const domains = withDomain(s.domains, domain);
 			if (s.flights.some((f) => f.id === id)) return { ...s, now, topics, domains }; // a repeat of the same promote
 			let flights = [...s.flights, { id, wolf, ...(domain ? { domain } : {}), ...(d.ref ? { ref: d.ref } : {}), stage: "queued" as const, queuedAt: now, at: now, endAt: now, slot: s.slotSeq }];
 			const queued = flights.filter((f) => f.stage === "queued");
@@ -131,12 +134,11 @@ export function reduceKbLife(s: KbLife, e: ActivityEvent, now: number): KbLife {
 				...(e.target?.domain ?? e.domain ? { domain: (e.target?.domain ?? e.domain)! } : {}),
 				...(d.section ? { section: d.section } : {}),
 				...(d.sectionTitle ? { sectionTitle: d.sectionTitle } : {}),
-				...(d.reason ? { reason: d.reason } : {}),
 				...(d.ms !== undefined ? { ms: d.ms } : {}),
 				...(d.tokens !== undefined ? { tokens: d.tokens } : {}),
 			};
 			const domain = result.domain;
-			const domains = domain && !s.domains.includes(domain) ? [...s.domains, domain] : s.domains;
+			const domains = withDomain(s.domains, domain);
 			const hit = id ? s.flights.find((f) => f.id === id && !f.result) : undefined;
 			if (hit) {
 				return { ...s, now, curator, domains, flights: s.flights.map((f) => (f === hit ? { ...f, result, ...(domain && !f.domain ? { domain } : {}) } : f)) };
@@ -162,7 +164,7 @@ export function stepKbLife(s: KbLife, now: number): KbLife {
 	let lastStartAt = s.lastStartAt;
 	const pulses: KbPulse[] = [];
 	let flights: KbFlight[] = [];
-	const inAir = () => flights.filter((f) => f.stage !== "queued").length + 0;
+	const inAir = () => flights.filter((f) => f.stage !== "queued").length;
 	// First phases that need no capacity, in order; queued ones last so the cap sees the real count.
 	const rest: KbFlight[] = [];
 	for (const f of s.flights) {
@@ -207,13 +209,25 @@ export function stepKbLife(s: KbLife, now: number): KbLife {
 	return { ...s, now, flights, topics, curator, pulses: allPulses, lastStartAt };
 }
 
-/** True while something is moving or fading (a frame loop is worth running). */
-export function kbLifeBusy(s: KbLife, now: number): boolean {
-	if (s.reduced) return false;
-	if (s.flights.length > 0 || s.pulses.length > 0 || Object.keys(s.curator).length > 0) return true;
-	for (const w of Object.values(s.wolves)) if (now - w.changedAt < KB_FILL_EASE_MS) return true;
-	return false;
+/**
+ * How fast the frame loop must run for the KB life: "fast" only while something travels, places, fades, pulses or a ring fill eases;
+ * "float" (the low idle rate) while flights only wait or queue and the curator only shimmers; "none" once everything has settled.
+ * `now` is the same wall clock the events and stepKbLife use.
+ */
+export function kbLifeRate(s: KbLife, now: number): "none" | "float" | "fast" {
+	if (s.reduced) return "none";
+	if (s.pulses.length > 0) return "fast";
+	for (const w of Object.values(s.wolves)) if (now - w.changedAt < KB_FILL_EASE_MS) return "fast";
+	let slow = Object.keys(s.curator).length > 0;
+	for (const f of s.flights) {
+		if (f.stage === "travel" || f.stage === "place" || f.stage === "fade") return "fast";
+		slow = true; // queued or waiting at the curator
+	}
+	return slow ? "float" : "none";
 }
+
+/** True while something is moving or fading (a frame loop is worth running). */
+export const kbLifeBusy = (s: KbLife, now: number): boolean => kbLifeRate(s, now) !== "none";
 
 /** The curator shimmers while it works a topic (curate-start) or a flight is waiting at it. */
 export const curatorBusy = (s: KbLife): boolean => Object.keys(s.curator).length > 0 || s.flights.some((f) => f.stage === "wait" && !f.result);

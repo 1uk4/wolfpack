@@ -36,7 +36,7 @@ import {
 	type KbActivityState,
 } from "@/src/core";
 import { fetchKbActivity } from "./kb-activity-client";
-import { KbLifeBody } from "./kb-life-view";
+import { KbLifeBody, type KbStrip } from "./kb-life-view";
 import { PageViewer } from "../viewer/page-viewer";
 import { openKbLink, useOpenView } from "../viewer/viewer-context";
 import { useOptionalServerEvent, useOptionalServerResync } from "../shell/server-events";
@@ -239,6 +239,15 @@ export function KbActivityBody({
 	);
 }
 
+/** The life page's collapsed strips under the log: Contributions (always) and Needs attention (only when something needs a look), each with its count. */
+export function lifeStrips(data: KbActivityResponse, now: number): KbStrip[] {
+	const attention = attentionGroups(data);
+	return [
+		{ id: "contributions", title: "Contributions", count: contributionList(data, now).rows.length, node: <ContributionsList data={data} now={now} /> },
+		...(attention.length > 0 ? [{ id: "attention", title: "Needs attention", count: attention.reduce((n, g) => n + g.items.length, 0), node: <NeedsAttention data={data} now={now} /> }] : []),
+	];
+}
+
 type Load = { kind: "loading" } | { kind: "unavailable"; message: string } | { kind: "ready" };
 
 export interface KbActivityTiming {
@@ -250,8 +259,13 @@ export interface KbActivityTiming {
 
 /** The KB activity page with the shared KB page viewer: entry links open in the side panel. */
 export function KbActivityView({ timing, variant = "classic" }: { timing?: KbActivityTiming; variant?: "classic" | "life" } = {}) {
-	// "life": the map with the folded log beside it (the graph brings its own viewer).
-	if (variant === "life") return <KbActivityInner timing={timing} life />;
+	// "life": the map with the folded log beside it; the same viewer wraps both so entry links in the log open in the side panel.
+	if (variant === "life")
+		return (
+			<PageViewer scope="kb" allowedKinds={["kb", "work"]}>
+				<KbActivityInner timing={timing} life />
+			</PageViewer>
+		);
 	return (
 		<PageViewer scope="kb" allowedKinds={["kb", "work"]}>
 			<KbActivityInner timing={timing} />
@@ -364,8 +378,15 @@ function KbActivityInner({ timing, life = false }: { timing?: KbActivityTiming; 
 	if (life) {
 		const stuckSince = curatorStuck(state.data);
 		const note = stuckSince ? `Curator stuck since ${kbRelativeTime(stuckSince, now)}` : curatorNote(state.data);
-		const notice = note ? <p role={stuckSince ? "alert" : undefined} className={`mx-2 mt-2 rounded-md px-2 py-1 text-[11px] ${stuckSince ? "bg-red-500/10 text-red-700 dark:text-red-300" : "text-muted-foreground"}`} data-testid={stuckSince ? "kb-curator-stuck" : "kb-curator-note"}>{note}</p> : null;
-		return <KbLifeBody data={state.data} extras={extras} now={now} since={since} onSince={setSince} notice={notice} sweeping={state.sweeping} />;
+		const older = hubIsOlder(state.data) ? <p className="mx-2 mt-2 text-[11px] text-muted-foreground/70" data-testid="kb-hub-older">The hub is older than this console: entry and waiting counts are unavailable.</p> : null;
+		const notice = (
+			<>
+				{note ? <p role={stuckSince ? "alert" : undefined} className={`mx-2 mt-2 rounded-md px-2 py-1 text-[11px] ${stuckSince ? "bg-red-500/10 text-red-700 dark:text-red-300" : "text-muted-foreground"}`} data-testid={stuckSince ? "kb-curator-stuck" : "kb-curator-note"}>{note}</p> : null}
+				{older}
+			</>
+		);
+		const strips = lifeStrips(state.data, now);
+		return <KbLifeBody data={state.data} extras={extras} now={now} since={since} onSince={setSince} notice={notice} sweeping={state.sweeping} strips={strips} />;
 	}
 	return <KbActivityBody state={state} now={now} since={since} extras={extras} loadingDomain={loadingDomain} onSince={setSince} onShowAll={showAll} />;
 }

@@ -741,6 +741,15 @@ export class GraphCanvasRenderer {
 	private animating = false;
 
 	private resizeObserver: ResizeObserver;
+	/** Embedded graphs (a panel, not the page) keep the whole graph fitted to their container on every resize until the user pans or zooms. */
+	private autoFit = false;
+	private onUserCamera = (): void => {
+		this.autoFit = false;
+	};
+	setAutoFit(on: boolean): void {
+		this.autoFit = on;
+		if (on) this.fit();
+	}
 	private downPos: Pt | null = null;
 	/** The live overlay (wolves, satellites, pulses): drawn above the nodes inside THIS loop; null = nothing changes. */
 	private destroyed = false;
@@ -819,6 +828,8 @@ export class GraphCanvasRenderer {
 			.on("wheel.zoom", null);
 
 		canvas.addEventListener("wheel", this.onWheel, { passive: false });
+		canvas.addEventListener("wheel", this.onUserCamera, { passive: true });
+		canvas.addEventListener("pointerdown", this.onUserCamera);
 		canvas.addEventListener("pointermove", this.onPointerMove);
 		canvas.addEventListener("pointerdown", this.onPointerDown);
 		canvas.addEventListener("pointerup", this.onPointerUp);
@@ -856,7 +867,7 @@ export class GraphCanvasRenderer {
 			const wy = (prevH / 2 - ty) / k;
 			this.syncSize();
 			this.validateRestoredCamera();
-			if (!this.hasFit) this.fit(); // first real size → fit once
+			if (!this.hasFit || this.autoFit) this.fit(); // first real size → fit once; an embedded graph refits to its panel until the user moves the camera
 			else {
 				this.refreshFitZoom(); // the gate's "1×" is viewport-bound
 				// Center-anchor (2026-09-17, owner): same world point under
@@ -1215,6 +1226,8 @@ export class GraphCanvasRenderer {
 		this.canvas.removeEventListener("wheel", this.onWheel);
 		this.canvas.removeEventListener("pointermove", this.onPointerMove);
 		this.canvas.removeEventListener("pointerdown", this.onPointerDown);
+		this.canvas.removeEventListener("pointerdown", this.onUserCamera);
+		this.canvas.removeEventListener("wheel", this.onUserCamera);
 		this.canvas.removeEventListener("pointerup", this.onPointerUp);
 		this.canvas.removeEventListener("dblclick", this.onDoubleClick);
 		this.canvas.removeEventListener("pointerleave", this.onPointerLeave);

@@ -30,7 +30,7 @@ import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path
 import { AMBER, EFFECTS, rgba } from "./live-effects";
 import { floatOffset, nameHash, roamOffset } from "./live-float";
 import { redact } from "@/src/core";
-import { emptyKbLife, isKbVerb, kbLifeBusy, reduceKbLife, stepKbLife } from "@/src/core";
+import { emptyKbLife, isKbVerb, kbLifeRate, reduceKbLife, stepKbLife } from "@/src/core";
 import { drawKbLife, type KbFocus } from "./kb-life-draw";
 
 export interface Pt { x: number; y: number }
@@ -263,6 +263,8 @@ export class LiveOverlay {
 	private highlight: OverlayHighlight | null = null;
 	/** KB life (memory pipeline motion): its own pure state, fed by the same events; drawn by kb-life-draw. */
 	private kb = emptyKbLife(Date.now());
+	/** The wall clock of the current frame (set in step, read by classifyNeed in the same frame). */
+	private wall = Date.now();
 	private kbFocus: KbFocus | null = null;
 	private settings: OverlaySettings = LIVE_DEFAULTS;
 	private timer: ReturnType<typeof setInterval> | null = null;
@@ -349,6 +351,12 @@ export class LiveOverlay {
 		this.requestFrame();
 	}
 
+	/** Forget the KB life (flights, topics, rings): the demo ended. */
+	resetKb(): void {
+		this.kb = emptyKbLife(Date.now(), this.reduced);
+		this.requestFrame();
+	}
+
 	/** The log's hover / selection: a flying topic and / or the curator mark get a ring. */
 	setKbFocus(f: KbFocus | null): void {
 		this.kbFocus = f;
@@ -398,6 +406,7 @@ export class LiveOverlay {
 		this.need = "none";
 		if (!this.settings.enabled) return false;
 		if (this.reduced) return false; // reduced motion: a still picture (rings, glows and positions are static)
+		this.wall = Date.now();
 		this.need = this.classifyNeed(now);
 		return this.need !== "none";
 	}
@@ -405,10 +414,12 @@ export class LiveOverlay {
 	/** fast > float > slow. No spreads or Object.values here: this runs on every rAF. The idle float holds the loop (at its own, lower, rate) while any wolf is shown; it also carries the needs-you ring's breathing. */
 	private classifyNeed(now: number): FrameNeed {
 		const s = this.state;
-		if (this.highlight || s.pulses.length > 0 || kbLifeBusy(this.kb, Date.now())) return "fast";
-		const wall = Date.now();
+		const kbRate = kbLifeRate(this.kb, this.wall);
+		if (this.highlight || s.pulses.length > 0 || kbRate === "fast") return "fast";
+		const wall = this.wall;
 		// Subagents darting to a target, launching from a hub or reeling back are fast motion; the wolves' slow roam is not.
 		for (const b of this.subList) if (Math.abs(b.vx) + Math.abs(b.vy) > 0.4 || (b.tug && now - b.tug.at < 8000) || wall - b.born < LAUNCH_MS) return "fast";
+		if (kbRate === "float") return "float"; // KB flights waiting or the curator shimmering: the low rate
 		for (const w in s.wolves) return "float"; // any wolf at all
 		const fade = this.settings.subagentFadeSec;
 		// Trails and fades keep frames coming only while they are still visibly fading.
@@ -464,7 +475,9 @@ export class LiveOverlay {
 	step(now: number, dtSec: number, host: OverlayHost, k: number): void {
 		this.syncReplaced(host);
 		if (!this.settings.enabled) return;
-		this.kb = stepKbLife(this.kb, Date.now());
+		// ONE wall clock per frame for the KB life: its events and phases are stamped with Date.now(), while rAF `now` is performance.now().
+		this.wall = Date.now();
+		this.kb = stepKbLife(this.kb, this.wall);
 		const s = this.state;
 		const { m } = scaleFor(k);
 		const reduced = this.reduced;

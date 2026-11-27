@@ -10,6 +10,11 @@ const nextConfig: NextConfig = {
 		agentUpgrade: "security",
 	},
 
+	// The KB Activity page is gone: its activity shows on the graph. Old bookmarks land there.
+	async redirects() {
+		return [{ source: "/kb-activity", destination: "/graph", permanent: false }];
+	},
+
 	// No framing on any route: the console acts with the paired browser's hub token.
 	// tests/next-config.test.ts pins both headers.
 	async headers() {

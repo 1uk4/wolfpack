@@ -97,7 +97,6 @@ export * from "./graph/graph-activity.ts";
 export * from "./graph/kb-graph-model.ts";
 export * from "./graph/graph-persistence.ts";
 export * from "./graph/graph-pane.ts";
-export * from "./kb/kb-activity-model.ts";
 export * from "./kb/entry-view.ts";
 export * from "./work/work-view.ts";
 export * from "./kb/item-document.ts";

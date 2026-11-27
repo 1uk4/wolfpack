@@ -5,6 +5,7 @@
  */
 
 import type { MemoryEvent } from "@wolfpack/client";
+import { parseLedgerTime } from "@wolfpack/protocol/ledger-time";
 
 export type {
 	BoundWork,
@@ -98,8 +99,21 @@ export function parseMemoryEventFrame(raw: string): MemoryEventFrame | null {
 	return o as MemoryEventFrame;
 }
 
-export const KB_ACTIVITY_HREF = "/kb-activity";
 export const entryHref = (id: string): string => `/kb/entry/${encodeURIComponent(id)}`;
 export const workHref = (id: string): string => `/kb/work/${encodeURIComponent(id)}`;
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
+
+/** "3m ago" / "just now" for a ledger timestamp; `now` injectable for tests. */
+export function kbRelativeTime(iso: string, now: number = Date.now()): string {
+	const t = parseLedgerTime(iso);
+	if (Number.isNaN(t)) return iso;
+	const s = Math.floor(Math.max(0, now - t) / 1000);
+	if (s < 10) return "just now";
+	if (s < 60) return `${s}s ago`;
+	const m = Math.floor(s / 60);
+	if (m < 60) return `${m}m ago`;
+	const h = Math.floor(m / 60);
+	if (h < 48) return `${h}h ago`;
+	return `${Math.floor(h / 24)}d ago`;
+}

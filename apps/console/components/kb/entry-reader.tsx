@@ -93,7 +93,7 @@ export function EntryReader({ id, chrome = "full", onTitle, onOpenView }: { id: 
 
 /**
  * The entry as a standalone PAGE (/kb/entry/[id]); the graph is not mounted behind it. Esc returns to the page it
- * was opened from when that was in-app (graph, /kb-activity), else to "/". The browser Back button does the same natively.
+ * was opened from when that was in-app (graph), else to "/". The browser Back button does the same natively.
  */
 /** Whether this keydown is an Esc that should leave the entry page (pure; the listener calls it). */
 export function shouldGoBackOnEscape(

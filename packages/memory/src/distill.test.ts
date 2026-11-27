@@ -67,9 +67,9 @@ describe("distillTopic", () => {
   });
 
   it("reports hard findings still present after the retry", async () => {
-    const bad = { contributions: [{ ...clean, body: "## Design\nDeployed to the VPS. Task AbC1234." }] };
+    const bad = { contributions: [{ ...clean, body: "## Design\nAll 120 tests pass. Task AbC1234." }] };
     const r = await distillTopic(engineOf(bad, bad).engine, { id: "t", title: "T", summary: "s", body: "raw", domain: "wolfpack", date: "2026-10-22" });
-    expect(r.heldCodes.sort()).toEqual(["deploy-status", "work-id"]);
+    expect(r.heldCodes.sort()).toEqual(["test-count", "work-id"]);
   });
 
   it("splits: the first keeps the topic id, extras get <id>~<slug>; slugs are fed back", async () => {
@@ -238,12 +238,12 @@ describe("promoteTopics", () => {
   });
 
   it("holds a topic whose distilled text still has junk, calls onHold, emits nothing, and does not retry unchanged", async () => {
-    const bad = { contributions: [{ ...clean, body: "## Design\nVerified live on a real inbox item." }] };
+    const bad = { contributions: [{ ...clean, body: "## Design\nAll 120 tests pass." }] };
     const { call, engine } = engineOf(bad, bad);
     const onHold = vi.fn();
     const stats = await promoteTopics([topic("t", "raw body one")], opts(engine, { onHold }));
     expect(stats).toMatchObject({ held: 1, emitted: 0 });
-    expect(onHold).toHaveBeenCalledWith(expect.objectContaining({ id: "t" }), "distill: deploy-status");
+    expect(onHold).toHaveBeenCalledWith(expect.objectContaining({ id: "t" }), "distill: test-count");
     expect(inbox()).toEqual([]);
     expect(call).toHaveBeenCalledTimes(2);
     const again = await promoteTopics([topic("t", "raw body one")], opts(engine));

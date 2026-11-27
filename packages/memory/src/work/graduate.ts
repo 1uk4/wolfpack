@@ -539,7 +539,9 @@ async function distillPreview(opts: {
     ...r.warnings,
     ...r.after.filter((f) => !["commit-hash", "work-id", "test-count", "deploy-status", "dated-heading"].includes(f.code)).map((f) => `lint: ${f.message}`),
   ];
-  const blocked = r.heldCodes.length ? `the distilled text still breaks the knowledge lint (${r.heldCodes.join(", ")}); run g again` : undefined;
+  // Name the offending line of each held code, so the owner can see what the writer wrote.
+  const heldLines = r.heldCodes.length ? r.heldDetail.split("\n").filter(Boolean).map((l) => (l.length > 120 ? `${l.slice(0, 119)}…` : l)) : [];
+  const blocked = r.heldCodes.length ? `the distilled text still breaks the knowledge lint (${r.heldCodes.join(", ")}); run g again${heldLines.length ? `\n${heldLines.join("\n")}` : ""}` : undefined;
   const archive = archiveSet(item, all).map((a) => ({ id: a.id as string, title: a.title }));
   // The owner-facing summary: the distill's own, else the item's entry summary (the first contribution's when none is the item's), cut at a word boundary.
   const own = contributions.find((c) => c.id === (id as string)) ?? contributions[0];

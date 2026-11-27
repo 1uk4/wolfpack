@@ -139,6 +139,45 @@ export function scrubCommitHashes(text: string, replacement = "a commit"): strin
     .join("\n");
 }
 
+const STATUS_LEAD = /^(\s*(?:[-*+]\s+)?)(?:\*\*)?(?:deployed|verified|shipped|live)\b(?:\*\*)?\s*[:\-–—]\s*/i;
+// The inline patterns (all but the leading-word one), with the space before them.
+const STATUS_INLINE = [0, 1, 2, 3, 5].map((i) => new RegExp(`\\s*${DEPLOY_STATUS[i].source}`, "gi"));
+
+function scrubStatusLine(line: string): string {
+  let out = line;
+  for (let pass = 0; pass < 3 && DEPLOY_STATUS.some((r) => r.test(out)); pass++) {
+    out = out.replace(STATUS_LEAD, (_m, lead: string) => lead);
+    if (out !== line && STATUS_LEAD.test(line)) out = out.replace(/^(\s*(?:[-*+]\s+)?)(\p{Ll})/u, (_m, lead: string, c: string) => lead + c.toUpperCase());
+    for (const r of STATUS_INLINE) out = out.replace(r, "");
+  }
+  if (out === line) return line;
+  return out
+    .replace(/\s*[;,]\s*([.!?])/g, "$1")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/(\S)[ \t]{2,}/g, "$1 ")
+    .replace(/[ \t]+$/, "");
+}
+
+/**
+ * Remove the deploy/verified status wording the lint flags from the current-state
+ * part of `text` (everything before `## History`; fenced code is left as is), so
+ * the sentence stays readable. A line left with nothing but a bullet or
+ * punctuation is dropped.
+ */
+export function scrubDeployStatus(text: string): string {
+  const { main, history } = splitHistory(text);
+  let fenced = false;
+  const kept: string[] = [];
+  for (const l of main.split("\n")) {
+    if (/^\s*```/.test(l)) { fenced = !fenced; kept.push(l); continue; }
+    if (fenced) { kept.push(l); continue; }
+    const out = scrubStatusLine(l);
+    if (out !== l && !/[\p{L}\p{N}]/u.test(out)) continue;
+    kept.push(out);
+  }
+  return kept.join("\n") + history;
+}
+
 export function lintKnowledge(input: LintInput): LintFinding[] {
   const findings: LintFinding[] = [];
   const add = (code: LintCode, message: string, sample?: string) =>

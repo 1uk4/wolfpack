@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { lintKnowledge, brokenLinks, wikilinkTargets, stripBrokenLinks, stripProperties, stripLedeRepeat, stripDetailHeading, splitHistory, hardFindings, describeFindings } from "./knowledgeLint.js";
+import { lintKnowledge, brokenLinks, wikilinkTargets, stripBrokenLinks, stripProperties, stripLedeRepeat, stripDetailHeading, splitHistory, hardFindings, describeFindings, scrubDeployStatus } from "./knowledgeLint.js";
 
 const codes = (body: string, extra: Partial<Parameters<typeof lintKnowledge>[0]> = {}) =>
   lintKnowledge({ body, ...extra }).map((f) => f.code);
@@ -151,5 +151,27 @@ describe("empty wikilink targets", () => {
   it("brokenLinks flags them, wikilinkTargets skips them", () => {
     expect(brokenLinks("a [[]] b [[ ]]", new Set())).toEqual([""]);
     expect(wikilinkTargets("a [[]] b [[ ]]")).toEqual([]);
+  });
+});
+
+describe("scrubDeployStatus", () => {
+  const cases: Array<[string, string]> = [
+    ["The panel opens on tap (shipped).", "The panel opens on tap."],
+    ["The hub runs a curator (deployed to sfo-01) every hour.", "The hub runs a curator every hour."],
+    ["Shipped: the panel opens on tap", "The panel opens on tap"],
+    ["- **Verified**: the panel opens on tap", "- The panel opens on tap"],
+    ["The panel opens on tap, deployed to the VPS.", "The panel opens on tap."],
+    ["The sync works and verified working in production.", "The sync works and in production."],
+    ["The panel opens on tap. Status: done", "The panel opens on tap."],
+    ["The panel opens on tap; needs a restart.", "The panel opens on tap."],
+  ];
+  it.each(cases)("clears %j", (before, after) => {
+    const out = scrubDeployStatus(before);
+    expect(out).toBe(after);
+    expect(lintKnowledge({ body: out, workIds: "none" }).map((f) => f.code)).not.toContain("deploy-status");
+  });
+  it("drops a line that is only status and leaves History and code fences alone", () => {
+    const body = "# T\n\nKeeps state.\nStatus: deployed\n```\nShipped: x\n```\n\n## History\n- Shipped: the thing (deployed to the VPS)\n";
+    expect(scrubDeployStatus(body)).toBe("# T\n\nKeeps state.\n```\nShipped: x\n```\n\n## History\n- Shipped: the thing (deployed to the VPS)\n");
   });
 });

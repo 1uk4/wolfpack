@@ -31,13 +31,15 @@ import { useFrameBadges } from "@/components/viewer/frame-store";
 import { FrameBadges } from "@/components/viewer/frame-badges";
 import { BarIcon } from "@/components/chat-bar/bar-icon";
 import { BarSettings } from "@/components/chat-bar/bar-settings";
+import { BarOverflow } from "@/components/chat-bar/bar-overflow";
+import { useColumnRect } from "@/components/chat-bar/column-store";
 import { useThreadColor } from "@/components/thread/use-thread-color";
 import { useBarCards, type BarCards } from "@/components/chat-bar/chat-bar-cards";
 import type { Answering } from "@/components/ask/ask-sheet";
 import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask/ask-session";
 import { replyLabel } from "@/components/ask/ask-reply";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
-import { attachable, inFrozenOrder, switcherOrder, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
+import { attachable, barGeometry, inFrozenOrder, switcherOrder, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar/chat-bar-io";
 
@@ -579,11 +581,15 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 	const pageAsk = useSyncExternalStore(subscribePagePending, () => (swap ? hasPagePendingAsk(swap.wolf, swap.threadId) : false), () => false);
 	const swapNeedsYou = swapThread?.status === "needs-you" || pageAsk;
 	const swapLabel = swapNeedsYou ? `Answer ${swapTitle}` : `Swap to ${swapTitle}`;
+	// Desktop: centred on the page column (the thread chat column, else main). A narrow column is compact: the secondary controls move into a ... menu.
+	const col = useColumnRect();
+	const geo = barGeometry({ colLeft: col.left, colWidth: col.width, viewportWidth: typeof window === "undefined" ? 1280 : window.innerWidth });
+	const compact = !phone && geo.compact;
 	// Not while a send's POST is in flight: a failed send puts the text back into this bar's composer, which a swap would have unmounted.
 	// Narrow gap left: if the attachment changes elsewhere (another tab/wolf) mid-send, the keyed Bar remounts and `sending` resets.
 	const [sending, setSending] = useState(false);
 	// A pill above the send button, on the right: one tap attaches to the thread whose page is open, and the bar steps aside for that page's own composer.
-	const swapPill = swap && !minimized ? (
+	const swapPill = swap && !minimized && !compact ? (
 		<div data-testid="chat-bar-swap-wrap" className={cn("pointer-events-none absolute bottom-full z-10 mb-2 flex justify-end", phone ? "right-3" : "right-2")}>
 			<Hint label={swapLabel}>
 				<button
@@ -706,8 +712,37 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 		);
 	}
 
+	// The header's secondary controls: inline on a wide column, inside the ⋯ menu on a narrow one (where the swap pill joins them).
+	const deskControls = (
+		<>
+			<BarSettings wolf={target.wolf} slug={target.slug} phone={false} buttonClass="rounded-md p-1 text-muted-foreground hover:bg-accent" />
+			{!swap && (
+				<Hint label="Minimize">
+					<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="rounded-md p-1 text-muted-foreground hover:bg-accent">
+						<ChevronDownIcon className="size-4" />
+					</button>
+				</Hint>
+			)}
+			{compact && swap && (
+				<Hint label={swapLabel}>
+					<button
+						type="button"
+						data-testid="chat-bar-swap"
+						data-needs-you={swapNeedsYou ? "true" : undefined}
+						aria-label={swapLabel}
+						disabled={sending}
+						onClick={() => void (!sending && afterBarDictation(() => api.attach({ wolf: swap.wolf, threadId: swap.threadId, slug: swap.slug })))}
+						className={cn("rounded-md p-1 text-muted-foreground hover:bg-accent", swapNeedsYou && "text-amber-600 dark:text-amber-400")}
+					>
+						{swapNeedsYou ? <MessageCircleQuestionIcon aria-hidden className="size-4" /> : <ArrowLeftRightIcon aria-hidden className="size-4" />}
+					</button>
+				</Hint>
+			)}
+		</>
+	);
+
 	return (
-		<div ref={wrapRef} data-testid="chat-bar" data-state="open" className="fixed bottom-3 left-1/2 z-30 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2">
+		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-compact={compact ? "true" : undefined} className="fixed bottom-3 z-30 -translate-x-1/2" style={{ left: geo.left, width: geo.width }}>
 			{swapPill}
 			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>
@@ -719,16 +754,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}
 					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
-					<div className="ml-auto flex items-center gap-0.5">
-						<BarSettings wolf={target.wolf} slug={target.slug} phone={false} buttonClass="rounded-md p-1 text-muted-foreground hover:bg-accent" />
-						{!swap && (
-							<Hint label="Minimize">
-								<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className="rounded-md p-1 text-muted-foreground hover:bg-accent">
-									<ChevronDownIcon className="size-4" />
-								</button>
-							</Hint>
-						)}
-					</div>
+					<div className="ml-auto flex items-center gap-0.5">{compact ? <BarOverflow>{deskControls}</BarOverflow> : deskControls}</div>
 				</div>
 				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} onSending={setSending} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />}
 				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}

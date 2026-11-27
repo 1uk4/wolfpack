@@ -24,6 +24,7 @@ import { submitToThread, swapTarget } from "@/components/chat-bar/chat-bar-io";
 import { SubagentStrip, stripReservePx, useSubagentChildren } from "@/components/thread/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/shell/panel-host";
 import { ViewerPanel } from "@/components/viewer/viewer-panel";
+import { registerColumn } from "@/components/chat-bar/column-store";
 import { useViewer } from "@/components/viewer/viewer-store";
 import { setVizActive, useVizMode } from "@/components/viewer/viz-mode";
 import { FrameBadges } from "@/components/viewer/frame-badges";
@@ -804,7 +805,7 @@ function ThreadChatInner({
 				(getInlineDropSink() ?? (noteMode ? session.addNoteFiles : onFiles))(droppedFiles(e.dataTransfer));
 			}}
 		>
-			<div className={viz ? "hidden" : "flex min-w-0 flex-1 flex-col"} data-testid="thread-main">
+			<div ref={registerColumn} className={viz ? "hidden" : "flex min-w-0 flex-1 flex-col"} data-testid="thread-main">
 				<TopBar>
 					<span className="min-w-0 shrink truncate font-title text-lg tracking-tight md:min-w-4 md:text-3xl">{title}</span>
 					<span className="text-xs uppercase tracking-wide text-muted-foreground max-md:hidden">{wolf}</span>

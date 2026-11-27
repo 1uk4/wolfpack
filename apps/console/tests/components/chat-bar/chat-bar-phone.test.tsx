@@ -169,15 +169,43 @@ const raise = (slug: string, ...ids: string[]) => void (bodies[slug] = { message
 
 describe("ChatBar on a phone", () => {
 	it("is a full-width dock below md and the floating pill from md up, switching live", async () => {
+		(window as any).innerWidth = 1440;
 		await mount();
 		assert.equal(bar().getAttribute("data-layout"), "dock");
 		assert.match(bar().className, /inset-x-0/);
 		await resize(false);
 		assert.equal(bar().getAttribute("data-layout"), null);
-		assert.match(bar().className, /w-\[min\(42rem/);
+		// No column measured (linkedom has no layout): the bar centres on the window, capped at 900px.
+		assert.match(bar().getAttribute("style")!, /width:\s*900px/);
 		assert.doesNotMatch(bar().className, /inset-x-0/);
 		await resize(true);
 		assert.equal(bar().getAttribute("data-layout"), "dock");
+	});
+
+	it("desktop: centres on the registered page column, and a narrow column moves gear, shrink and swap into the ... menu", async () => {
+		phone = false;
+		(window as any).innerWidth = 1440;
+		await mount();
+		const column = (left: number, width: number) => {
+			const el = document.createElement("div");
+			(el as any).getBoundingClientRect = () => ({ left, width, top: 0, height: 100 });
+			return el;
+		};
+		const frame = () => act(async () => void (await new Promise((r) => setTimeout(r, 20)))); // the store measures once per animation frame (a timer here)
+		const { registerColumn } = await import("../../../components/chat-bar/column-store.ts");
+		await act(async () => registerColumn(column(100, 600)));
+		await frame();
+		assert.match(bar().getAttribute("style")!, /left:\s*400px/);
+		assert.match(bar().getAttribute("style")!, /width:\s*568px/);
+		assert.ok(q('[data-testid="chat-bar-settings"]'), "wide column: the gear is in the header");
+		assert.equal(q('[data-testid="chat-bar-overflow"]'), null);
+		await act(async () => registerColumn(column(100, 400)));
+		await frame();
+		assert.match(bar().getAttribute("style")!, /width:\s*368px/);
+		assert.equal(q('[data-testid="chat-bar-settings"]'), null, "narrow column: the gear leaves the header");
+		await click(q('[data-testid="chat-bar-overflow"]'));
+		assert.ok(q('[data-testid="chat-bar-overflow-menu"] [data-testid="chat-bar-settings"]'), "and waits in the menu");
+		await act(async () => registerColumn(null));
 	});
 
 	it("the phone dock lists the thread's frame badges above the input, with the chat icon while viz mode is on", async () => {

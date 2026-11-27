@@ -63,6 +63,7 @@ export * from "./thread/session-navigation.ts";
 export * from "./settings/auth-keys.ts";
 // keyboard.ts: the shortcut registry + binding normalization (pure, browser-safe).
 export * from "./ui/keyboard.ts";
+export * from "./ui/bar-geometry.ts";
 // Pure, browser-safe.
 // thread-adapter.ts: the ConsoleClient (@wolfpack/client) ↔ session-model
 // seam — ThreadEvent → wire events, ThreadMessage → native record. Pure.

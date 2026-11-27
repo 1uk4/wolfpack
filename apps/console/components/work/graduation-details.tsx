@@ -11,6 +11,9 @@ import { KbMarkdown } from "@/components/kb/kb-markdown";
 import { createGraduateClient } from "@/components/kb/graduate-client";
 import { graduateStore, useGraduateJob } from "@/components/kb/graduate-store";
 import { getPendingPreview } from "./graduate-direct-client";
+import { HourglassIcon } from "lucide-react";
+import { Hint } from "@/components/ui/hint";
+import { THREAD_RUNNING_LABEL, useThreadRunning } from "./thread-running";
 
 type Load = { kind: "loading" } | { kind: "none" } | { kind: "error"; message: string } | { kind: "ready"; preview: GraduationPreview };
 
@@ -23,6 +26,7 @@ export function GraduationDetails({ itemId, wolf, assignee, ready, reason }: { i
 		setLoad(!res.ok ? { kind: "error", message: res.message } : "none" in res ? { kind: "none" } : { kind: "ready", preview: res.preview });
 	}, [wolf, itemId]);
 	useEffect(() => void read(), [read]);
+	const threadRunning = useThreadRunning(assignee ?? wolf, itemId);
 	// A Prepare that finished (or failed) in the store: read the wolf's preview again.
 	const phase = job?.phase;
 	useEffect(() => {
@@ -49,7 +53,17 @@ export function GraduationDetails({ itemId, wolf, assignee, ready, reason }: { i
 				<p className="min-w-0 text-sm text-muted-foreground">No graduation preview prepared.</p>
 				{!ready && <p className="basis-full text-sm text-muted-foreground">Not ready to graduate: {reason || "the item is not eligible"}</p>}
 				{ready && !assignee && <p className="basis-full text-sm text-muted-foreground">This item has no assignee wolf to prepare the graduation.</p>}
-				{canPrepare && <button
+				{canPrepare && threadRunning && (
+					<Hint label={THREAD_RUNNING_LABEL}>
+						<span className="inline-flex">
+							<button type="button" disabled aria-label={THREAD_RUNNING_LABEL} data-testid="graduation-prepare" data-phase="thread-running" className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1 text-sm text-muted-foreground disabled:cursor-not-allowed max-md:min-h-11">
+								<HourglassIcon className="size-3.5" aria-hidden />
+								Prepare
+							</button>
+						</span>
+					</Hint>
+				)}
+				{canPrepare && !threadRunning && <button
 					type="button"
 					data-testid="graduation-prepare"
 					disabled={busy}

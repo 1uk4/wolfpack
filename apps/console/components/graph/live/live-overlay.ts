@@ -33,7 +33,8 @@ import { LIVE_TUNING } from "./live-tuning";
 import { badgeLook, badgeRadiusPx, badgeRing, isLightHex, parkingSpot, stateRingRadiusPx, subOrbitRadiusPx, subRadiusPx, wolfFallbackHex } from "./live-badge";
 import { LABEL_LEVELS, type LabelObstacle } from "@/src/core";
 import { newMotion, restSlot, tetherStrength, wolfEvent, wolfStep, type WolfMotion } from "./live-den";
-import { elasticStep, pullFor, ringSlots, trailOrigin, type Elastic } from "./live-rings";
+import { elasticStep, orbitPhase, pullFor, ringSlots, trailOrigin, type Elastic } from "./live-rings";
+import { newRepeller, repelStep, setRep, type Repeller } from "./live-repel";
 import { redact } from "@/src/core";
 
 export interface Pt { x: number; y: number }
@@ -107,28 +108,25 @@ const FLOAT_COMPACT_AMP = 0.3;
 const FAST_MS = 16;
 const FAST_MOBILE_MS = 30;
 const SLOW_MS = 100;
-/** Soft separation: wolves closer than this many wolf diameters are pushed apart at this rate (1/s); the offset relaxes home at SEP_RELAX (1/s). */
-const SEP_DIAMETERS = 2.5;
-const SEP_RATE = 2;
-
-/** A wolf body: its state machine (live-den.ts) gives the position; `sx, sy` is the soft separation offset on top. */
+/** A wolf body: its state machine (live-den.ts) gives the position; `rep` (live-repel.ts) holds the repulsion offset on top. */
 interface Body {
 	x: number;
 	y: number;
 	name: string;
 	mot: WolfMotion;
-	sx: number;
-	sy: number;
+	rep: Repeller;
+	gid: number;
 	placed: boolean;
-	/** The node the wolf is working at (world): the faint tether is drawn to it while it lingers. */
+	/** The node the wolf is working at (world): the faint tether is drawn to it while it lingers; its radius (screen px) keeps the badge clear of the dot. */
 	target?: Pt;
+	targetRPx?: number;
 }
 /** A feature group's elastic offset from its home (the hub position), its goal and when the goal lapses (wall ms). */
-interface Group extends Elastic { gx: number; gy: number; until: number }
+interface Group extends Elastic { gx: number; gy: number; until: number; rep: Repeller; gid: number }
 /** A trail's actor: followed live, with its last position as the fallback. */
 interface TrailRef { actor: "wolf" | "chat" | "sub" | "pt"; key: string; last: Pt }
 /** A sub-agent: world position (ring slot + elastic offset), its angle on the parent's ring, and the elastic stretch goal. */
-interface SubState { x: number; y: number; off: Elastic; gx: number; gy: number; until: number; born: number; ang: number; pk: string; parentKey?: string; a: LiveSubagent }
+interface SubState { rep: Repeller; x: number; y: number; off: Elastic; gx: number; gy: number; until: number; born: number; ang: number; pk: string; parentKey?: string; a: LiveSubagent }
 const FLOAT_MS = 40;
 const FLOAT_MOBILE_MS = 60;
 
@@ -230,6 +228,8 @@ export class LiveOverlay {
 	private ringKey = "";
 	private restTmp = new Map<string, Pt>();
 	private groups = new Map<string, Group>();
+	private nextGid = 0;
+	private repelList: Repeller[] = [];
 	private groupCentre = new Map<string, Pt>();
 	private groupHome = new Map<string, Pt>();
 	private seenTrails = new Set<string>();
@@ -448,6 +448,7 @@ export class LiveOverlay {
 		for (const b of this.subList) if (Math.abs(b.off.vx) + Math.abs(b.off.vy) > 0.4 || Math.abs(b.off.x) + Math.abs(b.off.y) > 1 || wall - b.born < LAUNCH_MS) return "fast";
 		for (const g of this.groups.values()) if (Math.abs(g.vx) + Math.abs(g.vy) > 0.4 || Math.abs(g.x) + Math.abs(g.y) > 1) return "fast";
 		for (const b of this.bodies.values()) if (b.mot.phase === "working" || b.mot.phase === "returning") return "fast";
+		for (const r of this.repelList) if (Math.abs(r.rvx) + Math.abs(r.rvy) > 0.4) return "fast"; // badges bouncing off each other
 		for (const w in s.wolves) return "float"; // any wolf at all
 		const fade = this.settings.subagentFadeSec;
 		// Trails and fades keep frames coming only while they are still visibly fading.
@@ -508,7 +509,6 @@ export class LiveOverlay {
 		this.kNow = k;
 		const s = this.state;
 		const { m } = scaleFor(k);
-		const wolfPx = badgeRadiusPx(this.mobileNow, LIVE_TUNING, "home") * 2;
 		const reduced = this.reduced;
 		const bodies = this.bodyList;
 		bodies.length = 0;
@@ -518,7 +518,6 @@ export class LiveOverlay {
 		const dt = Math.min(Math.max(dtSec, 0), 0.25);
 		this.layoutRing(s.wolves);
 		const T = LIVE_TUNING;
-		let fresh = false;
 		// A body per wolf: the state machine (resting / working / lingering / returning) owns its position (live-den.ts).
 		for (const name in s.wolves) {
 			const w = s.wolves[name]!;
@@ -530,9 +529,8 @@ export class LiveOverlay {
 			let b = this.bodies.get(w.name);
 			const rest = restSlot(this.ringIdx.get(w.name) ?? 0, this.ringCount, now / 1000, w.online, den, m, T, reduced);
 			if (!b) {
-				b = { x: rest.x, y: rest.y, name: w.name, mot: newMotion(rest.x, rest.y), sx: 0, sy: 0, placed: false };
+				b = { x: rest.x, y: rest.y, name: w.name, mot: newMotion(rest.x, rest.y), rep: newRepeller(), gid: this.nextGid++, placed: false };
 				this.bodies.set(w.name, b);
-				fresh = true;
 			}
 			bodies.push(b);
 			this.restTmp.set(w.name, rest);
@@ -544,54 +542,16 @@ export class LiveOverlay {
 		for (const b of bodies) {
 			const w = s.wolves[b.name]!;
 			wolfStep(b.mot, wall, dt, { den, rest: this.restTmp.get(b.name)!, needsYou: w.needsYou, working: this.workingSet.has(b.name), reduced, tuning: T });
-			if (!reduced && b.placed) {
-				const f = Math.exp(-dt * 0.15);
-				b.sx *= f;
-				b.sy *= f;
-			}
-		}
-		// Soft separation: wolves closer than a few diameters (two arrivals at one target) are pushed apart; settled at once on first sight and under reduced motion.
-		const settle = fresh || reduced;
-		const minD = SEP_DIAMETERS * (wolfPx / k);
-		const rate = settle ? 1 : 1 - Math.exp(-dt * SEP_RATE);
-		for (let pass = settle ? 12 : 1; pass > 0; pass--) {
-			let moved = false;
-			for (let i = 0; i < bodies.length; i++) {
-				const a = bodies[i]!;
-				for (let j = i + 1; j < bodies.length; j++) {
-					const c = bodies[j]!;
-					let dx = a.mot.x + a.sx - (c.mot.x + c.sx);
-					let dy = a.mot.y + a.sy - (c.mot.y + c.sy);
-					let d = Math.hypot(dx, dy);
-					if (d >= minD) continue;
-					if (d < 1e-6) {
-						// Exactly stacked: split along a stable direction from the name.
-						const an = (this.hashOf(a.name) % 360) * (Math.PI / 180);
-						dx = Math.cos(an);
-						dy = Math.sin(an);
-						d = 0;
-					} else {
-						dx /= d;
-						dy /= d;
-					}
-					const push = (minD - d) * 0.5 * rate;
-					a.sx += dx * push;
-					a.sy += dy * push;
-					c.sx -= dx * push;
-					c.sy -= dy * push;
-					moved = true;
-				}
-			}
-			if (!moved) break;
 		}
 		// Attached things are derived from their parent's position every frame (never integrated apart from it), so nothing is left behind.
 		for (const b of bodies) {
-			b.x = b.mot.x + b.sx;
-			b.y = b.mot.y + b.sy;
+			b.x = b.mot.x + b.rep.rx;
+			b.y = b.mot.y + b.rep.ry;
 			b.placed = true;
 		}
 		if (this.bodies.size > bodies.length) for (const name of [...this.bodies.keys()]) if (!s.wolves[name]) (this.bodies.delete(name), this.wolfMeta.delete(name));
 		this.stepSubs(now, dt, host, m, reduced, wall);
+		this.repelPass(dt, k, reduced);
 		// Trails keep a reference to their actor (wolf, feature group or sub-agent), so the line follows it; `last` is the fallback once it is gone.
 		for (const t of s.trails) {
 			if (this.trailRef.has(t.id)) continue;
@@ -676,6 +636,7 @@ export class LiveOverlay {
 			}
 			wolfEvent(wb.mot, wall, this.waypoints(host, t.wolf, t.target, tp, id, wb));
 			wb.target = { x: tp.x, y: tp.y };
+			wb.targetRPx = (id ? (host.nodeRadius?.(id) ?? 0) : 0) * this.kNow;
 		}
 		if (this.seenTrails.size > 600) {
 			const live = new Set(s.trails.map((x) => x.id));
@@ -699,6 +660,44 @@ export class LiveOverlay {
 		return via;
 	}
 
+	/** Soft-body repulsion (live-repel.ts) between every live badge; the offsets it moves are added to the positions on the NEXT frame's derivation. */
+	private repelPass(dt: number, k: number, reduced: boolean): void {
+		const T = LIVE_TUNING;
+		const unit = 1 / k;
+		const mob = this.mobileNow;
+		const list = this.repelList;
+		let n = 0;
+		const homeR = badgeRadiusPx(mob, T, "home") * unit;
+		const featR = badgeRadiusPx(mob, T, "feature") * unit;
+		const subR = subRadiusPx(mob, T) * unit;
+		for (const b of this.bodyList) {
+			const r = b.rep;
+			setRep(r, b.x, b.y, homeR, T.massHome, b.gid, T.repelRelax, Number.POSITIVE_INFINITY, 0, (this.hashOf(b.name) % 360) * (Math.PI / 180));
+			const ph = b.mot.phase;
+			if (b.target && b.targetRPx !== undefined && (ph === "lingering" || ph === "working")) {
+				r.nx = b.target.x;
+				r.ny = b.target.y;
+				r.nr = b.targetRPx * unit;
+			}
+			list[n++] = r;
+		}
+		for (const [key, g] of this.groups) {
+			const c = this.groupCentre.get(key);
+			if (!c) continue;
+			const r = g.rep;
+			setRep(r, c.x, c.y, featR, T.massFeature, g.gid, T.repelRelax, Number.POSITIVE_INFINITY, 0, (this.hashOf(key) % 360) * (Math.PI / 180));
+			list[n++] = r;
+		}
+		for (const b of this.subList) {
+			const r = b.rep;
+			const gid = (b.parentKey ? this.groups.get(b.parentKey)?.gid : this.bodies.get(b.a.wolf)?.gid) ?? -1;
+			setRep(r, b.x, b.y, subR, T.massSub, gid, T.repelSubRelax, T.repelSubMaxPx * unit, 0, (this.hashOf(b.a.key) % 360) * (Math.PI / 180));
+			list[n++] = r;
+		}
+		list.length = n;
+		repelStep(list, n, T, unit, dt, reduced);
+	}
+
 	/** The elastic offset of every feature group from its home (the hub position): pulled by its chat, snapping back when the hold ends. */
 	private stepGroups(host: OverlayHost, m: number, dt: number, reduced: boolean, wall: number): void {
 		const s = this.state;
@@ -710,7 +709,7 @@ export class LiveOverlay {
 			if (t.feature === undefined) continue;
 			let g = this.groups.get(key);
 			if (!g) {
-				g = { x: 0, y: 0, vx: 0, vy: 0, gx: 0, gy: 0, until: 0 };
+				g = { x: 0, y: 0, vx: 0, vy: 0, gx: 0, gy: 0, until: 0, rep: newRepeller(), gid: this.nextGid++ };
 				this.groups.set(key, g);
 			}
 			if (wall > g.until) {
@@ -721,7 +720,7 @@ export class LiveOverlay {
 			else elasticStep(g, g.gx, g.gy, T.groupSpring / T.paceSec, 2, dt);
 			const home = this.hubPos(t, host, m, { x: 0, y: 0 });
 			this.groupHome.set(key, home);
-			this.groupCentre.set(key, { x: home.x + g.x, y: home.y + g.y });
+			this.groupCentre.set(key, { x: home.x + g.x + g.rep.rx, y: home.y + g.y + g.rep.ry });
 		}
 		if (this.groups.size > this.groupCentre.size) for (const key of [...this.groups.keys()]) if (!this.groupCentre.has(key)) this.groups.delete(key);
 	}
@@ -788,7 +787,7 @@ export class LiveOverlay {
 			const a = s.subagents[key]!;
 			if (this.subBodies.has(key)) continue;
 			const pk = this.parentKeyOf(a);
-			this.subBodies.set(key, { x: 0, y: 0, off: { x: 0, y: 0, vx: 0, vy: 0 }, gx: 0, gy: 0, until: 0, born: wall, ang: Number.NaN, pk, parentKey: s.threads[pk]?.feature !== undefined ? pk : undefined, a });
+			this.subBodies.set(key, { rep: newRepeller(), x: 0, y: 0, off: { x: 0, y: 0, vx: 0, vy: 0 }, gx: 0, gy: 0, until: 0, born: wall, ang: Number.NaN, pk, parentKey: s.threads[pk]?.feature !== undefined ? pk : undefined, a });
 		}
 		for (const key of [...this.subBodies.keys()]) if (!s.subagents[key]) this.subBodies.delete(key);
 		void m;
@@ -827,6 +826,8 @@ export class LiveOverlay {
 				}
 			});
 		}
+		// The whole ring turns together (one revolution per orbitSec), from the wall clock: even spacing is kept, nothing to allocate.
+		const phase = orbitPhase(wall, T.orbitSec, reduced);
 		for (const b of list) {
 			if (Number.isNaN(b.ang)) b.ang = (this.hashOf(b.a.key) % 360) * (Math.PI / 180);
 			const fc = b.parentKey ? this.groupCentre.get(b.parentKey) : undefined;
@@ -839,8 +840,9 @@ export class LiveOverlay {
 			}
 			if (reduced) [b.off.x, b.off.y, b.off.vx, b.off.vy] = [b.gx, b.gy, 0, 0];
 			else elasticStep(b.off, b.gx, b.gy, T.subSpring / T.paceSec, T.subDamping, dt);
-			b.x = c.x + Math.cos(b.ang) * radius + b.off.x;
-			b.y = c.y + Math.sin(b.ang) * radius + b.off.y;
+			const a = b.ang + phase;
+			b.x = c.x + Math.cos(a) * radius + b.off.x + b.rep.rx;
+			b.y = c.y + Math.sin(a) * radius + b.off.y + b.rep.ry;
 		}
 		void now;
 		void m;

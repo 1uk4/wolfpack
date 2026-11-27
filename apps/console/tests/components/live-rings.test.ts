@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { LIVE_TUNING } from "../../components/graph/live/live-tuning.ts";
-import { elasticStep, pullFor, ringSlots, trailOrigin } from "../../components/graph/live/live-rings.ts";
+import { elasticStep, orbitPhase, pullFor, ringSlots, trailOrigin } from "../../components/graph/live/live-rings.ts";
 
 describe("feature rings", () => {
 	it("sub-agents sit evenly spaced on the ring around the group's centre", () => {
@@ -35,6 +35,25 @@ describe("feature rings", () => {
 		assert.ok(Math.abs(sub.group.x - 4.2) < 1e-9, "the group only drifts");
 		assert.ok(sub.self!.x > sub.group.x * 10 && chat.group.x > sub.group.x * 10);
 		assert.ok(sub.self!.holdSec < chat.group.holdSec);
+	});
+
+	it("sub-agents orbit their feature: the angle advances at the tuned rate, spacing stays even, the ring follows a moving feature, reduced motion is static", () => {
+		assert.equal(LIVE_TUNING.orbitSec, 14);
+		const turn = Math.PI * 2;
+		assert.ok(Math.abs(orbitPhase(8000, 14, false) - orbitPhase(1000, 14, false) - (turn * 7) / 14) < 1e-9, "7 s is half a revolution");
+		for (let n = 1; n <= 5; n++) {
+			const at = (ms: number, c: { x: number; y: number }) => ringSlots(c, 20, n, 0.4 + orbitPhase(ms, 14, false));
+			const a = at(3000, { x: 0, y: 0 });
+			const b = at(9100, { x: 50, y: -30 });
+			for (const s of b) assert.ok(Math.abs(Math.hypot(s.x - 50, s.y + 30) - 20) < 1e-9, "still on the ring around the moved feature");
+			if (n > 1) {
+				const chord = 2 * 20 * Math.sin(Math.PI / n);
+				for (let i = 0; i < n; i++) assert.ok(Math.abs(Math.hypot(b[i]!.x - b[(i + 1) % n]!.x, b[i]!.y - b[(i + 1) % n]!.y) - chord) < 1e-9, `even spacing with ${n}`);
+				assert.ok(Math.hypot(a[0]!.x - (b[0]!.x - 50), a[0]!.y - (b[0]!.y + 30)) > 1, "they have turned");
+			}
+		}
+		assert.equal(orbitPhase(123456, 14, true), 0);
+		assert.equal(orbitPhase(999999, 14, true), 0);
 	});
 
 	it("an elastic offset stretches toward its goal and snaps back to zero when the goal clears", () => {

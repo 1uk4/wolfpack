@@ -17,6 +17,12 @@ export function ringSlots(centre: Pt, radius: number, n: number, rot: number): P
 	return out;
 }
 
+/** The angle (radians) the whole ring of sub-agents has turned by at wall time `wallMs`: one revolution per `orbitSec`; reduced motion: none (static even slots). */
+export function orbitPhase(wallMs: number, orbitSec: number, reduced: boolean): number {
+	if (reduced || !(orbitSec > 0)) return 0;
+	return (((wallMs / 1000) % orbitSec) / orbitSec) * Math.PI * 2;
+}
+
 /** Where an interaction's trail begins: the group's centre for the thread's own chat, the sub-agent's icon for a sub-agent. */
 export function trailOrigin(actor: "chat" | "sub", centre: Pt, icon: Pt | undefined): Pt {
 	return actor === "sub" && icon ? icon : centre;

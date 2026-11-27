@@ -52,6 +52,21 @@ export interface LiveTuning {
 	arcTurnSec: number;
 	/** A wolf parks this many screen px (beyond badge + node radius) from its target. */
 	parkGapPx: number;
+	/** Seconds one revolution of a feature's sub-agents round its badge takes (all of them turn together, evenly spaced). */
+	orbitSec: number;
+	/** Soft-body repulsion between live badges: contact gap (screen px), long-range reach (x contact distance, force zero beyond), bounce restitution, velocity damping (1/s), mass per kind. */
+	repelGapPx: number;
+	repelRangeMul: number;
+	repelPush: number;
+	restitution: number;
+	repelDamping: number;
+	massHome: number;
+	massFeature: number;
+	massSub: number;
+	/** Spring (1/s) pulling a repelled badge back to its place (a sub-agent's tether is stiffer) and the most a sub-agent may be pushed off its orbit (screen px). */
+	repelRelax: number;
+	repelSubRelax: number;
+	repelSubMaxPx: number;
 }
 
 export const LIVE_TUNING: LiveTuning = {
@@ -90,4 +105,16 @@ export const LIVE_TUNING: LiveTuning = {
 	arcDeg: 90,
 	arcTurnSec: 4,
 	parkGapPx: 10,
+	orbitSec: 14,
+	repelGapPx: 6,
+	repelRangeMul: 2.5,
+	repelPush: 120,
+	restitution: 0.4,
+	repelDamping: 5,
+	massHome: 4,
+	massFeature: 2,
+	massSub: 1,
+	repelRelax: 1.5,
+	repelSubRelax: 12,
+	repelSubMaxPx: 22,
 };

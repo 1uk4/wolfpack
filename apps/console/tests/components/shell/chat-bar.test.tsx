@@ -194,10 +194,11 @@ describe("ChatBar", () => {
 	});
 
 	it("the chip row shows one badge per running sub-agent, and nothing when none run", async () => {
-		kids = [{ id: "w/k1", title: "t1", agent: "scout", state: "running", parentThreadId: "w/a" }, { id: "w/k2", title: "t2", agent: "coder", state: "running", parentThreadId: "w/a" }, { id: "w/k3", title: "t3", agent: "old", state: "done", parentThreadId: "w/a" }];
+		kids = [{ id: "w/k1", title: "scout", agent: "worker", state: "running", parentThreadId: "w/a" }, { id: "w/k2", title: "coder", agent: "worker", state: "running", parentThreadId: "w/a" }, { id: "w/k3", title: "old", agent: "worker", state: "done", parentThreadId: "w/a" }];
 		await mount("/kb", A);
 		const chips = [...document.querySelectorAll('[data-testid="subagent-badge"]')];
-		assert.deepEqual(chips.map((c) => c.textContent?.includes("scout") ? "scout" : c.textContent?.includes("coder") ? "coder" : "?"), ["scout", "coder"]);
+		assert.deepEqual(chips.map((c) => c.getAttribute("title")), ["scout", "coder"]);
+		assert.equal(chips[0]!.getAttribute("aria-label"), "scout, running");
 		assert.ok(chips[0]!.closest('[data-testid="chat-bar"]'), "inside the bar surface");
 		await act(async () => root?.unmount());
 		document.body.innerHTML = "";

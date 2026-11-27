@@ -28,6 +28,21 @@ export function threadSlugOf(wolf: string, id: string): string {
 }
 
 /**
+ * The one thing the you node links to: the hub of the thread the floating chat is attached to (a feature thread), else the wolf's body.
+ * No history: a swapped chat moves the link at once and nothing of the old one stays (work-wolfpack-mnAxvBe).
+ */
+export function youLinkTarget<T extends { wolf: string; threadId?: string }>(
+	attached: { wolf: string; threadId: string } | null,
+	featureHubs: Iterable<T>,
+	wolfBody: (wolf: string) => T | undefined,
+): T | undefined {
+	if (!attached) return undefined;
+	const slug = threadSlugOf(attached.wolf, attached.threadId);
+	for (const h of featureHubs) if (h.wolf === attached.wolf && threadSlugOf(attached.wolf, h.threadId ?? "") === slug) return h;
+	return wolfBody(attached.wolf);
+}
+
+/**
  * The key (in `state.threads`) of the thread the owner is viewing, or null.
  * The protocol's target has no wolf field, so the console encodes a thread target's id as `<wolf>/<slug>` (see targetFromPath).
  * A bare slug (an older console) matches only when exactly one wolf has a thread with that slug; two would be ambiguous.

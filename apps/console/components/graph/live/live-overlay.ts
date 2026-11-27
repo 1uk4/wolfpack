@@ -24,7 +24,7 @@ import {
 	type LiveState,
 	type LiveTarget,
 } from "@/src/core";
-import { wolfSpringAnchor, ownerThreadKey, targetNodeId, threadKey, threadSlugOf } from "@/src/core";
+import { wolfSpringAnchor, ownerThreadKey, targetNodeId, threadKey, threadSlugOf, youLinkTarget } from "@/src/core";
 import { separateSubs, stepSub, SUB_PHYSICS, tetherStrength, type SubBody } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba } from "./live-effects";
@@ -182,7 +182,7 @@ let userPath: Path2D | null = null;
 /** lucide user, in its 24 x 24 box. */
 const userGlyph = (): Path2D => (userPath ??= new Path2D("M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z"));
 /** The you badge (screen px) and its links, as the renderer and tests see them. `x,y` is where a link ends (the target, or the canvas edge when `arrow`). */
-export interface YouLink { kind: "chat" | "view"; x: number; y: number; arrow: boolean; angle: number }
+export interface YouLink { kind: "chat"; x: number; y: number; arrow: boolean; angle: number }
 export interface YouGeometry { badge: { x: number; y: number; r: number }; links: YouLink[] }
 let wolfHead: Path2D | null = null;
 const wolfHeadPath = (): Path2D => (wolfHead ??= new Path2D(WOLF_HEAD_PATH));
@@ -752,38 +752,10 @@ export class LiveOverlay {
 		}
 	}
 
-	/** World points the you badge links to: the viewed thread / item (secondary) and the floating chat's attached thread (primary). */
-	private youLinks(host: OverlayHost): { chat: Pt | null; view: Pt | null } {
-		const out: { chat: Pt | null; view: Pt | null } = { chat: null, view: null };
-		const s = this.state;
-		const v = s.owner?.viewing;
-		if (v) {
-			if (v.kind === "thread") {
-				const key = ownerThreadKey(s);
-				const t = key ? s.threads[key] : null;
-				const it = t ? (this.threadItems.get(threadKey(t.wolf, t.id)) ?? this.wolfItems.get(t.wolf)) : null; // zoomed out the thread dot is hidden: link the wolf
-				if (it) out.view = { x: it.x, y: it.y };
-			} else {
-				const id = targetNodeId(v, (n) => host.hasNode(n));
-				const p = id ? host.nodePos(id) : null;
-				if (p) out.view = p;
-			}
-		}
-		// The chat's target: a feature thread's hub, otherwise the wolf's body (home and other threads).
-		if (this.attached) {
-			const a = this.attached;
-			const slug = threadSlugOf(a.wolf, a.threadId);
-			let it: OverlayItem | undefined;
-			for (const i of this.featureItems.values()) {
-				if (i.wolf === a.wolf && threadSlugOf(a.wolf, i.threadId ?? "") === slug) {
-					it = i;
-					break;
-				}
-			}
-			const p = it ?? this.wolfItems.get(a.wolf);
-			if (p) out.chat = { x: p.x, y: p.y };
-		}
-		return out;
+	/** The world point the you badge links to: the floating chat's attached thread only (no viewed-entry link, no history of earlier chats). */
+	private youLink(): Pt | null {
+		const p = youLinkTarget(this.attached, this.featureItems.values(), (w) => this.wolfItems.get(w));
+		return p ? { x: p.x, y: p.y } : null;
 	}
 
 	/** The floating chat's rect in the graph's own screen coordinates (live-layer measures it once per change); null = no composer. */
@@ -805,9 +777,9 @@ export class LiveOverlay {
 		const r = YOU_BADGE_R;
 		const badge = c ? { x: c.x + c.w / 2, y: c.y - YOU_GAP - r, r } : { x: size.w / 2, y: size.h - YOU_FALLBACK_MARGIN - r, r };
 		this.badge = badge;
-		const world = this.youLinks(host);
+		const chat = this.youLink();
 		const links: YouLink[] = [];
-		for (const [kind, p] of [["chat", world.chat], ["view", world.view]] as const) {
+		for (const [kind, p] of [["chat", chat]] as const) {
 			if (!p) continue;
 			const tx = p.x * tr.k + tr.x;
 			const ty = p.y * tr.k + tr.y;
@@ -846,7 +818,7 @@ export class LiveOverlay {
 				// A soft bend: the control point sits off the midpoint, perpendicular to the line.
 				const cx = sx + dx / 2 - (dy / len) * len * 0.15;
 				const cy = sy + dy / 2 + (dx / len) * len * 0.15;
-				const a = l.kind === "chat" ? 0.6 : 0.35;
+				const a = 0.6;
 				ctx.strokeStyle = rgba(YOU_ACCENT, a);
 				ctx.lineWidth = 1.4;
 				ctx.setLineDash([5, 5]);

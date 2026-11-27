@@ -17,6 +17,12 @@ describe("ask tool schema", () => {
     expect((card.fields[0] as { options: unknown[] }).options[0]).toMatchObject({ value: "a", tradeoff: "fast but rigid" });
   });
 
+  it("splits a page that holds several questions into one step per question, keeping the page title", () => {
+    const r = askResult({ pages: [{ title: "Scope", questions: [single, { id: "q2", ask: "Free?", kind: "free" }] }, { title: "Last", questions: [{ id: "q3", ask: "Sure?", kind: "confirm" }] }] });
+    const card = CardSchema.parse("card" in r ? r.card : undefined);
+    expect(card.steps).toEqual([{ title: "Scope", fields: ["q1"] }, { title: "Scope", fields: ["q2"] }, { title: "Last", fields: ["q3"] }]);
+  });
+
   it("required and noOther switch the defaults off", () => {
     const card = CardSchema.parse((askResult(one({ ...single, required: true, noOther: true })) as { card: unknown }).card);
     expect(card.fields[0]).toMatchObject({ allowOther: false });

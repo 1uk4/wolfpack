@@ -1,7 +1,7 @@
 /** The composer's button while a questionnaire is open (work-wolfpack-ssPFrEw): which action it takes and what it says. Pure. */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { askComposerAction, askQueue } from "../../../components/ask/ask-session.ts";
+import { askComposerAction, askProgress, askQueue } from "../../../components/ask/ask-session.ts";
 
 const base = { pages: 3, page: 0, missing: [] as string[], noteEmpty: true, expanded: true };
 
@@ -49,6 +49,15 @@ describe("askComposerAction for a tool confirmation or subagent card (own: false
 		const want = { kind: "submit", label: "Submit", disabled: true, hint: "Answer to continue: Q1" };
 		assert.deepEqual(askComposerAction(a), want);
 		assert.deepEqual(askComposerAction({ ...a, armed: true }), want);
+	});
+});
+
+describe("askProgress", () => {
+	it("is the share of questions reached: 2 of 5 is 40 percent, the last is 100, a lone question is 100", () => {
+		assert.equal(askProgress(1, 5), 40);
+		assert.equal(askProgress(4, 5), 100);
+		assert.equal(askProgress(0, 1), 100);
+		assert.equal(askProgress(0, 4), 25);
 	});
 });
 

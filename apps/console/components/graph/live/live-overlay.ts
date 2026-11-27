@@ -25,7 +25,7 @@ import {
 	type LiveState,
 	type LiveTarget,
 } from "@/src/core";
-import { ownerThreadKey, targetNodeId, threadKey, threadSlugOf, youLinkTarget, effectiveWolfColor, wolfColorTokens } from "@/src/core";
+import { activeFocus, isFocusNode, touchFocus, type FocusTouch, ownerThreadKey, targetNodeId, threadKey, threadSlugOf, youLinkTarget, effectiveWolfColor, wolfColorTokens } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba, safeArc, safeZoom } from "./live-effects";
 import { floatOffset, nameHash } from "./live-float";
@@ -244,6 +244,8 @@ export class LiveOverlay {
 	private groupCentre = new Map<string, Pt>();
 	private groupHome = new Map<string, Pt>();
 	private seenTrails = new Set<string>();
+	/** Per wolf: the entries and work items its home thread touched recently (pull the wolf, see forceTarget). */
+	private focus = new Map<string, FocusTouch[]>();
 	private workingSet = new Set<string>();
 	/** Subagent bodies by key (spring-damper physics) and the list the frame steps; the items they draw as, by key. */
 	private subBodies = new Map<string, SubState>();
@@ -588,7 +590,7 @@ export class LiveOverlay {
 		this.consumeTrails(host, m, den, wall);
 		for (const b of bodies) {
 			const w = s.wolves[b.name]!;
-			wolfStep(b.mot, wall, dt, { den, rest: this.forceTarget(b.name, this.restTmp.get(b.name)!, den, m, reduced), needsYou: w.needsYou, working: this.workingSet.has(b.name), reduced, tuning: T });
+			wolfStep(b.mot, wall, dt, { den, rest: this.forceTarget(host, wall, b.name, this.restTmp.get(b.name)!, den, m, reduced), needsYou: w.needsYou, working: this.workingSet.has(b.name), reduced, tuning: T });
 		}
 		// Attached things are derived from their parent's position every frame (never integrated apart from it), so nothing is left behind.
 		for (const b of bodies) {
@@ -656,6 +658,7 @@ export class LiveOverlay {
 			const tp = id ? host.nodePos(id) : null;
 			const wb = this.bodies.get(t.wolf);
 			if (!tp || !wb) continue;
+			if (id && isFocusNode(id) && !t.subagentKey && !t.featureKey && (!t.threadId || threadKey(t.wolf, t.threadId) === `${t.wolf}/home`)) this.focus.set(t.wolf, touchFocus(this.focus.get(t.wolf) ?? [], id, wall));
 			const sub = t.subagentKey ? this.subBodies.get(t.subagentKey) : undefined;
 			const subParent = sub?.parentKey ? s.threads[sub.parentKey] : undefined;
 			const featureKey = t.featureKey ?? (subParent?.feature !== undefined ? sub!.parentKey : undefined);
@@ -845,8 +848,8 @@ export class LiveOverlay {
 	 * running ones, the angle easing to its slot when a sibling comes or goes. A pull stretches the icon out on its elastic tether and it
 	 * snaps back to its slot when the hold ends. The position is parent + slot + offset each frame: it cannot be left behind.
 	 */
-	/** The wolf's resting target under the force model: its rest slot, pulled toward its active threads and (outward) by its running sub-agents; the Home spring bounds it. Focus pulls (KB / work nodes the home thread touches) are not wired yet. */
-	private forceTarget(name: string, rest: Pt, den: Pt, m: number, reduced: boolean): Pt {
+	/** The wolf's resting target under the force model: its rest slot, pulled toward its active threads and (outward) by its running sub-agents; the Home spring bounds it. Focus nodes (entries / work items its home thread read or wrote within trailSec) pull it too. */
+	private forceTarget(host: OverlayHost, wall: number, name: string, rest: Pt, den: Pt, m: number, reduced: boolean): Pt {
 		const threads: Pt[] = [];
 		for (const f of this.featureItems.values()) if (f.wolf === name) threads.push({ x: f.x, y: f.y });
 		const subs: Pt[] = [];
@@ -855,9 +858,19 @@ export class LiveOverlay {
 		const len = Math.hypot(dx, dy) || 1;
 		const out = 60 * m;
 		for (const b of this.subBodies.values()) if (b.a.wolf === name && b.a.finishedAt === undefined) subs.push({ x: rest.x + (dx / len) * out, y: rest.y + (dy / len) * out });
-		if (threads.length === 0 && subs.length === 0) return rest;
+		const focus: Pt[] = [];
+		const touched = this.focus.get(name);
+		if (touched) {
+			const live = activeFocus(touched, wall, this.settings.trailSec * 1000);
+			if (live.length < touched.length) this.focus.set(name, touched.filter((f) => live.includes(f.id)));
+			for (const id of live) {
+				const p = host.hasNode(id) ? host.nodePos(id) : null;
+				if (p) focus.push({ x: p.x, y: p.y });
+			}
+		}
+		if (threads.length === 0 && subs.length === 0 && focus.length === 0) return rest;
 		const T = LIVE_TUNING;
-		return orbitTarget(rest, threads, [], subs, { homeSpring: this.settings.homeSpring, threadPull: T.threadPull, focusPull: T.focusPull, subPull: this.settings.subPull * T.subPull }, reduced);
+		return orbitTarget(rest, threads, focus, subs, { homeSpring: this.settings.homeSpring, threadPull: T.threadPull, focusPull: T.focusPull, subPull: this.settings.subPull * T.subPull }, reduced);
 	}
 
 	private stepSubs(now: number, dt: number, host: OverlayHost, m: number, reduced: boolean, wall: number): void {

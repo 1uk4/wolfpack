@@ -165,4 +165,5 @@ export {
 export { EVENT_LABEL, parseSubagentMessage, resolveChild } from "./thread/subagent-message.ts";
 export type { SubagentOrigin } from "./thread/subagent-message.ts";
 export * from "./graph/live/thread-key.ts";
+export * from "./graph/live/focus.ts";
 export * from "./thread/wolf-color.ts";

@@ -121,11 +121,11 @@ export interface ConsoleClient {
    * answer and starts the next turn; the ack is that turn's, or disposition `queued` while sibling cards still wait.
    * Rejects NotFoundError for an unknown / already-answered card, BusyError while a turn runs. Optional: the mock has no cards.
    */
-  answerCard?(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck>;
+  answerCard?(threadId: string, callId: string, answers: CardAnswers, tool?: string): Promise<SubmitAck>;
   /** Save one page of a paged (`ask`) card as a draft (Next / Back); nothing reaches the agent. Optional like answerCard. */
   saveCardPage?(threadId: string, callId: string, page: number, answers: CardAnswers, opts?: { goto?: number; stepsKey?: string }): Promise<void>;
   /** Submit a paged card: one tool result with every page and the note. 400 names missing required questions, 409 on a double submit or changed pages, 404 unknown card. Optional. */
-  submitCard?(threadId: string, callId: string, body?: { answers?: CardAnswers; note?: { text?: string; attachments?: string[] }; stepsKey?: string }): Promise<SubmitAck>;
+  submitCard?(threadId: string, callId: string, body?: { answers?: CardAnswers; tool?: string; note?: { text?: string; attachments?: string[] }; stepsKey?: string }): Promise<SubmitAck>;
   /** Store the owner's note (text, upload ids) on a paged card; an empty note clears it. Optional. */
   putCardNote?(threadId: string, callId: string, note: { text?: string; attachments?: string[] }): Promise<void>;
   /** Hold typed text as the answer of question `qid` of a paged card, any page (not a chat message). Optional. */

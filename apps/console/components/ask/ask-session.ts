@@ -204,6 +204,7 @@ async function request(url: string, method: "PUT" | "POST", body: unknown): Prom
 	}
 }
 
+/** Placeholder when no card is pending: the session is inactive, so submit is never reachable. */
 const NO_CARD: PendingCard = { callId: "", threadId: "", card: { tool: "ask", fields: [] }, raisedAt: "" };
 
 /** `card` undefined = no questionnaire pending (hooks must run anyway): the session is then inactive and inert. */
@@ -367,6 +368,7 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 	const back = useCallback(() => void go(pageRef.current - 1), [go]);
 	const submit = useCallback(async () => {
 		const cid = callId;
+		const tool = pcRef.current.card.tool; // read before any await: a card swap mid-submit must not pair this callId with another card's tool
 		if (flying.current.has(cid)) return;
 		flying.current.add(cid);
 		setBusyIds((s) => new Set(s).add(cid));
@@ -377,12 +379,12 @@ export function useAskSession(host: Pick<AttachedRef, "wolf" | "slug">, card: Pe
 		let n = noteBody(noteRef.current);
 		const answers = pageBody(fieldsOf(pageRef.current), shownRef.current, pcRef.current.card);
 		// A task_graduate card: the owner's console graduates the picked items (the wolf cannot); the result rides to the wolf as the note.
-		if (pcRef.current.card.tool === GRADUATE_CARD_TOOL) {
+		if (tool === GRADUATE_CARD_TOOL) {
 			// The thread's own wolf, never the card's say-so; graduationNoteFor never throws, so the answer always goes out.
 			const result = await graduationNoteFor(pcRef.current.card as never, answers, wolf);
 			if (result) n = { ...n, text: n.text ? `${result}\n\n${n.text}` : result };
 		}
-		const r = await request(cardSubmitUrl(wolf, slug, cid), "POST", { answers, ...(Object.keys(n).length ? { note: n } : {}), stepsKey: stepsKey(pcRef.current.card) });
+		const r = await request(cardSubmitUrl(wolf, slug, cid), "POST", { answers, tool, ...(Object.keys(n).length ? { note: n } : {}), stepsKey: stepsKey(pcRef.current.card) });
 		flying.current.delete(cid);
 		setBusyIds((s) => {
 			const o = new Set(s);

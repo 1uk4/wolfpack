@@ -186,15 +186,15 @@ export class HttpConsoleClient implements ConsoleClient {
     return { bytes: new Uint8Array(await res.arrayBuffer()), mimeType: res.headers.get("content-type") ?? "application/octet-stream" };
   }
 
-  async answerCard(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck> {
-    return (await this.json("answerCard", { id: threadId, callId }, ROUTES.answerCard.response.schema, { answers }, threadId)) as SubmitAck;
+  async answerCard(threadId: string, callId: string, answers: CardAnswers, tool?: string): Promise<SubmitAck> {
+    return (await this.json("answerCard", { id: threadId, callId }, ROUTES.answerCard.response.schema, { answers, ...(tool ? { tool } : {}) }, threadId)) as SubmitAck;
   }
 
   async saveCardPage(threadId: string, callId: string, page: number, answers: CardAnswers, opts: { goto?: number; stepsKey?: string } = {}): Promise<void> {
     await this.json("saveCardPage", { id: threadId, callId, page: String(page) }, ROUTES.saveCardPage.response.schema, { answers, ...(opts.goto !== undefined ? { goto: opts.goto } : {}), ...(opts.stepsKey ? { stepsKey: opts.stepsKey } : {}) }, threadId);
   }
 
-  async submitCard(threadId: string, callId: string, body: { answers?: CardAnswers; note?: { text?: string; attachments?: string[] }; stepsKey?: string } = {}): Promise<SubmitAck> {
+  async submitCard(threadId: string, callId: string, body: { answers?: CardAnswers; tool?: string; note?: { text?: string; attachments?: string[] }; stepsKey?: string } = {}): Promise<SubmitAck> {
     return (await this.json("submitCard", { id: threadId, callId }, ROUTES.submitCard.response.schema, body, threadId)) as SubmitAck;
   }
 

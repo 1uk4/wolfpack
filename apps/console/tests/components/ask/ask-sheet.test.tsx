@@ -236,6 +236,14 @@ describe("ask sheet answers and guards", () => {
 		assert.deepEqual(refetched, ["r"]);
 	});
 
+	it("Submit carries the tool of the card that raised it, so the server can refuse a wrong card", async () => {
+		await render(pending({ pageIndex: 1 }));
+		await click(q('[data-testid="press"]'));
+		await settle();
+		const sub = posts.find((p) => p.url.endsWith("/submit"))!;
+		assert.equal(sub.body.tool, "ask");
+	});
+
 	it("a double click POSTs once", async () => {
 		await render(pending());
 		const next = q('[data-testid="press"]')!;

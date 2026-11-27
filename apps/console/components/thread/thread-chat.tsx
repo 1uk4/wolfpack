@@ -424,7 +424,7 @@ function ThreadChatInner({
 	const answerInFlight = useRef(false);
 	// An answer (answers given) or a skip (no answers) of one card: the same POST/ack handling.
 	const resolveCard = useCallback(
-		async (callId: string, answers?: CardAnswers) => {
+		async (callId: string, answers?: CardAnswers, tool?: string) => {
 			if (answerInFlight.current) return; // double click / Enter: one POST
 			answerInFlight.current = true;
 			setAnswering(callId);
@@ -433,7 +433,7 @@ function ThreadChatInner({
 				const res = await fetch(answers ? cardAnswerUrl(wolf, slug, callId) : cardSkipUrl(wolf, slug, callId), {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: answers ? JSON.stringify({ answers }) : undefined,
+					body: answers ? JSON.stringify({ answers, ...(tool ? { tool } : {}) }) : undefined,
 				});
 				if (!res.ok) {
 					const body = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -469,7 +469,7 @@ function ThreadChatInner({
 		},
 		[wolf, slug, resumeStream, refreshCards, setSendPending],
 	);
-	const cardCtx: CardContext = { wolf, slug, cards, answering, onAnswer: (callId, answers) => void resolveCard(callId, answers), onSkip: (callId) => void resolveCard(callId) };
+	const cardCtx: CardContext = { wolf, slug, cards, answering, onAnswer: (callId, answers) => void resolveCard(callId, answers, cards.pending.find((p) => p.callId === callId)?.card.tool), onSkip: (callId) => void resolveCard(callId) };
 	const { allOpen: allThinkingOpen, epoch: thinkingEpoch } = useAllThinkingToggle();
 	const [text, setText] = useState("");
 	// Ref mirror of the composer text: a dictation flush lands via setState, which a send resuming after

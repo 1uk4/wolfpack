@@ -26,6 +26,7 @@ export function BarCardSurface({ target, cards }: { target: AttachedRef; cards: 
 
 	const resolve = async (callId: string, answers?: CardAnswers) => {
 		if (busy) return;
+		const tool = pending.find((p) => p.callId === callId)?.card.tool;
 		setBusy(callId);
 		setError(null);
 		const key = `${target.wolf}:${target.threadId}`;
@@ -33,7 +34,7 @@ export function BarCardSurface({ target, cards }: { target: AttachedRef; cards: 
 			const res = await fetch(answers ? cardAnswerUrl(target.wolf, target.slug, callId) : cardSkipUrl(target.wolf, target.slug, callId), {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: answers ? JSON.stringify({ answers }) : undefined,
+				body: answers ? JSON.stringify({ answers, ...(tool ? { tool } : {}) }) : undefined,
 			});
 			if (key !== keyNow.current) return; // the bar moved to another thread meanwhile
 			if (res.ok) cards.settle(callId);

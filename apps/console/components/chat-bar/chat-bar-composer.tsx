@@ -13,6 +13,7 @@ import { threadBase } from "@/components/thread/thread-transport";
 import { newUploadState, startUploads } from "@/components/composer/attachment-upload";
 import { canSendWith, readyInfos, type PendingAttachment } from "@/components/composer/attachments";
 import { DICTATION_KEYLESS, DictationBar, DictationMicButton, LiveMeter, joinDictation, openDeepgramKeyInPack, setDictationFocus, recordingAt, type Dictation } from "@/components/composer/dictation";
+import { useRegisterBarDrop } from "@/components/chat-bar/bar-drop";
 import { useSingleMac } from "@/components/shell/single-mac";
 import { draftKey, readDraft, useComposerDraft } from "@/lib/composer-draft";
 import { abortThread, submitToThread } from "@/components/chat-bar/chat-bar-io";
@@ -26,7 +27,7 @@ import { type AskSession, type NoteState } from "@/components/ask/ask-session";
  * phone is on a thread page, and a run keeps going while the owner browses). This component only shows its meter and
  * registers where the transcript lands while it is mounted; with no composer mounted ChatBar writes it to the draft store.
  */
-export default function ChatBarComposer({ phone = false, target, title, cardOpen = false, askOpen = false, onReplied, onSending, dictation, registerAppend, session, registerNoteSink }: { /** The phone dock: the voice-first layout (large mic, transcript in place of the field). */ phone?: boolean; /** True while a send's POST is in flight (the swap pill waits, so a failed send still has this composer to restore into). */ onSending?: (v: boolean) => void; session?: AskSession; registerNoteSink?: (fn: ((n: NoteState) => void) | null) => void; target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
+export default function ChatBarComposer({ phone = false, docked = false, target, title, cardOpen = false, askOpen = false, onReplied, onSending, dictation, registerAppend, session, registerNoteSink }: { /** The bar is the thread page's composer (docked): the page hands its drops to this composer. */ docked?: boolean; /** The phone dock: the voice-first layout (large mic, transcript in place of the field). */ phone?: boolean; /** True while a send's POST is in flight (the swap pill waits, so a failed send still has this composer to restore into). */ onSending?: (v: boolean) => void; session?: AskSession; registerNoteSink?: (fn: ((n: NoteState) => void) | null) => void; target: AttachedRef; title: string; cardOpen?: boolean; askOpen?: boolean; onReplied?: () => void; dictation: Dictation; registerAppend: (fn: ((t: string) => void) | null) => void }) {
 	const api = useAttachedThread()!;
 	const { working } = api;
 	// Attachments pending in the thread page's composer ride with the PAGE's next send, never this input's (Enter here sends text only).
@@ -113,6 +114,9 @@ export default function ChatBarComposer({ phone = false, target, title, cardOpen
 
 	// While the questionnaire is expanded this composer is the NOTE's (Next / Submit); collapsing hands the note's images to the normal attachments (the text goes through the draft store).
 	const noteMode = !!session && session.active && session.expanded;
+	// A drop on the bar (or, docked, anywhere on the page) lands here; while the questionnaire note is the composer it is the note's images.
+	const dropFiles = useCallback((files: File[]) => (noteMode ? session.addNoteFiles : onFiles)(files), [noteMode, session, onFiles]);
+	useRegisterBarDrop(dropFiles, docked);
 	// Space-hold dictation (components/composer/space-dictation.ts) fires this when the owner releases after a hold: the spoken words are already in the field,
 	// so it goes through the send button's path (submit, clear the draft). Not while a questionnaire note is the composer; an empty field is a no-op (send checks).
 	const sendRef = useRef(send);

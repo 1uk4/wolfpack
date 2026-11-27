@@ -458,7 +458,7 @@ describe("ThreadChat dictation", () => {
 		assert.equal(barTa()!.value, "mine");
 	});
 
-	it("an attachment dropped on the docked page is announced by the bar, and Enter there sends text only", async () => {
+	it("an image dropped on the docked page attaches to the bar, and Enter there sends it with the text", async () => {
 		await mount(new CardClient(null), { poppedOut: true, inFlight: true });
 		const prev = globalThis.fetch;
 		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
@@ -468,13 +468,14 @@ describe("ThreadChat dictation", () => {
 		await act(async () => void chat.dispatchEvent(Object.assign(new dom.window.Event("drop", { bubbles: true, cancelable: true }), { dataTransfer: { types: ["Files"], files: [png] } })));
 		await settle(100);
 		assert.equal(pageComposers(), 0);
-		assert.match(q('[data-testid="chat-bar-attachments-waiting"]')?.textContent ?? "", /^1 attachment waiting in the thread$/);
+		assert.equal(q('[data-testid="chat-bar-attachments-waiting"]'), null, "the page's composer holds nothing: the bar took the file");
+		assert.equal(document.querySelectorAll('[data-testid="chat-bar"] [data-testid="attachment-chip"]').length, 1);
 		await typeIn(barTa()!, "words only");
 		await press(barTa()!, { key: "Enter" });
 		await settle(100);
 		const sent = posts.filter((p) => p.url.includes("/submit"));
 		assert.equal(sent.length, 1);
-		assert.doesNotMatch(JSON.stringify(sent[0]!.body), /up-1/);
+		assert.match(JSON.stringify(sent[0]!.body), /up-1/);
 	});
 
 	it("Submit on a card while recording includes the tail; a double click answers once", async () => {

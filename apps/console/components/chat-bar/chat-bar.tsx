@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useDockSlot } from "@/components/chat-bar/dock-slot";
+import { useBarDrop } from "@/components/chat-bar/bar-drop";
 import { getPageNoteAppend } from "@/components/composer/page-note-append";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
@@ -472,6 +473,8 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 }) {
 	const api = useAttachedThread()!;
 	const { setMinimized, working, attachedThread, groups } = api;
+	// Images dropped on the bar (floating or docked) attach through the composer (bar-drop.ts); `dropping` lights the bar up.
+	const { dropping, props: dropProps } = useBarDrop(docked);
 	const minimized = api.minimized && !swap;
 	const needsYouTotal = groups.reduce((n, g) => n + g.needsYou, 0);
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
@@ -703,10 +706,12 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				ref={wrapRef}
 				data-testid="chat-bar"
 				data-layout="dock"
+				data-dropping={dropping ? "true" : undefined}
+				{...dropProps}
 				data-state={minimized ? "minimized" : sheet ? "sheet" : "open"}
 				{...(sheet && !minimized ? { role: "dialog", "aria-modal": true, "aria-label": `Chat with ${title}` } : {})}
 				// Docked in the thread page's slot (not a sheet): the dock is a static block that takes its own height in the page, so the last messages are never under it.
-				className={cn("flex flex-col border-t bg-card shadow-lg", docked && !sheet ? "relative w-full" : "fixed inset-x-0", sheet ? cn(ZC.chatSheet, askCard ? "" : "rounded-t-2xl") : docked ? "" : ZC.chatBar)}
+				className={cn("flex flex-col border-t bg-card shadow-lg", dropping && "ring-2 ring-inset ring-(color:--thread-accent)", docked && !sheet ? "relative w-full" : "fixed inset-x-0", sheet ? cn(ZC.chatSheet, askCard ? "" : "rounded-t-2xl") : docked ? "" : ZC.chatBar)}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
 				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
@@ -773,7 +778,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 						</Hint>
 					</div>
 				</div>
-				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer phone target={target} onSending={setSending} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
+				{!minimized && (api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer phone docked={docked} target={target} onSending={setSending} title={vizOn ? target.wolf : title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />)}
 				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} sheet />}
 			</div>
 			</>
@@ -811,21 +816,21 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	);
 
 	return (
-		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={docked ? undefined : { left: geo.left, width: geo.width }}>
+		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-dropping={dropping ? "true" : undefined} {...dropProps} data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={docked ? undefined : { left: geo.left, width: geo.width }}>
 			{swapPill}
 			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>
 				{sheetCard}
 				{hasSurface && <BarCardSurface key={`${target.wolf}:${target.threadId}`} target={target} cards={cards} />}
 			</div>
-			<div className={cn("relative rounded-2xl border bg-card shadow-lg", askCard && session.expanded ? "rounded-t-none border-t-0" : "focus-within:ring-1 focus-within:ring-(color:--thread-accent)")} style={composing ? undefined : { borderColor: color }}>
+			<div className={cn("relative rounded-2xl border bg-card shadow-lg motion-safe:transition-shadow", dropping && "ring-2 ring-(color:--thread-accent)", askCard && session.expanded ? "rounded-t-none border-t-0" : "focus-within:ring-1 focus-within:ring-(color:--thread-accent)")} style={composing ? undefined : { borderColor: color }}>
 				{chipRow}
 				<div className="flex items-center gap-1 px-1.5 pt-1">
 					{chip}
 					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
 					<div className="ml-auto flex items-center gap-0.5">{compact ? <BarOverflow>{deskControls}</BarOverflow> : deskControls}</div>
 				</div>
-				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer target={target} onSending={setSending} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />}
+				{api.closedReason !== undefined ? <BarClosedNotice target={target} reason={api.closedReason} /> : composing ? null : <BarComposer docked={docked} target={target} onSending={setSending} title={title} cardOpen={pendingCount > 0} askOpen={!!askCard} onReplied={cards.replied} dictation={dictation} registerAppend={registerAppend} session={askCard ? session : undefined} registerNoteSink={registerNoteSink} />}
 				{BAR_EXTRAS.switcher && switcher && !vizOn && <Switcher groups={groups} current={target} onClose={closeSwitcher} />}
 			</div>
 		</div>

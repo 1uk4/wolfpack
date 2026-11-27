@@ -36,6 +36,7 @@ import { ComposerControls, useThreadSettings } from "@/components/composer/compo
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { DictationBar, joinDictation, setDictationFocus, recordingAt } from "@/components/composer/dictation";
 import { getInlineDropSink } from "@/components/ask/ask-inline-composer";
+import { getDockedBarSink } from "@/components/chat-bar/bar-drop";
 import { useThreadDictation } from "@/components/composer/use-thread-dictation";
 import { setPageNoteAppend } from "@/components/composer/page-note-append";
 import { setDockSlot } from "@/components/chat-bar/dock-slot";
@@ -687,7 +688,7 @@ function ThreadChatInner({
 	// a file drag is always taken so the browser never opens the file, and a drop or an image paste that nothing handled goes to the open
 	// answer, else the note, else the composer. Handlers that already took the event (the column, a composer's own paste) win.
 	const fileSinkRef = useRef<(files: File[]) => void>(() => {});
-	fileSinkRef.current = (files) => (getInlineDropSink() ?? (noteMode ? session.addNoteFiles : onFiles))(files);
+	fileSinkRef.current = (files) => (getInlineDropSink() ?? getDockedBarSink() ?? (noteMode ? session.addNoteFiles : onFiles))(files);
 	useEffect(() => {
 		const over = (e: DragEvent) => {
 			if (dragHasFiles(e.dataTransfer)) e.preventDefault();
@@ -791,8 +792,8 @@ function ThreadChatInner({
 				if (!dragHasFiles(e.dataTransfer)) return;
 				e.preventDefault();
 				setDragging(false);
-				// Follows focus: an open answer composer takes it, else the note's chips while the questionnaire note is the composer, else the chat's.
-				(getInlineDropSink() ?? (noteMode ? session.addNoteFiles : onFiles))(droppedFiles(e.dataTransfer));
+				// Follows focus: an open answer composer takes it, else the docked bar (it is the page composer), else the note's chips while the questionnaire note is the composer, else the chat's.
+				(getInlineDropSink() ?? getDockedBarSink() ?? (noteMode ? session.addNoteFiles : onFiles))(droppedFiles(e.dataTransfer));
 			}}
 		>
 			<div ref={registerColumn} className={viz ? "hidden" : "flex min-w-0 flex-1 flex-col"} data-testid="thread-main">

@@ -150,12 +150,9 @@ export interface PoolSummary {
 	count: number;
 	tokens: number;
 	consolidateAtTokens: number;
-	poolTarget: number;
 	/** tokens / consolidateAtTokens, clamped 0..1 (0 when the threshold is 0). */
 	fill: number;
-	/** Where poolTarget sits on the same 0..1 scale. */
-	targetMark: number;
-	/** "1,332 / 20,000 tokens" */
+	/** "8.6k of 40k · consolidates when full" */
 	tokensText: string;
 	/** "22 observations" */
 	observationsText: string;
@@ -179,6 +176,12 @@ export function triggerText(pool: Pick<MemoryPoolStatus, "trigger" | "consolidat
 	}
 }
 
+/** 8600 -> "8.6k", 40000 -> "40k", 850 -> "850". */
+function compactTokens(n: number): string {
+	if (n < 1000) return String(n);
+	return `${Number((n / 1000).toFixed(1))}k`;
+}
+
 export function poolSummary(pool: MemoryPoolStatus | null): PoolSummary | null {
 	if (!pool) return null;
 	const at = pool.consolidateAtTokens;
@@ -187,12 +190,10 @@ export function poolSummary(pool: MemoryPoolStatus | null): PoolSummary | null {
 		count: pool.count,
 		tokens: pool.tokens,
 		consolidateAtTokens: at,
-		poolTarget: pool.poolTarget,
 		fill: ratio(pool.tokens),
-		targetMark: ratio(pool.poolTarget),
 		trigger: pool.trigger,
 		triggerText: triggerText(pool),
-		tokensText: `${pool.tokens.toLocaleString("en-US")} / ${at.toLocaleString("en-US")} tokens`,
+		tokensText: `${compactTokens(pool.tokens)} of ${compactTokens(at)} · consolidates when full`,
 		observationsText: `${pool.count} ${pool.count === 1 ? "observation" : "observations"}`,
 	};
 }

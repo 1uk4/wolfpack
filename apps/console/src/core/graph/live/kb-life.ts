@@ -22,6 +22,9 @@ export const KB_STAGGER_MS = 900;
 export const KB_MAX_FLIGHTS = 6;
 export const KB_MAX_QUEUE = 80;
 export const KB_PULSE_MS = 2600;
+/** A landed entry's nerve pulse: the run down the tree, the lit path that stays after it reaches the entry, then the final ring (KB_PULSE_MS). */
+export const KB_NERVE_MS = 1800;
+export const KB_NERVE_GLOW_MS = 10_000;
 /** A consolidated topic nobody promotes stays beside its wolf this long; a flight whose curator never answers fades after this. */
 export const KB_TOPIC_TTL_MS = 120_000;
 export const KB_WAIT_MAX_MS = 60_000;
@@ -34,7 +37,10 @@ export const KB_MAX_DOMAINS = 50;
 const withDomain = (list: string[], d: string | undefined): string[] => (d && !list.includes(d) ? [...list, d].slice(-KB_MAX_DOMAINS) : list);
 
 export interface KbWolf { count: number; capacity: number; fill: number; prevFill: number; changedAt: number }
-export interface KbTopic { id: string; wolf: string; born: number }
+/** Topic dots on the Home ring (the draw cap); a flight keeps its topic's ring place only while the topic was among the first of these. */
+export const KB_RING_MAX = 6;
+/** `slot` is the topic's fixed place on the ring round Home; the flight made from it inherits it. */
+export interface KbTopic { id: string; wolf: string; born: number; slot: number }
 export type KbOutcome = "create" | "merge" | "reject" | "parked";
 export interface KbResult { outcome: string; entryId?: string; domain?: string; section?: string; sectionTitle?: string; ms?: number; tokens?: number }
 export type FlightStage = "queued" | "travel" | "wait" | "place" | "fade";
@@ -53,6 +59,8 @@ export interface KbFlight {
 	/** Slot around the curator, so concurrent flights do not stack. */
 	slot: number;
 	result?: KbResult;
+	/** Set when the flight comes from a topic dot that reached the ring: when that dot was born, so the flight carries on from its ring place instead of the wolf. */
+	born?: number;
 	/** A flight made from a curate-done alone (no promote seen): it starts at the curator. */
 	synthetic?: true;
 }
@@ -94,14 +102,15 @@ export function reduceKbLife(s: KbLife, e: ActivityEvent, now: number): KbLife {
 			const prev = s.wolves[wolf];
 			const wolves = prev ? { ...s.wolves, [wolf]: { ...prev, count: 0, fill: 0, prevFill: displayFill(prev, now), changedAt: now } } : s.wolves;
 			const have = new Set(s.topics.map((t) => t.id));
-			const fresh = (d.topicIds ?? []).filter((id) => !have.has(id)).map((id): KbTopic => ({ id, wolf, born: now }));
+			const fresh = (d.topicIds ?? []).filter((id) => !have.has(id)).map((id, i): KbTopic => ({ id, wolf, born: now, slot: s.slotSeq + i }));
 			let topics = [...s.topics, ...fresh];
+			const slotSeq = s.slotSeq + fresh.length;
 			const mine = topics.filter((t) => t.wolf === wolf);
 			if (mine.length > KB_MAX_TOPICS_PER_WOLF) {
 				const drop = new Set(mine.slice(0, mine.length - KB_MAX_TOPICS_PER_WOLF).map((t) => t.id));
 				topics = topics.filter((t) => !drop.has(t.id));
 			}
-			return { ...s, now, wolves, topics };
+			return { ...s, now, wolves, topics, slotSeq };
 		}
 		case "memory-promote": {
 			const wolf = e.actor.wolf;
@@ -109,15 +118,17 @@ export function reduceKbLife(s: KbLife, e: ActivityEvent, now: number): KbLife {
 			if (!wolf || !id) return s;
 			const domain = e.target?.id ?? e.domain;
 			const topics = s.topics.filter((t) => t.id !== id);
+			const own = s.topics.findIndex((t) => t.id === id);
+			const ownT = own >= 0 && own < KB_RING_MAX ? s.topics[own] : undefined;
 			const domains = withDomain(s.domains, domain);
 			if (s.flights.some((f) => f.id === id)) return { ...s, now, topics, domains }; // a repeat of the same promote
-			let flights = [...s.flights, { id, wolf, ...(domain ? { domain } : {}), ...(d.ref ? { ref: d.ref } : {}), stage: "queued" as const, queuedAt: now, at: now, endAt: now, slot: s.slotSeq }];
+			let flights = [...s.flights, { id, wolf, ...(domain ? { domain } : {}), ...(d.ref ? { ref: d.ref } : {}), stage: "queued" as const, queuedAt: now, at: now, endAt: now, slot: ownT ? ownT.slot : s.slotSeq, ...(ownT ? { born: ownT.born } : {}) }];
 			const queued = flights.filter((f) => f.stage === "queued");
 			if (queued.length > KB_MAX_QUEUE) {
 				const drop = queued[0]!;
 				flights = flights.filter((f) => f !== drop); // the one thing that is dropped: an absurd backlog, oldest first
 			}
-			return { ...s, now, topics, domains, flights, slotSeq: s.slotSeq + 1 };
+			return { ...s, now, topics, domains, flights, slotSeq: ownT ? s.slotSeq : s.slotSeq + 1 };
 		}
 		case "curate-start": {
 			const id = topicOf(e);
@@ -154,6 +165,22 @@ export function reduceKbLife(s: KbLife, e: ActivityEvent, now: number): KbLife {
 export function displayFill(w: KbWolf, now: number): number {
 	const t = Math.max(0, Math.min(1, (now - w.changedAt) / KB_FILL_EASE_MS));
 	return w.prevFill + (w.fill - w.prevFill) * t;
+}
+
+export type KbNervePhase = "run" | "lit" | "ring" | "done";
+/**
+ * Where a landed pulse is in its life at `now`: run (t = 0..1 along the path), lit (t = elapsed share of the glow), ring (t = 0..1), done.
+ * Reduced motion has no run: the lit path (faded in and out by the drawing) starts at landing.
+ */
+export function kbNerveState(p: Pick<KbPulse, "at">, now: number, reduced: boolean): { phase: KbNervePhase; t: number } {
+	let e = now - p.at;
+	if (!reduced) {
+		if (e < KB_NERVE_MS) return { phase: "run", t: Math.max(0, e) / KB_NERVE_MS };
+		e -= KB_NERVE_MS;
+	}
+	if (e < KB_NERVE_GLOW_MS) return { phase: "lit", t: Math.max(0, e) / KB_NERVE_GLOW_MS };
+	e -= KB_NERVE_GLOW_MS;
+	return e < KB_PULSE_MS ? { phase: "ring", t: e / KB_PULSE_MS } : { phase: "done", t: 1 };
 }
 
 const dur = (s: KbLife, ms: number) => (s.reduced ? 0 : ms);
@@ -200,7 +227,7 @@ export function stepKbLife(s: KbLife, now: number): KbLife {
 	const curator: Record<string, number> = {};
 	for (const [k, at] of Object.entries(s.curator)) if (now - at < KB_CURATOR_TTL_MS) curator[k] = at;
 	if (Object.keys(curator).length !== Object.keys(s.curator).length) changed = true;
-	const allPulses = [...s.pulses, ...pulses].filter((p) => now - p.at < KB_PULSE_MS);
+	const allPulses = [...s.pulses, ...pulses].filter((p) => kbNerveState(p, now, s.reduced).phase !== "done");
 	if (allPulses.length !== s.pulses.length + pulses.length || pulses.length > 0) changed = true;
 	if (!changed) return s;
 	// flights keep arrival order (a started flight keeps its place among the others)

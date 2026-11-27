@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, EyeIcon, MoonIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon } from "lucide-react";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, EyeIcon, MoonIcon, NetworkIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon } from "lucide-react";
 import { useSubagentModal } from "@/components/thread/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle, ReplyNotifier } from "@/components/shell/needs-you";
 import { UpdateNotice } from "@/components/shell/update-notice";
@@ -1019,19 +1019,6 @@ export function SessionsSidebar() {
 					>
 						<NetworkIcon className="size-3" />
 						Graph
-					</Link>
-					<Link
-						href="/kb-activity"
-						onClick={closeList}
-						data-testid="nav-kb-activity"
-						aria-current={pathname === "/kb-activity" ? "page" : undefined}
-						className={cn(
-							"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground",
-							pathname === "/kb-activity" ? "bg-accent text-foreground" : "text-muted-foreground",
-						)}
-					>
-						<WorkflowIcon className="size-3" />
-						KB activity
 					</Link>
 					<WorkNavEntry />
 				</div>

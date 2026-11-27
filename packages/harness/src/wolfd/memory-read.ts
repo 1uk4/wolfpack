@@ -93,6 +93,18 @@ export function memoryState(i: MemoryStateInput): { state: MemoryState; reason: 
   return { state: "inert", reason: "memory is inert: the extension is loaded but gated off (set `sandbox` or `memory.live` in wolf.yaml)" };
 }
 
+const PENDING_MESSAGE_MAX = 200;
+
+/** The compact stuck-saves summary the status route serves: group count, oldest wait, soonest retry, the first message (clipped). Undefined when nothing waits. */
+export function summarizePending(p: ReturnType<typeof readPendingSummary>, now: number): NonNullable<MemoryStatus["pending"]> | undefined {
+  const keys = Object.keys(p.keys);
+  if (keys.length === 0) return undefined;
+  const next = Math.min(...keys.map((k) => p.nextAttemptAt[k] ?? now));
+  const message = keys.map((k) => p.messages[k]).find(Boolean);
+  const oldest = p.oldestAgeMs ?? Math.max(...keys.map((k) => now - (p.firstPendingAt[k] ?? now)));
+  return { stuck: keys.length, oldestAgeMs: Math.max(0, oldest), nextRetryInMs: Math.max(0, next - now), ...(message ? { message: message.slice(0, PENDING_MESSAGE_MAX) } : {}) };
+}
+
 export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPromote | null, bound: BoundWork | null, promotingJobId: string | null = null): Promise<MemoryStatus> {
   const { state, reason } = memoryState(i);
   const promoting = promotingJobId ? { promoting: { jobId: promotingJobId } } : {};
@@ -101,6 +113,7 @@ export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPro
   }
   const stats = await getPoolStats(i.den);
   const c = i.config.consolidation;
+  const pending = summarizePending(readPendingSummary(i.den), Date.now());
   return {
     state,
     reason,
@@ -109,6 +122,7 @@ export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPro
     denTopics: readDenTopics(i.den).map((t) => ref(t)).sort(byUpdated),
     lastPromote,
     ...promoting,
+    ...(pending ? { pending } : {}),
     bound,
   };
 }

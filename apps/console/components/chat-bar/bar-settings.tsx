@@ -123,9 +123,6 @@ function SettingsMenu({ wolf, slug, phone, onClose }: { wolf: string; slug: stri
 						{error}
 					</p>
 				)}
-				<div className={cn(row, "text-muted-foreground")}>
-					<span className="min-w-0 flex-1 truncate">More settings soon</span>
-				</div>
 			</div>
 		</>
 	);

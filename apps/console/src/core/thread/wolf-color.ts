@@ -32,6 +32,16 @@ const LIGHT_ACCENTS: Record<ThreadColor, string> = {
 	blue: "#1f6fc0",
 	purple: "#6f4fd0",
 	pink: "#c43a8a",
+	amber: "#b45309",
+	emerald: "#047857",
+	cyan: "#0e7490",
+	sky: "#0369a1",
+	indigo: "#4338ca",
+	violet: "#7e22ce",
+	fuchsia: "#a21caf",
+	rose: "#be123c",
+	slate: "#475569",
+	copper: "#8a4b24",
 };
 
 const DARK_ALPHA = 0.06;

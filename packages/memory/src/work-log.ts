@@ -11,6 +11,7 @@
  */
 import { z } from "zod";
 import { LlmInfraError, WORK_LOG_SYSTEM, buildWorkLogPrompt, parseWorkLogOutput, type Engine } from "@wolfpack/engine";
+import { clip } from "./clip.js";
 import type { PendingCause, WorkPendingState } from "./work-pending.js";
 import { appendCompacting } from "./work/compact.js";
 import { extractRecord, type RecordAppendLine, type WorkObservation, type WorkRecordItem, type WorkRecordOutcome, type WorkRecordStore } from "./work-record.js";
@@ -27,6 +28,8 @@ export interface AppendWorkLogOptions {
   observations: WorkLogObservation[];
   /** Backoff and the 404 grace period, as in `consolidateWorkRecords`. Absent: every group is tried now and a 404 discards at once. */
   pending?: WorkPendingState;
+  /** One line per failed append, with the hub's message. */
+  onProgress?: (line: string) => void;
   now?: () => Date;
   /** Label stored on every line: the wolf or agent. */
   src: string;
@@ -118,14 +121,19 @@ export async function appendWorkLog(opts: AppendWorkLogOptions): Promise<WorkLog
             outcomes.push({ work: target, target, ids, status: "pending", reason: LOG_FULL, cause: "consolidation-failed", ...(retryAt ? { retryAt } : {}) });
             continue;
           }
-          const reason = res.message ?? res.code;
+          const reason = clip(res.message ?? res.code);
           if (res.code === "forbidden") {
             // Final, like a 403 in the fold: kept pending with the hub's message, no backoff.
             pending?.pending(target, "forbidden", { message: reason, ...(assignee ? { assignee } : {}) });
             outcomes.push({ work: target, target, ids, status: "pending", reason, cause: "forbidden", ...(assignee ? { assignee } : {}) });
             continue;
           }
-          pending?.pending(target, "work-api-unavailable");
+          // Said on the first failure, when the message or cause changes, and again as the tries mount (5, 20, then every 50).
+          const prev = pending?.entry(target);
+          const tries = (prev?.tries ?? 0) + 1;
+          const loud = !prev || prev.message !== reason || prev.cause !== "work-api-unavailable" || tries === 5 || tries === 20 || (tries > 20 && (tries - 20) % 50 === 0);
+          if (loud) opts.onProgress?.(`work ${target}: append failed (${res.code}), ${ids.length} observation(s) stay pending — ${reason}${tries > 1 ? ` (try ${tries})` : ""}`);
+          pending?.pending(target, "work-api-unavailable", { message: reason });
           const retryAt = pending?.entry(target)?.nextAttemptAt;
           outcomes.push({ work: target, target, ids, status: "pending", reason, cause: "work-api-unavailable", ...(retryAt ? { retryAt } : {}) });
           continue;

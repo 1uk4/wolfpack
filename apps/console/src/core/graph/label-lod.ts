@@ -1,15 +1,16 @@
 /**
  * Semantic-zoom labels for the knowledge graph (work-wolfpack-Wu0RH2z). Pure: no canvas, no DOM.
  *
- * Every label belongs to a LEVEL from the top: 0 group titles, 1 domains and big sections, 2 deeper sections and features, 3 leaves
- * (entries, tasks). The level comes from hierarchy depth AND size (child count) together. Zoomed out only the top levels are
+ * Every label belongs to a LEVEL from the top: 0 group titles, 1 domains, 2 top sections (depth 1), 3 deeper sections and features,
+ * 4 leaves (entries, tasks). The level comes from hierarchy depth alone (work-wolfpack-1ZTIbTb: size used to promote big top
+ * sections to the domain tier, so they were labelled at the fitted zoom). Zoomed out only the top levels are
  * eligible; each zoom step reveals the next. Eligible labels then compete for room: the higher level wins a collision and the
  * other hides. Hovering or selecting a node always shows its label and its parent chain.
  *
  * ALL THRESHOLDS LIVE IN LABEL_LEVELS below (and the two size knobs next to it).
  */
 
-export type LabelLevel = 0 | 1 | 2 | 3;
+export type LabelLevel = 0 | 1 | 2 | 3 | 4;
 
 export interface LabelLevelSpec {
 	level: LabelLevel;
@@ -29,11 +30,10 @@ export const LABEL_LEVELS: readonly LabelLevelSpec[] = [
 	{ level: 0, minZoom: 0, maxZoom: 1.1, px: 24, weight: 700, opacity: 1 },
 	{ level: 1, minZoom: 0, maxZoom: Infinity, px: 15, weight: 650, opacity: 0.95 },
 	{ level: 2, minZoom: 1.4, maxZoom: Infinity, px: 12, weight: 550, opacity: 0.8 },
-	{ level: 3, minZoom: 2.4, maxZoom: Infinity, px: 11, weight: 400, opacity: 0.65 },
+	{ level: 3, minZoom: 2.4, maxZoom: Infinity, px: 11.5, weight: 500, opacity: 0.72 },
+	{ level: 4, minZoom: 3.2, maxZoom: Infinity, px: 11, weight: 400, opacity: 0.65 },
 ];
 
-/** A section or feature with at least this many children counts one level higher ("big sections"). */
-export const BIG_PARENT_CHILDREN = 12;
 /** The zoom setting's default; the table above is written for it (see effectiveZoom). */
 export const LABEL_ZOOM_REFERENCE = 0.5;
 /** Seconds-ish: how long a label takes to fade in or out. */
@@ -60,18 +60,15 @@ export interface LabelTreeNode {
 
 /**
  * Level, size and parent for every node from the hierarchy edges (parent → child) and the depths (domain 0 → section 1 → entry 2 →
- * work 2+). Depth sets the base level (0 → 1, 1 → 2, deeper → 3); a leaf is always level 3, a parent is never below 2, and a big
- * parent (BIG_PARENT_CHILDREN children) moves up one level.
+ * work 2+). Domain 1; a parent at depth 1 is a top section (2); a deeper parent is 3; any leaf is 4.
  */
 export function buildLabelTree(
 	ids: Iterable<string>,
 	edges: ReadonlyArray<{ from: string; to: string }>,
 	depths: ReadonlyMap<string, number>,
-	/** Bucket nodes (Inbox, Factory): never promoted by child count. */
-	isBucket?: (id: string) => boolean,
 ): Map<string, LabelTreeNode> {
 	const out = new Map<string, LabelTreeNode>();
-	for (const id of ids) out.set(id, { domain: (depths.get(id) ?? 2) === 0, level: 3, childCount: 0, parent: null });
+	for (const id of ids) out.set(id, { domain: (depths.get(id) ?? 2) === 0, level: 4, childCount: 0, parent: null });
 	for (const e of edges) {
 		const p = out.get(e.from);
 		const c = out.get(e.to);
@@ -82,13 +79,9 @@ export function buildLabelTree(
 	}
 	for (const [id, n] of out) {
 		const d = depths.get(id) ?? 2;
-		if (n.childCount === 0) {
-			n.level = d === 0 ? 1 : 3;
-			continue;
-		}
-		let level = d <= 0 ? 1 : 2;
-		if (n.childCount >= BIG_PARENT_CHILDREN && !isBucket?.(id)) level -= 1;
-		n.level = Math.min(3, Math.max(1, level)) as LabelLevel;
+		if (d <= 0) n.level = 1;
+		else if (n.childCount === 0) n.level = 4;
+		else n.level = d === 1 ? 2 : 3;
 	}
 	return out;
 }
@@ -215,11 +208,6 @@ export function chooseLabels(
 		shown.add(c.id);
 	}
 	return shown;
-}
-
-/** Catch-all bucket nodes ("Inbox", "Factory", "Unsorted"): big because they collect, not because they matter. */
-export function isBucketLabel(label: string): boolean {
-	return /^(inbox|factory|unsorted|misc(ellaneous)?|uncategori[sz]ed|other)$/i.test(label.trim());
 }
 
 /** One fade step: every label moves toward 1 (shown) or 0 (hidden). Reduced motion jumps. Drops labels that reached 0. */

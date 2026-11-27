@@ -157,6 +157,37 @@ describe("hubd worker link: hello and registration", () => {
     expect((await flags()).dewey).toEqual(["offline", false, false]);
   });
 
+  it("GET /v1/wolves carries the color the worker reported; a wolf without one has none; a later wolf.add updates it; offline drops it", async () => {
+    await register("blu");
+    await register("nocolor");
+    const list = async () => ((await (await fetch(`${hub.url}/v1/wolves`, { headers: OP })).json()) as any).wolves;
+    const colors = async () => Object.fromEntries((await list()).map((w: any) => [w.name, w.color ?? null]));
+    const c = await join_((await mint("worker", "box")).token, "box", { wolves: [{ name: "blu", domains: [], color: "blue" }, { name: "nocolor", domains: [] }] });
+    expect(await colors()).toEqual({ blu: "blue", nocolor: null });
+    c.send({ t: "wolf.add", wolf: { name: "blu", domains: [], color: "green" } });
+    await c.until(async () => (await colors()).blu === "green", "wolf.add color");
+    c.ws.close();
+    await c.until(async () => (await list()).every((w: any) => w.status === "offline"), "offline");
+    expect(await colors()).toEqual({ blu: null, nocolor: null });
+  });
+
+  it("a junk or over-long wolf color never fails a hello or wolf.add: the wolf registers and GET /v1/wolves omits the color", async () => {
+    await register("junk");
+    await register("late");
+    const list = async () => ((await (await fetch(`${hub.url}/v1/wolves`, { headers: OP })).json()) as any).wolves;
+    const byName = async () => Object.fromEntries((await list()).map((w: any) => [w.name, w]));
+    const c = await join_((await mint("worker", "box")).token, "box", { wolves: [{ name: "junk", domains: [], color: "x".repeat(40) }, { name: "late", domains: [] }] });
+    expect(c.frames.some((f) => f.t === "error")).toBe(false);
+    expect((await byName()).junk.status).toBe("online");
+    expect((await byName()).junk.color).toBeUndefined();
+    c.send({ t: "wolf.add", wolf: { name: "late", domains: [], color: "#ff0000" } });
+    c.send({ t: "wolf.add", wolf: { name: "junk", domains: [], color: "blue" } });
+    await c.until(async () => (await byName()).junk.color === "blue", "later valid wolf.add still lands");
+    expect(c.frames.some((f) => f.t === "error")).toBe(false);
+    expect((await byName()).late.status).toBe("online");
+    expect((await byName()).late.color).toBeUndefined();
+  });
+
   it("an unknown wolf is not created (no name squatting): rejected in welcome, and on wolf.add", async () => {
     await register("alpha");
     const c = await join_((await mint("worker", "box")).token, "box", { wolves: [{ name: "alpha", domains: [] }, { name: "squat", domains: [] }] });

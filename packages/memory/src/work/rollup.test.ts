@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { replaceSection } from "@wolfpack/kb/shared";
 import {
   extractDistilled,
   upsertRollupBlock,
@@ -81,6 +82,41 @@ whatever`;
     expect(out).toContain("### Thu 10/15 — Lower A");
     expect(out).toContain("body A");
     expect(out).toContain("<!-- /rollup:item -->");
+  });
+
+  describe("a rolled feature still accepts the hub's Record write (kb replaceSection is the truth)", () => {
+    const feature = `# F\n\n## Record\n\n- own line\n\n## Outcomes\n\n<!-- rollup:children -->\n<!-- /rollup:children -->\n`;
+    const cases: Record<string, string> = {
+      "plain ##": "## Record\n\n- a\n\n## Changes\n\n- b",
+      "# H1": "# Title\n\ntext",
+      "tilde fence": "~~~\n## x\n~~~\n\n## Record",
+      "longer fence with an inner shorter fence": "````md\n```\n## x\n```\n````\n\n## Record",
+      "setext": "Record\n------\n\n- a\n\nChanges\n=======",
+      "quote prefix": "> ## Record\n\n- ## Record",
+      "unclosed fence": "## Record\n\n```md\n## x\n",
+    };
+    for (const [name, childBody] of Object.entries(cases)) {
+      it(name, () => {
+        const out = upsertRollupBlock(feature, child("t1", "2026-10-15", "Lower A"), childBody);
+        expect(() => replaceSection(out, "record", "x")).not.toThrow();
+        expect(out).toContain("<!-- /rollup:item -->");
+        // Idempotent: rolling the already-demoted block again changes nothing.
+        const inner = /<!-- rollup:item[^>]*-->\n### [^\n]*\n\n([\s\S]*?)\n<!-- \/rollup:item -->/.exec(out)![1]!;
+        expect(upsertRollupBlock(feature, child("t1", "2026-10-15", "Lower A"), inner)).toBe(out);
+      });
+    }
+    it("demotes ## to H4 so the feature keeps its own single ## Record; H3 stays", () => {
+      const out = upsertRollupBlock(feature, child("t1", "2026-10-15", "A"), "## Record\n\n- c\n\n## Changes\n\n### Keep");
+      expect(out.match(/^## Record$/gm)?.length).toBe(1);
+      expect(out).toContain("#### Record");
+      expect(out).toContain("#### Changes");
+      expect(out).toContain("### Keep");
+    });
+
+    it("keeps fenced headings and shows setext/quote text as H4", () => {
+      const out = upsertRollupBlock(feature, child("t1", "2026-10-15", "A"), "Record\n------\n\n> ## Q\n\n```\n## k\n```");
+      expect(out).toContain("#### Record\n\n> #### Q\n\n```\n## k\n```");
+    });
   });
 
   it("replaces an existing block keyed by taskId", () => {

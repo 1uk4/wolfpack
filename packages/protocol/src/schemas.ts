@@ -331,7 +331,7 @@ export const WolfSummarySchema = z.object({
   /** Additive: this wolf has KB roots and serves the read-only graph and entry routes (a mirror when it is not the librarian). Absent = false. */
   kbReadable: z.boolean().optional(),
   /** Additive: the wolf's chosen color (a THREAD_COLOR_KEYS key, wolf.yaml `color`). Absent = automatic. */
-  color: z.lazy(() => ThreadColorSchema).optional(),
+  color: z.lazy(() => ThreadColorReadSchema),
 });
 export type WolfSummary = z.infer<typeof WolfSummarySchema>;
 
@@ -380,14 +380,30 @@ export const THREAD_COLORS = {
   blue: "#6cb2f2",
   purple: "#b69cf5",
   pink: "#f28cc4",
+  // Added later (18 in all). Appended, never reordered: the first 8 keep their hexes.
+  amber: "#fbbf24",
+  emerald: "#34d399",
+  cyan: "#22d3ee",
+  sky: "#38bdf8",
+  indigo: "#8b93f5",
+  violet: "#c084fc",
+  fuchsia: "#e879f9",
+  rose: "#fb7185",
+  slate: "#94a3b8",
+  copper: "#d08a5c",
 } as const;
-export const THREAD_COLOR_KEYS = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"] as const;
+export const THREAD_COLOR_KEYS = [
+  "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink",
+  "amber", "emerald", "cyan", "sky", "indigo", "violet", "fuchsia", "rose", "slate", "copper",
+] as const;
 export const ThreadColorSchema = z.enum(THREAD_COLOR_KEYS);
 export type ThreadColor = z.infer<typeof ThreadColorSchema>;
+/** READ paths: a key this reader does not know (a newer palette) degrades to undefined (automatic) instead of failing the whole parse. Writes use the strict ThreadColorSchema. */
+export const ThreadColorReadSchema = ThreadColorSchema.optional().catch(undefined);
 /** Per-thread composer settings. Persisted by the wolf; the defaults are `main` and auto-ship off. */
 export const ThreadSettingsSchema = z.object({
   /** Owner's colour override (a palette key). Absent = automatic (derived from the thread id). */
-  color: ThreadColorSchema.optional(),
+  color: ThreadColorReadSchema,
   tier: ThreadTierSchema,
   /** true: task_done ships in this thread without raising a ship card. false: it asks (one multi-select card). */
   autoShip: z.boolean(),
@@ -1392,6 +1408,13 @@ export const MemoryStatusSchema = z.object({
   promoting: z.object({ jobId: z.string() }).optional(),
   /** `?thread=<id>`: that thread's bound work item; without it the home thread's. null = unbound. Absent on older servers. */
   bound: BoundWorkSchema.nullable().optional(),
+  /** Saves that keep failing (consolidation or the Work API): how many groups, the oldest wait, the retry and the first message. Absent: none stuck, or an older wolfd. */
+  pending: z.object({
+    stuck: z.number().int().positive(),
+    oldestAgeMs: z.number().nonnegative(),
+    nextRetryInMs: z.number().nonnegative(),
+    message: z.string().optional(),
+  }).optional(),
 });
 export type MemoryStatus = z.infer<typeof MemoryStatusSchema>;
 

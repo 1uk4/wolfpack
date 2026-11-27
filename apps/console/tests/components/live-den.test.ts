@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { LIVE_TUNING } from "../../components/graph/live/live-tuning.ts";
-import { newMotion, restSlot, tetherStrength, wolfEvent, wolfStep, type WolfCtx } from "../../components/graph/live/live-den.ts";
+import { newMotion, restSlot, orbitTarget, tetherStrength, wolfEvent, wolfStep, type WolfCtx } from "../../components/graph/live/live-den.ts";
 
 /** The wolf state machine from the polish concept (p-den): resting, working, lingering, returning. Timers in ms of wall time. */
 const DEN = { x: 0, y: 0 };
-const ctx = (over: Partial<WolfCtx> = {}): WolfCtx => ({ den: DEN, rest: { x: 62, y: 0 }, needsYou: false, working: true, reduced: false, tuning: LIVE_TUNING, ...over });
+const ctx = (over: Partial<WolfCtx> = {}): WolfCtx => ({ den: DEN, rest: { x: 84, y: 0 }, needsYou: false, working: true, reduced: false, tuning: LIVE_TUNING, ...over });
 /** Step in 100 ms slices from `from` for `sec` seconds; returns the end time. */
 function run(m: ReturnType<typeof newMotion>, from: number, sec: number, c: WolfCtx): number {
 	let t = from;
@@ -75,7 +75,7 @@ describe("wolf den state machine", () => {
 		const t2 = run(m, t, 40, ctx());
 		assert.equal(m.phase, "resting");
 		run(m, t2, 30, ctx());
-		assert.ok(Math.hypot(m.x - 62, m.y) < 1, `settled on its slot (${m.x},${m.y})`);
+		assert.ok(Math.hypot(m.x - 84, m.y) < 1, `settled on its slot (${m.x},${m.y})`);
 	});
 
 	it("the den tether strengthens over the linger and is zero otherwise; reduced motion arrives at once", () => {
@@ -98,8 +98,35 @@ describe("wolf den state machine", () => {
 		const b = restSlot(1, 3, 0, true, { x: 0, y: 0 }, 1, LIVE_TUNING);
 		const c = restSlot(2, 3, 0, false, { x: 0, y: 0 }, 1, LIVE_TUNING);
 		const d = (p: { x: number; y: number }, q: { x: number; y: number }) => Math.hypot(p.x - q.x, p.y - q.y);
-		assert.ok(Math.abs(Math.hypot(a.x, a.y) - 62) < 1e-6);
+		assert.ok(Math.abs(Math.hypot(a.x, a.y) - 84) < 1e-6);
 		assert.ok(d(a, b) > 80, `no overlap (${d(a, b)})`);
 		assert.ok(Math.hypot(c.x, c.y) > Math.hypot(a.x, a.y), "offline further out");
+	});
+});
+
+describe("the force model of a wolf round Home", () => {
+	const rest = { x: 84, y: 0 };
+	const W = { homeSpring: 1, threadPull: 1, focusPull: 1, subPull: 1 };
+	it("with no pulls the wolf sits on its rest slot, on the 84 px orbit", () => {
+		assert.deepEqual(orbitTarget(rest, [], [], [], W, false), { x: 84, y: 0 });
+	});
+	it("a thread pull moves it toward the thread but less far than the thread, bounded by the spring", () => {
+		const p = orbitTarget(rest, [{ x: 84, y: 200 }], [], [], W, false);
+		assert.equal(p.x, 84);
+		assert.equal(p.y, 100);
+	});
+	it("more subPull moves it further and a larger homeSpring pulls it back", () => {
+		const sub = [{ x: 84, y: 100 }];
+		assert.equal(orbitTarget(rest, [], [], sub, W, false).y, 50);
+		assert.equal(orbitTarget(rest, [], [], sub, { ...W, subPull: 3 }, false).y, 75);
+		assert.equal(orbitTarget(rest, [], [], sub, { ...W, homeSpring: 3 }, false).y, 25);
+	});
+	it("a focus pull draws it toward the node it reads", () => {
+		assert.equal(orbitTarget(rest, [], [{ x: 84, y: 60 }], [], { ...W, focusPull: 2 }, false).y, 40);
+	});
+	it("reduced motion gives the target at once, with no travel", () => {
+		const m = newMotion(0, 0);
+		wolfStep(m, 0, 0.1, ctx({ working: false, reduced: true, rest: { x: 84, y: 100 } }));
+		assert.deepEqual([m.x, m.y], [84, 100]);
 	});
 });

@@ -256,3 +256,36 @@ describe("direct token file", () => {
     expect(logs.length).toBe(1);
   });
 });
+
+describe("workerd proxy: settings-save announce", () => {
+  it("announces a wolf once after a 2xx settings save, and not after a non-2xx save or a non-settings PUT", async () => {
+    let status = 200;
+    const wolf = createServer((req, res) => {
+      req.resume();
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end("{}");
+    });
+    await new Promise<void>((r) => wolf.listen(0, "127.0.0.1", r));
+    const saved: string[] = [];
+    const srv = new WorkerdServer({ registry: staticRegistry({ alpha: `http://127.0.0.1:${(wolf.address() as AddressInfo).port}` }), onWolfSettingsSaved: (n) => saved.push(n) });
+    const url = await srv.listen();
+    try {
+      const put = async (path: string) => {
+        const r = await fetch(`${url}${path}`, { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" });
+        await r.text();
+      };
+      status = 500;
+      await put("/v1/wolves/alpha/settings");
+      status = 200;
+      await put("/v1/wolves/alpha/prompts/orchestrator-rules");
+      await new Promise((r) => setTimeout(r, 100));
+      expect(saved).toEqual([]);
+      await put("/v1/wolves/alpha/settings");
+      await new Promise((r) => setTimeout(r, 100));
+      expect(saved).toEqual(["alpha"]);
+    } finally {
+      await srv.close();
+      await new Promise<void>((r) => wolf.close(() => r()));
+    }
+  });
+});

@@ -35,7 +35,7 @@ describe("live seconds slider scale", () => {
 
 describe("live settings sanitizer", () => {
 	it("clamps fade and trail to 0-300 s and intensity to a 1-5 integer", () => {
-		assert.deepEqual(sanitizeLiveSettings({ subagentFadeSec: 900, trailSec: -4, intensity: 9 }), { enabled: true, subagentFadeSec: 300, trailSec: 0, intensity: 5, motion: "follow" });
+		assert.deepEqual(sanitizeLiveSettings({ subagentFadeSec: 900, trailSec: -4, intensity: 9 }), { enabled: true, subagentFadeSec: 300, trailSec: 0, intensity: 5, motion: "follow", memory: true, homeSpring: 1, subPull: 1 });
 		assert.equal(sanitizeLiveSettings({ intensity: 2.6 }).intensity, 3);
 		assert.equal(sanitizeLiveSettings({ intensity: 0 }).intensity, 1);
 		assert.equal(sanitizeLiveSettings({ trailSec: 200 }).trailSec, 200);
@@ -45,6 +45,19 @@ describe("live settings sanitizer", () => {
 		assert.equal(sanitizeLiveSettings({ motion: "always" }).motion, "always");
 		assert.equal(sanitizeLiveSettings({ motion: "bogus" as never }).motion, "follow");
 		assert.equal(liveSettingsOf({ live: { motion: "always" } }).motion, "always");
+	});
+	it("memory defaults to on; only an explicit false turns it off", () => {
+		assert.equal(sanitizeLiveSettings(undefined).memory, true);
+		assert.equal(sanitizeLiveSettings({ memory: false }).memory, false);
+		assert.equal(sanitizeLiveSettings({ memory: "no" as never }).memory, true);
+		assert.equal(liveSettingsOf({ live: { memory: false } }).memory, false);
+	});
+	it("homeSpring and subPull default to 1 for old files and clamp to 0.1-5", () => {
+		const d = sanitizeLiveSettings(undefined);
+		assert.deepEqual([d.homeSpring, d.subPull], [1, 1]);
+		const c = sanitizeLiveSettings({ homeSpring: 99, subPull: -2 });
+		assert.deepEqual([c.homeSpring, c.subPull], [5, 0.1]);
+		assert.equal(sanitizeLiveSettings({ subPull: "x" as never }).subPull, 1);
 	});
 	it("the overlay reads the same range", () => {
 		const l = liveSettingsOf({ live: { trailSec: 0, subagentFadeSec: 250, intensity: 4 } });

@@ -36,6 +36,18 @@ const server = createServer((req, res) => {
   // settings: the masked view (the real wolfd never returns a secret here) and a POST reveal that echoes the asked name
   if (p === `/v1/wolves/${name}/settings` && req.method === "GET")
     return json(res, 200, { etag: "e0", config: { name, memory: { hubToken: { set: true } } }, editable: [], tierModels: {}, env: [{ name: "WORK_TOKEN", set: true, secret: true, purpose: "Work API token" }], restartNeeded: false, restartable: false, restartAvailableInSeconds: 0 });
+  // settings save: like wolfd, write the picked color into wolf.yaml (null removes it) and answer 200 with the view
+  if (p === `/v1/wolves/${name}/settings` && req.method === "PUT") {
+    const bufs = [];
+    req.on("data", (c) => bufs.push(c));
+    return req.on("end", () => {
+      const color = JSON.parse(Buffer.concat(bufs).toString("utf8")).set?.color;
+      const file = arg("--config");
+      const kept = readFileSync(file, "utf8").split("\n").filter((l) => !/^color:/.test(l)).join("\n");
+      writeFileSync(file, typeof color === "string" ? `${kept.replace(/\n*$/, "\n")}color: ${color}\n` : kept);
+      json(res, 200, { etag: "e1", config: { name, ...(typeof color === "string" ? { color } : {}) }, editable: ["color"], tierModels: {}, env: [], restartNeeded: false, restartable: false, restartAvailableInSeconds: 0 });
+    });
+  }
   if (p === `/v1/wolves/${name}/settings/reveal` && req.method === "POST") {
     const bufs = [];
     req.on("data", (c) => bufs.push(c));

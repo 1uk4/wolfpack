@@ -31,12 +31,10 @@ Object.assign(globalThis, {
 });
 
 const { TopicPage } = await import("../../../components/memory/topic-page.tsx");
-const { KbActivityView } = await import("../../../components/kb/kb-activity-view.tsx");
 const { openNodeInViewer } = await import("../../../components/graph/graph-view.tsx");
 const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { getViewerState, resetViewerCache } = await import("../../../components/viewer/viewer-store.ts");
 const { dataStore } = await import("../../../src/core/data-store.ts");
-const { kbActivityFixture } = await import("../../fixtures/kb-activity.ts");
 const { FakeNav, navLog } = await import("../../helpers/fake-nav.tsx");
 
 const stack = () => getViewerState("page", "kb").stack.map((d) => `${d.kind}:${d.id}`);
@@ -56,7 +54,6 @@ beforeEach(() => {
 		const url = String(input);
 		if (url.includes("/session-topics")) return Response.json({ topics: [topicRow], retired: [] });
 		if (url.includes("/memory/topics/")) return Response.json({ id: "tp", title: "Topic", body: "hello" });
-		if (url.includes("/api/kb/activity")) return Response.json(kbActivityFixture());
 		return Response.json({}, { status: 404 });
 	}) as typeof fetch;
 });
@@ -89,18 +86,6 @@ describe("KB pages open entries in the page viewer", () => {
 		await act(async () => { q('a[href="/kb/entry/e1"]')!.dispatchEvent(ev); });
 		assert.equal(ev.defaultPrevented, false);
 		assert.deepEqual(stack(), []);
-	});
-
-	it("activity page: a click on a decision row opens that entry in the viewer", async () => {
-		await mount("/kb-activity", <KbActivityView />);
-		await click(q('a[href="/kb/entry/ent-merge"]')!);
-		assert.deepEqual(stack(), ["kb:ent-merge"]);
-	});
-
-	it("activity page: ?view=kb:<id> on load opens the entry", async () => {
-		await mount("/kb-activity?view=kb:ent-merge", <KbActivityView />);
-		assert.deepEqual(stack(), ["kb:ent-merge"]);
-		assert.equal(getViewerState("page", "kb").open, true);
 	});
 
 	it("graph: an entry node opens kind kb, a work node and a factory node are not handled", () => {

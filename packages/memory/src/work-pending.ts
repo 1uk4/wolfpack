@@ -6,6 +6,7 @@
 import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { observationHash } from "./observation-id.js";
+import { clip } from "./clip.js";
 
 /**
  * Why a group is waiting. "forbidden": the hub refused the write (403) and said why. That is a final state, not an outage:
@@ -212,12 +213,14 @@ export function readArchive(root: string): ArchiveEntry[] {
 /** An archived observation by id (any outcome; the last entry wins). */
 export const findArchived = (root: string, id: string): ArchiveEntry | undefined => readArchive(root).filter((e) => e.id === id).pop();
 
+export { clip };
+
 export interface PendingEntry {
   firstPendingAt: number;
   tries: number;
   nextAttemptAt: number;
   cause: PendingCause;
-  /** cause forbidden: the hub's own words. */
+  /** The hub's own words (clipped): the refusal for forbidden, the error for a failed append. */
   message?: string;
   /** cause forbidden: the wolf the item is assigned to, when known. */
   assignee?: string;
@@ -254,7 +257,7 @@ export class WorkPendingState {
     // forbidden: no backoff timer, due on every run.
     const nextAttemptAt = cause === "forbidden" ? 0 : this.now() + Math.min(BACKOFF_BASE_MS * 2 ** (tries - 1), BACKOFF_CAP_MS);
     const entry: PendingEntry = { ...e, firstPendingAt: e?.firstPendingAt ?? this.now(), tries, cause, nextAttemptAt };
-    if (cause === "forbidden" && extra.message) entry.message = extra.message; else delete entry.message;
+    if (extra.message) entry.message = clip(extra.message); else delete entry.message;
     if (cause === "forbidden" && extra.assignee) entry.assignee = extra.assignee; else delete entry.assignee;
     this.data[key] = entry;
     this.dirty = true;

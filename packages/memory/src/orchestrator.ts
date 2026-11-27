@@ -365,6 +365,7 @@ export function createOrchestrator(
       store: cfg.workRecordStore,
       engine,
       pending: state,
+      onProgress: (m) => runtime.notify?.(`memory: ${m}`, "warning"),
       src: runtime.name,
       observations: due.map((o) => ({ id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: o.work ?? "", feature: (o.feature ?? o.work)! })),
     });
@@ -419,7 +420,7 @@ export function createOrchestrator(
         store: cfg.workRecordStore,
         observations: tagged.map((o) => ({ id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
         state,
-        onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "info"),
+        onProgress: (m) => runtime.notify?.(`memory: ${m}`, "info"),
       });
       const settled = settleTagged(tagged, idOf, outcomes, folded.latestCoverageId, poolRoot);
       for (const t of settled.consumed) consumedWork.add(t);
@@ -572,7 +573,7 @@ export function createOrchestrator(
         engine,
         store: cfg.workRecordStore,
         observations: mine.map((o) => ({ id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
-        onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "info"),
+        onProgress: (m) => runtime.notify?.(`memory: ${m}`, "info"),
       });
       const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
       const statusOf = (o: (typeof mine)[number]) => status.get(idOf.get(o)!);

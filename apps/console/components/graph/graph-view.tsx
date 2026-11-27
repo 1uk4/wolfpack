@@ -383,7 +383,7 @@ export function GraphView({
 			}
 			renderer.destroy();
 		};
-		// `embedded` is fixed for a mounted view (the /kb-activity panel vs /graph); listing it only satisfies the lint.
+		// `embedded` is fixed for a mounted view (a panel inside another page vs /graph); listing it only satisfies the lint.
 	}, [isEmpty, embedded]);
 
 	// Feed #1 — data: nodes (with positions + styles), edges, glow groups,

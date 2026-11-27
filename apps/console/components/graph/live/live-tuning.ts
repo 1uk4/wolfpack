@@ -14,6 +14,12 @@ export interface LiveTuning {
 	maxWolfSpeedPx: number;
 	/** Resting orbit: radius (ref px), extra radius for an offline wolf, angular speed (rad/s), breathing amplitude (ref px) and rate (rad/s). */
 	restRadiusPx: number;
+	/** Wolf force model (live-den orbitTarget): weights of the Home spring and of the thread and focus pulls (the sub-agent pull is `subPull` below); the ring (ref px) memory items orbit Home on; most items shown. */
+	homeSpring: number;
+	threadPull: number;
+	focusPull: number;
+	kbRingPx: number;
+	kbMaxItems: number;
 	restOfflineExtraPx: number;
 	restOrbitRadPerSec: number;
 	restBreathPx: number;
@@ -75,7 +81,12 @@ export const LIVE_TUNING: LiveTuning = {
 	returnAfterIdleSec: 45,
 	lingerRampSec: 45,
 	maxWolfSpeedPx: 900,
-	restRadiusPx: 62,
+	restRadiusPx: 84,
+	homeSpring: 1,
+	threadPull: 0.5,
+	focusPull: 0.5,
+	kbRingPx: 40,
+	kbMaxItems: 6,
 	restOfflineExtraPx: 12,
 	restOrbitRadPerSec: 0.05,
 	restBreathPx: 5,

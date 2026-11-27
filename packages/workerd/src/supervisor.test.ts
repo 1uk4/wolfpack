@@ -26,6 +26,20 @@ describe("backoffDelay", () => {
 // Each case spawns real node children (fake wolf, orphans) and polls for sockets: under full-suite CPU load
 // that startup alone can approach the 5s default, which is shorter than the helpers' own 5-8s waits.
 describe("Supervisor (fake wolf)", { timeout: 20_000 }, () => {
+  it("reloadConfig takes only the announced color from a re-read config; the socket and the rest stay until a real restart", () => {
+    const m = makeWolves("alpha");
+    root = m.root;
+    sup = new Supervisor({ wolves: m.wolves, command: FAKE_COMMAND, log: () => {} });
+    const before = m.wolves[0];
+    const fresh = { ...before, color: "blue", serve: { ...before.serve, socket: "/elsewhere.sock" }, identity: { ...before.identity, domains: ["other"] } };
+    const merged = sup.reloadConfig(fresh);
+    expect(merged?.color).toBe("blue");
+    expect(merged?.serve).toEqual(before.serve);
+    expect(merged?.identity.domains).toEqual(before.identity.domains);
+    expect(sup.reloadConfig({ ...fresh, color: undefined })?.color).toBeUndefined();
+    expect(sup.reloadConfig({ ...fresh, identity: { ...fresh.identity, name: "nope" } })).toBeUndefined();
+  });
+
   it("boots each wolf, exposes urls, logs to <den>/logs/wolfd.log, stops cleanly", async () => {
     const m = makeWolves("alpha", "beta");
     root = m.root;

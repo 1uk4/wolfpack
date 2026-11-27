@@ -39,6 +39,7 @@
  *   "duration" / "time".
  */
 
+import { demoteHeadings } from "@wolfpack/kb/shared";
 import { findSection } from "../work-record.js";
 
 export const OUTCOMES_HEADING = "## Outcomes";
@@ -206,7 +207,7 @@ function renderBlock(child: ChildMeta, distilled: string): string {
     `<!-- rollup:item id=${child.taskId} when=${child.when} -->`,
     `### ${formatDate(child.when)} — ${child.title}`,
     "",
-    distilled,
+    demoteHeadings(distilled),
     ITEM_CLOSE,
   ].join("\n");
 }

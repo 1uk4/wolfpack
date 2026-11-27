@@ -16,6 +16,10 @@ describe("threadColor", () => {
 		const keys = new Set(Array.from({ length: 200 }, (_, i) => autoThreadColor(`w/feature-${i}`)));
 		assert.equal(keys.size, 8);
 	});
+	it("keeps hashing ids to the original 8 colours, so existing automatic colours never move", () => {
+		const got = ["a", "b", "wolf/home", "hal/home", "1uk4/home", "t-123", "w/feature-x", "snap/home"].map(autoThreadColor);
+		assert.deepEqual(got, ["teal", "blue", "blue", "teal", "yellow", "purple", "yellow", "orange"]);
+	});
 	it("a subagent gets its parent's automatic color, even if the parent is unknown", () => {
 		const kid = { id: "w/sub-1", parentThreadId: "w/feature-a" };
 		assert.equal(threadColor(kid, [{ id: "w/feature-a" }, kid]).key, autoThreadColor("w/feature-a"));

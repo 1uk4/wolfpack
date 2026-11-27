@@ -16,7 +16,7 @@
 
 import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { osPrefersReducedMotion, type MotionMode } from "@/src/core";
-import { Blend, EyeOff, Expand, Ghost, Gauge, Kanban, LayoutGrid, Layers, Radio, Route, Tags } from "lucide-react";
+import { Blend, Brain, EyeOff, Expand, Ghost, Gauge, Kanban, LayoutGrid, Layers, Radio, Route, Tags } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
 import {
 	PRESET_IDS,
@@ -98,13 +98,44 @@ function Switch({
 	Icon,
 	checked,
 	onChange,
+	row = false,
 }: {
 	label: string;
 	hint: string;
 	Icon: IconType;
 	checked: boolean;
 	onChange: (on: boolean) => void;
+	/** One settings row (icon and label left, switch right) instead of a stacked tile. */
+	row?: boolean;
 }) {
+	if (row) {
+		return (
+			<Hint label={hint} side="bottom">
+				<button
+					type="button"
+					role="switch"
+					aria-checked={checked}
+					aria-label={label}
+					onClick={() => onChange(!checked)}
+					className="flex min-h-11 w-full items-center gap-2 text-left md:min-h-7"
+				>
+					<Icon className={`size-3.5 shrink-0 ${checked ? "text-foreground" : "text-muted-foreground"}`} />
+					<span className="min-w-0 flex-1 text-[11px] leading-tight text-muted-foreground">{label}</span>
+					<span
+						aria-hidden
+						className={`relative h-[18px] w-[30px] shrink-0 rounded-full ring-1 ring-border/60 transition-colors motion-reduce:transition-none ${
+							checked ? "bg-primary" : "bg-muted"
+						}`}
+					>
+						<span
+							className={`absolute left-[2px] top-[2px] size-[14px] rounded-full bg-background shadow ${SPRING}`}
+							style={{ transform: `translateX(${checked ? 12 : 0}px)` }}
+						/>
+					</span>
+				</button>
+			</Hint>
+		);
+	}
 	return (
 		<Hint label={hint} side="bottom">
 			<button
@@ -163,6 +194,20 @@ function SimpleSlider({
 					onChange={(e) => onChange(Number(e.target.value))}
 					className="h-6 w-full accent-primary md:h-1.5"
 				/>
+			</label>
+		</Hint>
+	);
+}
+
+/** A 0.1-5 weight slider for the wolf force model. */
+function PlainSlider({ label, hint, Icon, value, onChange }: { label: string; hint: string; Icon: IconType; value: number; onChange: (v: number) => void }) {
+	return (
+		<Hint label={hint} side="bottom">
+			<label className="flex min-h-11 items-center gap-2 md:min-h-7">
+				<Icon className="size-3.5 shrink-0 text-muted-foreground" />
+				<span className="w-16 shrink-0 text-[11px] leading-tight text-muted-foreground">{label}</span>
+				<input type="range" min={0.1} max={5} step={0.1} value={value} aria-label={label} onChange={(e) => onChange(Number(e.target.value))} className="h-6 w-full accent-primary md:h-1.5" />
+				<span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-foreground">{value.toFixed(1)}</span>
 			</label>
 		</Hint>
 	);
@@ -395,6 +440,16 @@ export function SimpleControls({
 					value={settings.live.intensity}
 					onChange={(n) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, intensity: n } }))}
 				/>
+				<Switch
+					row
+					label="Memory"
+					hint="Show the memory and KB animations"
+					Icon={Brain}
+					checked={settings.live.memory}
+					onChange={(on) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, memory: on } }))}
+				/>
+				<PlainSlider label="Home pull" hint="How firmly Home pulls a wolf back to its orbit" Icon={Gauge} value={settings.live.homeSpring} onChange={(v) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, homeSpring: v } }))} />
+				<PlainSlider label="Sub-agent pull" hint="How far a wolf's subagents push it away from Home" Icon={Gauge} value={settings.live.subPull} onChange={(v) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, subPull: v } }))} />
 				<MotionControl value={settings.live.motion} onChange={(m) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, motion: m } }))} />
 			</div>
 			{children}

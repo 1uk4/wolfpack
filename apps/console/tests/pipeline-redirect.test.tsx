@@ -3,12 +3,12 @@ import { describe, it } from "node:test";
 import PipelinePage from "../app/pipeline/page.tsx";
 
 describe("/pipeline", () => {
-	it("redirects to /kb-activity", () => {
+	it("redirects to /graph", () => {
 		assert.throws(
 			() => PipelinePage(),
 			(e: unknown) => {
 				const err = e as { digest?: string };
-				return typeof err.digest === "string" && err.digest.startsWith("NEXT_REDIRECT") && err.digest.includes("/kb-activity");
+				return typeof err.digest === "string" && err.digest.startsWith("NEXT_REDIRECT") && err.digest.includes("/graph");
 			},
 		);
 	});

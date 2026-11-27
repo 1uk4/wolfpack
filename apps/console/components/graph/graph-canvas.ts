@@ -63,7 +63,7 @@ import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import { LabelPass, type GroupTitle } from "./label-pass.ts";
 import { computeGroupShapes, drawGroupShapes, groupAt, type GroupShape } from "./group-regions.ts";
-import { DEFAULT_RENDER_SETTINGS, effectiveZoom, isBucketLabel, labelsOn, type LabelObstacle } from "@/src/core";
+import { DEFAULT_RENDER_SETTINGS, effectiveZoom, labelsOn, type LabelObstacle } from "@/src/core";
 const NO_OBSTACLES = { n: 0, sig: 0 };
 import type { LiveOverlay, OverlayHighlight, OverlayHit, OverlayHost } from "./live/live-overlay";
 import {
@@ -918,7 +918,7 @@ export class GraphCanvasRenderer {
 		this.data = data;
 		this.nodeById = new Map(data.nodes.map((n) => [n.id, n]));
 		this.hasBlocked = data.nodes.some((n) => n.blocked);
-		this.labels.setHierarchy(this.nodeById.keys(), data.edges, data.depths ?? new Map(), (id) => isBucketLabel(this.nodeById.get(id)?.label ?? ""));
+		this.labels.setHierarchy(this.nodeById.keys(), data.edges, data.depths ?? new Map());
 		this.refreshVisible();
 		let minX = Infinity;
 		let minY = Infinity;
@@ -1287,6 +1287,11 @@ export class GraphCanvasRenderer {
 	}
 
 	/** Ring a node / target / wolf on the overlay (the activity feed's hover); null clears it. */
+	/** The map's tree edges and node ids, for the kbdemo to pick real filing targets from. */
+	demoGraph(): { edges: readonly { from: string; to: string }[]; ids: string[] } {
+		return { edges: this.data?.edges ?? [], ids: [...this.nodeById.keys()] };
+	}
+
 	setOverlayHighlight(h: OverlayHighlight | null): void {
 		this.overlay?.setHighlight(h);
 	}
@@ -1325,6 +1330,7 @@ export class GraphCanvasRenderer {
 			},
 			hasNode: (id) => this.nodeById.has(id),
 			nodeColor: (id) => this.nodeById.get(id)?.color,
+			edgesOf: () => this.data?.edges ?? [],
 			nodeRadius: (id) => {
 				const n = this.nodeById.get(id);
 				return n ? this.radiusOf(n) : null;

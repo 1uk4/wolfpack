@@ -16,3 +16,10 @@ describe("toLinkWolf kbReadable", () => {
     expect(toLinkWolf(w(), { KB_BASE: "/b" }).kbReadable).toBe(false);
   });
 });
+
+describe("toLinkWolf color", () => {
+  it("announces wolf.yaml color; absent stays absent", () => {
+    expect(toLinkWolf({ ...w(), color: "blue" }, {}).color).toBe("blue");
+    expect(toLinkWolf(w(), {})).not.toHaveProperty("color");
+  });
+});

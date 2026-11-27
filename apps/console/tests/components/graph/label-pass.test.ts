@@ -50,13 +50,13 @@ describe("label pass", () => {
 	it("zoomed out only the domain is labelled; zoomed in the leaves join it", () => {
 		const s = setup();
 		assert.deepEqual(s.shown({ ze: 1 }), ["Domain"]);
-		assert.deepEqual(s.shown({ ze: 3 }), ["Domain", "Leaf one", "Leaf two"]);
+		assert.deepEqual(s.shown({ ze: 4 }), ["Domain", "Leaf one", "Leaf two"]);
 	});
 
 	it("with Labels off only the hovered and selected labels (and their parent chain) show", () => {
 		const s = setup();
-		assert.deepEqual(s.shown({ ze: 3, on: false }), []);
-		assert.deepEqual(s.shown({ ze: 3, on: false, hoverId: "leaf1" }), ["Domain", "Leaf one"]);
+		assert.deepEqual(s.shown({ ze: 4, on: false }), []);
+		assert.deepEqual(s.shown({ ze: 4, on: false, hoverId: "leaf1" }), ["Domain", "Leaf one"]);
 	});
 
 	it("labels not eligible at this zoom are never measured, and a frame that only moves the camera measures nothing", () => {
@@ -67,28 +67,28 @@ describe("label pass", () => {
 		s.shown({ ze: 1, tx: 5 });
 		s.shown({ ze: 1, tx: 9 });
 		assert.equal(s.c.measured(), first);
-		s.shown({ ze: 3 });
+		s.shown({ ze: 4 });
 		assert.equal(s.c.measured(), first + 2, "the two leaves, once");
-		s.shown({ ze: 3, tx: 4 });
+		s.shown({ ze: 4, tx: 4 });
 		assert.equal(s.c.measured(), first + 2);
 	});
 
 	it("a search filter changes what is drawn even when the camera and geometry did not move", () => {
 		const s = setup();
-		assert.deepEqual(s.shown({ ze: 3 }), ["Domain", "Leaf one", "Leaf two"]);
-		assert.deepEqual(s.shown({ ze: 3, visible: new Set(["leaf2"]) }), ["Leaf two"]);
-		assert.deepEqual(s.shown({ ze: 3, visible: new Set(["leaf1", "leaf2"]) }), ["Leaf one", "Leaf two"]);
+		assert.deepEqual(s.shown({ ze: 4 }), ["Domain", "Leaf one", "Leaf two"]);
+		assert.deepEqual(s.shown({ ze: 4, visible: new Set(["leaf2"]) }), ["Leaf two"]);
+		assert.deepEqual(s.shown({ ze: 4, visible: new Set(["leaf1", "leaf2"]) }), ["Leaf one", "Leaf two"]);
 	});
 
 	it("cluster labels off hides the domain title but not a hovered one; the size setting scales it", () => {
 		const s = setup();
-		assert.deepEqual(s.shown({ ze: 3, clusterLabels: false }), ["Leaf one", "Leaf two"]);
-		assert.deepEqual(s.shown({ ze: 3, clusterLabels: false, hoverId: "dom" }), ["Domain", "Leaf one", "Leaf two"]);
+		assert.deepEqual(s.shown({ ze: 4, clusterLabels: false }), ["Leaf one", "Leaf two"]);
+		assert.deepEqual(s.shown({ ze: 4, clusterLabels: false, hoverId: "dom" }), ["Domain", "Leaf one", "Leaf two"]);
 	});
 
 	it("the cluster label size scales the domain title's font, not the leaves'", () => {
 		const s = setup();
-		s.shown({ ze: 3, clusterScale: 2 });
+		s.shown({ ze: 4, clusterScale: 2 });
 		const font = (t: string) => s.c.drawn.find((d) => d.text === t)!.font;
 		assert.match(font("Domain"), /30px/);
 		assert.match(font("Leaf one"), /11px/);

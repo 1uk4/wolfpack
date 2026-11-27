@@ -80,7 +80,7 @@ import { createLinkContributions, type LinkContributions } from "./link-contribu
 import { createLink, type Link, type LinkTimers } from "./link.js";
 import { createApprovalStore } from "./work-approvals.js";
 import { CreateApprovalRequestBodySchema, DirectGraduateBodySchema } from "@wolfpack/protocol";
-import { CommandRequestSchema, INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES, InventoryReportBodySchema, LINK_PATH, MachineKeyAckBodySchema, wolfForRoute } from "@wolfpack/protocol";
+import { CommandRequestSchema, THREAD_COLOR_KEYS, INVENTORY_MAX_ENTRIES, INVENTORY_REPORT_MAX_BYTES, InventoryReportBodySchema, LINK_PATH, MachineKeyAckBodySchema, wolfForRoute } from "@wolfpack/protocol";
 import { createInventory, type Inventory } from "./inventory.js";
 import { createCommandHub, type CommandHub } from "./commands.js";
 import { createMachineKeys, type MachineKeys } from "./machine-keys.js";
@@ -873,8 +873,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           // A worker token sees only its own host's wolves (it must not enumerate other hosts).
           return send(res, 200, { wolves: (registry.list("wolves") as { name: string; host?: string; status?: string }[]).filter((w) => w.status !== "retired" && (!identity || identity.kind !== "worker" || w.host === identity.hostId)).map((w) => {
             const online = !!w.host && link.presence(w.host) === "online";
-            const f = online ? registry.kbFlags(w.name) : { librarian: false, kbReadable: false }; // flags only from a live link: an offline host claims nothing
-            return { id: w.name, name: w.name, host: w.host ?? "", status: online ? "online" : "offline", librarian: f.librarian, kbReadable: f.kbReadable };
+            const f: { librarian: boolean; kbReadable: boolean; color?: string } = online ? registry.kbFlags(w.name) : { librarian: false, kbReadable: false }; // flags only from a live link: an offline host claims nothing
+            return { id: w.name, name: w.name, host: w.host ?? "", status: online ? "online" : "offline", librarian: f.librarian, kbReadable: f.kbReadable, ...(f.color && (THREAD_COLOR_KEYS as readonly string[]).includes(f.color) ? { color: f.color } : {}) }; // an unknown key is dropped: the client schema is an enum and one bad value would fail the whole roster
           }) });
         case "hubListWork": {
           const domain = url.searchParams.get("domain");

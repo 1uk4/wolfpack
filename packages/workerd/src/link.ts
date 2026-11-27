@@ -13,6 +13,9 @@ import type { CommandKind, LinkCmd, LinkCmdResult } from "@wolfpack/protocol";
 import type { Outbox } from "./outbox.js";
 
 export type LinkState = "idle" | "connecting" | "online" | "backoff" | "incompatible" | "unauthorized" | "replaced" | "stopped";
+/** What the hub was told about a wolf (domains and color): a change in either is re-sent after a handshake race. */
+const wolfKey = (w: LinkWolf): string => JSON.stringify([w.domains, w.color ?? null]);
+
 const STICKY: ReadonlySet<LinkState> = new Set(["incompatible", "unauthorized", "replaced"]);
 
 export interface HubLinkOptions {
@@ -195,7 +198,7 @@ export class HubLink {
     return false;
   }
   wolfAdded(w: LinkWolf): void {
-    if (this.send({ t: "wolf.add", wolf: w })) this.sentWolves.set(w.name, JSON.stringify(w.domains));
+    if (this.send({ t: "wolf.add", wolf: w })) this.sentWolves.set(w.name, wolfKey(w));
   }
   wolfRemoved(name: string): void {
     if (this.send({ t: "wolf.remove", name })) this.sentWolves.delete(name);
@@ -323,7 +326,7 @@ export class HubLink {
       const wolves = this.o.wolves();
       const advertised = (this.o.commands?.() ?? []).filter((k) => !(this.legacyHub && k === "update.run"));
       this.helloSentUpdateRun = advertised.includes("update.run");
-      this.sentWolves = new Map(wolves.map((w) => [w.name, JSON.stringify(w.domains)]));
+      this.sentWolves = new Map(wolves.map((w) => [w.name, wolfKey(w)]));
       ws.send(encodeLinkFrame({ t: "hello", v: LINK_PROTOCOL_VERSION, hostId: this.o.hostId, laptop: this.laptop, ...(machineName() ? { machine: machineName() } : {}), wolves, kbRevisions: this.o.kbRevisions?.() ?? {}, ...(advertised.length ? { commands: advertised } : {}), ...(this.o.pubkey?.() ? { pubkey: this.o.pubkey!() } : {}) }));
       this.welcomeTimer = setTimeout(() => {
         if (this.ws !== ws) return;
@@ -482,7 +485,7 @@ export class HubLink {
   private syncDiff(): void {
     const now = new Map(this.o.wolves().map((w) => [w.name, w] as const));
     for (const [name, w] of now) {
-      if (this.sentWolves.get(name) !== JSON.stringify(w.domains)) this.wolfAdded(w);
+      if (this.sentWolves.get(name) !== wolfKey(w)) this.wolfAdded(w);
     }
     for (const name of [...this.sentWolves.keys()]) if (!now.has(name)) this.wolfRemoved(name);
   }

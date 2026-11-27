@@ -333,11 +333,9 @@ export function MemoryPanel({ wolf, threadId, slug, embedded = false }: {
 					</div>
 					<div className="relative h-1.5 rounded bg-muted" title={`Consolidation ${pool.triggerText}`} data-testid="memory-trigger">
 						<div className="h-full rounded bg-foreground/60" style={{ width: `${Math.round(pool.fill * 100)}%` }} />
-						<div className="absolute top-[-2px] h-2.5 w-px bg-foreground" style={{ left: `${Math.round(pool.targetMark * 100)}%` }} title={`pool target ${pool.poolTarget.toLocaleString("en-US")}`} />
 					</div>
 					<p className="mt-1 text-xs text-muted-foreground" data-testid="memory-pool-line">
-						{pool.tokensText} ·{" "}
-						<span data-testid="memory-observations">{pool.observationsText}</span>
+						<span title={pool.observationsText} data-testid="memory-observations">{pool.tokensText}</span>
 					</p>
 					{pline ? <p className="text-xs text-muted-foreground" data-testid="memory-promote">{pline}</p> : null}
 					{note ? <p className="text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}

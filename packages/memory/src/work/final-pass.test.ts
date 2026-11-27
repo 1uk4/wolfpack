@@ -96,6 +96,12 @@ describe("finalFeaturePass", () => {
     expect((await store.get("f"))!.body).toContain("racer 2");
   });
 
+  it("reports the hub's message when the marker append fails", async () => {
+    const { store, run } = setup({ reply: new Error("down") });
+    store.appendRecord = async () => ({ ok: false, code: "error", message: "the body has more than one ## Record heading" });
+    expect(await run()).toEqual({ ok: false, reason: "append failed: error: the body has more than one ## Record heading" });
+  });
+
   it("writes only the marker when the model fails or its answer is not shorter", async () => {
     for (const reply of [new Error("down"), { lines: [{ group: "Changes", text: "y".repeat(230), from: ["l1"] }, { group: "Changes", text: "z".repeat(230), from: ["l2"] }, { group: "Changes", text: "w".repeat(230), from: ["l3"] }] }]) {
       const { store, run } = setup({ reply });

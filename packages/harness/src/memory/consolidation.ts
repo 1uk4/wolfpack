@@ -284,6 +284,7 @@ async function runWorkStep(a: {
     engine: a.engine,
     store: a.store,
     ...(a.state ? { pending: a.state } : {}),
+    ...(a.onProgress ? { onProgress: a.onProgress } : {}),
     now: a.now,
     src: a.src,
     observations: due.map((x) => ({ id: x.w.id, timestamp: x.w.timestamp, content: x.w.content, ...(x.o.work ? { work: x.o.work } : {}), ...(x.o.feature ? { feature: x.o.feature } : {}) })),

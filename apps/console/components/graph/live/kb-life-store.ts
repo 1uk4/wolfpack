@@ -15,8 +15,18 @@ const EMIT_MS = 250;
 
 /** The memory events seen since the page opened, oldest first, with the browser time each arrived. */
 export function useKbLiveRows(): KbLogRow[] {
+	const events = useKbLiveEvents();
+	return useMemo(() => foldEvents(events), [events]);
+}
+
+/** The raw memory events behind the rows (oldest first, with arrival ms). With enabled false it collects nothing and holds no feed reference. */
+export function useKbLiveEvents(enabled = true): { event: ActivityEvent; at: number }[] {
 	const [events, setEvents] = useState<{ event: ActivityEvent; at: number }[]>([]);
 	useEffect(() => {
+		if (!enabled) {
+			setEvents((cur) => (cur.length ? [] : cur));
+			return;
+		}
 		const release = acquireLiveFeed();
 		let buf: { event: ActivityEvent; at: number }[] = [];
 		let timer: ReturnType<typeof setTimeout> | null = null;
@@ -41,8 +51,8 @@ export function useKbLiveRows(): KbLogRow[] {
 			release();
 			if (timer) clearTimeout(timer);
 		};
-	}, []);
-	return useMemo(() => foldEvents(events), [events]);
+	}, [enabled]);
+	return events;
 }
 
 // ── reset bus: the demo ending clears the log rows and the map's KB state ──
@@ -66,29 +76,66 @@ export function subscribeKbHover(fn: () => void): () => void {
 // ── demo ──
 /** The demo plays as a made-up wolf, never a real one. */
 export const DEMO_WOLF = "demo-wolf";
-const wolfActor = { kind: "wolf", wolf: DEMO_WOLF } as const;
+/** One demo cycle, then it repeats. */
+const DEMO_LOOP_MS = 28_000;
 const hubActor = { kind: "hub", title: "curator" } as const;
 
-/** One scripted cycle (ms offset, event). Real event shapes; `c` makes ids unique per cycle. */
-export function demoCycle(c: number): { at: number; event: Omit<ActivityEvent, "id" | "ts" | "v" | "pack" | "ttlMs"> }[] {
+/** A place on the loaded map a demo entry is filed at (domain, the section above the entry, and an entry that is on the map). */
+export interface DemoTarget { domain: string; section?: string; entryId: string }
+
+/** Up to `max` filing targets from the loaded graph: for each domain node, the first entry found down the tree edges, with the section just above it. */
+export function demoTargets(edges: readonly { from: string; to: string }[], ids: readonly string[], max = 5): DemoTarget[] {
+	const adj = new Map<string, string[]>();
+	for (const e of edges) {
+		(adj.get(e.from) ?? adj.set(e.from, []).get(e.from)!).push(e.to);
+		(adj.get(e.to) ?? adj.set(e.to, []).get(e.to)!).push(e.from);
+	}
+	const out: DemoTarget[] = [];
+	for (const dom of ids.filter((id) => id.startsWith("dom:"))) {
+		const prev = new Map<string, string>([[dom, dom]]);
+		const queue = [dom];
+		for (let i = 0; i < queue.length; i++) {
+			const cur = queue[i]!;
+			if (cur.startsWith("ent:")) {
+				const up = prev.get(cur)!;
+				out.push({ domain: dom.slice(4), ...(up.startsWith("sec:") ? { section: up.slice(4) } : {}), entryId: cur.slice(4) });
+				break;
+			}
+			for (const nb of adj.get(cur) ?? []) if (!prev.has(nb) && !nb.startsWith("work:") && !nb.startsWith("den:")) (prev.set(nb, cur), queue.push(nb));
+		}
+	}
+	return out.slice(0, max);
+}
+
+/** One scripted cycle (ms offset, event). Real event shapes; `c` makes ids unique per cycle. `targets` are real places on the map (else made-up ids that are not on it). */
+export function demoCycle(c: number, wolf: string = DEMO_WOLF, targets: readonly DemoTarget[] = []): { at: number; event: Omit<ActivityEvent, "id" | "ts" | "v" | "pack" | "ttlMs"> }[] {
 	const t = (i: number) => `demo-${c}-t${i}`;
-	const wolfBase = { actor: wolfActor };
+	const wolfBase = { actor: { kind: "wolf", wolf } as const };
 	const out: { at: number; event: Omit<ActivityEvent, "id" | "ts" | "v" | "pack" | "ttlMs"> }[] = [];
-	[6000, 12000, 18000, 25000, 33000, 40000].forEach((count, i) => out.push({ at: 600 + i * 1400, event: { ...wolfBase, verb: "memory-observe", detail: { count, capacity: 40000 } } }));
-	out.push({ at: 10000, event: { ...wolfBase, verb: "memory-consolidate", detail: { count: 14, topicIds: [t(1), t(2), t(3)] } } });
-	[1, 2, 3].forEach((i) => out.push({ at: 12000 + i * 600, event: { ...wolfBase, verb: "memory-promote", target: { kind: "domain", id: "wolfpack" }, detail: { ref: `demo-c-${c}-${i}`, topicIds: [t(i)] } } }));
-	const outcomes = ["create", "merge", "reject"];
-	[1, 2, 3].forEach((i) => {
-		const base = 21000 + (i - 1) * 4500;
+	// Compact life (loops every DEMO_LOOP_MS): the buffer fills (0.3-1.8 s), consolidation births 5 topics at the wolf (2.5 s) that fly to the Home ring and orbit it,
+	// they are promoted one by one (6-8.4 s) and the curator files each (from 9 s).
+	[6000, 12000, 18000, 25000, 33000, 40000].forEach((count, i) => out.push({ at: 300 + i * 300, event: { ...wolfBase, verb: "memory-observe", detail: { count, capacity: 40000 } } }));
+	const ids = [1, 2, 3, 4, 5];
+	out.push({ at: 2500, event: { ...wolfBase, verb: "memory-consolidate", detail: { count: 14, topicIds: ids.map(t) } } });
+	const place = (i: number): DemoTarget => targets.length ? targets[(i - 1) % targets.length]! : { domain: "wolfpack", section: "demo", entryId: `kb-demo-${i}` };
+	ids.forEach((i) => out.push({ at: 3500 + (i - 1) * 600, event: { ...wolfBase, verb: "memory-promote", target: { kind: "domain", id: place(i).domain }, detail: { ref: `demo-c-${c}-${i}`, topicIds: [t(i)] } } }));
+	const outcomes = ["create", "merge", "reject", "merge", "create"];
+	ids.forEach((i) => {
+		const base = 6500 + (i - 1) * 3000;
+		const at = place(i);
+		// the last create files an entry the map does not have yet: the nerve ends at its section with a temporary dot
+		const entryId = i === 5 && targets.length ? `kb-demo-new-${c}` : at.entryId;
 		out.push({ at: base, event: { actor: hubActor, verb: "curate-start", detail: { ref: t(i), topicIds: [t(i)] } } });
 		const o = outcomes[i - 1]!;
-		out.push({ at: base + 2500, event: { actor: hubActor, verb: "curate-done", ...(o === "reject" ? {} : { target: { kind: "kb-entry", id: `kb-demo-${i}`, domain: "wolfpack", title: i === 1 ? "Demo: new topic" : "Demo: merged topic" } }), detail: { outcome: o, ref: t(i), topicIds: [t(i)], section: "demo", sectionTitle: "Demo", ms: 2400, tokens: 1800 * i } } });
+		out.push({ at: base + 2200, event: { actor: hubActor, verb: "curate-done", ...(o === "reject" ? {} : { target: { kind: "kb-entry", id: entryId, domain: at.domain, title: o === "create" ? "Demo: new topic" : "Demo: merged topic" } }), detail: { outcome: o, ref: t(i), topicIds: [t(i)], ...(at.section ? { section: at.section } : {}), sectionTitle: "Demo", ms: 2200, tokens: 1800 * i } } });
 	});
 	return out;
 }
 
 /** Feed the scripted cycle (looping) through the live pipeline. Returns stop. Dev only: gated by `?kbdemo=1` in the page. */
-export function startKbDemo(): () => void {
+export function startKbDemo(wolf: string = DEMO_WOLF, targetsOf?: () => DemoTarget[]): () => void {
+	const wolfActor = { kind: "wolf", wolf } as const;
+	const fake = wolf === DEMO_WOLF; // a made-up wolf is brought online and offline; a real one is left alone
 	if (process.env.NODE_ENV === "production") return () => undefined; // dev only
 	let stopped = false;
 	const timers: ReturnType<typeof setTimeout>[] = [];
@@ -102,15 +149,15 @@ export function startKbDemo(): () => void {
 	const run = () => {
 		if (stopped) return;
 		const c = cycle++;
-		injectLiveAction({ type: "event", event: { v: 1, id: `demo-online-${c}`, pack: "demo", ts: Date.now(), ttlMs: 120_000, actor: wolfActor, verb: "wolf-online" } as ActivityEvent, now: Date.now() });
-		for (const s of demoCycle(c)) timers.push(setTimeout(() => !stopped && send(s.event), s.at));
-		timers.push(setTimeout(run, 50_000));
+		if (fake) injectLiveAction({ type: "event", event: { v: 1, id: `demo-online-${c}`, pack: "demo", ts: Date.now(), ttlMs: 120_000, actor: wolfActor, verb: "wolf-online" } as ActivityEvent, now: Date.now() });
+		for (const s of demoCycle(c, wolf, targetsOf?.() ?? [])) timers.push(setTimeout(() => !stopped && send(s.event), s.at));
+		timers.push(setTimeout(run, DEMO_LOOP_MS));
 	};
 	run();
 	return () => {
 		stopped = true;
 		timers.forEach(clearTimeout);
-		injectLiveAction({ type: "event", event: { v: 1, id: `demo-offline-${++seq}`, pack: "demo", ts: Date.now(), ttlMs: 60_000, actor: wolfActor, verb: "wolf-offline" } as ActivityEvent, now: Date.now() });
+		if (fake) injectLiveAction({ type: "event", event: { v: 1, id: `demo-offline-${++seq}`, pack: "demo", ts: Date.now(), ttlMs: 60_000, actor: wolfActor, verb: "wolf-offline" } as ActivityEvent, now: Date.now() });
 		resetKbLife(); // the injected rows and the map's flights go with the demo
 	};
 }

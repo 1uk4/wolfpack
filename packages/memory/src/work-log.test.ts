@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { LlmInfraError, type Engine } from "@wolfpack/engine";
 import { appendWorkLog } from "./work-log.js";
+import { WorkPendingState } from "./work-pending.js";
 import { InMemoryWorkRecordStore, type AppendRecordResult, type WorkRecordItem } from "./work-record.js";
 
 const item = (over: Partial<WorkRecordItem>): WorkRecordItem => ({ id: "x", title: "T", kind: "task", stage: "in_build", body: "", ...over });
@@ -98,6 +99,59 @@ describe("appendWorkLog", () => {
     store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "forbidden", message: "not yours" });
     const out = await appendWorkLog({ engine: engineOf([{ lines: [line("t", ["o1"])] }]), store, src: "w", observations: [o("1", "a", "x")] });
     expect(out[0]).toMatchObject({ status: "pending", cause: "forbidden", reason: "not yours" });
+  });
+
+  it("records the hub's message in the pending state and reports it once when an append fails", async () => {
+    const store = new InMemoryWorkRecordStore({ a: item({ id: "a" }) });
+    store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "error", message: "more than one ## Record heading" });
+    const pending = new WorkPendingState(undefined);
+    const progress: string[] = [];
+    const out = await appendWorkLog({ engine: engineOf([{ lines: [line("t", ["o1"])] }]), store, src: "w", pending, onProgress: (m) => progress.push(m), observations: [o("1", "a", "x")] });
+    expect(out[0]).toMatchObject({ status: "pending", cause: "work-api-unavailable", reason: "more than one ## Record heading" });
+    expect(pending.entry("a")?.message).toBe("more than one ## Record heading");
+    expect(progress.filter((m) => m.includes("more than one ## Record heading"))).toHaveLength(1);
+  });
+
+  it("says a repeated identical append failure once, and clips a long multi-line message to 300 characters", async () => {
+    const store = new InMemoryWorkRecordStore({ a: item({ id: "a" }) });
+    const long = `first line\n${"x".repeat(500)}`;
+    store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "error", message: long });
+    let t = 1_000_000;
+    const pending = new WorkPendingState(undefined, () => t);
+    const progress: string[] = [];
+    for (let run = 0; run < 2; run++) {
+      await appendWorkLog({ engine: engineOf([{ lines: [line("t", ["o1"])] }]), store, src: "w", pending, onProgress: (m) => progress.push(m), observations: [o("1", "a", "x")] });
+      t += 24 * 3_600_000; // past the backoff, so the second run really retries
+    }
+    expect(progress).toHaveLength(1);
+    expect(pending.entry("a")?.tries).toBe(2);
+    const stored = pending.entry("a")!.message!;
+    expect(stored).toHaveLength(300);
+    expect(stored.startsWith("first line xxx")).toBe(true);
+    expect(stored.endsWith("\u2026")).toBe(true);
+  });
+
+  it("warns again when the failure persists to the 5th try, and when the cause changes", async () => {
+    const store = new InMemoryWorkRecordStore({ a: item({ id: "a" }) });
+    store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "error", message: "boom" });
+    let t = 1_000_000;
+    const pending = new WorkPendingState(undefined, () => t);
+    const progress: string[] = [];
+    const run = async () => {
+      await appendWorkLog({ engine: engineOf([{ lines: [line("t", ["o1"])] }]), store, src: "w", pending, onProgress: (m) => progress.push(m), observations: [o("1", "a", "x")] });
+      t += 24 * 3_600_000;
+    };
+    for (let i = 0; i < 4; i++) await run();
+    expect(progress).toHaveLength(1);
+    await run();
+    expect(progress).toHaveLength(2);
+    expect(progress[1]).toContain("try 5");
+    // The cause changes (the log is full), then the same failure returns: said again.
+    store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "log_full" });
+    await run();
+    store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "error", message: "boom" });
+    await run();
+    expect(progress).toHaveLength(3);
   });
 
   it("sends the recent log lines and the observation text, and maps from to observation ids", async () => {

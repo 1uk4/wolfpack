@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ActivityEvent } from "@wolfpack/protocol";
-import { KB_MAX_DOMAINS, KB_MAX_QUEUE, KB_MAX_TOPICS_PER_WOLF, addRow, displayFill, emptyKbLife, foldEvents, groupRows, kbLifeBusy, mergeSeed, reduceKbLife, stepKbLife, withReasons, withTitles, type KbLife } from "../../../src/core/index.ts";
+import { KB_MAX_DOMAINS, KB_NERVE_GLOW_MS, KB_NERVE_MS, KB_PULSE_MS, kbNerveState, KB_MAX_QUEUE, KB_MAX_TOPICS_PER_WOLF, addRow, displayFill, emptyKbLife, foldEvents, groupRows, kbLifeBusy, mergeSeed, reduceKbLife, stepKbLife, withReasons, withTitles, type KbLife } from "../../../src/core/index.ts";
 
 const T0 = 1_000_000;
 let n = 0;
@@ -56,7 +56,20 @@ describe("kb life model", () => {
 		s = stepKbLife(s, T0 + 9000);
 		assert.equal(s.flights.length, 0);
 		assert.deepEqual(s.pulses.map((p) => [p.kind, p.entryId]), [["create", "kb-x"]]);
-		assert.equal(stepKbLife(s, T0 + 9000 + 2600).pulses.length, 0);
+		// the pulse outlives the flight: nerve run, 10 s lit, then the final ring
+		assert.equal(stepKbLife(s, T0 + 9000 + KB_PULSE_MS).pulses.length, 1);
+		assert.equal(stepKbLife(s, T0 + 9000 + KB_NERVE_MS + KB_NERVE_GLOW_MS + KB_PULSE_MS - 1).pulses.length, 1);
+		assert.equal(stepKbLife(s, T0 + 9000 + KB_NERVE_MS + KB_NERVE_GLOW_MS + KB_PULSE_MS).pulses.length, 0);
+	});
+
+	it("a landed pulse runs the nerve for 1.8 s, stays lit for 10 s, then rings; under reduced motion it skips the run", () => {
+		const p = { id: "x", kind: "create" as const, at: 1000 };
+		assert.deepEqual(kbNerveState(p, 1000 + 900, false), { phase: "run", t: 0.5 });
+		assert.deepEqual(kbNerveState(p, 1000 + KB_NERVE_MS + 2500, false), { phase: "lit", t: 0.25 });
+		assert.equal(kbNerveState(p, 1000 + KB_NERVE_MS + KB_NERVE_GLOW_MS + 1300, false).phase, "ring");
+		assert.equal(kbNerveState(p, 1000 + KB_NERVE_MS + KB_NERVE_GLOW_MS + KB_PULSE_MS, false).phase, "done");
+		assert.deepEqual(kbNerveState(p, 1000 + 2500, true), { phase: "lit", t: 0.25 });
+		assert.equal(kbNerveState(p, 1000 + KB_NERVE_GLOW_MS, true).phase, "ring");
 	});
 
 	it("a result that arrives while the topic is still flying is held until it reaches the curator", () => {

@@ -446,9 +446,10 @@ export function SessionRow({
 	const wolfName = chat.href ? /\/wolf\/([^/]+)\//.exec(chat.href)?.[1] : undefined;
 	const tref = featureSlug && wolfName ? { wolf: decodeURIComponent(wolfName), slug: featureSlug } : undefined;
 	return (
-		<div className="group/row relative" data-testid="row-wrap" {...wolfHandle}>
+		<div className="group/row relative" data-testid="row-wrap">
 		<button
 			type="button"
+			{...(wolfHandle as HTMLAttributes<HTMLButtonElement>)}
 			onClick={onOpen}
 			data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
 			data-offline={offline || undefined}
@@ -557,8 +558,8 @@ type WolfMenuProps = { wolf: string; pinned: boolean; hidden: boolean; onPin: ()
 const WOLF_DRAG = "application/x-wolfpack-wolf";
 const LONG_PRESS_SHEET_MS = 500;
 
-/** A wolf's header row as a Den handle: draggable with a mouse, long-press (touch) opens the Hide/Show sheet. */
-function useWolfHandle(menu?: WolfMenuProps): HTMLAttributes<HTMLDivElement> {
+/** A wolf's header (its label, never the wrapper holding thread rows or the ⋯ button) as a Den handle: draggable with a mouse, long-press (touch) opens the Hide/Show sheet. */
+function useWolfHandle(menu?: WolfMenuProps): HTMLAttributes<HTMLElement> {
 	const [coarse, setCoarse] = useState(false);
 	useEffect(() => {
 		setCoarse(typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches);
@@ -591,13 +592,28 @@ function useWolfHandle(menu?: WolfMenuProps): HTMLAttributes<HTMLDivElement> {
 
 /** The phone's long-press sheet (iOS style): move the wolf to the Den, or show it again. */
 function WolfSheet({ wolf, inDen, onToggle, onClose }: { wolf: string; inDen: boolean; onToggle: () => void; onClose: () => void }) {
+	const first = useRef<HTMLButtonElement>(null);
+	const closeRef = useRef(onClose);
+	closeRef.current = onClose;
+	useEffect(() => {
+		const back = document.activeElement as HTMLElement | null;
+		first.current?.focus();
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") closeRef.current();
+		};
+		document.addEventListener("keydown", onKey);
+		return () => {
+			document.removeEventListener("keydown", onKey);
+			back?.focus?.();
+		};
+	}, []);
 	const btn = "flex min-h-11 w-full items-center gap-3 rounded-xl px-4 text-left text-base hover:bg-accent";
 	return (
-		<div data-testid="wolf-sheet" role="dialog" aria-label={`${wolf} actions`} className="fixed inset-0 z-[80] flex items-end">
-			<button type="button" aria-label="Close" className="absolute inset-0 bg-black/30" onClick={onClose} />
+		<div data-testid="wolf-sheet" role="dialog" aria-modal="true" aria-label={`${wolf} actions`} className="fixed inset-0 z-[80] flex items-end">
+			<button type="button" aria-label="Close" tabIndex={-1} className="absolute inset-0 bg-black/30" onClick={onClose} />
 			<div className="relative w-full space-y-1 rounded-t-2xl border-t bg-card p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-lg">
 				<div className="px-4 py-1 text-xs uppercase tracking-widest text-muted-foreground/70">{wolf}</div>
-				<button type="button" data-testid="wolf-sheet-toggle" onClick={onToggle} className={btn}>
+				<button type="button" ref={first} data-testid="wolf-sheet-toggle" onClick={onToggle} className={btn}>
 					{inDen ? <EyeIcon className="size-5" /> : <MoonIcon className="size-5" />}
 					{inDen ? "Show" : "Hide to Den"}
 				</button>
@@ -637,8 +653,8 @@ export function WolfHeaderRow({ wolf, wolfMenu }: { wolf: WolfStatus; wolfMenu?:
 	const handle = useWolfHandle(wolfMenu);
 	const wolfHex = wolf.color ? (THREAD_COLORS as Record<string, string>)[wolf.color] : undefined;
 	return (
-		<div data-testid="wolf-header" data-wolf={wolf.name} {...handle} className={cn("group/row relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2", !wolf.online && "opacity-50")}>
-			<span className="min-w-0 flex-1">
+		<div data-testid="wolf-header" data-wolf={wolf.name} className={cn("group/row relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2", !wolf.online && "opacity-50")}>
+			<span className="min-w-0 flex-1" {...handle}>
 				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--wp-prose-size)">
 					<span data-testid="orchestrator-icon" role="img" aria-label="Orchestrator" className={cn("inline-flex size-[1em] shrink-0", !wolfHex && "text-muted-foreground")} style={wolfHex ? { color: wolfHex } : undefined}>
 						<WolfpackMark className="size-full" />
@@ -715,9 +731,9 @@ export function SessionsSidebar() {
 	const homeWolves = useMemo(() => new Set((groups ?? []).filter((g) => g.top.kind === "home").map((g) => rowWolf(g.top))), [groups]);
 	const searching = query.trim() !== "";
 	const flat = (gs: readonly { top: SessionItem; kids: SessionItem[] }[]) => gs.flatMap((g) => [g.top, ...g.kids]);
-	/* Pin / Hide per wolf, per browser (localStorage; presentation only). Hidden and Archived are small collapsed sections; a search shows everything. */
+	/* Pin / Hide per wolf, per browser (localStorage; presentation only). The Den is one collapsed section at the bottom; a search shows everything. */
 	const [prefs, setPrefs] = useState<WolfPrefs>({ pinned: [], hidden: [] });
-	const [showHidden, setShowHidden] = useState(false);
+	const [denShown, setDenShown] = useState(false);
 	const [denOver, setDenOver] = useState(false);
 	const [sheetWolf, setSheetWolf] = useState<string | null>(null);
 	useEffect(() => {
@@ -729,10 +745,10 @@ export function SessionsSidebar() {
 	};
 	const parts = useMemo(() => (groups ? (searching ? { pinned: [], main: groups, hidden: [] } : partitionWolves(groups, prefs)) : null), [groups, prefs, searching]);
 	const hiddenWolfNames = new Set(searching ? [] : prefs.hidden);
-	const hiddenHeaders = roster.filter((w) => !homeWolves.has(w.name) && hiddenWolfNames.has(w.name));
-	const hiddenCount = new Set([...(parts?.hidden ?? []).map((g) => rowWolf(g.top)), ...hiddenHeaders.map((w) => w.name)]).size;
-	const hiddenOpen = showHidden && !searching;
-	const shown = useMemo(() => (parts ? [...flat(parts.pinned), ...flat(parts.main), ...(showHidden && !searching ? flat(parts.hidden) : []), ...(searching ? flat(archived) : [])] : null), [parts, archived, showHidden, searching]);
+	const denHeaders = roster.filter((w) => !homeWolves.has(w.name) && hiddenWolfNames.has(w.name));
+	const denCount = new Set([...(parts?.hidden ?? []).map((g) => rowWolf(g.top)), ...denHeaders.map((w) => w.name)]).size;
+	const denOpen = denShown && !searching;
+	const shown = useMemo(() => (parts ? [...flat(parts.pinned), ...flat(parts.main), ...(denShown && !searching ? flat(parts.hidden) : []), ...(searching ? flat(archived) : [])] : null), [parts, archived, denShown, searching]);
 	const denBadge = denNeedsYou(chats ?? [], prefs);
 	const dragsWolf = (e: { dataTransfer: DataTransfer }) => Array.from(e.dataTransfer.types).includes(WOLF_DRAG);
 	const menuFor = (wolf: string): WolfMenuProps => ({ wolf, onSheet: () => setSheetWolf(wolf), pinned: prefs.pinned.includes(wolf), hidden: prefs.hidden.includes(wolf), onPin: () => updatePrefs(togglePinned(prefs, wolf)), onHide: () => updatePrefs(toggleHidden(prefs, wolf)) });
@@ -1079,7 +1095,10 @@ export function SessionsSidebar() {
 					className="flex-1 overflow-y-auto p-2"
 					// Dropping a wolf anywhere on the list takes it out of the Den.
 					onDragOver={(e) => { if (dragsWolf(e)) e.preventDefault(); }}
+					onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDenOver(false); }}
+					onDragEnd={() => setDenOver(false)}
 					onDrop={(e) => {
+						setDenOver(false);
 						const w = e.dataTransfer.getData(WOLF_DRAG);
 						if (!w) return;
 						e.preventDefault();
@@ -1125,25 +1144,24 @@ export function SessionsSidebar() {
 								<button
 									type="button"
 									data-testid="den-toggle"
-									aria-label={denBadge > 0 ? `Den, ${denBadge} need you` : "Den"}
-									aria-expanded={hiddenOpen}
-									onClick={() => setShowHidden((v) => !v)}
+									aria-expanded={denOpen}
+									onClick={() => setDenShown((v) => !v)}
 									className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-muted-foreground hover:bg-accent max-md:min-h-11"
 								>
-									{hiddenOpen ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
+									{denOpen ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
 									<MoonIcon className="size-4" aria-hidden />
 									<span>Den</span>
-									{hiddenCount > 0 && <span data-testid="den-count" className="text-xs">{hiddenCount}</span>}
+									{denCount > 0 && <span data-testid="den-count" className="text-xs">{denCount}<span className="sr-only"> wolves in Den</span></span>}
 									{denBadge > 0 && (
-										<span data-testid="den-badge" className="ml-auto rounded-full bg-primary px-1.5 text-xs font-medium text-primary-foreground">{denBadge}</span>
+										<span data-testid="den-badge" className="ml-auto rounded-full bg-primary px-1.5 text-xs font-medium text-primary-foreground">{denBadge}<span className="sr-only"> need you</span></span>
 									)}
 								</button>
 							</Hint>
-							{hiddenOpen && (
+							{denOpen && (
 								<div className="px-1 pb-1">
 									{[
 										...parts!.hidden.flatMap((g) => renderGroup(g, g.top.kind !== "home" && homeWolves.has(rowWolf(g.top)))),
-										...hiddenHeaders.map((w) => <WolfHeaderRow key={`wolf-header-${w.name}`} wolf={w} wolfMenu={menuFor(w.name)} />),
+										...denHeaders.map((w) => <WolfHeaderRow key={`wolf-header-${w.name}`} wolf={w} wolfMenu={menuFor(w.name)} />),
 									]}
 								</div>
 							)}

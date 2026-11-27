@@ -23,14 +23,22 @@ describe("wolf pins and hides", () => {
 		assert.deepEqual(toggleHidden(h, "x").hidden, []);
 	});
 
-	it("moving to the Den is idempotent and unpins; showing is idempotent; the badge counts needs-you rows of Den wolves only", () => {
+	it("moving a wolf to the Den is idempotent and unpins it", () => {
 		const prefs = hideWolf({ pinned: ["a"], hidden: [] }, "a");
 		assert.deepEqual(prefs, { pinned: [], hidden: ["a"] });
 		assert.equal(hideWolf(prefs, "a"), prefs);
+	});
+
+	it("showing a wolf takes it out of the Den and is idempotent", () => {
+		const prefs = { pinned: [], hidden: ["a"] };
 		assert.deepEqual(showWolf(prefs, "a").hidden, []);
-		assert.equal(showWolf({ pinned: [], hidden: [] }, "a").hidden.length, 0);
+		const none = { pinned: [], hidden: [] };
+		assert.equal(showWolf(none, "a"), none);
+	});
+
+	it("the Den badge counts the needs-you rows of Den wolves only", () => {
 		const rows = [{ id: "a/home", meta: "a", needsYou: true }, { id: "a/f", meta: "a", needsYou: true }, { id: "a/g", meta: "a" }, { id: "b/home", meta: "b", needsYou: true }];
-		assert.equal(denNeedsYou(rows, prefs), 2);
+		assert.equal(denNeedsYou(rows, { pinned: [], hidden: ["a"] }), 2);
 	});
 
 	it("persists in storage and falls back to empty when storage throws or holds junk", () => {

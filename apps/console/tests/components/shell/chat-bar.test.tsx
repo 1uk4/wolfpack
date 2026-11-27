@@ -37,13 +37,15 @@ type Call = { url: string; body?: any };
 let calls: Call[] = [];
 let status: "idle" | "busy" = "idle";
 let bNeedsYou = false; // thread w/b waits on the owner
+let secondWolfDown = false; // a second wolf is listed but its thread list does not load yet (the lists are incomplete)
 let noHome = false; // the wolf has no home thread: nothing to auto-attach
 let holdSubmit: Promise<void> | null = null; // a send's POST stays in flight until this settles
 let archived = false;
 let kids: object[] = [];
 let gets: string[] = [];
 const handlers = new Map<string, (d: string) => void>();
-const fakeSource = () => ({ close() {}, onOpen() {}, onEvent: (n: string, cb: (d: string) => void) => void handlers.set(n, cb) });
+let fireOpen: (() => void) | null = null; // the event source's (re)open: the app's resync
+const fakeSource = () => ({ close() {}, onOpen: (cb: () => void) => void (fireOpen = cb), onEvent: (n: string, cb: (d: string) => void) => void handlers.set(n, cb) });
 const emit = (n: string, d: object) => act(async () => void handlers.get(n)?.(JSON.stringify(d)));
 const realFetch = globalThis.fetch;
 const th = (id: string, extra: object = {}) => ({ id, title: id, kind: "feature", status, ...extra });
@@ -56,7 +58,8 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	}
 	if (init?.method !== "POST") gets.push(url);
 	if (url.endsWith("/threads/a/children")) return Response.json({ threads: kids });
-	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
+	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }, ...(secondWolfDown ? [{ name: "v" }] : [])] });
+	if (url === "/api/wolves/v/threads") return secondWolfDown ? new Response("{}", { status: 503 }) : Response.json({ threads: [] });
 	if (url === "/api/wolves/w/threads") return Response.json({ threads: [...(noHome ? [] : [th("w/home", { kind: "home" })]), th("w/a", archived ? { closed: true } : {}), th("w/b", bNeedsYou ? { status: "needs-you" } : {})] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
@@ -108,6 +111,8 @@ afterEach(async () => {
 	status = "idle";
 	bNeedsYou = false;
 	noHome = false;
+	secondWolfDown = false;
+	fireOpen = null;
 	holdSubmit = null;
 	archived = false;
 	kids = [];
@@ -133,6 +138,19 @@ describe("ChatBar", () => {
 		assert.ok(q('[data-testid="chat-bar"]'), "the bar is on the page");
 		assert.equal(mem.get("wolfpack:chatbar:attached"), undefined);
 		assert.equal(mem.get("wolfpack:chatbar:home-wolf"), undefined);
+	});
+
+	it("a home thread that shows up after an incomplete first load still gets attached", async () => {
+		noHome = true;
+		secondWolfDown = true;
+		await mount("/kb");
+		assert.equal(mem.get(ATTACHED_KEY), undefined, "no home thread yet and a list is missing: nothing decided");
+		noHome = false;
+		secondWolfDown = false;
+		dataStore.clear();
+		await act(async () => void fireOpen?.());
+		await wait();
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/home");
 	});
 
 	it("is on /chat/new and hidden on the pairing page", async () => {

@@ -72,6 +72,8 @@ export function openNodeInViewer(nodeId: string, open: OpenViewFn | null): boole
 
 /** The default node look when a node carries no colour of its own. */
 const NODE_COLOR_TOKEN = "--primary";
+/** The controls container leaves this much room on its left for the sidebar handle (graph-home.tsx draws it at the left edge, with the KB label beside it), so the two never overlap. A literal class: Tailwind only sees whole strings. */
+const CHROME_LEFT_GUTTER = "left-[5rem]";
 
 type RenderSettings = GraphRenderSettings;
 
@@ -163,7 +165,7 @@ export function GraphChromeRow({
 					{noMatch && <div className="px-1.5 pt-1 text-[11px] text-muted-foreground">No matching nodes.</div>}
 				</div>
 			)}
-			<div className="graph-chrome-fade-in absolute bottom-0 right-0 flex shrink-0 items-center gap-2">
+			<div className="graph-chrome-fade-in pointer-events-auto absolute bottom-0 right-0 flex shrink-0 items-center gap-2">
 				<GraphSettingsControl settings={settings} changeSettings={changeSettings} domains={domains} />
 			</div>
 		</>
@@ -552,7 +554,7 @@ export function GraphView({
 				    ignores z-index, so without an explicit carve-out the controls
 				    were unclickable in the desktop app. The row NEVER wraps; in
 				    narrow windows the search shrinks. */}
-				<div className="wp-no-drag wp-wco-floating pointer-events-none absolute left-[5rem] right-2 top-2 bottom-[calc(var(--chat-bar-top,0px)+12px)] z-10 flex flex-col items-end gap-2">
+				<div className={`wp-no-drag wp-wco-floating pointer-events-none absolute ${CHROME_LEFT_GUTTER} right-2 top-2 bottom-[calc(var(--chat-bar-top,0px)+12px)] z-10 flex flex-col items-end gap-2`}>
 					<div className="pointer-events-auto z-20 flex min-w-0 items-start gap-2">
 						<GraphChromeRow
 							isEmpty={isEmpty}

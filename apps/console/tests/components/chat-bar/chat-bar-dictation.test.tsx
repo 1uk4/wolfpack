@@ -752,6 +752,23 @@ describe("one dictation path: the bar's when a thread is attached, the page's ow
 		assert.deepEqual(posts, [], "nothing sent");
 	});
 
+	it("docking and undocking move the same bar: its element and its input survive, so unsent state is not lost", async () => {
+		await mount("/kb", A, <><OnPageA /><DockSlot /></>);
+		const bar = q('[data-testid="chat-bar"]')!;
+		const input = barTa()!;
+		assert.ok(bar && input);
+		await act(async () => go("/wolf/w/thread/a"));
+		await wait();
+		assert.equal(q('[data-testid="chat-bar"]'), bar, "the same element after docking");
+		assert.equal(barTa(), input, "the same input after docking");
+		assert.ok(q('[data-testid="thread-dock-slot"]')!.contains(bar), "and it now sits in the page's slot");
+		await act(async () => go("/kb"));
+		await wait();
+		assert.equal(q('[data-testid="chat-bar"]'), bar, "the same element after undocking");
+		assert.equal(barTa(), input, "the same input after undocking");
+		assert.ok(!q('[data-testid="thread-dock-slot"]')!.contains(bar), "and it left the slot");
+	});
+
 	it("Cmd+J on the attached thread's page focuses the docked bar's input", async () => {
 		await mount("/wolf/w/thread/a", A, <><OnPageA /><DockSlot /></>);
 		let focusedBar = false;

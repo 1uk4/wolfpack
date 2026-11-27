@@ -331,6 +331,8 @@ describe("thread visualization mode", () => {
 		await settle(80);
 		const page = q('[data-testid="thread-main"] [data-testid="composer"] textarea') as HTMLTextAreaElement;
 		assert.equal(page.value, "half a thought");
+		// The bar is not remounted when it docks (so no unmount flush): the draft reaches the store on the normal debounce.
+		await settle(400);
 		assert.equal(store.get(DRAFT), "half a thought");
 	});
 

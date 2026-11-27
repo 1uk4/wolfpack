@@ -168,6 +168,33 @@ export function ChatBar() {
 	// eslint-disable-next-line react-hooks/exhaustive-deps -- the listed dictation fields are the ones the page reads; the dictation object itself is new every render
 	}, [dictation.phase, dictation.error, dictation.active, dictation.levelRef, dictation.toggle, dictation.stop, dictation.finish, dictation.cancel, shown, docked]);
 	useEffect(() => () => publishBarDictation(null), []);
+	// The Bar lives in one host element for good. Docked, the host moves into the thread page's dock slot (the page's composer position); otherwise it sits
+	// in this component's own mount point. Moving a DOM node keeps the React tree as is: composer sending state, attachments and the switcher survive.
+	const mountRef = useRef<HTMLDivElement | null>(null);
+	const [host, setHost] = useState<HTMLElement | null>(null);
+	useLayoutEffect(() => {
+		const el = document.createElement("div");
+		el.className = "contents";
+		mountRef.current?.appendChild(el);
+		setHost(el);
+		return () => el.remove();
+	}, []);
+	const placed = useRef(false);
+	useLayoutEffect(() => {
+		if (!host) return;
+		const to = docked && dockSlot ? dockSlot : mountRef.current;
+		if (!to || host.parentNode === to) return;
+		// FLIP: slide from where the bar was to where it lands (only on a real dock/undock, never on the first placement or under reduced motion).
+		const el = wrapRef.current;
+		const from = placed.current && el ? el.getBoundingClientRect() : null;
+		placed.current = true;
+		to.appendChild(host);
+		if (!el || !from || typeof el.animate !== "function" || (typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) return;
+		const now = el.getBoundingClientRect();
+		const dx = from.left - now.left;
+		const dy = from.top - now.top;
+		if (Math.abs(dx) > 1 || Math.abs(dy) > 1) el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0, 0)" }], { duration: 200, easing: "ease-out" });
+	}, [host, docked, dockSlot]);
 	// Space dictation needs the attached thread (the autosend is addressed to it) and its composer's draft (typed text means Space is typing).
 	useEffect(() => {
 		setSpaceContext(() => {
@@ -384,14 +411,17 @@ export function ChatBar() {
 	// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on whether a thread is attached, not on the attached object identity
 	}, [!!attached]);
 
-	if (!api || hidden) return null;
-	// Nothing attached (a fresh browser, the hub down): the icon is still on every page; a press attaches the owner's home thread.
-	if (!attached) return <DetachedIcon phone={!wide} dictation={dictation} />;
-	// The attached thread's own page: the page composer is the chat there.
-	if (own && !dockSlot) return null;
-	const bar = <Bar key={`${attached.wolf}/${attached.threadId}`} docked={own} swap={swap} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
-	// Docked: the same Bar is portalled into the thread page's slot (the page's composer position), so one component serves both places.
-	return own && dockSlot ? createPortal(bar, dockSlot) : bar;
+	const content = (() => {
+		if (!api || hidden) return null;
+		// Nothing attached (a fresh browser, the hub down): the icon is still on every page; a press attaches the owner's home thread.
+		if (!attached) return <DetachedIcon phone={!wide} dictation={dictation} />;
+		// The attached thread's own page: the page composer is the chat there.
+		if (own && !dockSlot) return null;
+		if (!host) return null;
+		// ALWAYS the same portal into the same host element: docking moves the host in the DOM (effect above), never the React tree, so the Bar is not remounted.
+		return createPortal(<Bar key={`${attached.wolf}/${attached.threadId}`} docked={docked} swap={swap} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />, host);
+	})();
+	return <div ref={mountRef} className="contents">{content}</div>;
 }
 
 /** The icon with nothing attached: it opens the owner's home thread (the bar attaches it) when there is one. */
@@ -424,9 +454,6 @@ export function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttach
 /** A downward swipe of at least this many px on the sheet's handle closes it. */
 const SWIPE_CLOSE_PX = 60;
 
-/** FLIP: a bar that moves between the page's dock slot and floating remounts (a portal change), so the last rect is handed over here and the new mount slides from it (~200ms, never under reduced motion). */
-let lastBarRect: { rect: DOMRect; at: number } | null = null;
-
 function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, closeSwitcher, dictation, registerAppend }: {
 	/** In the thread page's dock slot: static, full width of the slot, not floating. */
 	docked?: boolean;
@@ -444,21 +471,6 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 }) {
 	const api = useAttachedThread()!;
 	const { setMinimized, working, attachedThread, groups } = api;
-	useLayoutEffect(() => {
-		const el = wrapRef.current;
-		const prev = lastBarRect;
-		lastBarRect = null;
-		if (el && prev && Date.now() - prev.at < 400 && typeof el.animate === "function" && !(typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) {
-			const to = el.getBoundingClientRect();
-			const dx = prev.rect.left - to.left;
-			const dy = prev.rect.top - to.top;
-			if (Math.abs(dx) > 1 || Math.abs(dy) > 1) el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0, 0)" }], { duration: 200, easing: "ease-out" });
-		}
-		return () => {
-			if (el) lastBarRect = { rect: el.getBoundingClientRect(), at: Date.now() };
-		};
-	// eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount: the portal change remounts the Bar
-	}, [docked]);
 	const minimized = api.minimized && !swap;
 	const needsYouTotal = groups.reduce((n, g) => n + g.needsYou, 0);
 	const all = useMemo(() => Object.values(api.threads).flatMap((l) => l ?? []), [api.threads]);
@@ -692,9 +704,10 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				data-layout="dock"
 				data-state={minimized ? "minimized" : sheet ? "sheet" : "open"}
 				{...(sheet && !minimized ? { role: "dialog", "aria-modal": true, "aria-label": `Chat with ${title}` } : {})}
-				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? cn("z-[47]", askCard ? "" : "rounded-t-2xl") : vizOn ? "z-[45]" : "z-30")}
+				// Docked in the thread page's slot (not a sheet): the dock is a static block that takes its own height in the page, so the last messages are never under it.
+				className={cn("flex flex-col border-t bg-card shadow-lg", docked && !sheet ? "relative w-full" : "fixed inset-x-0", sheet ? cn("z-[47]", askCard ? "" : "rounded-t-2xl") : docked ? "" : vizOn ? "z-[45]" : "z-30")}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
-				style={{ bottom: inset, paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
+				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
 			>
 				{!sheet && swapPill}

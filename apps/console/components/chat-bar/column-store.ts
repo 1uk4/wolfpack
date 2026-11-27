@@ -28,6 +28,11 @@ function measure() {
 	rect = { left: r.left, width: r.width };
 	for (const cb of subs) cb();
 }
+/** A transition that can move the column is one on the column or an element holding it; every other transition on the page (hover fades) is ignored. */
+const onTransitionEnd = (e: Event) => {
+	const col = target();
+	if (col && e.target instanceof Node && e.target.contains(col)) schedule();
+};
 const schedule = () => {
 	if (frame) return;
 	frame = requestAnimationFrame(() => {
@@ -57,7 +62,7 @@ function subscribe(cb: () => void): () => void {
 	if (subs.size === 0) {
 		ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
 		window.addEventListener("resize", schedule);
-		document.addEventListener("transitionend", schedule, true);
+		document.addEventListener("transitionend", onTransitionEnd, true);
 		observeTarget();
 		measure();
 	}
@@ -69,7 +74,7 @@ function subscribe(cb: () => void): () => void {
 		ro = null;
 		observed = null;
 		window.removeEventListener("resize", schedule);
-		document.removeEventListener("transitionend", schedule, true);
+		document.removeEventListener("transitionend", onTransitionEnd, true);
 		if (frame) cancelAnimationFrame(frame);
 		frame = 0;
 	};

@@ -242,7 +242,7 @@ export function AttachedThreadProvider({
 		refreshWolf(ref.wolf);
 	}, [setAttached, refreshWolf]);
 
-	// Auto-attach: once the lists have loaded with nothing attached, the owner's own wolf's home thread is attached, once per session.
+	// Auto-attach: once the lists have loaded (every online wolf's) with nothing attached, the owner's own wolf's home thread is attached, once per session.
 	// A restored attachment, an explicit attach or detach, and a closed thread (settle) all count as "decided": none is overridden.
 	const autoDecided = useRef(false);
 	useEffect(() => {
@@ -253,9 +253,10 @@ export function AttachedThreadProvider({
 		}
 		const owner = pickOwnerWolf(wolves);
 		if (!owner || !threads[owner]) return;
-		autoDecided.current = true;
 		const home = pickHomeThread(wolves, threads);
-		if (home) attach(home);
+		if (home) return attach(home); // attach() marks it decided
+		// No home thread yet: only final once every online wolf's list is in. A missing list may still bring one, so keep waiting.
+		if (wolves.every((w) => w.status === "offline" || threads[w.name])) autoDecided.current = true;
 	}, [ready, attached, wolves, threads, attach]);
 
 	const detach = useCallback(() => {

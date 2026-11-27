@@ -168,6 +168,37 @@ describe("resolvePositions drift", () => {
 	});
 });
 
+describe("resolvePositions: a subtree arriving after the rest", () => {
+	// A Factory (work items) loads after the KB: its nodes are new, linked only to each other
+	// and to one anchored node. They must settle like a fresh layout, not stay pinned on the rim
+	// (they then sat bunched, and snapped out on the first drag).
+	it("settles a new connected subtree as tightly as a fresh layout does", () => {
+		const old = ["hub", ...Array.from({ length: 30 }, (_, i) => `e${i}`)];
+		const fresh = ["fac", "mid", ...Array.from({ length: 12 }, (_, i) => `t${i}`)];
+		const nodes = [...old, ...fresh].map((id) => ({ id }));
+		const edges = [
+			...old.slice(1).map((e) => ({ from: "hub", to: e })),
+			{ from: "hub", to: "fac" },
+			{ from: "fac", to: "mid" },
+			...fresh.slice(2).map((t) => ({ from: "mid", to: t })),
+		];
+		const oldIds = new Set(old);
+		const known = resolvePositions(
+			nodes.filter((n) => oldIds.has(n.id)),
+			edges.filter((e) => oldIds.has(e.from) && oldIds.has(e.to)),
+			new Map(),
+		).positions;
+		const reach = (positions: Map<string, { x: number; y: number }>) => {
+			const ts = fresh.slice(2).map((id) => positions.get(id)!);
+			const mid = positions.get("mid")!;
+			return ts.reduce((s, p) => s + Math.hypot(p.x - mid.x, p.y - mid.y), 0) / ts.length;
+		};
+		const staged = reach(resolvePositions(nodes, edges, known).positions);
+		const together = reach(resolvePositions(nodes, edges, new Map()).positions);
+		assert.ok(staged < together * 1.2, `staged ${Math.round(staged)} vs fresh ${Math.round(together)}`);
+	});
+});
+
 describe("parseCamera", () => {
 	it("round-trips a stored camera", () => {
 		assert.deepEqual(parseCamera(JSON.stringify({ k: 2, x: -10, y: 5 })), { k: 2, x: -10, y: 5 });

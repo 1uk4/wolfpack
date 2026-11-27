@@ -46,9 +46,17 @@ export function buildPayload(config: Record<string, unknown>, drafts: Record<str
 			}
 			value = n;
 		}
+		if (value === "" && current === undefined) continue; // an empty box over an unset key is no change
+		if (typeof value === "string" && (typeof current === "number" || typeof current === "boolean") && String(current) === value) continue; // the box shows the saved value as text
 		if (value !== current) set[key] = value;
 	}
 	return { set, invalid };
+}
+
+/** The draft keys that differ from the saved config (or are invalid): what Save would act on. */
+export function changedKeys(config: Record<string, unknown>, drafts: Record<string, Draft>): string[] {
+	const { set, invalid } = buildPayload(config, drafts);
+	return Object.keys(drafts).filter((k) => k in set || k in invalid);
 }
 
 /** wolfd's 400 message is "path: message; path: message". */

@@ -61,11 +61,11 @@ describe("floating wolves in the overlay", () => {
 		assert.ok(Math.hypot(t1.x - t0.x, t1.y - t0.y) > 0.3, "it moved");
 		const xs: number[] = [];
 		for (let t = 0; t < 60_000; t += 500) xs.push(wolfAt(5_000_000_000_000 + t).x);
-		assert.ok(Math.max(...xs) - Math.min(...xs) <= 2 * 3.5 * (34 / 36.4) + 1e-9, "the drift stays inside the amplitude around the body");
+		assert.ok(Math.max(...xs) - Math.min(...xs) <= 2 * 3.5 * 0.55 + 1e-9, "the drift stays inside the amplitude around the body");
 		const items = o.items(host, 1, 5_000_000_002_000);
 		const dot = items.find((i) => i.kind === "thread")!;
 		const wolf = items.find((i) => i.kind === "wolf")!;
-		assert.ok(Math.abs(Math.hypot(dot.x - wolf.x, dot.y - wolf.y) - 25 * (34 / 36.4)) < 1e-6, "the dot orbits the floated wolf");
+		assert.ok(Math.abs(Math.hypot(dot.x - wolf.x, dot.y - wolf.y) - 25 * 0.55) < 1e-6, "the dot orbits the floated wolf");
 		const hit = o.hitTest(wolf.x, wolf.y, { x: 0, y: 0, k: 1 }, 1);
 		assert.equal(hit?.item.kind, "wolf");
 		assert.ok(Math.hypot(hit!.sx - wolf.x, hit!.sy - wolf.y) < 1e-9, "the hit is reported at the floated position");
@@ -108,7 +108,7 @@ describe("wolf spacing: ring anchors, activity bias, soft separation", () => {
 	});
 	const ev = (verb: string, actor: Record<string, unknown>): ActivityEvent => ({ v: 1, id: `s${Math.random()}`, pack: "p", ts: 0, ttlMs: 600_000, actor, verb }) as unknown as ActivityEvent;
 	const T0 = 5_000_000_000_000;
-	const DIAM = 34; // wolf diameter in world units at k=1
+	const DIAM = 18.7; // wolf diameter in world units at k=1 (34 * 0.55)
 	let o: LiveOverlay;
 	const spawn = (names: string[]) => {
 		for (const n of names) o.dispatch({ type: "event", event: ev("thread-active", { kind: "thread", wolf: n, threadId: `${n}/home` }), now: Date.now() });

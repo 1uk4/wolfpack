@@ -30,6 +30,8 @@ import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path
 import { AMBER, EFFECTS, rgba } from "./live-effects";
 import { floatOffset, nameHash } from "./live-float";
 import { LIVE_TUNING } from "./live-tuning";
+import { badgeRadiusPx, badgeRing, isLightHex, ownerSpot, parkingSpot, stateRingRadiusPx, wolfFallbackHex } from "./live-badge";
+import { LABEL_LEVELS, type LabelObstacle } from "@/src/core";
 import { newMotion, restSlot, tetherStrength, wolfEvent, wolfStep, type WolfMotion } from "./live-den";
 import { elasticStep, pullFor, ringSlots, trailOrigin, type Elastic } from "./live-rings";
 import { redact } from "@/src/core";
@@ -47,6 +49,8 @@ export interface OverlayHost {
 	nodeLabel?(id: string): string | undefined;
 	/** Tell the base layer which node dots the overlay replaces (hubs on their work nodes). Only called when the set changes. */
 	setReplacedNodes?(ids: ReadonlySet<string>): void;
+	/** The graph's effective label zoom (label-lod effectiveZoom); the badge pills show from the leaf level on. */
+	labelZoom?(): number;
 	colors: { node: string; edge: string; label: string; hoverText: string };
 	fontFamily: string;
 }
@@ -72,15 +76,9 @@ export const WOLF_MIN_PX = 14;
 /** Everything else (dots, hubs, subagents, offsets) is drawn in reference px for the old 26 px wolf and keeps that size: m divides the 1.4x out. */
 const WOLF_SCALE = 1.4;
 const REF_PX = 26;
-/** A sub-agent ring around a wolf with no feature group is this much wider than a feature ring. */
-const WOLF_RING_GROW = 1.3;
-/** A wolf settles this far (ref px) from the thing it went to, on its own angle. */
-const LINGER_OFFSET = 18;
 /** Trails older than this when first seen (a page load replaying history) move nothing. */
 const EVENT_MAX_AGE_MS = 20_000;
 /** Dot radius, orbits and offsets are in reference px (drawn for a 26 px wolf); they keep that proportion at every zoom. */
-/** A sub-agent of a wolf with no feature ring is drawn at this share of the wolf icon (on a feature ring it is the small ring icon). */
-const SUBAGENT_RATIO = 0.7;
 const THREAD_DOT_R = 3.2;
 const SAT_ORBIT = 25;
 /** A feature group with no node of its own sits this far (ref px) from its domain node. */
@@ -89,8 +87,6 @@ const HUB_FALLBACK_OFFSET = 34;
 const FLOAT_WOLF_PX = 3.5;
 /** The feature hub's radius (reference px), its distance from its node, and from the domain node when it has no node of its own. */
 const HUB_R = 7.5;
-/** A hub on its work node is drawn at least this much bigger than the node's own dot. */
-const HUB_NODE_GROW = 1.4;
 /** The launch burst when a subagent leaves its hub (ms). */
 const LAUNCH_MS = 900;
 /** The you badge (screen px): radius, gap above the composer's top edge, and its margin off the canvas bottom when there is no composer. */
@@ -124,6 +120,8 @@ interface Body {
 	sx: number;
 	sy: number;
 	placed: boolean;
+	/** The node the wolf is working at (world): the faint tether is drawn to it while it lingers. */
+	target?: Pt;
 }
 /** A feature group's elastic offset from its home (the hub position), its goal and when the goal lapses (wall ms). */
 interface Group extends Elastic { gx: number; gy: number; until: number }
@@ -170,6 +168,7 @@ function bucketOf<T>(map: Map<string, T[]>, key: string, pool: unknown[][]): T[]
 
 /** lucide house, in its 24 x 24 box: the den's placeholder icon. */
 const homeGlyph = (): Path2D => (homePath ??= new Path2D("M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"));
+const DIM_FILL = "#8b9099";
 let userPath: Path2D | null = null;
 /** lucide user, in its 24 x 24 box. */
 const userGlyph = (): Path2D => (userPath ??= new Path2D("M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z"));
@@ -260,6 +259,17 @@ export class LiveOverlay {
 	private trailRef = new Map<string, TrailRef>();
 	private composer: { x: number; y: number; w: number; h: number } | null = null;
 	private badge: { x: number; y: number; r: number } | null = null;
+	/** Wolf colours as the sidebar shows them (name -> hex); a wolf without one gets a stable fallback. */
+	private wolfColors = new Map<string, string>();
+	/** The overlay thing under the pointer ("kind:key") and the camera zoom of the last step (screen px per world unit). */
+	private hoverKey: string | null = null;
+	private kNow = 1;
+	/** The owner node (world), recomputed by ownerWorld(). */
+	private ownerTmp: Pt = { x: 0, y: 0 };
+	private ownerR = 0;
+	/** Pill text widths by label (at 11 px), measured once. */
+	private pillW = new Map<string, number>();
+	private pillTheme: { colors: unknown; light: boolean } | null = null;
 	private attached: AttachedRef | null = null;
 	private highlight: OverlayHighlight | null = null;
 	private settings: OverlaySettings = LIVE_DEFAULTS;
@@ -315,6 +325,41 @@ export class LiveOverlay {
 	setPrivate(on: boolean): void {
 		this.privateView = on;
 		this.requestFrame();
+	}
+
+	/** The wolves' own colours from the console roster (hex), as the sidebar shows them. */
+	setWolfColors(colors: ReadonlyMap<string, string>): void {
+		let same = colors.size === this.wolfColors.size;
+		if (same) for (const [n, c] of colors) if (this.wolfColors.get(n) !== c) same = false;
+		if (same) return;
+		this.wolfColors = new Map(colors);
+		this.requestFrame();
+	}
+
+	/** The pointer is over this overlay thing (or nothing): its pill shows and the owner link follows. */
+	setHover(key: string | null): void {
+		if (key === this.hoverKey) return;
+		this.hoverKey = key;
+		this.requestFrame();
+	}
+
+	/**
+	 * The wolf badges as screen discs for the label pass (labels under a badge hide). Fills `out` in place and returns how many, plus a
+	 * position signature quantised to 4 px so the label choice is not redone for sub-pixel float.
+	 */
+	fillObstacles(out: LabelObstacle[], tr: { x: number; y: number; k: number }): { n: number; sig: number } {
+		let n = 0;
+		let sig = 0;
+		for (const it of this.cachedItems) {
+			if (it.kind !== "wolf" && it.kind !== "feature") continue;
+			const o = (out[n] ??= { sx: 0, sy: 0, r: 0 });
+			o.sx = it.x * tr.k + tr.x;
+			o.sy = it.y * tr.k + tr.y;
+			o.r = it.r * tr.k + 3;
+			sig = (sig * 31 + Math.round(o.sx / 4) * 7 + Math.round(o.sy / 4) * 13 + n) | 0;
+			n++;
+		}
+		return { n, sig };
 	}
 
 	configure(s: OverlaySettings): void {
@@ -463,8 +508,10 @@ export class LiveOverlay {
 	step(now: number, dtSec: number, host: OverlayHost, k: number): void {
 		this.syncReplaced(host);
 		if (!this.settings.enabled) return;
+		this.kNow = k;
 		const s = this.state;
-		const { m, wolfPx } = scaleFor(k);
+		const { m } = scaleFor(k);
+		const wolfPx = badgeRadiusPx(this.mobileNow, LIVE_TUNING) * 2;
 		const reduced = this.reduced;
 		const bodies = this.bodyList;
 		bodies.length = 0;
@@ -630,7 +677,8 @@ export class LiveOverlay {
 				sub.gy = pull.self!.y;
 				sub.until = wall + pull.self!.holdSec * 1000;
 			}
-			wolfEvent(wb.mot, wall, this.waypoints(host, t.wolf, t.target, tp, wb.mot.phase, m));
+			wolfEvent(wb.mot, wall, this.waypoints(host, t.wolf, t.target, tp, id, wb));
+			wb.target = { x: tp.x, y: tp.y };
 		}
 		if (this.seenTrails.size > 600) {
 			const live = new Set(s.trails.map((x) => x.id));
@@ -639,15 +687,18 @@ export class LiveOverlay {
 	}
 
 	/** Along the connections: the wolf's home domain (only when it is leaving the den), the target's domain, then beside the target. */
-	private waypoints(host: OverlayHost, wolf: string, target: LiveTarget, tp: Pt, phase: string, m: number): Pt[] {
+	private waypoints(host: OverlayHost, wolf: string, target: LiveTarget, tp: Pt, nodeId: string | null, wb: Body): Pt[] {
+		const phase = wb.mot.phase;
 		const via: Pt[] = [];
 		const home = this.wolfMeta.get(wolf)?.dom;
 		const hp = home && (phase === "resting" || phase === "returning") ? host.nodePos(`dom:${home}`) : null;
 		if (hp) via.push({ x: hp.x, y: hp.y });
 		const dp = target.domain && target.domain !== home ? host.nodePos(`dom:${target.domain}`) : null;
 		if (dp) via.push({ x: dp.x, y: dp.y });
-		const a = (this.hashOf(wolf) % 360) * (Math.PI / 180);
-		via.push({ x: tp.x + Math.cos(a) * LINGER_OFFSET * m, y: tp.y + Math.sin(a) * LINGER_OFFSET * m });
+		// It settles beside the node, on the side it came from (the last stop, else where it is), never on top of it.
+		const from = via.length > 0 ? via[via.length - 1]! : wb.mot;
+		const nodeRPx = (nodeId ? (host.nodeRadius?.(nodeId) ?? 0) : 0) * this.kNow;
+		via.push(parkingSpot(tp, from, nodeRPx, badgeRadiusPx(this.mobileNow, LIVE_TUNING), LIVE_TUNING.parkGapPx, this.kNow));
 		return via;
 	}
 
@@ -784,7 +835,7 @@ export class LiveOverlay {
 			const fc = b.parentKey ? this.groupCentre.get(b.parentKey) : undefined;
 			const wb = this.bodies.get(b.a.wolf);
 			const c = fc ?? wb ?? host.center();
-			const radius = (fc ? T.ringRadiusPx : T.ringRadiusPx * WOLF_RING_GROW) * m;
+			const radius = stateRingRadiusPx(this.mobileNow, T) / this.kNow;
 			if (b.a.finishedAt !== undefined || wall > b.until) {
 				b.gx = 0;
 				b.gy = 0;
@@ -795,6 +846,7 @@ export class LiveOverlay {
 			b.y = c.y + Math.sin(b.ang) * radius + b.off.y;
 		}
 		void now;
+		void m;
 	}
 
 	/** World points the you badge links to: the viewed thread / item (secondary) and the floating chat's attached thread (primary). */
@@ -945,6 +997,7 @@ export class LiveOverlay {
 		out.length = 0;
 		const sc = scaleFor(k);
 		const m = sc.m;
+		const badgeR = badgeRadiusPx(this.mobileNow, LIVE_TUNING);
 		const fade = this.settings.subagentFadeSec;
 		const reduced = this.reduced;
 		// Indexes built once per call: subagents by parent thread, visible threads by wolf.
@@ -972,13 +1025,12 @@ export class LiveOverlay {
 			const w = s.wolves[name]!;
 			const b = this.bodies.get(w.name);
 			if (!b) continue;
-			const dom = this.wolfMeta.get(w.name)?.dom ?? homeDomainOf(w, w.name);
-			const color = (dom && host.nodeColor(`dom:${dom}`)) || host.colors.node;
+			const color = this.wolfColors.get(w.name) ?? wolfFallbackHex(w.name);
 			// The idle float: a pure function of the clock, so every frame rate shows the same path.
 			const fo = floatOffset(this.hashOf(w.name), now, FLOAT_WOLF_PX * m * (sc.compact ? FLOAT_COMPACT_AMP : 1) * (w.online ? 1 : FLOAT_OFFLINE_AMP), { reduced, slow: w.online ? 1 : FLOAT_OFFLINE_SLOW });
 			const wx = b.x + fo.dx;
 			const wy = b.y + fo.dy;
-			const wolfItem: OverlayItem = { kind: "wolf", key: w.name, wolf: w.name, x: wx, y: wy, r: sc.wolfPx / 2 / k, alpha: w.online ? 1 : 0.35, needsYou: w.needsYou, online: w.online, working: w.online && this.workingSet.has(w.name), color, label: w.name };
+			const wolfItem: OverlayItem = { kind: "wolf", key: w.name, wolf: w.name, x: wx, y: wy, r: badgeR / k, alpha: w.online ? 1 : 0.6, needsYou: w.needsYou, online: w.online, working: w.online && this.workingSet.has(w.name), color, label: w.name };
 			out.push(wolfItem);
 			this.wolfItems.set(w.name, wolfItem);
 			const all = threadsByWolf.get(w.name) ?? [];
@@ -999,11 +1051,10 @@ export class LiveOverlay {
 				const tkey = threadKey(t.wolf, t.id);
 				const pos = this.groupCentre.get(tkey) ?? this.hubPos(t, host, m, this.anchorTmp);
 				const nodeId = this.hubNodeId(t, host) ?? undefined;
-				const nodeR = nodeId ? (host.nodeRadius?.(nodeId) ?? 0) : 0;
 				let running = 0;
 				for (const a of subsByThread.get(tkey) ?? []) if (a.finishedAt === undefined) running++;
 				const working = t.active || running > 0;
-				const hub: OverlayItem = { kind: "feature", key: tkey, wolf: t.wolf, threadId: t.id, x: pos.x, y: pos.y, r: Math.max(LIVE_TUNING.ringRadiusPx * m, nodeR * HUB_NODE_GROW), alpha: working ? 1 : 0.5, needsYou: t.needsYou, online: w.online, working, color, label: t.title ?? threadSlugOf(t.wolf, t.id), subCount: running, nodeId, nodeLabel: nodeId ? host.nodeLabel?.(nodeId) : undefined };
+				const hub: OverlayItem = { kind: "feature", key: tkey, wolf: t.wolf, threadId: t.id, x: pos.x, y: pos.y, r: badgeR / k, alpha: working ? 1 : 0.7, needsYou: t.needsYou, online: w.online, working, color, label: t.title ?? threadSlugOf(t.wolf, t.id), subCount: running, nodeId, nodeLabel: nodeId ? host.nodeLabel?.(nodeId) : undefined };
 				out.push(hub);
 				this.threadItems.set(tkey, hub);
 				this.featureItems.set(tkey, hub);
@@ -1017,7 +1068,7 @@ export class LiveOverlay {
 			const b = this.subBodies.get(a.key);
 			if (!b || al <= 0.02) continue;
 			const wi = this.wolfItems.get(a.wolf);
-			const item: OverlayItem = { kind: "subagent", key: a.key, wolf: a.wolf, threadId: a.parentThreadId, x: b.x, y: b.y, r: b.parentKey ? LIVE_TUNING.ringSubPx * m : (sc.wolfPx * SUBAGENT_RATIO) / 2 / k, alpha: al, needsYou: false, online: wi?.online ?? true, color: wi?.color ?? host.colors.node, label: a.title ?? a.name };
+			const item: OverlayItem = { kind: "subagent", key: a.key, wolf: a.wolf, threadId: a.parentThreadId, x: b.x, y: b.y, r: LIVE_TUNING.ringSubPx / k, alpha: al, needsYou: false, online: wi?.online ?? true, color: wi?.color ?? host.colors.node, label: a.title ?? a.name };
 			out.push(item);
 			this.subItems.set(a.key, item);
 		}
@@ -1094,7 +1145,7 @@ export class LiveOverlay {
 				}
 			} else if (it.kind === "subagent" && !compactNow) {
 				const parent = this.featureItems.get(threadKey(it.wolf, it.threadId ?? "")) ?? this.wolfItems.get(it.wolf);
-				if (parent) {
+				if (parent && Math.hypot(it.x - parent.x, it.y - parent.y) * k > stateRingRadiusPx(this.mobileNow, LIVE_TUNING) * 1.5) {
 					ctx.lineWidth = 1 / k;
 					this.line(ctx, parent, it, rgba(it.color, 0.35 * it.alpha));
 					ctx.lineWidth = 1.2 / k;
@@ -1113,39 +1164,24 @@ export class LiveOverlay {
 				ctx.setLineDash([]);
 			}
 		}
-		// Glyphs.
+		// A wolf at its node: a short faint tether between its badge and the node.
+		for (const name in s.wolves) {
+			const b = this.bodies.get(name);
+			const wi = this.wolfItems.get(name);
+			if (!b || !wi || !b.target || (b.mot.phase !== "lingering" && b.mot.phase !== "working")) continue;
+			let onHub = false; // a feature hub there already has its own link
+			for (const f of this.featureItems.values()) if (Math.abs(f.x - b.target.x) < 0.5 && Math.abs(f.y - b.target.y) < 0.5) onHub = true;
+			if (onHub) continue;
+			ctx.lineWidth = 1 / k;
+			ctx.setLineDash([2 / k, 3 / k]);
+			this.line(ctx, wi, b.target, rgba(wi.color, 0.35 * wi.alpha));
+			ctx.setLineDash([]);
+		}
+		// Glyphs: wolves and feature threads are avatar badges; sub-agents small dots; thread satellites plain dots.
 		for (const it of items) {
 			ctx.globalAlpha = it.alpha;
-			if (it.kind === "wolf") {
-				if (it.online) {
-					// Working: a stronger glow that slowly breathes (static and bright under reduced motion). Idle: a calm, faint one.
-					const breath = it.working ? (reduced ? 1 : 0.8 + 0.2 * Math.sin(now / 900)) : 0.5;
-					ctx.globalAlpha = it.alpha * breath;
-					EFFECTS.glow!({ ctx, x: it.x, y: it.y, r: it.r * (it.working ? 1.25 : 1), k, t: 0, color: it.color, intensity: it.working ? Math.min(5, I + 1) : I, reduced });
-					ctx.globalAlpha = it.alpha;
-				}
-				// The Wolfpack wolf-head centred on the body in the wolf's colour (alpha dims an offline wolf).
-				ctx.save();
-				ctx.translate(it.x - it.r, it.y - it.r);
-				ctx.scale((it.r * 2) / WOLF_HEAD_BOX, (it.r * 2) / WOLF_HEAD_BOX);
-				ctx.fillStyle = rgba(it.color, 0.95);
-				ctx.fill(wolfHeadPath(), "evenodd");
-				ctx.restore();
-			} else if (it.kind === "feature") {
-				// The feature thread: a wolf icon inside a hollow ring (the thread itself); its sub-agents sit on the ring. Working adds the pulsing ring, idle stays dim.
-				ctx.beginPath();
-				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
-				ctx.lineWidth = 1.6 / k;
-				ctx.strokeStyle = rgba(it.color, it.working ? 0.95 : 0.7);
-				ctx.stroke();
-				const wr = LIVE_TUNING.ringWolfPx * m;
-				ctx.save();
-				ctx.translate(it.x - wr, it.y - wr);
-				ctx.scale((wr * 2) / WOLF_HEAD_BOX, (wr * 2) / WOLF_HEAD_BOX);
-				ctx.fillStyle = rgba(it.color, it.working ? 0.95 : 0.7);
-				ctx.fill(wolfHeadPath(), "evenodd");
-				ctx.restore();
-				if (it.working) this.drawWorkingRing(ctx, it, k, now, reduced);
+			if (it.kind === "wolf" || it.kind === "feature") {
+				this.drawBadge(ctx, it, k, now, reduced);
 			} else if (it.kind === "thread") {
 				ctx.beginPath();
 				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
@@ -1153,18 +1189,20 @@ export class LiveOverlay {
 				ctx.fill();
 				if (it.working) this.drawWorkingRing(ctx, it, k, now, reduced);
 			} else if (it.kind === "subagent") {
-				ctx.save();
-				ctx.translate(it.x - it.r, it.y - it.r);
-				ctx.scale((it.r * 2) / WOLF_HEAD_BOX, (it.r * 2) / WOLF_HEAD_BOX);
-				ctx.fillStyle = rgba(it.color, 0.9);
-				ctx.fill(wolfHeadPath(), "evenodd");
-				ctx.restore();
+				ctx.beginPath();
+				ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
+				ctx.fillStyle = rgba(it.color, 0.95);
+				ctx.fill();
+				ctx.lineWidth = 1 / k;
+				ctx.strokeStyle = "rgba(255,255,255,0.85)";
+				ctx.stroke();
 			}
 			ctx.globalAlpha = 1;
-			if (it.needsYou && (it.kind === "wolf" || it.kind === "thread" || it.kind === "feature")) {
+			if (it.needsYou && it.kind === "thread") {
 				EFFECTS.ring!({ ctx, x: it.x, y: it.y, r: it.r, k, t: 0, color: AMBER, intensity: I, reduced, time: now, alpha: it.alpha });
 			}
 		}
+		this.drawPills(ctx, host, items, k);
 		const hl = this.highlight;
 		if (hl) {
 			let at: Pt | null = null;
@@ -1200,7 +1238,6 @@ export class LiveOverlay {
 		const T = LIVE_TUNING;
 		const den = host.center();
 		const col = host.colors.label;
-		const pulse = reduced ? 0 : 0.5 + 0.5 * Math.sin(now / 1600);
 		ctx.save();
 		ctx.lineWidth = 1.2 / k;
 		for (const name in this.state.wolves) {
@@ -1218,12 +1255,8 @@ export class LiveOverlay {
 		ctx.globalAlpha = 1;
 		const r = T.denRadiusPx * m;
 		ctx.beginPath();
-		ctx.arc(den.x, den.y, r * (1.25 + 0.2 * pulse), 0, Math.PI * 2);
-		ctx.fillStyle = rgba(YOU_ACCENT, 0.1);
-		ctx.fill();
-		ctx.beginPath();
 		ctx.arc(den.x, den.y, r, 0, Math.PI * 2);
-		ctx.fillStyle = rgba(host.colors.node, 0.35);
+		ctx.fillStyle = rgba(host.colors.node, 0.25);
 		ctx.fill();
 		ctx.lineWidth = 1.5 / k;
 		ctx.strokeStyle = rgba(col, 0.5);
@@ -1237,15 +1270,20 @@ export class LiveOverlay {
 		ctx.stroke(homeGlyph());
 		ctx.restore();
 		// The owner node and its dashed link.
-		const ow = { x: den.x, y: den.y - T.ownerOffsetPx * m };
-		const focus = (this.attached ? this.wolfItems.get(this.attached.wolf) : undefined) ?? this.firstNeedingYou();
+		const or = 13 * m;
+		const ow = ownerSpot(den, r, or, T.ownerGapPx * m);
+		this.ownerTmp.x = ow.x;
+		this.ownerTmp.y = ow.y;
+		this.ownerR = or;
+		// The dashed link is short-range: only while the owner or a wolf is hovered.
+		const hk = this.hoverKey;
+		const focus = hk === "you:owner" ? ((this.attached ? this.wolfItems.get(this.attached.wolf) : undefined) ?? this.firstNeedingYou()) : hk?.startsWith("wolf:") ? this.wolfItems.get(hk.slice(5)) : undefined;
 		if (focus) {
 			ctx.setLineDash([5 / k, 5 / k]);
 			ctx.lineWidth = 1.4 / k;
 			this.line(ctx, ow, focus, rgba(focus.color, 0.7));
 			ctx.setLineDash([]);
 		}
-		const or = 13 * m;
 		ctx.beginPath();
 		ctx.arc(ow.x, ow.y, or, 0, Math.PI * 2);
 		ctx.fillStyle = rgba(YOU_ACCENT, 0.2);
@@ -1270,6 +1308,102 @@ export class LiveOverlay {
 		}
 		const id = targetNodeId(target, (n) => host.hasNode(n));
 		return id ? host.nodePos(id) : null;
+	}
+
+	/** The avatar badge of a wolf or feature thread: a disc in the wolf's colour, a white wolf glyph, a quiet shadow and hairline border, and the one state ring hugging it. */
+	private drawBadge(ctx: CanvasRenderingContext2D, it: OverlayItem, k: number, now: number, reduced: boolean): void {
+		const T = LIVE_TUNING;
+		const st = badgeRing({ online: it.online, working: !!it.working, needsYou: it.needsYou }, T);
+		ctx.save();
+		ctx.shadowColor = "rgba(0,0,0,0.28)";
+		ctx.shadowBlur = 5;
+		ctx.shadowOffsetY = 1.5;
+		ctx.beginPath();
+		ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
+		ctx.fillStyle = rgba(st.dim ? DIM_FILL : it.color, 1);
+		ctx.fill();
+		ctx.restore();
+		ctx.lineWidth = 1 / k;
+		ctx.strokeStyle = "rgba(255,255,255,0.6)";
+		ctx.stroke();
+		const wr = it.r * 0.62;
+		ctx.save();
+		ctx.translate(it.x - wr, it.y - wr);
+		ctx.scale((wr * 2) / WOLF_HEAD_BOX, (wr * 2) / WOLF_HEAD_BOX);
+		ctx.fillStyle = st.dim ? "rgba(255,255,255,0.8)" : "#ffffff";
+		ctx.fill(wolfHeadPath(), "evenodd");
+		ctx.restore();
+		if (st.kind === "none") return;
+		const rr = stateRingRadiusPx(this.mobileNow, T) / k;
+		const color = st.amber ? AMBER : it.color;
+		ctx.lineCap = "round";
+		if (st.kind === "arc") {
+			const a0 = reduced ? -Math.PI / 2 - st.sweepRad / 2 : (now / 1000) * ((Math.PI * 2) / T.arcTurnSec) + (this.hashOf(it.key) % 628) / 100;
+			ctx.beginPath();
+			ctx.arc(it.x, it.y, rr, a0, a0 + st.sweepRad);
+			ctx.lineWidth = T.ringStrokePx / k;
+			ctx.strokeStyle = rgba(color, 0.95);
+			ctx.stroke();
+		} else {
+			const pulse = st.pulse && !reduced ? 0.7 + 0.3 * Math.sin(now / 450) : 1;
+			const a = ctx.globalAlpha;
+			ctx.beginPath();
+			ctx.arc(it.x, it.y, rr, 0, Math.PI * 2);
+			ctx.globalAlpha = a * 0.2 * pulse;
+			ctx.lineWidth = (T.ringStrokePx * 2.4) / k;
+			ctx.strokeStyle = rgba(color, 1);
+			ctx.stroke();
+			ctx.globalAlpha = a * pulse;
+			ctx.lineWidth = T.ringStrokePx / k;
+			ctx.stroke();
+			ctx.globalAlpha = a;
+		}
+		ctx.lineCap = "butt";
+	}
+
+	/** The name pills under wolf and feature badges: on hover, on the attached thread, and when zoomed in to the leaf label level. Screen-sized (11 px). */
+	private drawPills(ctx: CanvasRenderingContext2D, host: OverlayHost, items: OverlayItem[], k: number): void {
+		const close = (host.labelZoom?.() ?? 0) >= LABEL_LEVELS[3]!.minZoom;
+		const hk = this.hoverKey;
+		const att = this.attached;
+		if (!close && !hk && !att) return;
+		if (!this.pillTheme || this.pillTheme.colors !== host.colors) this.pillTheme = { colors: host.colors, light: !isLightHex(host.colors.hoverText) };
+		const lightSurface = this.pillTheme.light;
+		ctx.save();
+		ctx.font = `500 11px ${host.fontFamily}`;
+		ctx.textAlign = "center";
+		ctx.textBaseline = "middle";
+		for (const it of items) {
+			if (it.kind !== "wolf" && it.kind !== "feature") continue;
+			const hot = hk === it.kind + ":" + it.key || (att !== null && it.kind === "feature" && it.key === threadKey(att.wolf, att.threadId));
+			if (!hot && !close) continue;
+			const raw = this.privateView ? (it.kind === "feature" ? "feature" : it.wolf) : it.label;
+			const text = raw.length > 28 ? raw.slice(0, 27) + "…" : raw;
+			let w = this.pillW.get(text);
+			if (w === undefined) {
+				w = ctx.measureText(text).width;
+				if (this.pillW.size > 400) this.pillW.clear();
+				this.pillW.set(text, w);
+			}
+			const pw = w + 16;
+			const y0 = it.r * k + 5;
+			ctx.save();
+			ctx.translate(it.x, it.y);
+			ctx.scale(1 / k, 1 / k);
+			ctx.globalAlpha = Math.min(1, it.alpha + 0.2);
+			ctx.beginPath();
+			if (typeof ctx.roundRect === "function") ctx.roundRect(-pw / 2, y0, pw, 18, 9);
+			else ctx.rect(-pw / 2, y0, pw, 18);
+			ctx.fillStyle = lightSurface ? "rgba(255,255,255,0.84)" : "rgba(22,24,30,0.8)";
+			ctx.fill();
+			ctx.lineWidth = 1;
+			ctx.strokeStyle = "rgba(128,128,128,0.35)";
+			ctx.stroke();
+			ctx.fillStyle = lightSurface ? "#1b1d23" : "#f3f4f6";
+			ctx.fillText(text, 0, y0 + 9.5);
+			ctx.restore();
+		}
+		ctx.restore();
 	}
 
 	/** An active thread's soft pulsing ring and a short comet arc circling the dot; reduced motion: one static brighter ring. */
@@ -1327,6 +1461,14 @@ export class LiveOverlay {
 			if (score < bestD) {
 				bestD = score;
 				best = { item: it, ring: it.needsYou && d > -2, sx: px, sy: py };
+			}
+		}
+		if (this.ownerR > 0 && (!best || bestD > 0)) {
+			const ox = this.ownerTmp.x * tr.k + tr.x;
+			const oy = this.ownerTmp.y * tr.k + tr.y;
+			if (Math.hypot(ox - sx, oy - sy) - this.ownerR * tr.k <= Math.min(slop, 4)) {
+				const item: OverlayItem = { kind: "you", key: "owner", wolf: "", x: this.ownerTmp.x, y: this.ownerTmp.y, r: this.ownerR, alpha: 1, needsYou: false, online: true, color: YOU_ACCENT, label: "You" };
+				return { item, ring: false, sx: ox, sy: oy };
 			}
 		}
 		return best;

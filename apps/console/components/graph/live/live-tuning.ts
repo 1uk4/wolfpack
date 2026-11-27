@@ -18,12 +18,9 @@ export interface LiveTuning {
 	restOrbitRadPerSec: number;
 	restBreathPx: number;
 	restBreathRadPerSec: number;
-	/** The den disc (ref px) and where the owner node sits above it. */
+	/** The den disc (ref px). */
 	denRadiusPx: number;
-	ownerOffsetPx: number;
-	/** Feature ring: its radius and the wolf icon's, and a sub-agent icon's radius (ref px). */
-	ringRadiusPx: number;
-	ringWolfPx: number;
+	/** A sub-agent dot radius on the state ring (screen px). */
 	ringSubPx: number;
 	/** Chat pull: the share of the way to the target the whole group is drawn (pull x reach), held for holdMul x pace. */
 	chatPull: number;
@@ -40,6 +37,16 @@ export interface LiveTuning {
 	groupSpring: number;
 	subSpring: number;
 	subDamping: number;
+	/** Avatar badge (screen px, constant at any zoom): diameter on desktop and phone, the gap and stroke of the state ring hugging it, the working arc (degrees) and its turn time (s). */
+	badgePx: number;
+	badgePhonePx: number;
+	ringGapPx: number;
+	ringStrokePx: number;
+	arcDeg: number;
+	arcTurnSec: number;
+	/** A wolf parks this many screen px (beyond badge + node radius) from its target; the owner node sits this far (screen px) from the den disc. */
+	parkGapPx: number;
+	ownerGapPx: number;
 }
 
 export const LIVE_TUNING: LiveTuning = {
@@ -53,11 +60,8 @@ export const LIVE_TUNING: LiveTuning = {
 	restOrbitRadPerSec: 0.05,
 	restBreathPx: 5,
 	restBreathRadPerSec: 1.2,
-	denRadiusPx: 30,
-	ownerOffsetPx: 110,
-	ringRadiusPx: 30,
-	ringWolfPx: 9,
-	ringSubPx: 7,
+	denRadiusPx: 20,
+	ringSubPx: 4.5,
 	chatPull: 0.7,
 	chatReach: 0.8,
 	chatHoldMul: 1.1,
@@ -69,4 +73,12 @@ export const LIVE_TUNING: LiveTuning = {
 	groupSpring: 6,
 	subSpring: 18,
 	subDamping: 2.2,
+	badgePx: 28,
+	badgePhonePx: 32,
+	ringGapPx: 3,
+	ringStrokePx: 2.5,
+	arcDeg: 90,
+	arcTurnSec: 4,
+	parkGapPx: 10,
+	ownerGapPx: 14,
 };

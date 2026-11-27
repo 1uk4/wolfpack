@@ -4,7 +4,7 @@
  * state: the level tree, the text widths (measured lazily, once per id and font, only for labels that become eligible), the last
  * choice and the fades. The per-frame path allocates nothing: scratch sets and arrays are fields.
  */
-import { LABEL_FADE_MS, LABEL_LEVELS, buildLabelTree, chooseLabels, eligibleAt, labelTop, parentChain, redactLines, stepLabelFades, type LabelCandidate, type LabelLevel, type LabelTreeNode } from "@/src/core";
+import { LABEL_FADE_MS, LABEL_LEVELS, buildLabelTree, chooseLabels, eligibleAt, labelTop, parentChain, redactLines, stepLabelFades, type LabelCandidate, type LabelLevel, type LabelObstacle, type LabelTreeNode } from "@/src/core";
 
 export interface LabelNode {
 	id: string;
@@ -41,6 +41,10 @@ export interface LabelFrame {
 	clusterScale: number;
 	hoverId: string | null;
 	selectedId: string | null;
+	/** Wolf badges on screen (the first obstacleCount entries) and a signature of their quantised positions: labels under a badge hide. */
+	obstacles?: readonly LabelObstacle[];
+	obstacleCount?: number;
+	obstacleSig?: number;
 	reduce: boolean;
 	privateView: boolean;
 	textColor: string;
@@ -81,6 +85,7 @@ interface ChoiceKey {
 	clusterLabels: boolean;
 	clusterScale: number;
 	geoVersion: number;
+	obstacleSig: number;
 	hoverId: string | null;
 	selectedId: string | null;
 	groups: readonly GroupTitle[] | null;
@@ -171,7 +176,7 @@ export class LabelPass {
 					}
 				}
 			}
-			this.shown = chooseLabels(cands, { ze: f.ze, width: f.w, height: f.h, forced });
+			this.shown = chooseLabels(cands, { ze: f.ze, width: f.w, height: f.h, forced, obstacles: f.obstacleCount && f.obstacles ? f.obstacles.slice(0, f.obstacleCount) : undefined });
 		}
 
 		const dt = this.lastNow ? Math.min(Math.max(f.now - this.lastNow, 0), 100) : LABEL_FADE_MS;
@@ -230,13 +235,13 @@ export class LabelPass {
 		if (
 			c &&
 			c.tx === f.tx && c.ty === f.ty && c.k === f.k && c.w === f.w && c.h === f.h && c.ze === f.ze && c.on === f.on &&
-			c.clusterLabels === f.clusterLabels && c.clusterScale === f.clusterScale && c.geoVersion === f.geoVersion &&
+			c.clusterLabels === f.clusterLabels && c.clusterScale === f.clusterScale && c.geoVersion === f.geoVersion && c.obstacleSig === (f.obstacleSig ?? 0) &&
 			c.hoverId === f.hoverId && c.selectedId === f.selectedId && c.groups === f.groups && c.visible === f.visible &&
 			c.visibleSize === size && c.nodes === f.nodes && c.nodeCount === f.nodes.size && c.tree === this.tree
 		) {
 			return false;
 		}
-		this.choice = { tx: f.tx, ty: f.ty, k: f.k, w: f.w, h: f.h, ze: f.ze, on: f.on, clusterLabels: f.clusterLabels, clusterScale: f.clusterScale, geoVersion: f.geoVersion, hoverId: f.hoverId, selectedId: f.selectedId, groups: f.groups, visible: f.visible, visibleSize: size, nodes: f.nodes, nodeCount: f.nodes.size, tree: this.tree };
+		this.choice = { tx: f.tx, ty: f.ty, k: f.k, w: f.w, h: f.h, ze: f.ze, on: f.on, clusterLabels: f.clusterLabels, clusterScale: f.clusterScale, geoVersion: f.geoVersion, obstacleSig: f.obstacleSig ?? 0, hoverId: f.hoverId, selectedId: f.selectedId, groups: f.groups, visible: f.visible, visibleSize: size, nodes: f.nodes, nodeCount: f.nodes.size, tree: this.tree };
 		return true;
 	}
 

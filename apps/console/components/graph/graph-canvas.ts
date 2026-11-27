@@ -62,7 +62,8 @@ import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import { LabelPass, type GroupTitle } from "./label-pass.ts";
 import { computeGroupShapes, drawGroupShapes, groupAt, type GroupShape } from "./group-regions.ts";
-import { DEFAULT_RENDER_SETTINGS, effectiveZoom, isBucketLabel, labelsOn } from "@/src/core";
+import { DEFAULT_RENDER_SETTINGS, effectiveZoom, isBucketLabel, labelsOn, type LabelObstacle } from "@/src/core";
+const NO_OBSTACLES = { n: 0, sig: 0 };
 import type { LiveOverlay, OverlayHighlight, OverlayHit, OverlayHost } from "./live/live-overlay";
 import {
 	CHARGE_STRENGTH,
@@ -736,6 +737,9 @@ export class GraphCanvasRenderer {
 	private destroyed = false;
 	private overlay: LiveOverlay | null = null;
 	private overlayHoverKey: string | null = null;
+	/** The effective label zoom of the last frame, and the wolf badges as label obstacles (reused every frame). */
+	private lastLabelZe = 0;
+	private readonly badgeObstacles: LabelObstacle[] = [];
 	private overlayDown: OverlayHit | null = null;
 	private lastDrawAt = 0;
 
@@ -1299,6 +1303,7 @@ export class GraphCanvasRenderer {
 			nodeLabel: (id) => this.nodeById.get(id)?.label,
 			setReplacedNodes: (ids) => this.setReplacedNodes(ids),
 			extentRadius: () => this.extentRadiusOf(),
+			labelZoom: () => this.lastLabelZe,
 			center: () => {
 				const b = this.worldBBox;
 				return b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 } : { x: 0, y: 0 };
@@ -1319,6 +1324,7 @@ export class GraphCanvasRenderer {
 		const key = hit ? hit.item.kind + ":" + hit.item.key : null;
 		if (key === this.overlayHoverKey) return;
 		this.overlayHoverKey = key;
+		this.overlay?.setHover(key);
 		this.callbacks.onOverlayHover?.(hit);
 	}
 
@@ -2439,6 +2445,9 @@ export class GraphCanvasRenderer {
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		this.guardOverlay((o) => o.drawScreen?.(ctx, this.overlayHost(), this.transform, { w, h }, performance.now()), undefined);
 
+		const labelZe = effectiveZoom(1 / ratio, settings.labelZoom);
+		this.lastLabelZe = labelZe;
+		const obs = this.guardOverlay((o) => o.fillObstacles(this.badgeObstacles, this.transform), NO_OBSTACLES);
 		// 8. Labels, topmost: semantic zoom by hierarchy level, collisions resolved by level, hover/selection chain always shown.
 		this.labels.draw({
 			ctx,
@@ -2447,7 +2456,10 @@ export class GraphCanvasRenderer {
 			k,
 			w,
 			h,
-			ze: effectiveZoom(1 / ratio, settings.labelZoom),
+			ze: labelZe,
+			obstacles: this.badgeObstacles,
+			obstacleCount: obs.n,
+			obstacleSig: obs.sig,
 			on: labelsOn(settings),
 			clusterLabels: settings.clusterLabels,
 			clusterScale: settings.clusterLabelSize / DEFAULT_RENDER_SETTINGS.clusterLabelSize,

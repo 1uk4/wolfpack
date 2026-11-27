@@ -71,6 +71,15 @@ describe("label anchor", () => {
 	});
 });
 
+describe("wolf badges are obstacles (work-wolfpack-1Djd6IR)", () => {
+	it("a label overlapping a badge hides unless it is hovered or selected", () => {
+		const cs = [cand("under", 3, 500, 400), cand("clear", 3, 100, 100)];
+		const obstacles = [{ sx: 505, sy: 400, r: 14 }];
+		assert.deepEqual([...chooseLabels(cs, { ...view, ze: 5, obstacles })], ["clear"]);
+		assert.deepEqual([...chooseLabels(cs, { ...view, ze: 5, obstacles, forced: new Set(["under"]) })].sort(), ["clear", "under"]);
+	});
+});
+
 describe("domains outrank sections (work-wolfpack-Wu0RH2z)", () => {
 	it("a domain label beats a bigger level-1 section in a collision", () => {
 		const cs: LabelCandidate[] = [cand("sec", 1, 500, 400, 40), { ...cand("dom", 1, 505, 402, 3), domain: true }];

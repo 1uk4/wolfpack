@@ -108,7 +108,7 @@ describe("live overlay fade clock", () => {
 		assert.ok(a !== undefined && Math.abs(a - 0.45 * 0.5) < 0.02, `thread alpha ${a}`);
 	});
 
-	it("draws each wolf as the wolf-head logo path, dimmed when offline", () => {
+	it("draws each wolf as a badge with the wolf-head logo path, dimmed when offline", () => {
 		const fills: { d?: string; alpha: number; scale: number }[] = [];
 		let alpha = 1;
 		let scale = 1;
@@ -125,21 +125,21 @@ describe("live overlay fade clock", () => {
 			o.dispatch({ type: "event", event: ev("subagent-spawned", { actor: th("tw", "sa") }), now: Date.now() });
 			o.step(1, 0.016, host, 2);
 			o.draw(rec, host, 2, 1);
-			// At k=2 the wolf is capped at 36.4 px (1.4x the old 26) and the subagent is 70% of it (25.48 px), both the logo path (scale = px / k / 64).
-			const scales = logo().map((f) => f.scale).sort((a, b) => b - a);
-			assert.equal(scales.length, 2);
-			assert.ok(Math.abs(scales[0]! - 36.4 / 2 / 64) < 1e-9 && Math.abs(scales[1]! - 25.48 / 2 / 64) < 1e-9, `${scales}`);
-			assert.equal(logo().find((f) => Math.abs(f.scale - 36.4 / 2 / 64) < 1e-9)?.alpha, 1);
+			// The wolf is a 28 px badge with the logo path at 62% of it (scale = px / k / 64); the subagent is a plain dot.
+			const scales = logo().map((f) => f.scale);
+			assert.equal(scales.length, 1);
+			assert.ok(Math.abs(scales[0]! - (28 * 0.62) / 2 / 64) < 1e-9, `${scales}`);
+			assert.equal(logo()[0]?.alpha, 1);
 			mock.timers.tick(3_600_000);
 			o.dispatch({ type: "tick", now: Date.now() });
 			fills.length = 0;
 			o.step(2, 0.016, host, 2);
 			o.draw(rec, host, 2, 2);
-			assert.equal(logo().find((f) => Math.abs(f.scale - 36.4 / 2 / 64) < 1e-9)?.alpha, 0.35);
+			assert.equal(logo()[0]?.alpha, 0.6);
 		}
 	});
 
-	it("icons scale with zoom between a 14 px floor and a 36.4 px cap (the wolf is 1.4x), keep their proportions, and thread dots hide at the floor while subagents stay as small marks", () => {
+	it("the wolf badge stays 28 px (glyph 62% of it) and a subagent dot 4.5 px at any zoom, while thread dots keep the old zoom scaling and hide at the floor", () => {
 		const fills: { d?: string; scale: number }[] = [];
 		let scale = 1;
 		const radii: number[] = [];
@@ -154,23 +154,20 @@ describe("live overlay fade clock", () => {
 			radii.length = 0;
 			o.step(1, 0.016, host, k);
 			o.draw(rec, host, k, 1);
-			const px = fills.filter((f) => f.d?.startsWith("M8 2L24 18")).map((f) => f.scale * 64 * k).sort((a, b) => b - a);
+			const px = fills.filter((f) => f.d?.startsWith("M8 2L24 18")).map((f) => f.scale * 64 * k);
 			const dotPx = 3.2 * Math.min(36.4, Math.max(14, 34 * k)) / 36.4;
-			return { px, dot: radii.find((r) => Math.abs(r * k - dotPx) < 1e-6) };
+			return { px, dot: radii.find((r) => Math.abs(r * k - dotPx) < 1e-6), sub: radii.find((r) => Math.abs(r * k - 4.5) < 1e-6), badge: radii.find((r) => Math.abs(r * k - 14) < 1e-6) };
 		};
 		const near = (a: number | undefined, b: number) => assert.ok(a !== undefined && Math.abs(a - b) < 1e-6, `${a} vs ${b}`);
-		const big = frame(4); // 34 x 4 px, capped
-		near(big.px[0], 36.4);
-		near(big.px[1], 25.48);
-		const mid = frame(0.8); // 34 x 0.8 = 27.2 px
-		near(mid.px[0], 27.2);
-		near(mid.px[1], 27.2 * 0.7);
-		assert.ok(mid.dot !== undefined, "the thread dot keeps its reference proportion");
-		const small = frame(0.1); // 34 x 0.1 = 3.4 px, floored at 14: the dots hide, the subagent stays as a small mark
-		assert.equal(small.px.length, 2);
-		near(small.px[0], 14);
-		near(small.px[1], 14 * 0.7);
-		assert.equal(small.dot, undefined);
+		for (const k of [4, 0.8, 0.1]) {
+			const f = frame(k);
+			assert.equal(f.px.length, 1, "one wolf glyph (the subagent is a plain dot)");
+			near(f.px[0], 28 * 0.62);
+			near(f.badge ? f.badge * k : undefined, 14);
+			near(f.sub ? f.sub * k : undefined, 4.5);
+		}
+		assert.ok(frame(0.8).dot !== undefined, "the thread dot keeps its reference proportion");
+		assert.equal(frame(0.1).dot, undefined, "thread dots hide at the floor");
 	});
 
 	it("a finished subagent is half faded 7.5 s after it finished when the renderer passes its monotonic clock to draw", () => {

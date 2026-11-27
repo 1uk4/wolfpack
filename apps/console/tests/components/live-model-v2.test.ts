@@ -181,16 +181,16 @@ describe("live map model v2", () => {
 		}
 	});
 
-	it("a running subagent is a small icon on its feature's ring, joined to it by a link, and gone once it has finished and faded", () => {
+	it("a running subagent is a small dot on its feature's state ring, and gone once it has finished and faded", () => {
 		send("thread-active", feature);
 		send("subagent-spawned", subTap);
 		run(5);
 		const hub = of("feature");
 		const sub = of("subagent");
-		assert.ok(Math.abs(dist(sub, hub) - 28) < 2, `on the ring (${dist(sub, hub)})`);
-		assert.ok(hub.r > sub.r * 3 && sub.r > 5 && sub.r < 8, `a small icon (${sub.r}) on a bigger ring (${hub.r})`);
+		assert.ok(Math.abs(dist(sub, hub) - 18.25) < 2, `on the ring (${dist(sub, hub)})`);
+		assert.ok(hub.r === 14 && sub.r === 4.5, `a small dot (${sub.r}) on the ring of a 28 px badge (${hub.r})`);
 		const link = render().filter((s) => !s.dash && near(s.from, hub, 0.5) && near(s.to, sub, 0.5));
-		assert.equal(link.length, 1, "one link line from the ring's centre to the subagent");
+		assert.equal(link.length, 0, "no link line while the dot rests on the ring: it is drawn only once the dot stretches away");
 		send("subagent-finished", subTap);
 		run(20);
 		assert.equal(items().filter((i) => i.kind === "subagent").length, 0, "removed after the fade");
@@ -207,7 +207,7 @@ describe("live map model v2", () => {
 		const hub = of("feature");
 		const subs = items().filter((i) => i.kind === "subagent");
 		assert.equal(subs.length, 3);
-		for (const s of subs) assert.ok(Math.abs(dist(s, hub) - 28) < 2, `on the ring (${dist(s, hub)})`);
+		for (const s of subs) assert.ok(Math.abs(dist(s, hub) - 18.25) < 2, `on the ring (${dist(s, hub)})`);
 		const gaps = [dist(subs[0]!, subs[1]!), dist(subs[1]!, subs[2]!), dist(subs[2]!, subs[0]!)];
 		assert.ok(Math.max(...gaps) - Math.min(...gaps) < 3, `equal gaps ${gaps}`);
 	});
@@ -252,7 +252,7 @@ describe("live map model v2", () => {
 		assert.ok(away > 100, `it is stretched out (${away})`);
 		run(40);
 		const home_ = dist(of("subagent"), of("feature"));
-		assert.ok(Math.abs(home_ - 28) < 2, `back on the ring (${home_})`);
+		assert.ok(Math.abs(home_ - 18.25) < 2, `back on the ring (${home_})`);
 	});
 
 	it("a finished subagent is back on its ring and still there fading", () => {
@@ -263,7 +263,7 @@ describe("live map model v2", () => {
 		send("subagent-finished", subTap);
 		run(13);
 		const sub = of("subagent");
-		assert.ok(Math.abs(dist(sub, of("feature")) - 28) < 3, `on the ring (${dist(sub, of("feature"))})`);
+		assert.ok(Math.abs(dist(sub, of("feature")) - 18.25) < 3, `on the ring (${dist(sub, of("feature"))})`);
 		assert.ok(sub.alpha > 0 && sub.alpha < 1, `fading (${sub.alpha})`);
 	});
 
@@ -336,7 +336,7 @@ describe("live map model v2", () => {
 		const hub = of("feature");
 		const moved = dist(hub, hub0);
 		assert.ok(moved > 0.45 * d && moved < 0.62 * d, `about 0.56 of the way (${moved} of ${d})`);
-		assert.ok(Math.abs(dist(of("subagent"), hub) - 28) < 3, "the subagent went with it, still on the ring");
+		assert.ok(Math.abs(dist(of("subagent"), hub) - 18.25) < 3, "the subagent went with it, still on the ring");
 		run(40);
 		assert.ok(dist(of("feature"), hub0) < 5, "and it returns home when the hold ends");
 	});
@@ -355,7 +355,7 @@ describe("live map model v2", () => {
 			const dot = of("thread");
 			assert.ok(Math.abs(dist(dot, wolf) - 23.4) < 1, `thread dot beside the wolf at frame ${i} (${dist(dot, wolf)})`);
 			const sub = of("subagent");
-			assert.ok(Math.abs(dist(sub, wolf) - 36.4) < 6, `subagent on its ring about the wolf at frame ${i} (${dist(sub, wolf)})`);
+			assert.ok(Math.abs(dist(sub, wolf) - 18.25) < 9, `subagent on its ring about the wolf at frame ${i} (${dist(sub, wolf)})`);
 			if (i === 100) {
 				const trail = render().filter((s) => !s.dash && near(s.to, target, 0.5));
 				assert.equal(trail.length, 1);

@@ -101,6 +101,12 @@ export interface SimOptions {
 		clusters: ReadonlyArray<{ members: ReadonlyArray<string> }>;
 		strength: number;
 	};
+	/** Visual groups of domains (work-wolfpack-FnzgC6g): a GENTLE second centroid pull toward the whole group's centre, so the
+	 *  group's domains sit together. Members are every node of the group's domains. Absent or strength 0 = off. */
+	groupPull?: {
+		groups: ReadonlyArray<{ members: ReadonlyArray<string> }>;
+		strength: number;
+	};
 }
 
 /** Link input: edges are undirected for layout purposes. */
@@ -141,6 +147,8 @@ const RIM_SPACING = 30;
  *  compact enough to read as blobs, weak enough that cluster shape is
  *  still the edge network's). */
 export const CLUSTER_PULL_STRENGTH = 0.15;
+/** Default group pull: a fifth of the cluster pull, enough to keep a group's domains neighbours without squeezing them. */
+export const GROUP_PULL_STRENGTH = 0.03;
 
 /**
  * The one force set. Returns a STOPPED simulation — callers drive it
@@ -313,6 +321,40 @@ export function createGraphSimulation(
 		});
 	}
 
+	// Group pull (visual groups of domains): the centroid idea of the cluster pull, gentler, one membership per node.
+	const gp = options.groupPull;
+	if (gp && gp.strength > 0 && gp.groups.length > 0) {
+		const groupIdx = new Map<string, number>();
+		gp.groups.forEach((g, i) => {
+			for (const id of g.members) groupIdx.set(id, i);
+		});
+		const nodeGroup = nodes.map((n) => groupIdx.get(n.id) ?? -1);
+		const gk = gp.groups.length;
+		const gSumX = new Float64Array(gk);
+		const gSumY = new Float64Array(gk);
+		const gCnt = new Float64Array(gk);
+		const gStrength = gp.strength;
+		sim.force("groupPull", (alpha: number) => {
+			gSumX.fill(0);
+			gSumY.fill(0);
+			gCnt.fill(0);
+			for (let i = 0; i < nodes.length; i++) {
+				const gi = nodeGroup[i]!;
+				if (gi < 0) continue;
+				gSumX[gi] = gSumX[gi]! + (nodes[i]!.x ?? 0);
+				gSumY[gi] = gSumY[gi]! + (nodes[i]!.y ?? 0);
+				gCnt[gi] = gCnt[gi]! + 1;
+			}
+			for (let i = 0; i < nodes.length; i++) {
+				const gi = nodeGroup[i]!;
+				if (gi < 0 || (gCnt[gi] ?? 0) < 2 || (anchored[i] && mode !== "vertical")) continue;
+				const n = nodes[i]!;
+				n.vx = (n.vx ?? 0) + (gSumX[gi]! / gCnt[gi]! - (n.x ?? 0)) * gStrength * alpha;
+				if (!anchored[i]) n.vy = (n.vy ?? 0) + (gSumY[gi]! / gCnt[gi]! - (n.y ?? 0)) * gStrength * alpha;
+			}
+		});
+	}
+
 	// ── Hierarchy-depth anchoring ────────────────────────────────────────
 	// The level is GIVEN (the node's hierarchy depth): per-node target
 	// scalar, then one O(n) pull pass per tick. Soft knob — high strength
@@ -370,6 +412,9 @@ export interface IncrementalLayoutOptions {
 	clusters?: ReadonlyArray<{ members: ReadonlyArray<string> }>;
 	/** Cluster centroid pull strength (default CLUSTER_PULL_STRENGTH). */
 	clusterPullStrength?: number;
+	/** Visual domain groups (gentle second pull, see SimOptions.groupPull). */
+	groups?: ReadonlyArray<{ members: ReadonlyArray<string> }>;
+	groupPullStrength?: number;
 	/** Hierarchy-depth anchoring (see DepthAnchor). `center` defaults to
 	 *  the anchored core's centroid. */
 	depthAnchor?: DepthAnchor;
@@ -523,6 +568,7 @@ export function incrementalLayout(
 		clusterPull: options.clusters
 			? { clusters: options.clusters, strength: options.clusterPullStrength ?? CLUSTER_PULL_STRENGTH }
 			: undefined,
+		groupPull: options.groups ? { groups: options.groups, strength: options.groupPullStrength ?? GROUP_PULL_STRENGTH } : undefined,
 		depthAnchor:
 			options.depthAnchor && options.depthAnchor.mode !== "off"
 				? { ...options.depthAnchor, center: options.depthAnchor.center ?? ORIGIN }

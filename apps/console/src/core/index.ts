@@ -24,6 +24,8 @@ export * from "./graph/live/live-sub-physics.ts";
 export * from "./graph/live/live-wolf-springs.ts";
 export * from "./graph/live/feed.ts";
 export * from "./graph/simple-settings.ts";
+export * from "./graph/label-lod.ts";
+export * from "./graph/groups.ts";
 export * from "./ui/mobile-layout.ts";
 
 export * from "./thread/question-core.ts";

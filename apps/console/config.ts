@@ -51,6 +51,9 @@ export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
  */
 export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json");
 
+/** Graph groups (visual domain bubbles): local file in the console data dir. Shared shape/rules: src/core/graph/groups.ts. */
+export const GRAPH_GROUPS_FILE = path.join(PATHS.graph, "groups.json");
+
 /**
  * THE USER SETTINGS RECORD (settings-storage wave, 2026-09-19): one
  * versioned, DELTA-shaped JSON blob at the data-dir seam holding every

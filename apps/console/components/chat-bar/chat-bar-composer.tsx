@@ -12,7 +12,7 @@ import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { threadBase } from "@/components/thread/thread-transport";
 import { newUploadState, startUploads } from "@/components/composer/attachment-upload";
 import { canSendWith, readyInfos, type PendingAttachment } from "@/components/composer/attachments";
-import { DICTATION_KEYLESS, DictationBar, LiveMeter, joinDictation, openDeepgramKeyInPack, setDictationFocus, recordingAt, type Dictation } from "@/components/composer/dictation";
+import { DICTATION_KEYLESS, DictationBar, DictationMicButton, LiveMeter, joinDictation, openDeepgramKeyInPack, setDictationFocus, recordingAt, type Dictation } from "@/components/composer/dictation";
 import { useSingleMac } from "@/components/shell/single-mac";
 import { draftKey, readDraft, useComposerDraft } from "@/lib/composer-draft";
 import { abortThread, submitToThread } from "@/components/chat-bar/chat-bar-io";
@@ -177,6 +177,7 @@ export default function ChatBarComposer({ phone = false, target, title, cardOpen
 			{askOpen && !noteMode && text.trim() !== "" && <p data-testid="ask-replace-hint" className="px-3 pt-1 font-ui text-xs text-muted-foreground">Sending a message replaces the open questions.</p>}
 			<Composer
 				{...(voice ? { voice } : {})}
+				{...(phone && !voice ? { phoneRow: { mic: <DictationMicButton dictation={dictation} /> } } : {})}
 				busy={noteMode ? false : working}
 				{...(noteMode ? { sendLabel: session.action.label, alwaysLabel: true, ...(session.action.armed ? { sendAriaLabel: session.action.ariaLabel, armed: { onCancel: session.disarm } } : {}) } : cardOpen && canSendWith(text, attachments) ? { sendLabel: "Reply instead" } : {})}
 				value={noteMode ? session.note.text : text}
@@ -190,12 +191,12 @@ export default function ChatBarComposer({ phone = false, target, title, cardOpen
 				onEscape={dictation.active ? dictation.cancel : undefined}
 				enterSends={dictation.active}
 				inputRef={inputRef}
-				placeholder={`Message ${title}…  (${formatBinding(bindingForAction("focus-chat-bar"))} to focus)`}
+				placeholder={phone ? `Message ${target.wolf}…` : `Message ${title}…  (${formatBinding(bindingForAction("focus-chat-bar"))} to focus)`}
 				onFiles={noteMode ? session.addNoteFiles : onFiles}
 				onPickFiles={noteMode ? session.addNoteFiles : onFiles}
 				chips={<AttachmentChips items={noteMode ? session.note.atts : attachments} onRemove={noteMode ? session.removeNoteAtt : (k) => setAttachments((prev) => prev.filter((a) => a.key !== k))} />}
 			/>
-			{!voice && (
+			{!voice && !phone && (
 				<div className="px-3 pb-2" data-testid="dictation-slot">
 					<DictationBar dictation={dictation} />
 				</div>

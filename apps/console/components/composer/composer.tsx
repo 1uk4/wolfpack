@@ -112,7 +112,10 @@ export function Composer({
 	armed,
 	sendAriaLabel,
 	voice,
+	phoneRow,
 }: {
+	/** Phone dock, classic states (questionnaire note): one row [attach] [field] [mic] [submit], the field one line at rest and growing to about five. */
+	phoneRow?: { mic: React.ReactNode };
 	/** Phone dock only: the voice-first layout. Absent: the classic composer row. */
 	voice?: VoiceLayout;
 	/** The questionnaire's "Send anyway?" state: the button widens and changes colour, a cancel × appears beside it and Esc cancels. */
@@ -160,7 +163,8 @@ export function Composer({
 	controls?: React.ReactNode;
 }) {
 	const mode = mainButtonMode({ dictating: dictating === true, finishing: finishing === true, busy, canSend, voice: voice !== undefined });
-	const labelled = (mode === "send" || mode === "stop-wolf") && sendLabel !== undefined && (canSend || alwaysLabel === true);
+	// The one-row phone layout drops the word for an icon (the aria-label and tooltip keep it), except while armed ("Send anyway?" needs its words).
+	const labelled = (mode === "send" || mode === "stop-wolf") && sendLabel !== undefined && (canSend || alwaysLabel === true) && (!phoneRow || armed !== undefined);
 	const act = (viaEnter = false) => {
 		// Dictation phases never reach onStop: recording only finishes the run, flushing does nothing.
 		if (mode === "finishing") return;
@@ -224,7 +228,7 @@ export function Composer({
 			<form
 				data-testid="composer"
 				data-field={voice?.field}
-				className={cn("flex items-end gap-1.5 p-1.5 max-md:flex-wrap", voice && "items-center justify-center gap-x-5")}
+				className={cn("flex items-end gap-1.5 p-1.5", !phoneRow && "max-md:flex-wrap", voice && "items-center justify-center gap-x-5")}
 				onSubmit={(e) => {
 					e.preventDefault();
 					act();
@@ -287,7 +291,7 @@ export function Composer({
 						{voice.meter}
 					</div>
 				)}
-				<div className={cn("relative flex min-w-0 flex-1 max-md:order-first max-md:basis-full", voice && voice.field !== "text" && "hidden")}>
+				<div className={cn("relative flex min-w-0 flex-1", !phoneRow && "max-md:order-first max-md:basis-full", voice && voice.field !== "text" && "hidden")}>
 				<textarea
 					ref={inputRef}
 					value={value}
@@ -323,11 +327,12 @@ export function Composer({
 					placeholder={placeholder}
 					autoFocus={autoFocus}
 					rows={1}
-					className={cn("field-sizing-content wp-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground", recording && "pr-7")}
+					className={cn("field-sizing-content wp-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground", (phoneRow || voice) && "min-w-0 max-md:max-h-[7.25rem] max-md:min-h-11 max-md:text-base max-md:placeholder:truncate", recording && "pr-7")}
 				/>
 				{recording && <RecordingMarker state={recording} className="absolute right-1.5 top-3" />}
 				</div>
 				{controls}
+				{phoneRow?.mic}
 				{/* The button follows the text (owner report 2026-10-03): while
 					 a turn runs WITH text typed it stays the SEND affordance
 					 (click = steer — steering must be clickable, not Enter-only);

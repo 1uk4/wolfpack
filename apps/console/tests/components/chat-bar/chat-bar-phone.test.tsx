@@ -562,3 +562,39 @@ describe("ChatBar on a phone", () => {
 		assert.equal(ta().value, "across the breakpoint");
 	});
 });
+
+describe("the phone dock's compact composer (work-wolfpack-qoLvFIe)", () => {
+	const NOTE_ASK = { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00Z", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "free-text", label: "Why" }], steps: [{ fields: ["q1"] }] } };
+
+	it("the phone placeholder is the short 'Message <wolf>', never the thread title or the focus hint; desktop keeps its long one", async () => {
+		await mount();
+		assert.equal(ta().getAttribute("placeholder"), "Message w…");
+		await resize(false);
+		await until(() => /to focus\)$/.test(ta().getAttribute("placeholder") ?? ""), "the desktop placeholder");
+		assert.match(ta().getAttribute("placeholder")!, /^Message w\/a…  \(.+ to focus\)$/);
+	});
+
+	it("in note mode the composer is one row: attach, field, mic, submit; no full-width dictation bar, and the submit is not overlaid on the field", async () => {
+		bodies.a = { messages: [], pendingCards: [NOTE_ASK] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		const form = q('[data-testid="composer"]')!;
+		const kinds = Array.from(form.children).map((c) => {
+			const el = c as HTMLElement;
+			if (el.getAttribute("aria-label") === "Attach images") return "attach";
+			if (el.contains(ta())) return "field";
+			if (el.getAttribute("data-testid") === "dictation-toggle") return "mic";
+			if (el.getAttribute("type") === "submit") return "submit";
+			return null;
+		}).filter(Boolean);
+		assert.deepEqual(kinds, ["attach", "field", "mic", "submit"]);
+		assert.equal(q('[data-testid="dictation-slot"]'), null, "no full-width dictation bar slot");
+		const mic = q('[data-testid="dictation-toggle"]')!;
+		assert.equal(mic.getAttribute("aria-label"), "Dictate");
+		assert.match(mic.className, /size-11/);
+		const submit = form.querySelector('button[type="submit"]')!;
+		assert.ok(!ta().parentElement!.contains(submit), "the submit sits beside the field, not inside it");
+		assert.doesNotMatch(submit.className, /\babsolute\b/);
+		assert.match(ta().className, /min-h-11/);
+	});
+});

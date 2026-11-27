@@ -1003,6 +1003,37 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 }
 
 /**
+ * The phone dock's compact mic (note mode and other classic phone states): a 44px icon button in the composer's row instead of the
+ * full-width DictationBar. Same behaviour as the bar's button: click starts, click while recording finishes, a missing key opens Pack → Keys.
+ */
+export function DictationMicButton({ dictation }: { dictation: Dictation }) {
+	const { phase, error, toggle, active, clearError } = dictation;
+	const singleMac = useSingleMac();
+	if (singleMac) return null;
+	const keyless = error === DICTATION_KEYLESS;
+	const label = active ? "Stop dictation" : error ? `Dictation failed: ${error}` : "Dictate";
+	return (
+		<Hint label={active ? "Stop dictation (Esc)" : (error ?? "Dictate")} side="top">
+			<button
+				type="button"
+				data-testid="dictation-toggle"
+				aria-label={label}
+				disabled={phase === "stopping"}
+				onClick={() => {
+					if (!active && keyless) {
+						clearError();
+						openDeepgramKeyInPack();
+					} else toggle();
+				}}
+				className={cn("flex size-11 shrink-0 items-center justify-center self-end rounded-full transition-colors", active ? "bg-destructive/10 text-destructive hover:bg-destructive/20" : "text-muted-foreground hover:bg-secondary hover:text-foreground")}
+			>
+				{phase === "stopping" ? <Loader2Icon className="size-5 animate-spin" /> : <MicIcon className={cn("size-5", active && "motion-safe:animate-pulse")} />}
+			</button>
+		</Hint>
+	);
+}
+
+/**
  * The inline mic of a prose field: a small icon button at the field's trailing edge. Click claims the dictation target
  * for this field (`onClaim`, which must make `targetKey` the claimed key) and starts the run; click while this field is
  * listening finishes it (the transcript lands once, as with ⌘D); click while another field listens retargets the run

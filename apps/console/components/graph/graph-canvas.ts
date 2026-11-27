@@ -61,11 +61,13 @@ import { recentreCamera, recentreOffset } from "@/src/core";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import { LabelPass, type GroupTitle } from "./label-pass.ts";
+import { computeGroupShapes, drawGroupShapes, groupAt, type GroupShape } from "./group-regions.ts";
 import { effectiveZoom, labelsOn } from "@/src/core";
 import type { LiveOverlay, OverlayHighlight, OverlayHit, OverlayHost } from "./live/live-overlay";
 import {
 	CHARGE_STRENGTH,
 	CLUSTER_PULL_STRENGTH,
+	GROUP_PULL_STRENGTH,
 	createGraphSimulation,
 	routeFilteredEdges,
 	routeDepSprings,
@@ -131,6 +133,15 @@ export interface CanvasCluster {
 	color: string;
 }
 
+/** One visual group: all its member node ids (layout pull) and the members per domain (the bubble). */
+export interface CanvasGroup {
+	id: string;
+	label: string;
+	color: string;
+	members: string[];
+	parts: string[][];
+}
+
 /** Theme colors, resolved to #rrggbb by the caller (canvas wants hex,
  *  and the renderer must not read CSS itself). */
 export interface CanvasColors {
@@ -157,6 +168,8 @@ export interface CanvasData {
 	/** Nested sub-halos (the Factory subtree), painted over the cluster
 	 *  regions in the same bitmap; no labels, no layout pull. */
 	subClusters?: CanvasCluster[];
+	/** Visual groups of domains: a big soft bubble behind the domain regions, a title, a gentle layout pull. */
+	groups?: CanvasGroup[];
 	colors: CanvasColors;
 	/** Body font family (labels must match the app typography). */
 	fontFamily: string;
@@ -1474,7 +1487,15 @@ export class GraphCanvasRenderer {
 		}
 		const node = this.pickAt(pos.x, pos.y);
 		if (node) this.callbacks.onSelect(node.id, pos);
-		else this.callbacks.onStageClick();
+		else {
+			this.callbacks.onStageClick();
+			// On a touch screen a tap on a group's bubble zooms to it (a mouse keeps a plain stage click).
+			if (e.pointerType === "touch" || e.pointerType === "pen") {
+				const { x: tx, y: ty, k } = this.transform;
+				const hit = groupAt(this.shapesNow(), (pos.x - tx) / k, (pos.y - ty) / k);
+				if (hit) this.zoomToGroup(hit.id);
+			}
+		}
 	};
 
 	private onDoubleClick = (e: MouseEvent) => {
@@ -1550,8 +1571,39 @@ export class GraphCanvasRenderer {
 		this.markDirty();
 	}
 
+	private groupShapes: GroupShape[] = [];
+	private groupShapesKey = "";
+	private groupShapesFor: CanvasGroup[] | undefined;
+
+	/** Group bubbles at the current positions (recomputed when the geometry or the search filter changes). */
+	private shapesNow(): GroupShape[] {
+		const groups = this.data?.groups;
+		if (!groups || groups.length === 0) return (this.groupShapes = []);
+		const key = `${this.geoVersion}|${this.visible ? this.visible.size : -1}`;
+		if (this.groupShapesFor !== groups) {
+			this.groupShapesFor = groups;
+			this.groupShapesKey = "";
+		}
+		if (key !== this.groupShapesKey) {
+			this.groupShapesKey = key;
+			this.groupShapes = computeGroupShapes(groups, (id) => this.nodeById.get(id), this.visible);
+		}
+		return this.groupShapes;
+	}
+
 	private groupTitles(): GroupTitle[] {
-		return [];
+		return this.shapesNow().map((s) => ({ id: s.id, label: s.label, color: s.color, x: s.cx, y: s.cy, size: s.size }));
+	}
+
+	/** Zoom the camera to a group's bubble (the phone tap). True when the group exists. */
+	zoomToGroup(id: string): boolean {
+		const s = this.shapesNow().find((g) => g.id === id);
+		const w = this.canvas.clientWidth;
+		const h = this.canvas.clientHeight;
+		if (!s || w < 10 || h < 10) return false;
+		const t = fitTransform(s.box, w, h, 40);
+		select(this.canvas).call(this.zoomBehavior.transform, zoomIdentity.translate(t.x, t.y).scale(t.k));
+		return true;
 	}
 
 	private markDirty(): void {
@@ -1922,6 +1974,7 @@ export class GraphCanvasRenderer {
 			depSprings: springs.length ? { edges: springs, strength: DEP_SPRING_STRENGTH } : undefined,
 			clusterPull:
 				data.clusters.length > 0 ? { clusters: data.clusters, strength: t.clusterPull } : undefined,
+			groupPull: data.groups?.length ? { groups: data.groups, strength: GROUP_PULL_STRENGTH } : undefined,
 			depthAnchor:
 				t.depthMode === "off" || !data.depths
 					? undefined
@@ -2306,6 +2359,9 @@ export class GraphCanvasRenderer {
 				ctx.clearRect(0, 0, pxW, pxH);
 				ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * tx, dpr * ty);
 			}
+
+		// 0. Group bubbles: large soft regions behind the domain regions (few shapes, cheap).
+		if (this.data?.groups?.length) drawGroupShapes(ctx, this.shapesNow());
 
 		// 1. Cluster regions: one tiny world-space bitmap blit. The upscale
 		//    blur is the region softness; adjacent cluster tints blend

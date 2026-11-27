@@ -21,6 +21,7 @@ import type { KbGraph, KbGraphNode, KbNodeKind } from "../kb/kb.ts";
 import { subtreeLinkLength } from "./layout.ts";
 import { NODE_ID_PATTERN } from "./graph-persistence.ts";
 import type { GraphLayerToggles, GroupBy } from "./render-settings.ts";
+import type { GraphGroups } from "./groups.ts";
 
 /** One entry of the payload's `domains` list. */
 export type KbGraphDomain = KbGraph["domains"][number];
@@ -367,6 +368,29 @@ export interface KbCanvasData {
 	depths: Map<string, number>;
 	/** Rest length per work hierarchy link (`from|to`), sized to the child's subtree. */
 	linkLengths: Map<string, number>;
+	/** Visual groups of domains (work-wolfpack-FnzgC6g): members = every node of the group's domains, parts = one member list per domain. */
+	groups: KbCanvasGroup[];
+}
+
+export interface KbCanvasGroup {
+	id: string;
+	label: string;
+	color: string;
+	icon: string | null;
+	members: string[];
+	parts: string[][];
+}
+
+/** The saved groups resolved against this graph: groups whose domains are not in it are dropped; the colour defaults to the first domain's hue. */
+export function canvasGroups(graph: Pick<KbGraph, "nodes" | "domains">, state: GraphGroups, colors: ReadonlyMap<string, string> = domainColors(graph)): KbCanvasGroup[] {
+	const out: KbCanvasGroup[] = [];
+	for (const g of state.groups) {
+		const parts = g.domains.map((d) => graph.nodes.filter((n) => n.domain === d).map((n) => n.id)).filter((p) => p.length > 0);
+		if (parts.length === 0) continue;
+		const first = g.domains.find((d) => colors.has(d));
+		out.push({ id: g.id, label: g.name, color: g.color ?? (first ? colors.get(first)! : NEUTRAL_NODE_COLOR), icon: g.icon, members: parts.flat(), parts });
+	}
+	return out;
 }
 
 /** Work depth along the hierarchy from the Factory (factory 1, top-level work 2, …).
@@ -421,7 +445,7 @@ export function workLinkLengths(
  *  topics): `partOf` mirrors it and `dependsOn` is a cross-link, shown on the
  *  detail card instead. Edges to missing endpoints and duplicates are
  *  dropped; edge direction is irrelevant on the canvas (no arrowheads). */
-export function toCanvasData(graph: KbGraph, opts: { groupBy: GroupBy }): KbCanvasData {
+export function toCanvasData(graph: KbGraph, opts: { groupBy: GroupBy; groups?: GraphGroups }): KbCanvasData {
 	const colors = domainColors(graph);
 	const blocked = blockedWorkIds(graph);
 	const ids = new Set<string>();
@@ -462,6 +486,7 @@ export function toCanvasData(graph: KbGraph, opts: { groupBy: GroupBy }): KbCanv
 		clusters: groupClusters(graph, opts.groupBy, colors),
 		subClusters,
 		depths,
+		groups: opts.groups ? canvasGroups(graph, opts.groups, colors) : [],
 	};
 }
 

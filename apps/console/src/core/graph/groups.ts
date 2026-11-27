@@ -18,11 +18,14 @@ export interface GraphGroup {
 
 export interface GraphGroups {
 	groups: GraphGroup[];
+	/** Epoch ms of the last save (hub value and file each carry one: the newer wins). Absent on lists saved before this existed. */
+	updatedAt?: number;
 }
 
 export const EMPTY_GROUPS: GraphGroups = { groups: [] };
 export const MAX_GROUP_NAME = 40;
 export const MAX_GROUPS = 24;
+export const MAX_GROUP_DOMAINS = 64;
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -46,7 +49,7 @@ export function sanitizeGroups(raw: unknown): GraphGroups {
 		const domains: string[] = [];
 		for (const d of Array.isArray(g.domains) ? g.domains : []) {
 			const dn = text(d, 80);
-			if (!dn || seenDomains.has(dn)) continue;
+			if (!dn || seenDomains.has(dn) || domains.length >= MAX_GROUP_DOMAINS) continue;
 			seenDomains.add(dn);
 			domains.push(dn);
 		}
@@ -58,7 +61,8 @@ export function sanitizeGroups(raw: unknown): GraphGroups {
 			domains,
 		});
 	}
-	return { groups };
+	const at = (raw as GraphGroups | null)?.updatedAt;
+	return typeof at === "number" && Number.isFinite(at) && at > 0 ? { groups, updatedAt: at } : { groups };
 }
 
 export function groupOfDomain(state: GraphGroups, domain: string): GraphGroup | null {

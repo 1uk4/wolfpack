@@ -72,6 +72,6 @@ Affected-only selection (`scripts/affected.mjs`) marks every workspace when a ch
 - `scripts/affected.*` (the selector itself)
 - an unknown, zero or unreachable base commit
 
-Docs (`*.md`, `docs/**`, `LICENSE`) mark nothing, except markdown under `packages/agents/` (agent profiles, prompts and standards), which is prompt input and marks `@wolfpack/agents` and its dependents.
+Docs (`*.md`, `docs/**`, `LICENSE`) mark nothing, except markdown under `packages/agents/{agents,standards,prompts}/` (agent profiles, standards and prompts), which is prompt input and marks `@wolfpack/agents` and its dependents.
 
 A workspace that reaches another at runtime without importing it (it spawns a built `hubd.mjs`, runs `hubd pair`, mints hub tokens against it) must say so in its own `package.json`: `"ci": { "affectedBy": ["@wolfpack/hubd"] }`. `affected.mjs` treats those names like declared dependencies, so a change in them marks the consumer and its tests. `@wolfpack/cli` and `@wolfpack/desktop` do this today; the 4a88a410 owner-device gate on hubd slipped past an affected-only run because they did not.

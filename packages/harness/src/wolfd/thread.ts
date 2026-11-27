@@ -89,6 +89,8 @@ export interface ThreadHost {
  * generation / run start) are engine events and count as activity, so an error + retry at ~90 s does not trip it.
  */
 export const DEFAULT_STALL_TIMEOUT_MS = 120_000;
+/** Start of the error message the stall watchdog emits before it aborts a turn; the subagent manager matches on it. */
+export const STALL_ERROR_PREFIX = "Turn stalled";
 
 const OPERATOR: Actor = { id: "operator", kind: "operator" };
 const SYSTEM: Actor = { id: "wolfd", kind: "system" };
@@ -459,7 +461,7 @@ export class ThreadRuntime {
     const idle = Date.now() - this.lastActivity;
     if (idle < limit) return this.armWatchdog(limit - idle);
     const follow = this.ownerQueued.size > 0 || this.withdrawn.length > 0;
-    this.emit({ type: "error", turnId: turn.turnId, message: `Turn stalled: no activity for ${Math.round(idle / 1000)}s. Aborting it.${follow ? " Queued messages and card answers will follow." : ""}` });
+    this.emit({ type: "error", turnId: turn.turnId, message: `${STALL_ERROR_PREFIX}: no activity for ${Math.round(idle / 1000)}s. Aborting it.${follow ? " Queued messages and card answers will follow." : ""}` });
     void this.abort()
       .catch((e) => this.host.onError(e))
       .finally(() => {

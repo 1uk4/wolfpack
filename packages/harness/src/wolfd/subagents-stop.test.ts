@@ -68,7 +68,7 @@ type Mgr = { port: { thread(id: string): { abort(): Promise<void> } | undefined 
 const mgr = (w: TestWolf) => (w.wolf.server as unknown as { subagents: Mgr }).subagents;
 
 /** A wolf whose child calls a tool, then holds its next model call until the gate opens (so a steer lands mid-run). */
-async function bootToolChild(): Promise<{ w: TestWolf; open: () => void; childId: string }> {
+async function bootToolChild(env?: Record<string, string>): Promise<{ w: TestWolf; open: () => void; childId: string }> {
   let open!: () => void;
   const gate = new Promise<void>((r) => (open = r));
   const step: FauxResponseStep = async (ctx, options) => {
@@ -85,7 +85,7 @@ async function bootToolChild(): Promise<{ w: TestWolf; open: () => void; childId
     if (options?.signal?.aborted) return fauxAssistantMessage("", { stopReason: "aborted" });
     return fauxAssistantMessage("The first attempt failed. I'll retry. FINAL_REPORT");
   };
-  const w = await startTestWolf({ script: Array.from({ length: 40 }, () => step) });
+  const w = await startTestWolf({ script: Array.from({ length: 40 }, () => step), ...(env ? { env } : {}) });
   tw = w;
   const dir = join(w.root, "agent", "agents");
   mkdirSync(dir, { recursive: true });
@@ -157,6 +157,38 @@ describe("what counts as a stop", () => {
     const steer = ledger.find((e) => e.kind === "steer" || e.kind === "resume")?.text ?? "";
     expect(steer).toMatch(/git status/);
     expect(steer).toMatch(/do not repeat a commit, push or merge that already happened/);
+  });
+
+  const resumeTexts = async (w: TestWolf, id: string) => (await w.client.getLedger!(id)).filter((e) => e.kind === "steer" || e.kind === "resume").map((e) => e.text ?? "");
+  const errorTexts = async (w: TestWolf, id: string) => (await w.client.getLedger!(id)).filter((e) => e.kind === "error").map((e) => e.text ?? "");
+
+  it("a real stall-watchdog abort is resumed once with a neutral nudge and named as a stall, not as the 90 s idle timeout", async () => {
+    const { w, childId } = await bootToolChild({ WOLFPACK_STALL_TIMEOUT_MS: "400" });
+    await vi.waitFor(async () => expect((await resumeTexts(w, childId)).length).toBe(1), { timeout: 5000 });
+    const nudge = (await resumeTexts(w, childId))[0]!;
+    expect(nudge).toMatch(/git status/);
+    expect(nudge).toMatch(/do not repeat a commit, push or merge that already happened/);
+    expect(nudge).not.toMatch(/90 s/);
+    const errs = await errorTexts(w, childId);
+    expect(errs.some((t) => /stall watchdog/.test(t))).toBe(true);
+    expect(errs.some((t) => /90 s idle timeout|although nobody stopped it|without a stop request/.test(t))).toBe(false);
+  });
+
+  it("a second real stall fails the child, naming the stall watchdog twice", async () => {
+    const { w, childId } = await bootToolChild({ WOLFPACK_STALL_TIMEOUT_MS: "400" });
+    await vi.waitFor(async () => expect((await w.client.listChildren!(w.home))[0]!.state).toBe("failed"), { timeout: 8000 });
+    const errs = await errorTexts(w, childId);
+    expect(errs.some((t) => /killed by the stall watchdog twice/.test(t))).toBe(true);
+    expect(errs.some((t) => /90 s idle timeout|although nobody stopped it/.test(t))).toBe(false);
+  });
+
+  it("one idle kill then one real stall still fails on the second, naming both causes", async () => {
+    const { w, childId } = await bootToolChild({ WOLFPACK_STALL_TIMEOUT_MS: "1500" });
+    await new Promise((r) => setTimeout(r, 150));
+    await idleKill(w, childId);
+    await vi.waitFor(async () => expect((await w.client.listChildren!(w.home))[0]!.state).toBe("failed"), { timeout: 8000 });
+    const errs = await errorTexts(w, childId);
+    expect(errs.some((t) => /killed twice: first by the 90 s idle timeout, then by the stall watchdog/.test(t))).toBe(true);
   });
 
   it("a stale idle error from an earlier turn does not make a later unrelated abort read as an idle kill", async () => {

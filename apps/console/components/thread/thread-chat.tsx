@@ -1,5 +1,6 @@
 "use client";
 
+import { useGraduateJob } from "@/components/kb/graduate-store";
 import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
 import { isSupersedable } from "@/components/ask/ask-session";
 import { createEarlierScroll } from "@/components/thread/earlier-scroll";
@@ -730,6 +731,7 @@ function ThreadChatInner({
 		}
 	}, [dictation.active]);
 
+	const graduating = useGraduateJob(bound ?? "")?.phase === "graduating";
 	const replyInFlight = useRef(false);
 	const beginSend = useRestoreOnSendFailure(error, status, textRef, applyText);
 	const doSend = useCallback(() => {
@@ -743,7 +745,7 @@ function ThreadChatInner({
 		// A running turn takes the message as a steer, attachments included (the submit route accepts them with
 		// whenBusy "steer"); Stop is the abort.
 		if (busy) return steer(t, refs);
-		send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
+		return send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
 	}, [busy, send, steer, attachments, applyText, beginSend, setSendPending]);
 	// Submit while dictating only finishes the run (the spoken tail lands in the field); the next press sends. A press
 	// while the run is still settling does nothing.
@@ -1023,6 +1025,8 @@ function ThreadChatInner({
 										{noteMode && session.error && <p role="alert" className="px-3 pt-1 font-ui text-xs text-destructive">{session.error}</p>}
 										<Composer
 											busy={noteMode ? false : busy}
+											// The bound feature is graduating: its thread is about to close, a send would race the archive.
+											sending={noteMode ? false : graduating}
 											value={noteMode ? session.note.text : text}
 											onChange={noteMode ? session.setNoteText : applyText}
 											onSend={noteMode ? onNoteSend : onSend}

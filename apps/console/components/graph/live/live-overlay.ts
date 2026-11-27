@@ -38,7 +38,7 @@ import { newRepeller, repelStep, setRep, type Repeller } from "./live-repel";
 import { redact } from "@/src/core";
 import { emptyKbLife, isKbVerb, kbLifeRate, reduceKbLife, stepKbLife } from "@/src/core";
 import { drawKbLife, type KbFocus } from "./kb-life-draw";
-import { isMotionReduced, type MotionMode } from "@/src/core/graph/live/motion-mode";
+import { isMotionReduced, type MotionMode } from "@/src/core";
 
 export interface Pt { x: number; y: number }
 export interface OverlayHost {

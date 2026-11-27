@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useState, type ComponentType, type ReactNode } from "react";
-import { osPrefersReducedMotion, type MotionMode } from "@/src/core/graph/live/motion-mode";
+import { osPrefersReducedMotion, type MotionMode } from "@/src/core";
 import { Blend, EyeOff, Expand, Ghost, Gauge, Kanban, LayoutGrid, Layers, Radio, Route, Tags } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
 import {

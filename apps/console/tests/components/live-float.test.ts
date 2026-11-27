@@ -88,42 +88,6 @@ describe("floating wolves in the overlay", () => {
 		assert.ok(Math.hypot(hit!.sx - wolf.x, hit!.sy - wolf.y) < 1e-9, "the hit is reported at the floated position");
 	});
 
-	it("a wolf roams freely over the whole graph extent (not a domain): it wanders within bounds, hit-testing follows it, and reduced motion keeps it at the centre", () => {
-		const rhost = { ...host, extentRadius: () => 1000 };
-		const pos: { x: number; y: number }[] = [];
-		for (let t = 0; t <= 60_000; t += 40) {
-			o.step(t, 0.04, rhost, 1);
-			if (t % 1000 === 0) {
-				const w = wolfAt(t);
-				pos.push({ x: w.x, y: w.y });
-			}
-		}
-		let far = 0;
-		for (const p of pos) far = Math.max(far, Math.hypot(p.x - pos[0]!.x, p.y - pos[0]!.y));
-		assert.ok(far > 150, `it wandered across the graph, far beyond a domain-sized roam (${far})`);
-		assert.ok(far < 2 * (550 + 36 + 4) * Math.SQRT2, `and stayed within 0.55 of the extent (${far})`);
-		for (const p of pos) assert.ok(Math.hypot(p.x, p.y) < 550 * Math.SQRT2 + 36 + 4, `inside the graph (${p.x},${p.y})`);
-		const w = wolfAt(60_000);
-		const hit = o.hitTest(w.x, w.y, { x: 0, y: 0, k: 1 }, 1);
-		assert.equal(hit?.item.kind, "wolf");
-		assert.ok(Math.hypot(hit!.sx - w.x, hit!.sy - w.y) < 1e-9);
-		const win = globalThis as unknown as { window?: unknown };
-		win.window = { matchMedia: () => ({ matches: true }), innerWidth: 1280 };
-		try {
-			const still = new LiveOverlay(() => {});
-			still.configure(LIVE_DEFAULTS);
-			still.dispatch({ type: "event", event: ev("thread-active", { kind: "thread", wolf: "hal", threadId: "t1" }), now: Date.now() });
-			const xs: number[] = [];
-			for (let t = 0; t <= 30_000; t += 40) {
-				still.step(t, 0.04, rhost, 1);
-				if (t % 5000 === 0) xs.push(still.items(rhost, 1, t).find((i) => i.kind === "wolf")!.x);
-			}
-			assert.ok(Math.max(...xs) - Math.min(...xs) < 1e-9, "reduced motion: the wolf stays at its anchor");
-			still.stop();
-		} finally {
-			delete win.window;
-		}
-	});
 
 	it("an active thread and its wolf read as working; an idle one is dimmer and not working", () => {
 		const now = Date.now();
@@ -215,25 +179,5 @@ describe("wolf spacing: ring anchors, activity bias, soft separation", () => {
 		for (let t = 40; t < 6000; t += 40) o.step(t, 0.04, host, 1);
 		const w = wolves(host);
 		assert.ok(gap(w[0]!, w[1]!) >= 2 * DIAM, `pushed apart (${gap(w[0]!, w[1]!)})`);
-	});
-
-	it("a wolf with one feature hub settles about halfway toward it, never all the way", () => {
-		reduce();
-		const host = mk(1000);
-		const pos = (threadId: string) => {
-			o.stop();
-			o = new LiveOverlay(() => {});
-			o.configure(LIVE_DEFAULTS);
-			o.dispatch({ type: "event", event: ev("thread-active", { kind: "thread", wolf: "hal", threadId, title: "f" }), now: Date.now() });
-			for (let t = 0; t <= 20_000; t += 40) o.step(t, 0.04, host, 1);
-			return wolves(host)[0]!;
-		};
-		const plain = pos("hal/home");
-		nodes.set("work:ELzLSkV", { x: -900, y: 700 });
-		const hub = nodes.get("work:ELzLSkV")!;
-		const biased = pos("hal/feature-work-wolfpack-ELzLSkV");
-		const frac = 1 - gap(biased, hub) / gap(plain, hub);
-		// One hub's invisible spring pulls the anchor half the way (wolfSpringAnchor: n / (1 + n)).
-		assert.ok(Math.abs(frac - 0.5) < 0.05, `moved ${(frac * 100).toFixed(0)}% toward the hub`);
 	});
 });

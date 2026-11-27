@@ -182,23 +182,22 @@ describe("live map model v2", () => {
 		}
 	});
 
-	it("a subagent is its own body beside its hub, never on the hub's ring, joined to it by a link, and gone once it has finished and faded", () => {
+	it("a running subagent is a small icon on its feature's ring, joined to it by a link, and gone once it has finished and faded", () => {
 		send("thread-active", feature);
 		send("subagent-spawned", subTap);
 		run(5);
 		const hub = of("feature");
 		const sub = of("subagent");
-		assert.ok(dist(sub, hub) > hub.r + sub.r, `clear of the hub's ring (${dist(sub, hub)} vs ${hub.r + sub.r})`);
-		assert.ok(dist(sub, hub) < 80, "but still close to it");
-		assert.ok(sub.r > 10 && sub.r < 14, `about 70% of the wolf's icon (${sub.r})`);
+		assert.ok(Math.abs(dist(sub, hub) - 28) < 2, `on the ring (${dist(sub, hub)})`);
+		assert.ok(hub.r > sub.r * 3 && sub.r > 5 && sub.r < 8, `a small icon (${sub.r}) on a bigger ring (${hub.r})`);
 		const link = render().filter((s) => !s.dash && near(s.from, hub, 0.5) && near(s.to, sub, 0.5));
-		assert.equal(link.length, 1, "one link line from the hub to the subagent");
+		assert.equal(link.length, 1, "one link line from the ring's centre to the subagent");
 		send("subagent-finished", subTap);
 		run(20);
 		assert.equal(items().filter((i) => i.kind === "subagent").length, 0, "removed after the fade");
 	});
 
-	it("several subagents of one hub spread apart around it", () => {
+	it("several subagents of one feature sit evenly spaced on its ring", () => {
 		const subB = { ...subTap, threadId: "1uk4/sub-2", subagent: "scout2", title: "scout2" };
 		const subC = { ...subTap, threadId: "1uk4/sub-3", subagent: "scout3", title: "scout3" };
 		send("thread-active", feature);
@@ -209,65 +208,63 @@ describe("live map model v2", () => {
 		const hub = of("feature");
 		const subs = items().filter((i) => i.kind === "subagent");
 		assert.equal(subs.length, 3);
-		for (let i = 0; i < subs.length; i++) {
-			assert.ok(dist(subs[i]!, hub) > hub.r + subs[i]!.r, "each is clear of the hub");
-			for (let j = i + 1; j < subs.length; j++) assert.ok(dist(subs[i]!, subs[j]!) > subs[i]!.r + subs[j]!.r, `bodies ${i} and ${j} do not overlap (${dist(subs[i]!, subs[j]!)})`);
-		}
+		for (const s of subs) assert.ok(Math.abs(dist(s, hub) - 28) < 2, `on the ring (${dist(s, hub)})`);
+		const gaps = [dist(subs[0]!, subs[1]!), dist(subs[1]!, subs[2]!), dist(subs[2]!, subs[0]!)];
+		assert.ok(Math.max(...gaps) - Math.min(...gaps) < 3, `equal gaps ${gaps}`);
 	});
 
-	it("a subagent's kb-read darts it toward the entry from where it was, joined to its spawn by its own thread id", () => {
+	it("a subagent's kb-read stretches its own icon toward the entry while the group only drifts, and the trail starts at the icon", () => {
 		send("thread-active", feature);
 		send("subagent-spawned", subTap);
 		run(0.1);
 		const p0 = { x: of("subagent").x, y: of("subagent").y };
+		const hub0 = { x: of("feature").x, y: of("feature").y };
 		const target = nodes.get("ent:kb-wolfpack-KNMBskd")!;
 		send("kb-read", subDerived, ENT); // the hub-derived shape: another name, no parent
 		assert.equal(items().filter((i) => i.kind === "subagent").length, 1, "still one subagent");
-		run(1.5);
-		const mid = of("subagent");
-		assert.ok(dist(mid, target) < dist(p0, target) * 0.4, `moved toward the entry (${dist(p0, target)} -> ${dist(mid, target)})`);
+		run(8);
+		const sub = of("subagent");
+		assert.ok(dist(sub, target) < dist(p0, target) * 0.7, `stretched toward the entry (${dist(p0, target)} -> ${dist(sub, target)})`);
+		assert.ok(dist(of("feature"), hub0) < 30, `the group drifted only a little (${dist(of("feature"), hub0)})`);
 		const trail = render().filter((s) => !s.dash && near(s.to, target, 0.5));
 		assert.equal(trail.length, 1, "one trail ends on the entry");
-		assert.ok(near(trail[0]!.from, p0, 6), "and starts where the subagent was");
-		assert.ok(alphaOfStyle(trail[0]!.style) >= 0.5);
+		assert.ok(near(trail[0]!.from, sub, 0.5), "and starts at the subagent's icon, following it");
 	});
 
-	it("a subagent hops from one target to the next", () => {
+	it("a subagent's next event re-aims its stretch", () => {
 		send("thread-active", feature);
 		send("subagent-spawned", subTap);
 		send("kb-read", subTap, ENT);
-		run(3);
+		run(5);
 		const first = of("subagent");
 		send("bound", subTap, WORK);
-		run(3);
+		run(8);
 		const second = of("subagent");
-		assert.ok(dist(second, nodes.get("work:ELzLSkV")!) < dist(first, nodes.get("work:ELzLSkV")!) * 0.4);
+		assert.ok(dist(second, nodes.get("work:ELzLSkV")!) < dist(first, nodes.get("work:ELzLSkV")!), "now closer to the new target");
 		assert.equal(of("feature").working, true);
 	});
 
-	it("with no target for more than 10 s the tether reels a subagent back to its hub", () => {
+	it("once the hold ends the tether snaps a subagent back to its slot on the ring", () => {
 		send("thread-active", feature);
 		send("subagent-spawned", subTap);
 		send("kb-read", subTap, ENT);
-		run(3);
+		run(5);
 		const away = dist(of("subagent"), of("feature"));
-		assert.ok(away > 300, `it is out at the entry (${away})`);
-		run(9); // 12 s since the target
-		run(8);
+		assert.ok(away > 100, `it is stretched out (${away})`);
+		run(40);
 		const home_ = dist(of("subagent"), of("feature"));
-		assert.ok(home_ > 20 && home_ < 60, `it drifted back to its rest ring beside the hub (${home_})`);
+		assert.ok(Math.abs(home_ - 28) < 2, `back on the ring (${home_})`);
 	});
 
-	it("a finished subagent flies back to its hub and is still there fading", () => {
+	it("a finished subagent is back on its ring and still there fading", () => {
 		send("thread-active", feature);
 		send("subagent-spawned", subTap);
 		send("kb-read", subTap, ENT);
-		run(3);
-		const out = dist(of("subagent"), of("feature"));
+		run(5);
 		send("subagent-finished", subTap);
-		run(3);
+		run(13);
 		const sub = of("subagent");
-		assert.ok(dist(sub, of("feature")) < out * 0.3, `back toward the hub (${out} -> ${dist(sub, of("feature"))})`);
+		assert.ok(Math.abs(dist(sub, of("feature")) - 28) < 3, `on the ring (${dist(sub, of("feature"))})`);
 		assert.ok(sub.alpha > 0 && sub.alpha < 1, `fading (${sub.alpha})`);
 	});
 
@@ -324,48 +321,50 @@ describe("live map model v2", () => {
 		assert.equal(items().some((i) => i.kind === "feature"), false);
 	});
 
-	it("the wolf floats free: its feature hub settles it about halfway toward the work, never onto it", () => {
-		const big: OverlayHost = { ...host, extentRadius: () => 600 };
-		const b = new LiveOverlay(() => {});
-		b.configure(LIVE_DEFAULTS);
-		send("thread-active", home);
-		send("thread-active", home, undefined, b);
+	it("the chat's own event pulls the whole feature group strongly toward the target, its subagents riding on the ring, and the trail starts at the centre", () => {
 		send("thread-active", feature);
 		send("subagent-spawned", subTap);
-		send("kb-read", subTap, ENT);
+		run(0.1);
+		const hub0 = { x: of("feature").x, y: of("feature").y };
+		const target = nodes.get("ent:kb-wolfpack-KNMBskd")!;
+		const d = dist(hub0, target);
 		send("kb-read", feature, ENT);
-		for (let i = 0; i < 80; i++) {
-			mock.timers.tick(50);
-			o.step(Date.now(), 0.05, big, 1);
-			b.step(Date.now(), 0.05, big, 1);
-		}
-		const wolfA = items().find((i) => i.kind === "wolf")!;
-		const wolfB = b.items(host, 1, Date.now()).find((i) => i.kind === "wolf")!;
-		const moved = dist(wolfA, wolfB);
-		const d = dist(wolfB, nodes.get("work:ELzLSkV")!);
-		assert.ok(Math.abs(moved - 0.5 * d) < 0.02 * d, `one hub pulls the wolf half of the way to the work: moved ${moved} of ${d}`);
-		b.stop();
+		run(8);
+		const early = render().filter((s) => !s.dash && near(s.to, target, 0.5));
+		assert.equal(early.length, 1);
+		assert.ok(near(early[0]!.from, of("feature"), 0.5), "the trail starts at the group's centre, wherever it is now");
+		run(22);
+		const hub = of("feature");
+		const moved = dist(hub, hub0);
+		assert.ok(moved > 0.45 * d && moved < 0.62 * d, `about 0.56 of the way (${moved} of ${d})`);
+		assert.ok(Math.abs(dist(of("subagent"), hub) - 28) < 3, "the subagent went with it, still on the ring");
+		run(40);
+		assert.ok(dist(of("feature"), hub0) < 5, "and it returns home when the hold ends");
 	});
 
-	it("a wolf with feature hubs settles: against the same wolf without hubs (same idle roam), the offset stops changing within 60 frames", () => {
-		const big: OverlayHost = { ...host, extentRadius: () => 600 };
-		const b = new LiveOverlay(() => {});
-		b.configure(LIVE_DEFAULTS);
+	it("a wolf's own kb-read sends it to the entry; its thread dots, its subagents and its trail move with it every frame, with the layout frozen", () => {
+		const subHome = { ...subTap, parentThreadId: "1uk4/home" };
 		send("thread-active", home);
-		send("thread-active", home, undefined, b);
-		send("thread-active", feature);
-		const off: { x: number; y: number }[] = [];
-		for (let i = 0; i < 60; i++) {
-			mock.timers.tick(50);
-			o.step(Date.now(), 0.05, big, 1);
-			b.step(Date.now(), 0.05, big, 1);
-			const a = items().find((it) => it.kind === "wolf")!;
-			const c = b.items(host, 1, Date.now()).find((it) => it.kind === "wolf")!;
-			off.push({ x: a.x - c.x, y: a.y - c.y });
+		send("subagent-spawned", subHome);
+		run(0.2);
+		const w0 = of("wolf");
+		send("kb-read", home, ENT);
+		const target = nodes.get("ent:kb-wolfpack-KNMBskd")!;
+		for (let i = 0; i < 40 * 20; i++) {
+			run(0.05);
+			const wolf = of("wolf");
+			const dot = of("thread");
+			assert.ok(Math.abs(dist(dot, wolf) - 23.4) < 1, `thread dot beside the wolf at frame ${i} (${dist(dot, wolf)})`);
+			const sub = of("subagent");
+			assert.ok(Math.abs(dist(sub, wolf) - 36.4) < 6, `subagent on its ring about the wolf at frame ${i} (${dist(sub, wolf)})`);
+			if (i === 100) {
+				const trail = render().filter((s) => !s.dash && near(s.to, target, 0.5));
+				assert.equal(trail.length, 1);
+				assert.ok(near(trail[0]!.from, wolf, 0.5), "the trail leaves the wolf where it is now");
+			}
 		}
-		assert.ok(Math.hypot(off[59]!.x, off[59]!.y) > 100, "the hubs do pull it away from its ring slot");
-		assert.ok(dist(off[58]!, off[59]!) < 0.5, `still settling: ${dist(off[58]!, off[59]!)} per frame`);
-		b.stop();
+		const w1 = of("wolf");
+		assert.ok(dist(w0, w1) > 200 && dist(w1, target) < 30, `the wolf travelled to the entry (${dist(w1, target)})`);
 	});
 
 	it("a home-thread bind to a feature draws a wolf-to-feature link; the feature's own action starts at its hub", () => {
@@ -409,22 +408,24 @@ describe("live map model v2", () => {
 		nodes.delete("work:Zz9");
 	});
 
-	it("reduced motion: no float or roam, subagents snap to their target", () => {
+	it("reduced motion: no float, the wolf arrives at once, subagents snap to their stretch", () => {
 		g.window = { matchMedia: () => ({ matches: true }), innerWidth: 1280 };
 		const still = new LiveOverlay(() => {});
 		still.configure(LIVE_DEFAULTS);
 		send("thread-active", feature, undefined, still);
+		send("thread-active", home, undefined, still);
 		send("subagent-spawned", subTap, undefined, still);
 		send("kb-read", subTap, ENT, still);
-		const big: OverlayHost = { ...host, extentRadius: () => 600 };
-		still.step(T0, 0.016, big, 1);
+		send("kb-read", home, ENT, still);
+		still.step(T0, 0.016, host, 1);
 		const w0 = still.items(host, 1, T0).find((i) => i.kind === "wolf")!;
 		const sub = still.items(host, 1, T0).find((i) => i.kind === "subagent")!;
-		const d = dist(sub, nodes.get("ent:kb-wolfpack-KNMBskd")!);
-		assert.ok(d > 10 && d < 16, `snapped beside the entry (${d})`);
-		still.step(T0 + 30_000, 0.016, big, 1);
+		const hub = still.items(host, 1, T0).find((i) => i.kind === "feature")!;
+		assert.ok(dist(sub, hub) > 150, `snapped out toward the entry (${dist(sub, hub)})`);
+		assert.ok(dist(w0, nodes.get("ent:kb-wolfpack-KNMBskd")!) < 30, "the wolf is already at the entry");
+		still.step(T0 + 30_000, 0.016, host, 1);
 		const w1 = still.items(host, 1, T0 + 17_000).find((i) => i.kind === "wolf")!;
-		assert.ok(dist(w0, w1) < 1e-9, "the wolf neither roams nor floats");
+		assert.ok(dist(w0, w1) < 1e-9, "the wolf neither moves nor floats");
 		assert.equal(still.needsFrames(0), false);
 		still.stop();
 	});

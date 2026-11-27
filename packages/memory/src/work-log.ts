@@ -11,7 +11,7 @@
  */
 import { z } from "zod";
 import { LlmInfraError, WORK_LOG_SYSTEM, buildWorkLogPrompt, parseWorkLogOutput, type Engine } from "@wolfpack/engine";
-import type { PendingCause, WorkPendingState } from "./work-pending.js";
+import { clip, type PendingCause, type WorkPendingState } from "./work-pending.js";
 import { appendCompacting } from "./work/compact.js";
 import { extractRecord, type RecordAppendLine, type WorkObservation, type WorkRecordItem, type WorkRecordOutcome, type WorkRecordStore } from "./work-record.js";
 
@@ -127,7 +127,8 @@ export async function appendWorkLog(opts: AppendWorkLogOptions): Promise<WorkLog
             outcomes.push({ work: target, target, ids, status: "pending", reason, cause: "forbidden", ...(assignee ? { assignee } : {}) });
             continue;
           }
-          opts.onProgress?.(`  work ${target}: append failed (${res.code}), ${ids.length} observation(s) stay pending — ${reason}`);
+          // Said once per distinct failure: a retry that fails the same way adds no line.
+          if (clip(reason) !== pending?.entry(target)?.message) opts.onProgress?.(`work ${target}: append failed (${res.code}), ${ids.length} observation(s) stay pending — ${clip(reason)}`);
           pending?.pending(target, "work-api-unavailable", { message: reason });
           const retryAt = pending?.entry(target)?.nextAttemptAt;
           outcomes.push({ work: target, target, ids, status: "pending", reason, cause: "work-api-unavailable", ...(retryAt ? { retryAt } : {}) });

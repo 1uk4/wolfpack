@@ -14,6 +14,7 @@ import { z } from "zod";
 import { WORK_TIDY_SYSTEM, buildWorkTidyPrompt, parseWorkTidyOutput, type Engine } from "@wolfpack/engine";
 import { extractRecord, RECORD_HEADING, APPEND_CAP_FEATURE, WorkApiError, type WorkRecordStore } from "../work-record.js";
 import { outcomesText } from "./rollup.js";
+import { clip } from "../work-pending.js";
 import { appendCompacting } from "./compact.js";
 import { sweepPendingDistills, type SweepClient } from "./ship-distill.js";
 
@@ -80,7 +81,7 @@ async function finalPassOnce(opts: PassOpts): Promise<FinalPassResult | "conflic
     const markerOnly = async (before: number): Promise<FinalPassResult> => {
       // On log_full, compact first (appendCompacting), so the pass is marked and does not re-run its model call on every graduation.
       const r = await appendCompacting({ store, engine, id: featureId, kind: feature.kind, src: opts.src, group: "Changes", lines: [{ at, src: opts.src, kind: "change", text: "final pass: nothing to tidy", ids: [marker] }] });
-      return r.ok ? { ok: true, status: "marker-only", before, after: before } : { ok: false, reason: `append failed: ${r.code}${"message" in r ? `: ${r.message}` : ""}` };
+      return r.ok ? { ok: true, status: "marker-only", before, after: before } : { ok: false, reason: `append failed: ${r.code === "log_full" ? r.code : `${r.code}: ${clip(r.message)}`}` };
     };
 
     const before = input.reduce((n, l) => n + l.text.length, 0);

@@ -63,6 +63,42 @@ function isHeading12(lines: string[], fenced: boolean[], i: number): boolean {
 }
 
 /**
+ * Demote every H1/H2 of `text` (the same ones `assertSectionText` and `replaceSection` see: ATX incl. quote / list prefixes, and setext)
+ * to an H4, so pasted text can never add a second `## Record` (or any H1/H2) to a body. Fenced code is untouched; an unclosed fence is
+ * closed at the end so it cannot swallow what follows. Idempotent.
+ */
+export function demoteHeadings(text: string): string {
+  const lines = toLf(text).split("\n");
+  const { fenced, unclosed } = fenceMap(lines);
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (!isHeading12(lines, fenced, i)) { out.push(l); continue; }
+    if (!ATX_H12.test(l) && SETEXT_UNDERLINE.test(l) && !CONTAINER_PREFIX.test(l)) {
+      // Setext: the text line above (already pushed) becomes `#### text`; the underline is dropped.
+      out[out.length - 1] = `#### ${out[out.length - 1].trim()}`;
+      continue;
+    }
+    let prefix = "";
+    let rest = l;
+    for (let n = 0; n < 8 && !ATX_H12.test(rest); n++) {
+      const m = CONTAINER_PREFIX.exec(rest);
+      if (!m) break;
+      prefix += m[0];
+      rest = rest.slice(m[0].length);
+    }
+    out.push(prefix + rest.replace(/^ {0,3}#{1,2}(?=[ \t]|$)/, "####"));
+  }
+  if (unclosed) {
+    let k = lines.length - 1;
+    while (k > 0 && fenced[k - 1]) k--;
+    const m = FENCE_OPEN.exec(lines[k]);
+    out.push(m ? m[1][0].repeat(m[1].length) : "```");
+  }
+  return out.join("\n");
+}
+
+/**
  * Reject section text that could restructure the body. `stripGeneratedLog` cuts the body at a column-0 `## Log` + list item, and
  * any CommonMark parser would see an H1/H2 (ATX with 0-3 spaces indent or a bare `##`, setext `Log\n---` / `Log\n===`) as a new
  * section. Headings inside fenced code are legitimate content; an unclosed fence would swallow the next real heading, so it is refused.

@@ -39,6 +39,7 @@
  *   "duration" / "time".
  */
 
+import { demoteHeadings } from "@wolfpack/kb/shared";
 import { findSection } from "../work-record.js";
 
 export const OUTCOMES_HEADING = "## Outcomes";
@@ -209,27 +210,6 @@ function renderBlock(child: ChildMeta, distilled: string): string {
     demoteHeadings(distilled),
     ITEM_CLOSE,
   ].join("\n");
-}
-
-/**
- * Demote a child's ATX H1/H2 headings (outside code fences) to H4, so a copied `## Record`
- * never becomes a second Record section of the feature. H3 and deeper stay as they are.
- */
-export function demoteHeadings(text: string): string {
-  let fence: string | null = null;
-  return text
-    .split("\n")
-    .map((line) => {
-      const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-      if (f) {
-        if (!fence) fence = f[1]![0]!;
-        else if (f[1]![0] === fence) fence = null;
-        return line;
-      }
-      if (fence) return line;
-      return line.replace(/^ {0,3}#{1,2}(?=[ \t]|$)/, "####");
-    })
-    .join("\n");
 }
 
 /** `2026-10-18` → `Sun 10/18`. ISO dates are UTC-free; parse as calendar day. */

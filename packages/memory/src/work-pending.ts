@@ -212,12 +212,18 @@ export function readArchive(root: string): ArchiveEntry[] {
 /** An archived observation by id (any outcome; the last entry wins). */
 export const findArchived = (root: string, id: string): ArchiveEntry | undefined => readArchive(root).filter((e) => e.id === id).pop();
 
+/** A hub message for the state file, a log line or a reason: whitespace collapsed, at most `max` characters (ending in an ellipsis when cut). */
+export function clip(msg: string, max = 300): string {
+  const s = msg.replace(/\s+/g, " ").trim();
+  return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
+}
+
 export interface PendingEntry {
   firstPendingAt: number;
   tries: number;
   nextAttemptAt: number;
   cause: PendingCause;
-  /** cause forbidden: the hub's own words. */
+  /** The hub's own words (clipped): the refusal for forbidden, the error for a failed append. */
   message?: string;
   /** cause forbidden: the wolf the item is assigned to, when known. */
   assignee?: string;
@@ -254,7 +260,7 @@ export class WorkPendingState {
     // forbidden: no backoff timer, due on every run.
     const nextAttemptAt = cause === "forbidden" ? 0 : this.now() + Math.min(BACKOFF_BASE_MS * 2 ** (tries - 1), BACKOFF_CAP_MS);
     const entry: PendingEntry = { ...e, firstPendingAt: e?.firstPendingAt ?? this.now(), tries, cause, nextAttemptAt };
-    if (extra.message) entry.message = extra.message; else delete entry.message;
+    if (extra.message) entry.message = clip(extra.message); else delete entry.message;
     if (cause === "forbidden" && extra.assignee) entry.assignee = extra.assignee; else delete entry.assignee;
     this.data[key] = entry;
     this.dirty = true;

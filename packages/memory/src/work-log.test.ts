@@ -112,6 +112,25 @@ describe("appendWorkLog", () => {
     expect(progress.filter((m) => m.includes("more than one ## Record heading"))).toHaveLength(1);
   });
 
+  it("says a repeated identical append failure once, and clips a long multi-line message to 300 characters", async () => {
+    const store = new InMemoryWorkRecordStore({ a: item({ id: "a" }) });
+    const long = `first line\n${"x".repeat(500)}`;
+    store.appendRecord = async (): Promise<AppendRecordResult> => ({ ok: false, code: "error", message: long });
+    let t = 1_000_000;
+    const pending = new WorkPendingState(undefined, () => t);
+    const progress: string[] = [];
+    for (let run = 0; run < 2; run++) {
+      await appendWorkLog({ engine: engineOf([{ lines: [line("t", ["o1"])] }]), store, src: "w", pending, onProgress: (m) => progress.push(m), observations: [o("1", "a", "x")] });
+      t += 24 * 3_600_000; // past the backoff, so the second run really retries
+    }
+    expect(progress).toHaveLength(1);
+    expect(pending.entry("a")?.tries).toBe(2);
+    const stored = pending.entry("a")!.message!;
+    expect(stored).toHaveLength(300);
+    expect(stored.startsWith("first line xxx")).toBe(true);
+    expect(stored.endsWith("\u2026")).toBe(true);
+  });
+
   it("sends the recent log lines and the observation text, and maps from to observation ids", async () => {
     const body = "## Record\n\n- 10:00 [w·change] earlier line <!-- src:0 -->";
     const store = new InMemoryWorkRecordStore({ a: item({ id: "a", title: "Fix cache", body }) });

@@ -20,6 +20,8 @@ export interface WorkerdServerOptions {
    * The hub relay never reaches it (relay.ts refuses /direct paths).
    */
   directToken?: () => string;
+  /** Called after a wolf's settings save (PUT /v1/wolves/:name/settings) came back 2xx, so workerd can re-read wolf.yaml and re-announce the wolf. */
+  onWolfSettingsSaved?: (wolf: string) => void;
   /** Is this request from this machine? Default: the socket's peer address is loopback (isLoopbackPeer). */
   isLoopback?: (req: IncomingMessage) => boolean;
 }
@@ -148,16 +150,17 @@ export class WorkerdServer {
     if (!wolf || !this.opts.registry.has(wolf)) return sendError(res, "not_found", `unknown wolf: ${wolf ?? "(none)"}`);
     const upstream = this.opts.registry.upstream(wolf);
     if (!upstream) return sendError(res, "engine_error", `wolf ${wolf} is offline`, true);
-    this.forward(req, res, upstream, wolf, path);
+    this.forward(req, res, upstream, wolf, path, m.name === "putWolfSettings");
   }
 
-  private forward(req: IncomingMessage, res: ServerResponse, upstream: string, wolf: string, path: string): void {
+  private forward(req: IncomingMessage, res: ServerResponse, upstream: string, wolf: string, path: string, settingsSave = false): void {
     const sock = socketOf(upstream);
     const target = new URL(path, sock ? "http://wolf" : upstream);
     const where = sock ? { socketPath: sock } : { hostname: target.hostname, port: target.port };
     const up = httpRequest(
       { ...where, path: target.pathname + target.search, method: req.method, headers: forwardHeaders(req.headers) },
       (ur) => {
+        if (settingsSave && (ur.statusCode ?? 0) >= 200 && (ur.statusCode ?? 0) < 300) ur.on("end", () => this.opts.onWolfSettingsSaved?.(wolf)); // the file is written before wolfd answers
         res.writeHead(ur.statusCode ?? 502, forwardHeaders(ur.headers));
         res.flushHeaders();
         ur.pipe(res);

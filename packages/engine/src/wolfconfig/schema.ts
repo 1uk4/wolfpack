@@ -176,6 +176,8 @@ export interface TierOverrideConfig {
 
 /** Normalized, defaults-applied wolf config. */
 export interface WolfConfig {
+  /** The wolf's chosen colour (wolf.yaml `color`, a palette key). Absent = automatic. */
+  color?: string;
   identity: {
     id: string;
     name: string;

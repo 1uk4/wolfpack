@@ -32,6 +32,19 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
     expect((await r.client.listWolves()).map((w) => w.name).sort()).toEqual(["alpha", "beta"]);
   });
 
+  it("a wolf settings save that changes color re-announces the wolf: the hub's wolf list shows the new color, and clearing it removes it", async () => {
+    const r = await rig({ wolves: ["alpha"] });
+    await r.waitPresence("online");
+    await r.workerd.supervisor.whenSettled();
+    const hubColor = async () => ((await (await fetch(`${r.hub.url}/v1/wolves`, { headers: r.operator })).json()) as any).wolves.find((w: any) => w.name === "alpha")?.color ?? null;
+    expect(await hubColor()).toBe(null);
+    const put = (color: string | null) => fetch(`${r.workerd.url}/v1/wolves/alpha/settings`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ set: { color } }) });
+    expect((await put("blue")).status).toBe(200);
+    await r.eventually(async () => (await hubColor()) === "blue", "hub shows blue");
+    expect((await put(null)).status).toBe(200);
+    await r.eventually(async () => (await hubColor()) === null, "hub drops the color");
+  });
+
   it("a retired wolf is not resurrected on reconnect and stays retired", async () => {
     const r = await rig({ wolves: ["alpha"] });
     await r.waitPresence("online");

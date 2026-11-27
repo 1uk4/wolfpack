@@ -41,6 +41,11 @@ describe("loadWolfConfig", () => {
     expect(extra.config.prompts).toEqual({ structuredOutput: "custom" });
   });
 
+  it("color loads as config.color (what workerd announces to the hub); absent leaves it unset", () => {
+    const load = (y: string) => loadWolfConfig(wolf("c", y), { home: "/h" });
+    expect(load("name: p\ncolor: blue\n").config.color).toBe("blue");
+    expect(load("name: p\n").config).not.toHaveProperty("color");
+  });
   it("memory.hubKb: true loads as config.memory.hubKb; absent leaves it unset", () => {
     expect(loadWolfConfig(wolf("hk", "name: hk\nextensions: [memory]\nmemory:\n  live: true\n  hubKb: true\n"), { home: "/h" }).config.memory.hubKb).toBe(true);
     expect(loadWolfConfig(wolf("nk", "name: nk\nextensions: [memory]\nmemory:\n  live: true\n"), { home: "/h" }).config.memory.hubKb).toBeUndefined();

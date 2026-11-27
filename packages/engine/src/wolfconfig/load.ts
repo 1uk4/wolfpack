@@ -138,6 +138,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       ...(v.memory.sweepInterval ? { sweepInterval: v.memory.sweepInterval } : {}),
       consolidation: { ...DEFAULT_CONSOLIDATION, ...definedOnly(v.memory.consolidation) } as WolfConfig["memory"]["consolidation"],
     },
+    ...(v.color ? { color: v.color } : {}),
     extensions: v.extensions,
     plugins: v.plugins,
     extensionConfig: Object.fromEntries(

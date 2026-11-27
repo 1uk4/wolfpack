@@ -369,6 +369,16 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   const server = new WorkerdServer({
     registry: supervisor,
     ...(directToken ? { directToken } : {}),
+    // A settings save wrote wolf.yaml (color, tiers...): re-read it, refresh workerd's copy and re-announce the wolf (hubd treats wolf.add as an upsert).
+    onWolfSettingsSaved: (name) => {
+      if (linkOnly) return;
+      try {
+        const fresh = discoverWolves(root).wolves.map((l) => l.config).find((c) => c.identity.name === name);
+        if (fresh && supervisor.reloadConfig(fresh)) link?.wolfAdded(linkWolf(fresh));
+      } catch (e) {
+        log(`[workerd] re-announce of ${name} after a settings save failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
     health: () => ({ ok: true, wolves: supervisor.status(), ...(kbSync ? { kb: kbSync.status() } : {}), ...(link ? { hub: link.status() satisfies LinkStatus } : {}), ...(link && hubCfg ? { hubHostId: hubCfg.hostId } : {}) }), // hubHostId: matches this workerd to its entry in hubd's /healthz hosts
   });
   const url = await server.listen(opts.port ?? workerdPort(), opts.host ?? (linkOnly ? (process.env.WORKERD_HOST || "127.0.0.1") : undefined));

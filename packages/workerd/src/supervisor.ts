@@ -96,7 +96,7 @@ class Child {
   timer: NodeJS.Timeout | null = null;
   healthyTimer: NodeJS.Timeout | null = null;
   readonly logFile: string;
-  constructor(readonly config: WolfConfig) {
+  constructor(public config: WolfConfig) {
     this.logFile = join(config.den, "logs", "wolfd.log");
   }
 }
@@ -153,6 +153,14 @@ export class Supervisor implements WolfRegistry {
     this.children.set(name, c);
     if (this.started && !this.stopping) this.spawnChild(c);
     this.emit({ type: "add", config });
+  }
+
+  /** Replace a supervised wolf's in-memory config (its wolf.yaml was re-read after a settings save). Does not restart the child. */
+  reloadConfig(config: WolfConfig): boolean {
+    const c = this.children.get(config.identity.name);
+    if (!c) return false;
+    c.config = config;
+    return true;
   }
 
   /** Stop and forget a wolf. */

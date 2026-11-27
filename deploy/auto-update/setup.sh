@@ -75,5 +75,7 @@ run systemctl daemon-reload
 log "updater state dir stays root-only; the console-writable subscription.json gets its own directory"
 run install -d -m 0755 -o root -g root /var/lib/wolfpack-auto-update
 if getent group console >/dev/null 2>&1; then run install -d -m 0775 -o root -g console /var/lib/wolfpack-subscription; else run install -d -m 0775 -o root -g root /var/lib/wolfpack-subscription; echo "NOTICE: no console group yet; re-run this after deploy/console/setup.sh so the panel can save its channel and mode"; fi
+# workerd (another user) reads the channel from subscription.json; an older console wrote it 0600 (work-wolfpack-B8vtRi3). No secrets in it.
+if [ -f /var/lib/wolfpack-subscription/subscription.json ]; then run chmod 0644 /var/lib/wolfpack-subscription/subscription.json; fi
 log "installed (wolfpack-auto-update-now[@].service for the console's Update buttons need no further step; install deploy/console/50-console-restart.rules via deploy/console/setup.sh for polkit)"
 log "To also turn the timer on: set WOLFPACK_AUTO_UPDATE=1 in $ENV_FILE, then systemctl enable --now wolfpack-auto-update.timer (RUNBOOK.md)"

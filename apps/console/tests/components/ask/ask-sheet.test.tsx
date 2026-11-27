@@ -119,12 +119,12 @@ afterEach(async () => {
 describe("ask sheet", () => {
 	it("shows page N of M with Next, and Submit on the last page; tradeoffs show per choice", async () => {
 		await render(pending());
-		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 1 of 2");
+		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "1 of 2");
 		assert.equal(q('[data-testid="ask-page-title"]')!.textContent, "First");
 		assert.equal(q('[data-testid="press"]')!.textContent, "Next");
 		assert.deepEqual(qa('[data-testid="ask-tradeoff"]').map((e) => e.textContent), ["fast but loose", "slow but sure"]);
 		await render(pending({ pageIndex: 1 }));
-		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 2 of 2");
+		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "2 of 2");
 		assert.equal(q('[data-testid="press"]')!.textContent, "Submit");
 	});
 
@@ -164,7 +164,7 @@ describe("ask sheet", () => {
 		await render(pending());
 		await click(qa('[data-testid="ask-option"]')[0]!);
 		await render(pending({ pageIndex: 1, draft: { q3: { value: "typed so far" } } }));
-		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 2 of 2");
+		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "2 of 2");
 		assert.equal(qa('[data-testid="ask-question"]').length, 1);
 		assert.equal((q('[data-testid="ask-free"]') as HTMLTextAreaElement).value, "typed so far");
 		await click(q('[data-testid="press"]'));
@@ -245,7 +245,7 @@ describe("ask sheet answers and guards", () => {
 		});
 		await settle();
 		assert.equal(posts.length, 1);
-		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 2 of 2");
+		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "2 of 2");
 	});
 
 	it("Other text bound from the composer sends as {value, other:true} for single and {value:[..], other:[text]} for multi", async () => {
@@ -392,13 +392,13 @@ describe("ask sheet answers and guards", () => {
 		assert.equal(q('[data-testid="ask-back"]') === null, true); // no Back on page 1
 		await click(qa('[data-testid="ask-option"]')[1]!);
 		await click(q('[data-testid="press"]'));
-		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 2 of 2");
+		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "2 of 2");
 		assert.equal(q('[data-testid="press"]')!.textContent, "Submit");
 		await settle();
 		await click(q('[data-testid="ask-back"]'));
 		await settle();
 		assert.equal(posts[1]!.body.goto, 0);
-		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "page 1 of 2");
+		assert.equal(q('[data-testid="ask-page-count"]')!.textContent, "1 of 2");
 		assert.equal(q('[data-testid="press"]')!.textContent, "Next");
 		assert.equal(posts.length, 2);
 	});

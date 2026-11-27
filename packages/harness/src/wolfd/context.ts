@@ -59,7 +59,7 @@ export const DEFAULT_STRUCTURED_OUTPUT_GUIDANCE = `Besides prose you can show th
 /** The "Ending a turn" section: a normal message for the big picture, then `ask` for the decision. */
 export const ENDING_TURN_GUIDANCE = `When the owner has to make a decision, supply an answer or confirm something, do two things in order.
 1. Write a normal message first. It carries the big picture: where things stand, what you found or did, and why a decision is needed.
-2. Then call ask. Lay out the trade-off first, then the choice: each question's context states what is at stake, and every option states what picking it costs or implies. Keep each question small, with its own context, and put related questions on one page.
+2. Then call ask. Lay out the trade-off first, then the choice: each question's context states what is at stake, and every option states what picking it costs or implies. Keep each question small, with its own context, and put one question on each page, because the owner sees one question at a time.
 - ask ends your turn. Make no further tool calls after it. The owner fills in the pages at their own pace and submits once; their answers open your next turn.
 - Ask only when you cannot proceed without the owner. Ordinary conversation stays plain chat: thinking out loud, status updates, small clarifications, and anything you can decide yourself and say so.
 - Don't ask what you can find out by looking, and don't repeat a question the owner already answered.

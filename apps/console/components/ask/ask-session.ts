@@ -57,6 +57,12 @@ export function askComposerAction({ pages, page, missing, noteEmpty, expanded, a
 	return { kind, label, disabled: true, hint: `Answer to continue: ${missing.join(", ")}` };
 }
 
+/** How far through the questionnaire the owner is, 0-100: the 0-based question on screen counts as reached (2 of 5 = 40). */
+export function askProgress(page: number, pages: number): number {
+	if (pages <= 0) return 0;
+	return Math.round((Math.min(Math.max(page, 0), pages - 1) + 1) / pages * 100);
+}
+
 /** "Q8 isn't answered" / "Q8 and Q10 aren't answered" / "Q1, Q2 and Q3 aren't answered". */
 function missingPhrase(missing: readonly string[]): string {
 	const list = missing.length <= 1 ? (missing[0] ?? "") : `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}`;

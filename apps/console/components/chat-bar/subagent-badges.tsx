@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { BotIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
-import { useSubagentModal } from "@/components/thread/subagent-modal";
+import { useSubagentModal } from "@/components/thread/subagent-opener";
 import { useSubagentChildren } from "@/components/thread/use-subagent-children";
 import { elapsedMs, formatChildElapsed, partitionChildren, stateLabel, type ChildThread } from "@/src/core";
 

@@ -1005,6 +1005,10 @@ export const HubSweepItemEventSchema = hubBase.extend({
   outcome: z.enum(["create", "merge", "reject", "parked"]),
   entryId: z.string().optional(),
   decision: HubSweepDecisionSchema.optional(),
+  /** Where the resulting entry (create / merge) landed, when the hub could resolve it; absent otherwise. Older hubs omit all three. */
+  domain: z.string().optional(),
+  section: z.string().optional(),
+  sectionTitle: z.string().optional(),
 });
 /**
  * The item the curator is working on changed: it started, or its route became known (the sweep's sweep-current.json was rewritten).

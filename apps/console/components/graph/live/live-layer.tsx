@@ -18,6 +18,7 @@ import { talkToWolf } from "./live-talk";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
 import { acquireLiveFeed, getLiveSnapshot, onLiveAction, useLiveConnected } from "./live-store";
+import { getKbHover, onKbReset, subscribeKbHover } from "./kb-life-store";
 import { LiveOverlay, liveSettingsOf, type OverlayCard, type OverlayHit } from "./live-overlay";
 
 interface Shown { hit: OverlayHit; card: OverlayCard; pinned: boolean; width: number }
@@ -89,6 +90,23 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 			setShown(null);
 		};
 	}, [renderer, answer, openThread]);
+
+	// The KB activity log's hover / selection: ring the wolf, node, flying topic or curator it names.
+	useEffect(() => {
+		if (!renderer) return;
+		const apply = () => {
+			const h = getKbHover();
+			overlayRef.current?.setKbFocus(h && (h.topicId || h.curator) ? { topicId: h.topicId, curator: h.curator } : null);
+			renderer.setOverlayHighlight(h && (h.wolf || h.target) ? { wolf: h.wolf, target: h.target } : null);
+		};
+		const off = subscribeKbHover(apply);
+		const offReset = onKbReset(() => overlayRef.current?.resetKb());
+		return () => {
+			off();
+			offReset();
+			renderer.setOverlayHighlight(null);
+		};
+	}, [renderer]);
 
 	// Private view: cards show kind and wolf only; a card already open is closed so no real title stays on screen.
 	const priv = (settings as { privateView?: boolean } | null)?.privateView === true;

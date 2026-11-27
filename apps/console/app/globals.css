@@ -824,3 +824,13 @@ body {
 		animation: none;
 	}
 }
+
+/* KB activity log: a fresh or changed row flashes the primary tint and eases back (restarted by the row key). */
+@keyframes kb-row-flash {
+	from { background-color: color-mix(in oklab, var(--primary) 30%, transparent); }
+	to { background-color: transparent; }
+}
+.kb-row-flash { animation: kb-row-flash 1400ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+	.kb-row-flash { animation: none; }
+}

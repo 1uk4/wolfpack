@@ -131,7 +131,7 @@ export function rowWolf(r: { id: string; meta?: string }): string {
 type LayoutRow = { id: string; meta?: string; kind?: string; parentThreadId?: string; state?: SubagentState; archived?: boolean };
 
 /**
- * The sidebar layout: `groups` are the main (not archived) threads, `archived` the archived ones, each with its LIVE
+ * The sidebar layout: `groups` are the main (not archived) threads plus archived ones that still have live subagents (not while searching), `archived` the rest of the archived ones, each with its LIVE
  * subagents nested. Settled subagents are dropped (visibility only). A live subagent nests under its parent whether
  * the parent is in the main list or archived; with the parent missing it nests under Home; with no Home it is dropped.
  * It is never a top-level row. `ranked` is the (searched) list in display order: with `searching`, only matching rows
@@ -160,7 +160,9 @@ export function sidebarLayout<T extends LayoutRow>(all: readonly T[], ranked: re
 		const kids = kidsOf.get(id) ?? [];
 		return { top: byId.get(id)!, kids: searching ? kids.filter((k) => matched.has(k.id)) : kids, };
 	};
-	return { groups: order.filter((id) => !byId.get(id)!.archived).map(mk), archived: order.filter((id) => byId.get(id)!.archived).map(mk) };
+	// A closed thread with live subagents stays in the main list (its running work stays visible) until they finish; a search shows every closed one as before.
+	const stays = (id: string) => !byId.get(id)!.archived || (!searching && (kidsOf.get(id)?.length ?? 0) > 0);
+	return { groups: order.filter(stays).map(mk), archived: order.filter((id) => !stays(id)).map(mk) };
 }
 
 /** The main groups of `sidebarLayout` (kept for callers that ignore the archive). */

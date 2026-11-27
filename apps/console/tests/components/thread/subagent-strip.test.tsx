@@ -487,12 +487,14 @@ describe("sidebarLayout: a subagent is never a top-level row", () => {
 		assert.deepEqual(core.sidebarLayout([{ id: "x", kind: "subagent", parentThreadId: "gone", state: "failed" }], [{ id: "x", kind: "subagent", state: "failed" }], true), { groups: [], archived: [] });
 	});
 
-	it("(c) a live child of an archived parent nests under it, not top level; a live orphan falls under Home", () => {
+	it("(c) a live child of an archived parent nests under it (the parent stays in the main list while it runs), not top level; a live orphan falls under Home", () => {
 		const k: R = { id: "k", kind: "subagent", parentThreadId: "feat", state: "running" };
 		const rows: R[] = [home, feat, k, live];
 		const l = core.sidebarLayout(rows, rows, false);
-		assert.deepEqual(ids(l.archived), [["feat", ["k"]]]);
-		assert.deepEqual(ids(l.groups), [["home", ["live"]]]);
+		assert.deepEqual(ids(l.groups), [["home", ["live"]], ["feat", ["k"]]]);
+		assert.deepEqual(ids(l.archived), []);
+		const q = core.sidebarLayout(rows, rows, true); // searching: closed threads are listed as closed results
+		assert.deepEqual(ids(q.archived), [["feat", ["k"]]]);
 		// no Home: the orphan is dropped, never promoted
 		assert.deepEqual(core.sidebarLayout([live], [live], false), { groups: [], archived: [] });
 		// a subagent without a parentThreadId is still never top level
@@ -594,24 +596,77 @@ describe("subagent openers: the modal opens over the page, with the wolf the cal
 	const archivedFeature = { id: "1uk4/f1", title: "Old feature", kind: "feature", closed: true };
 	const liveUnderArchived = { ...child(1), parentThreadId: "1uk4/f1" };
 
-	it("a live subagent under a collapsed Archived parent shows a running indicator on the toggle", async () => {
-		await mountSidebar([], [], [{ id: PARENT, title: "Home", kind: "home" }, archivedFeature, liveUnderArchived]);
-		const toggle = q('[data-testid="archived-toggle"]')!;
-		assert.match(toggle.textContent!, /Archived \(1\)/);
-		assert.match(q('[data-testid="archived-running"]')!.textContent!, /1 running/);
-		await click(toggle);
-		assert.equal(q('[data-testid="archived-running"]'), null); // open: the row itself is visible
-		assert.ok(qa('[data-testid^="session-row"]').some((b) => b.textContent?.includes("Task 1")));
-	});
-
-	it("while searching, the Archived toggle is disabled", async () => {
+	it("there is no Archived section; a closed thread still shows as a row when searching", async () => {
 		await mountSidebar([], [], [{ id: PARENT, title: "Home", kind: "home" }, archivedFeature]);
+		assert.equal(q('[data-testid="archived-toggle"]'), null);
+		assert.ok(!qa('[data-testid^="session-row"]').some((b) => b.textContent?.includes("Old feature")));
 		const input = q('[data-testid="session-search"]') as HTMLInputElement;
-		assert.equal((q('[data-testid="archived-toggle"]') as HTMLButtonElement).disabled, false);
 		const key = Object.keys(input).find((k) => k.startsWith("__reactProps$"))!;
 		await act(async () => void (input as unknown as Record<string, { onChange: (e: unknown) => void }>)[key]!.onChange({ target: { value: "old" }, currentTarget: { value: "old" } }));
 		await settle(30);
-		assert.equal((q('[data-testid="archived-toggle"]') as HTMLButtonElement).disabled, true);
+		assert.ok(qa('[data-testid^="session-row"]').some((b) => b.textContent?.includes("Old feature")));
+	});
+
+	/** A real DOM drag event (bubbling, cancelable) with a recording dataTransfer, dispatched through React's own listeners. */
+	const WOLF_TYPE = "application/x-wolfpack-wolf";
+	const drag = (el: Element, type: string, dt = makeDt()) => act(async () => void el.dispatchEvent(Object.assign(new dom.window.Event(type, { bubbles: true, cancelable: true }), { dataTransfer: dt })));
+	const makeDt = () => {
+		const data = new Map<string, string>();
+		return { get types() { return [...data.keys()]; }, setData: (k: string, v: string) => void data.set(k, v), getData: (k: string) => data.get(k) ?? "", effectAllowed: "" };
+	};
+	const savedHidden = () => JSON.parse(store.get("wolfpack:sidebar-wolf-prefs") ?? "{\"hidden\":[]}").hidden as string[];
+	const homeNeedsYou = { id: PARENT, title: "Home", kind: "home", status: "needs-you" };
+
+	it("a wolf in the Den is out of the list and its needs-you count shows on the Den badge", async () => {
+		store.set("wolfpack:sidebar-wolf-prefs", JSON.stringify({ pinned: [], hidden: ["1uk4"] }));
+		await mountSidebar([], [], [homeNeedsYou]);
+		assert.match(q('[data-testid="den-badge"]')!.textContent!, /^1/);
+		assert.equal(qa('[data-testid^="session-row"]').length, 0);
+		store.clear();
+	});
+
+	it("dragging a wolf's row onto the Den hides it", async () => {
+		store.clear();
+		await mountSidebar([], [], [homeNeedsYou]);
+		const row = q('[data-testid^="session-row"]')!;
+		const dt = makeDt();
+		await drag(row, "dragstart", dt);
+		assert.deepEqual(dt.types, [WOLF_TYPE]);
+		await drag(q('[data-testid="den"]')!, "drop", dt);
+		assert.deepEqual(savedHidden(), ["1uk4"]);
+		assert.equal(qa('[data-testid^="session-row"]').length, 0);
+		store.clear();
+	});
+
+	it("dropping a Den wolf on the list shows it again", async () => {
+		store.set("wolfpack:sidebar-wolf-prefs", JSON.stringify({ pinned: [], hidden: ["1uk4"] }));
+		await mountSidebar([], [], [homeNeedsYou]);
+		const dt = makeDt();
+		dt.setData(WOLF_TYPE, "1uk4");
+		await drag(q('[data-testid="den"]')!.parentElement!, "drop", dt);
+		assert.deepEqual(savedHidden(), []);
+		assert.ok(qa('[data-testid^="session-row"]').some((b) => b.textContent?.includes("needs you")));
+		store.clear();
+	});
+
+	it("the Den highlights while a wolf is dragged over it and drops the highlight when the drag ends", async () => {
+		store.clear();
+		await mountSidebar([], [], [homeNeedsYou]);
+		const dt = makeDt();
+		dt.setData(WOLF_TYPE, "1uk4");
+		const den = q('[data-testid="den"]')!;
+		await drag(den, "dragover", dt);
+		assert.match(den.className, /ring-2/);
+		await drag(q('[data-testid^="session-row"]')!, "dragend", dt);
+		assert.doesNotMatch(den.className, /ring-2/);
+		store.clear();
+	});
+
+	it("a closed thread with a running subagent stays in the main list while the subagent runs", async () => {
+		await mountSidebar([], [], [{ id: PARENT, title: "Home", kind: "home" }, archivedFeature, liveUnderArchived]);
+		const rows = () => qa('[data-testid^="session-row"]').map((b) => b.textContent ?? "");
+		assert.ok(rows().some((t) => t.includes("Old feature")));
+		assert.ok(rows().some((t) => t.includes("Task 1")));
 	});
 
 	it("the kbd scroll targets session rows only (the archived toggle button does not shift the index)", async () => {

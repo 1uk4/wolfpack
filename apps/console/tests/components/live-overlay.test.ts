@@ -44,6 +44,14 @@ describe("live overlay frame scheduling", () => {
 		assert.equal(o.minFrameMs, 40);
 	});
 
+	it("a queued KB flight or the curator's shimmer asks only for the low float rate, and nothing at all once idle", () => {
+		o.needsFrames(0);
+		assert.equal(o.frameNeed, "none");
+		o.dispatch({ type: "event", event: ev("curate-start", { actor: { kind: "hub", title: "curator" }, detail: { topicIds: ["t9"] } }), now: Date.now() });
+		o.needsFrames(0);
+		assert.deepEqual([o.frameNeed, o.minFrameMs], ["float", 40]);
+	});
+
 	it("frames stop once a trail has faded away", () => {
 		o.start();
 		o.dispatch({ type: "event", event: ev("kb-read", { target: { kind: "kb-entry", id: "kb-x", domain: "personal" } }), now: Date.now() });

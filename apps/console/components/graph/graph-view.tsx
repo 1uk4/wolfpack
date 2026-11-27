@@ -204,6 +204,7 @@ export function GraphView({
 	onFocusHandled,
 	controllerRef,
 	route = null,
+	embedded = false,
 }: {
 	graph: KbGraph;
 	settings: GraphRenderSettings;
@@ -215,6 +216,8 @@ export function GraphView({
 	controllerRef?: React.MutableRefObject<GraphViewController | null>;
 	/** An externally supplied route; the selected node's own route wins. */
 	route?: DepRouteSelection | null;
+	/** A panel inside another page (KB activity), not the page itself: fits to its own container, leaves the saved camera alone, keeps clear of the phone back button. */
+	embedded?: boolean;
 }) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -299,6 +302,7 @@ export function GraphView({
 		// (zoom AND pan, per-device in localStorage). Absent or corrupt →
 		// null → the renderer fits on first open.
 		let initialCamera: { k: number; x: number; y: number } | null = null;
+		if (!embedded)
 		try {
 			initialCamera = parseCamera(localStorage.getItem(GRAPH_CAMERA_KEY));
 		} catch {
@@ -309,6 +313,7 @@ export function GraphView({
 		let cameraTimer: ReturnType<typeof setTimeout> | null = null;
 		let lastCamera: { k: number; x: number; y: number } | null = null;
 		const writeCamera = (t: { k: number; x: number; y: number }) => {
+			if (embedded) return; // the /graph page owns the saved camera
 			try {
 				localStorage.setItem(GRAPH_CAMERA_KEY, JSON.stringify(t));
 			} catch {
@@ -349,6 +354,7 @@ export function GraphView({
 			initialCamera,
 		);
 		rendererRef.current = renderer;
+		if (embedded) renderer.setAutoFit(true);
 		setLiveRenderer(renderer);
 		return () => {
 			rendererRef.current = null;
@@ -362,7 +368,8 @@ export function GraphView({
 			}
 			renderer.destroy();
 		};
-	}, [isEmpty]);
+		// `embedded` is fixed for a mounted view (the /kb-activity panel vs /graph); listing it only satisfies the lint.
+	}, [isEmpty, embedded]);
 
 	// Feed #1 — data: nodes (with positions + styles), edges, glow groups,
 	// resolved colours. A new payload keeps every position the renderer
@@ -590,7 +597,7 @@ export function GraphView({
 				    ignores z-index, so without an explicit carve-out the controls
 				    were unclickable in the desktop app. The row NEVER wraps; in
 				    narrow windows the search shrinks. */}
-				<div className={`wp-no-drag wp-wco-floating pointer-events-none absolute ${CHROME_LEFT_GUTTER} right-2 top-2 bottom-[calc(var(--chat-bar-top,0px)+12px)] z-10 flex flex-col items-end gap-2`}>
+				<div className={`wp-no-drag wp-wco-floating pointer-events-none absolute ${CHROME_LEFT_GUTTER} ${embedded ? "max-md:left-[4rem]" : ""} right-2 top-2 bottom-[calc(var(--chat-bar-top,0px)+12px)] z-10 flex flex-col items-end gap-2`}>
 					<div className="pointer-events-auto z-20 flex min-w-0 items-start gap-2">
 						<GraphChromeRow
 							isEmpty={isEmpty}

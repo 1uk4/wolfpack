@@ -14,6 +14,7 @@
  */
 import { Suspense, useEffect, useRef } from "react";
 import { WorkItemPage } from "@/components/work/work-item-page";
+import { registerCover } from "@/components/chat-bar/column-store";
 import { ZC } from "@/lib/z-layers";
 
 export { ITEM_PARAM, readerUrl, useWorkReader } from "@/components/work/work-reader-nav";
@@ -46,6 +47,11 @@ export function WorkReaderPanel({ id, onClose, onOpenTask }: { id: string; onClo
 		window.addEventListener("keydown", onKey, true);
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [onClose]);
+	// A side panel, not a modal: the floating chat stays over it (z viewer < chat bar) and centres on the column left of it.
+	useEffect(() => {
+		registerCover(panelRef.current);
+		return () => registerCover(null);
+	}, []);
 	// Take focus on open (the close button, else the panel) so Tab and Esc work in the reader at once.
 	// On close, give focus back to whatever had it (like overlay-shell); a detached opener (palette, modal) is skipped.
 	useEffect(() => {
@@ -64,7 +70,7 @@ export function WorkReaderPanel({ id, onClose, onOpenTask }: { id: string; onClo
 			aria-label="Work item reader"
 			data-testid="work-reader"
 			data-work={id}
-			className={`fixed inset-y-0 right-0 ${ZC.overlay} flex w-[min(52rem,70vw)] flex-col border-l bg-background max-md:inset-0 max-md:h-dvh max-md:w-full max-md:border-l-0 max-md:pb-[env(safe-area-inset-bottom)] max-md:pt-[env(safe-area-inset-top)]`}
+			className={`fixed inset-y-0 right-0 ${ZC.viewer} flex w-[min(52rem,70vw)] flex-col border-l bg-background max-md:inset-0 max-md:h-dvh max-md:w-full max-md:border-l-0 max-md:pb-[env(safe-area-inset-bottom)] max-md:pt-[env(safe-area-inset-top)]`}
 		>
 			<WorkItemPage id={id} onClose={onClose} onOpenTask={onOpenTask} />
 		</div>

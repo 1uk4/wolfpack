@@ -23,7 +23,7 @@ import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import { ArrowLeftRightIcon, MessageCircleQuestionIcon, ChevronDownIcon, ChevronUpIcon, MicIcon } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
-import { useSubagentChildren } from "@/components/thread/use-subagent-children";
+import { SubagentBadges } from "@/components/chat-bar/subagent-badges";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
@@ -612,16 +612,8 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	const vizOn = !!vizActive && vizActive.wolf === target.wolf && vizActive.threadId === target.threadId;
 	const badge = BAR_EXTRAS.badge && !vizOn && (waiting.length > 0 || approvals.length > 0) ? <NeedsYouBadge waiting={waiting} all={all} approvals={approvals} /> : null;
 	// Same source as the thread page's strip, so the two always agree on what is running.
-	const running = useSubagentChildren(target.wolf, target.slug, target.threadId).filter((c) => c.state === "running");
-	const subagentChip = running.length > 0 && !vizOn ? (
-		<Hint label={`Running: ${running.map((c) => c.agent ?? "agent").join(", ")}`}>
-			<button type="button" data-testid="chat-bar-subagents" aria-label={`${running.length} sub-agent${running.length === 1 ? "" : "s"} running`} onClick={() => router.push(threadHref(target.wolf, target.threadId))} className="flex shrink-0 items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 font-ui text-xs text-muted-foreground hover:bg-accent max-md:min-h-11">
-				<BrailleSpinner />
-				{running.length}
-			</button>
-		</Hint>
-	) : null;
-	const lead = badge || subagentChip ? <>{badge}{subagentChip}</> : null;
+	const subagentChip = vizOn ? null : <SubagentBadges wolf={target.wolf} slug={target.slug} threadId={target.threadId} />;
+	const lead = <>{badge}{subagentChip}</>;
 	// Every badge of the bar (frame chips, needs-you, approvals, running sub-agents) rides one scrolling row inside the bar's surface, between the card slot and the header.
 	const chipRow = (
 		<FrameBadges bar wolf={target.wolf} threadId={target.threadId} vizOn={vizOn} lead={lead} onNavigate={onThreadPage ? undefined : (view) => router.push(`${threadHref(target.wolf, target.threadId)}?view=${encodeURIComponent(view)}`)} />

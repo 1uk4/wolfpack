@@ -97,6 +97,7 @@ export * from "./kb/topics-model.ts";
 export * from "./ui/panel-host.ts";
 export * from "./work/task-graph.ts";
 export * from "./work/task-graph-layout.ts";
+export * from "./work/task-progress.ts";
 export * from "./work/feature-progress.ts";
 export { coalescedRefresh } from "./ui/coalesced-refresh.ts";
 export * from "./thread/thread-lists.ts";

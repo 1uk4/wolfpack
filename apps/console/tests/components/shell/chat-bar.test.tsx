@@ -37,6 +37,7 @@ type Call = { url: string; body?: any };
 let calls: Call[] = [];
 let status: "idle" | "busy" = "idle";
 let bNeedsYou = false; // thread w/b waits on the owner
+let noHome = false; // the wolf has no home thread: nothing to auto-attach
 let holdSubmit: Promise<void> | null = null; // a send's POST stays in flight until this settles
 let archived = false;
 let kids: object[] = [];
@@ -56,7 +57,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	if (init?.method !== "POST") gets.push(url);
 	if (url.endsWith("/threads/a/children")) return Response.json({ threads: kids });
 	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
-	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a", archived ? { closed: true } : {}), th("w/b", bNeedsYou ? { status: "needs-you" } : {})] });
+	if (url === "/api/wolves/w/threads") return Response.json({ threads: [...(noHome ? [] : [th("w/home", { kind: "home" })]), th("w/a", archived ? { closed: true } : {}), th("w/b", bNeedsYou ? { status: "needs-you" } : {})] });
 	return new Response("{}", { status: 404 });
 }) as typeof fetch;
 
@@ -106,6 +107,7 @@ afterEach(async () => {
 	calls = [];
 	status = "idle";
 	bNeedsYou = false;
+	noHome = false;
 	holdSubmit = null;
 	archived = false;
 	kids = [];
@@ -123,15 +125,23 @@ function AttachHere() {
 }
 
 describe("ChatBar", () => {
-	it("renders nothing and reserves no space with nothing popped out, and clears the old home-wolf default", async () => {
+	it("with nothing attached the owner's home thread attaches on its own, and the old home-wolf default is cleared", async () => {
 		mem.set("wolfpack:chatbar:attached", JSON.stringify(A));
 		mem.set("wolfpack:chatbar:home-wolf", "w");
 		await mount("/kb");
-		assert.equal(q('[data-testid="chat-bar"]'), null);
-		assert.equal(document.documentElement.style.getPropertyValue("--chat-bar-reserve"), "");
-		assert.equal(mem.get(ATTACHED_KEY), undefined);
+		assert.equal(JSON.parse(mem.get(ATTACHED_KEY)!).threadId, "w/home");
+		assert.ok(q('[data-testid="chat-bar"]'), "the bar is on the page");
 		assert.equal(mem.get("wolfpack:chatbar:attached"), undefined);
 		assert.equal(mem.get("wolfpack:chatbar:home-wolf"), undefined);
+	});
+
+	it("is on /chat/new and hidden on the pairing page", async () => {
+		await mount("/chat/new", A);
+		assert.ok(q('[data-testid="chat-bar"]'), "the new-chat page keeps the bar");
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		await mount("/pair", A);
+		assert.equal(q('[data-testid="chat-bar"]'), null, "no console to chat from before sign-in");
 	});
 
 	it("with the extras off the bar fetches no cards, reply peek or needs-you list", async () => {
@@ -349,8 +359,9 @@ describe("ChatBar behaviours", () => {
 		await act(async () => root?.unmount());
 		document.body.innerHTML = "";
 		mem.clear();
-		await mount("/kb"); // nothing popped out: no bar, Cmd+J does nothing
-		assert.equal(q('[data-testid="chat-bar"]'), null);
+		noHome = true;
+		await mount("/kb"); // nothing attached and no home thread to attach: only the icon, Cmd+J does nothing
+		assert.equal(q('[data-testid="chat-bar"]')?.getAttribute("data-state"), "minimized");
 		assert.equal(press("wolfpack:kbd-focus-chat-bar"), false);
 	});
 

@@ -508,7 +508,6 @@ function ThreadChatInner({
 	const viewOpen = viewerState.open && viewerState.stack.length > 0;
 	const viz = vizChoice && viewOpen;
 	const vizAttach = attachedApi?.attach;
-	const vizDock = attachedApi?.detach;
 	const vizWasOn = useRef(false);
 	// Only a real open -> closed transition clears the stored choice: on a reload the viewer hydrates after this effect first runs.
 	const prevViewOpen = useRef(viewOpen);
@@ -517,8 +516,6 @@ function ThreadChatInner({
 		prevViewOpen.current = viewOpen;
 		if (wasOpen && !viewOpen && vizChoice) setVizChoice(false);
 	}, [vizChoice, viewOpen, setVizChoice]);
-	const vizDockRef = useRef(vizDock);
-	vizDockRef.current = vizDock;
 	useEffect(() => {
 		if (viz) {
 			vizWasOn.current = true;
@@ -527,18 +524,14 @@ function ThreadChatInner({
 		} else if (vizWasOn.current) {
 			vizWasOn.current = false;
 			setVizActive(null);
-			vizDock?.();
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- attach/dock identities change with the attached state; the mode flip is the trigger
 	}, [viz, wolf, threadId, slug]);
-	// Leaving the page while the mode is on: the bar must not stay attached to this thread on other pages.
+	// Leaving the page while the mode is on: the viz flag goes; the bar stays attached to this thread (it is always on screen now, no dock).
 	useEffect(
 		() => () => {
 			setVizActive(null);
-			if (vizWasOn.current) {
-				vizWasOn.current = false;
-				vizDockRef.current?.();
-			}
+			vizWasOn.current = false;
 		},
 		[],
 	);

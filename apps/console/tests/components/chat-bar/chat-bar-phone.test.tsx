@@ -78,7 +78,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	}
 	if (url === "/api/needs-you") return needsYou ? Response.json({ items: needsYou }) : new Response("{}", { status: 500 });
 	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w" }] });
-	if (url === "/api/wolves/w/threads") return Response.json({ threads: [th("w/home", { kind: "home" }), th("w/a"), th("w/b"), th("w/c"), ...extraThreads] });
+	if (url === "/api/wolves/w/threads") return Response.json({ threads: [...(noHome ? [] : [th("w/home", { kind: "home" })]), th("w/a"), th("w/b"), th("w/c"), ...extraThreads] });
 	const g = /^\/api\/wolves\/w\/threads\/([^/?]+)\?/.exec(url);
 	if (g) {
 		const slug = g[1]!;
@@ -102,6 +102,7 @@ const until = async (cond: () => unknown, what: string) => {
 const q = (s: string) => document.querySelector(s) as HTMLElement | null;
 const qa = (s: string) => Array.from(document.querySelectorAll(s)) as HTMLElement[];
 let startPath = "/kb";
+let noHome = false; // the wolf has no home thread: nothing to auto-attach
 async function mount(stored: object | null = A, extra?: React.ReactNode, expectBar = true) {
 	if (stored) mem.set(ATTACHED_KEY, JSON.stringify(stored));
 	const host = document.createElement("div");
@@ -156,6 +157,7 @@ afterEach(async () => {
 	handlers.clear();
 	phone = true;
 	startPath = "/kb";
+	noHome = false;
 	document.body.style.overflow = "";
 	document.documentElement.style.removeProperty("--chat-bar-reserve");
 	delete (window as any).visualViewport;
@@ -565,10 +567,12 @@ describe("ChatBar on a phone", () => {
 		assert.equal(over(), "", "removed on unmount");
 	});
 
-	it("shows no dock and reserves nothing until something is popped out", async () => {
+	it("shows only the icon, reserving nothing, until something is attached", async () => {
+		noHome = true;
 		(HTMLElement.prototype as any).getBoundingClientRect = () => ({ height: 90 });
 		await mount(null, undefined, false);
-		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.equal(bar().getAttribute("data-state"), "minimized");
+		assert.ok(q('[data-testid="chat-bar-expand"]'), "the icon is on the page");
 		assert.equal(reserve(), "");
 	});
 

@@ -193,7 +193,7 @@ describe("thread visualization mode", () => {
 	it("turning it on hides the transcript and page composer, fills the width and shows the chat bar; turning it off restores them", async () => {
 		await mount();
 		await openKb();
-		assert.equal(q('[data-testid="chat-bar"]'), null, "bar is off on the thread's own page normally");
+		assert.equal(q('[data-testid="chat-bar"] [data-testid="composer"]'), null, "no floating composer on the thread's own page normally (only the icon)");
 		await click(q('[data-testid="viz-toggle"]')!);
 		await settle(60);
 		assert.equal(mainHidden(), true);
@@ -303,7 +303,7 @@ describe("thread visualization mode", () => {
 		assert.equal(q('[data-testid="viz-toggle"]'), null);
 	});
 
-	it("leaving the page while the mode is on docks the bar, so it does not stay attached to this thread", async () => {
+	it("leaving the page while the mode is on ends the mode but keeps the thread attached (the bar is always on screen now)", async () => {
 		await mount();
 		await openKb();
 		await click(q('[data-testid="viz-toggle"]')!);
@@ -312,6 +312,7 @@ describe("thread visualization mode", () => {
 		await act(async () => hideChat!());
 		await settle(60);
 		assert.equal(q('[data-testid="chat-bar"]'), null);
+		assert.ok(store.get(ATTACHED_KEY), "still attached");
 	});
 
 	it("a draft typed in the bar during the mode is in the page composer after leaving it", async () => {

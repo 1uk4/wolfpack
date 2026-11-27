@@ -31,6 +31,8 @@ import { useFrameBadges } from "@/components/viewer/frame-store";
 import { FrameBadges } from "@/components/viewer/frame-badges";
 import { BarIcon } from "@/components/chat-bar/bar-icon";
 import { BarSettings } from "@/components/chat-bar/bar-settings";
+import { useKeyboardInset } from "@/components/chat-bar/use-keyboard-inset";
+import { useBarHiddenReasons } from "@/components/chat-bar/bar-visibility";
 import { BarOverflow } from "@/components/chat-bar/bar-overflow";
 import { useColumnRect } from "@/components/chat-bar/column-store";
 import { useThreadColor } from "@/components/thread/use-thread-color";
@@ -39,7 +41,7 @@ import type { Answering } from "@/components/ask/ask-sheet";
 import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask/ask-session";
 import { replyLabel } from "@/components/ask/ask-reply";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
-import { attachable, barGeometry, inFrozenOrder, switcherOrder, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
+import { attachable, barGeometry, barHiddenFor, pickHomeThread, inFrozenOrder, switcherOrder, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread, type SwitcherGroup } from "@/src/core";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar/chat-bar-io";
 
@@ -89,27 +91,6 @@ export function useWide(): boolean {
 	return useSyncExternalStore(subscribeWide, () => (canMatch() ? window.matchMedia(WIDE_QUERY).matches : true), () => true);
 }
 
-/** The new-chat page is all composer: the bar stays off it (a thread page is different: the bar floats over it, or the page composer IS the chat). */
-const NEW_CHAT = /^\/chat\/new(\/|$)/;
-
-/** Phone keyboard: how far the visual viewport's bottom sits above the layout viewport's bottom (iOS does not resize the layout, so a fixed dock would stay under the keyboard). 0 when the layout itself resizes (Android, interactive-widget=resizes-content). */
-function useKeyboardInset(enabled: boolean): number {
-	const [inset, setInset] = useState(0);
-	useEffect(() => {
-		const vv = window.visualViewport;
-		if (!enabled || !vv) return setInset(0);
-		const apply = () => setInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)));
-		apply();
-		vv.addEventListener("resize", apply);
-		vv.addEventListener("scroll", apply);
-		return () => {
-			vv.removeEventListener("resize", apply);
-			vv.removeEventListener("scroll", apply);
-		};
-	}, [enabled]);
-	return inset;
-}
-
 export function ChatBar() {
 	const api = useAttachedThread();
 	const pathname = usePathname();
@@ -131,7 +112,8 @@ export function ChatBar() {
 	const swap = page && pageThreadId ? { wolf: page.wolf, slug: page.slug, threadId: pageThreadId } : null;
 	// The pill is the way to type to that page's thread, so a minimized bar still opens over a thread page.
 	const minimized = (api?.minimized ?? false) && !swap;
-	const dockless = !!pathname && NEW_CHAT.test(pathname);
+	const hiddenReasons = useBarHiddenReasons();
+	const hidden = barHiddenFor(pathname, { reasons: hiddenReasons });
 	const scrolls = !!pathname && !FULL_HEIGHT.test(pathname);
 
 	// Shortcuts: the dispatcher hands over the KeyboardEvent; the browser's own key (Cmd+J = downloads) is swallowed only
@@ -169,8 +151,8 @@ export function ChatBar() {
 	const dictating = dictation.active;
 	const own = onOwn;
 	live.current = { attached, onOwn, wide, minimized, setMinimized: api?.setMinimized, dictating, vizAttached };
-	const full = !!attached && !own && !dockless && !minimized;
-	const shown = !!attached && !own && !dockless;
+	const full = !!attached && !own && !hidden && !minimized;
+	const shown = !!attached && !own && !hidden;
 
 	// Published so the popped-out thread's own page shows and drives the same run (use-thread-dictation.ts). Every field
 	// the page reads is a dep (phase/active/error for the state, toggle/stop/finish/cancel for the actions, levelRef for
@@ -378,8 +360,34 @@ export function ChatBar() {
 	// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on whether a thread is attached, not on the attached object identity
 	}, [!!attached]);
 
-	if (!api || !attached || own || dockless) return null;
+	if (!api || hidden) return null;
+	// Nothing attached (a fresh browser, the hub down): the icon is still on every page; a press attaches the owner's home thread.
+	if (!attached) return <DetachedIcon phone={!wide} dictation={dictation} />;
+	// The attached thread's own page: the page composer is the chat there.
+	if (own) return null;
 	return <Bar key={`${attached.wolf}/${attached.threadId}`} swap={swap} phone={!wide} target={attached} wrapRef={wrapRef} chipRef={chipRef} switcher={switcher} setSwitcher={setSwitcher} closeSwitcher={closeSwitcher} dictation={dictation} registerAppend={registerAppend} />;
+}
+
+/** The icon with nothing attached: it opens the owner's home thread (the bar attaches it) when there is one. */
+function DetachedIcon({ phone, dictation }: { phone: boolean; dictation: Dictation }) {
+	const api = useAttachedThread()!;
+	const needsYou = api.groups.reduce((n, g) => n + g.needsYou, 0);
+	return (
+		<BarIcon
+			phone={phone}
+			label={needsYou > 0 ? `Open chat (${needsYou} waiting for you)` : "Open chat"}
+			color="var(--border)"
+			wolfStatus="online"
+			needsYou={needsYou}
+			working={false}
+			dictation={dictation}
+			onExpand={() => {
+				const home = pickHomeThread(api.wolves, api.threads);
+				if (home) api.attach(home);
+				api.setMinimized(false);
+			}}
+		/>
+	);
 }
 
 export function attachedThreadTitle(api: NonNullable<ReturnType<typeof useAttachedThread>>, a: AttachedRef): string {
@@ -535,7 +543,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 	};
 	const hasSurface = (BAR_EXTRAS.cards || BAR_EXTRAS.peek) && (cards.pending.length > 0 || cards.superseded.length > 0 || !!cards.peek || !!cards.error);
 
-	// Visualization mode: chat and questionnaires only (no needs-you badge, no thread switcher), and on the phone the dock sits over the viewer's full-screen sheet (z-60).
+	// Visualization mode: chat and questionnaires only (no needs-you badge, no thread switcher), and on the phone the dock sits over the viewer's full-screen sheet (z-40).
 	const vizActive = useVizActive();
 	const vizOn = !!vizActive && vizActive.wolf === target.wolf && vizActive.threadId === target.threadId;
 	const badge = BAR_EXTRAS.badge && !vizOn && (waiting.length > 0 || approvals.length > 0) ? <NeedsYouBadge waiting={waiting} all={all} approvals={approvals} /> : null;
@@ -583,7 +591,7 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 	const swapLabel = swapNeedsYou ? `Answer ${swapTitle}` : `Swap to ${swapTitle}`;
 	// Desktop: centred on the page column (the thread chat column, else main). A narrow column is compact: the secondary controls move into a ... menu.
 	const col = useColumnRect();
-	const geo = barGeometry({ colLeft: col.left, colWidth: col.width, viewportWidth: typeof window === "undefined" ? 1280 : window.innerWidth });
+	const geo = barGeometry({ colLeft: col.left, colWidth: col.width, viewportWidth: (typeof window === "undefined" ? 0 : window.innerWidth) || 1280 });
 	const compact = !phone && geo.compact;
 	// Not while a send's POST is in flight: a failed send puts the text back into this bar's composer, which a swap would have unmounted.
 	// Narrow gap left: if the attachment changes elsewhere (another tab/wolf) mid-send, the keyed Bar remounts and `sending` resets.
@@ -631,14 +639,14 @@ function Bar({ target, swap, phone, wrapRef, chipRef, switcher, setSwitcher, clo
 		const asSheet = sheet && !minimized;
 		return (
 			<>
-			{asSheet && <button type="button" tabIndex={-1} aria-label="Close chat" data-testid="bar-sheet-backdrop" onClick={() => setSheet(false)} className="fixed inset-0 z-[69] bg-black/40" />}
+			{asSheet && <button type="button" tabIndex={-1} aria-label="Close chat" data-testid="bar-sheet-backdrop" onClick={() => setSheet(false)} className="fixed inset-0 z-[46] bg-black/40" />}
 			<div
 				ref={wrapRef}
 				data-testid="chat-bar"
 				data-layout="dock"
 				data-state={minimized ? "minimized" : sheet ? "sheet" : "open"}
 				{...(sheet && !minimized ? { role: "dialog", "aria-modal": true, "aria-label": `Chat with ${title}` } : {})}
-				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? cn("z-[70]", askCard ? "" : "rounded-t-2xl") : vizOn ? "z-[65]" : "z-30")}
+				className={cn("fixed inset-x-0 flex flex-col border-t bg-card shadow-lg", sheet ? cn("z-[47]", askCard ? "" : "rounded-t-2xl") : vizOn ? "z-[45]" : "z-30")}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
 				style={{ bottom: inset, paddingBottom: bottomPad, ...(composing ? {} : { borderColor: color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}

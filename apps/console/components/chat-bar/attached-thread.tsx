@@ -18,6 +18,8 @@ import {
 	loadAttached,
 	LEGACY_KEYS,
 	loadMinimized,
+	pickHomeThread,
+	pickOwnerWolf,
 	saveAttached,
 	saveMinimized,
 	threadSlug,
@@ -233,13 +235,31 @@ export function AttachedThreadProvider({
 	});
 
 	const attach = useCallback<AttachedThreadApi["attach"]>((ref) => {
+		autoDecided.current = true;
 		gen.current++;
 		setSent(false);
 		setAttached({ wolf: ref.wolf, threadId: ref.threadId, slug: ref.slug ?? threadSlug(ref.wolf, ref.threadId) });
 		refreshWolf(ref.wolf);
 	}, [setAttached, refreshWolf]);
 
+	// Auto-attach: once the lists have loaded with nothing attached, the owner's own wolf's home thread is attached, once per session.
+	// A restored attachment, an explicit attach or detach, and a closed thread (settle) all count as "decided": none is overridden.
+	const autoDecided = useRef(false);
+	useEffect(() => {
+		if (!ready || autoDecided.current) return;
+		if (attached) {
+			autoDecided.current = true;
+			return;
+		}
+		const owner = pickOwnerWolf(wolves);
+		if (!owner || !threads[owner]) return;
+		autoDecided.current = true;
+		const home = pickHomeThread(wolves, threads);
+		if (home) attach(home);
+	}, [ready, attached, wolves, threads, attach]);
+
 	const detach = useCallback(() => {
+		autoDecided.current = true;
 		setSent(false);
 		setAttached(null);
 	}, [setAttached]);

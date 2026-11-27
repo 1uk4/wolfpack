@@ -114,7 +114,7 @@ export function ViewerPanel(props: ({ wolf: string; threadId: string } | { host:
 	const title = top.title ?? titles[key] ?? top.id;
 	return (
 		<aside
-			className={`relative flex ${props.fill ? "min-w-0 flex-1" : "w-[480px] shrink-0"} flex-col border-l border-border bg-background text-sm max-md:fixed max-md:inset-0 max-md:z-[60] max-md:w-full max-md:border-l-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]`}
+			className={`relative flex ${props.fill ? "min-w-0 flex-1" : "w-[480px] shrink-0"} flex-col border-l border-border bg-background text-sm max-md:fixed max-md:inset-0 max-md:z-[40] max-md:w-full max-md:border-l-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]`}
 			data-testid="viewer-panel"
 			data-kind={top.kind}
 			data-fill={props.fill ? "true" : undefined}

@@ -70,8 +70,8 @@ const afterBarDictation = (then?: () => void) => {
 const AskSheet = dynamic(() => import("@/components/ask/ask-sheet").then((m) => m.AskSheet), { ssr: false });
 const BarCardSurface = dynamic(() => import("@/components/chat-bar/bar-card-surface").then((m) => m.BarCardSurface), { ssr: false });
 
-/** Pages that scroll: the open bar reserves room under their content. Full-height screens (graph, chat) are left alone. */
-const SCROLLING = /^\/(kb|work|kb-activity|pipeline|settings|prompts)(\/|$)|^\/wolf\/[^/]+$/;
+/** Full-height screens (the graph canvas, the new-chat page, a thread page) run under the bar; every other page scrolls, so the open bar reserves room under its content. */
+const FULL_HEIGHT = /^\/(graph|chat)(\/|$)|^\/wolf\/[^/]+\/thread(\/|$)/;
 
 /** md+ (768px): the floating pill. Below it the bar is a full-width dock at the bottom (phone layout). */
 const WIDE_QUERY = "(min-width: 768px)";
@@ -130,7 +130,7 @@ export function ChatBar() {
 	// The pill is the way to type to that page's thread, so a minimized bar still opens over a thread page.
 	const minimized = (api?.minimized ?? false) && !swap;
 	const dockless = !!pathname && NEW_CHAT.test(pathname);
-	const scrolls = !!pathname && SCROLLING.test(pathname);
+	const scrolls = !!pathname && !FULL_HEIGHT.test(pathname);
 
 	// Shortcuts: the dispatcher hands over the KeyboardEvent; the browser's own key (Cmd+J = downloads) is swallowed only
 	// when the bar (or, on its own thread's page, the page composer) actually answers.
@@ -241,6 +241,46 @@ export function ChatBar() {
 			root.style.removeProperty("--chat-bar-reserve");
 		};
 	}, [full, scrolls, wide, attached?.wolf, attached?.threadId]);
+
+	// --chat-bar-top: how far the top of the bar (swap pill included, plus the bar's own bottom offset) sits above the viewport bottom,
+	// so other pages (the graph controls) can sit above it. 0px with no bar; written once per frame; removed on cleanup.
+	useLayoutEffect(() => {
+		const root = document.documentElement;
+		if (!shown || !wrapRef.current) {
+			root.style.removeProperty("--chat-bar-top");
+			return;
+		}
+		const el = wrapRef.current;
+		const set = () => {
+			if (el.dataset.state === "sheet") return void root.style.removeProperty("--chat-bar-top");
+			const pill = el.querySelector<HTMLElement>('[data-testid="chat-bar-swap-wrap"]');
+			const top = Math.min(el.getBoundingClientRect().top, pill ? pill.getBoundingClientRect().top : Infinity);
+			root.style.setProperty("--chat-bar-top", `${Math.max(0, Math.ceil(window.innerHeight - top))}px`);
+		};
+		set();
+		let frame = 0;
+		const schedule = () => {
+			if (frame) return;
+			frame = requestAnimationFrame(() => {
+				frame = 0;
+				set();
+			});
+		};
+		const ro = new ResizeObserver(schedule);
+		ro.observe(el);
+		const vv = window.visualViewport;
+		vv?.addEventListener("resize", schedule);
+		vv?.addEventListener("scroll", schedule);
+		window.addEventListener("resize", schedule);
+		return () => {
+			if (frame) cancelAnimationFrame(frame);
+			ro.disconnect();
+			vv?.removeEventListener("resize", schedule);
+			vv?.removeEventListener("scroll", schedule);
+			window.removeEventListener("resize", schedule);
+			root.style.removeProperty("--chat-bar-top");
+		};
+	}, [shown, minimized, wide, !!swap, attached?.wolf, attached?.threadId]);
 
 	// Over another thread's page: that page's dock (sub-agent strip, pinned strip) pads its bottom by the bar's real height
 	// (--chat-bar-over, read in thread-chat.tsx) so nothing of it peeks out under or behind the bar.

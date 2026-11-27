@@ -462,6 +462,7 @@ describe("ChatBar on a phone", () => {
 	});
 
 	it("the dock hides on the attached thread's own page (the page composer is the chat); on another thread's page it floats with a thumb-sized swap pill and reserves its height for the page; the desktop pill does the same; other pages keep it", async () => {
+		const top = () => document.documentElement.style.getPropertyValue("--chat-bar-top");
 		const over = () => document.documentElement.style.getPropertyValue("--chat-bar-over");
 		// The pad is measured from the viewport bottom up to the bar's top (or the pill's, which floats 40px above the bar): an 800px viewport, a 90px bar.
 		(window as any).innerHeight = 800;
@@ -487,6 +488,7 @@ describe("ChatBar on a phone", () => {
 		await mount(A);
 		assert.ok(q('[data-testid="chat-bar-swap"]'), "desktop: the pill floats over another thread page too");
 		assert.equal(over(), "142px", "pill: the bar's height, its 12px float and the swap pill above it");
+		assert.equal(top(), "142px", "--chat-bar-top reaches the swap pill, the same as the page pad");
 		await act(async () => root?.unmount());
 		root = null;
 		document.body.innerHTML = "";
@@ -494,6 +496,10 @@ describe("ChatBar on a phone", () => {
 		await mount();
 		assert.equal(bar().getAttribute("data-state"), "open", "desktop pill on a page with no composer");
 		assert.equal(over(), "");
+		assert.equal(top(), "102px", "--chat-bar-top is the bar top plus its 12px offset when there is no pill");
+		await act(async () => root?.unmount());
+		root = null;
+		assert.equal(top(), "", "removed with the bar");
 	});
 
 	it("the page pad under the keyboard is clamped to 60% of the viewport, re-measured on a visualViewport resize (one frame), and removed in the sheet state and on unmount", async () => {

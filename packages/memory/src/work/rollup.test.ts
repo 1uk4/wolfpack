@@ -83,6 +83,17 @@ whatever`;
     expect(out).toContain("<!-- /rollup:item -->");
   });
 
+  it("demotes a child's H1/H2 headings so the feature keeps one ## Record (fenced headings untouched)", () => {
+    const feature = `# F\n\n## Record\n\n- own line\n\n## Outcomes\n\n<!-- rollup:children -->\n<!-- /rollup:children -->\n`;
+    const childBody = "## Record\n\n- child line\n\n## Changes\n\n```md\n## x\n```\n\n### Keep";
+    const out = upsertRollupBlock(feature, child("t1", "2026-10-15", "Lower A"), childBody);
+    expect(out.match(/^## Record$/gm)?.length).toBe(1);
+    expect(out).toContain("#### Record");
+    expect(out).toContain("#### Changes");
+    expect(out).toContain("```md\n## x\n```");
+    expect(out).toContain("### Keep");
+  });
+
   it("replaces an existing block keyed by taskId", () => {
     let body = parent("");
     body = upsertRollupBlock(body, child("t1", "2026-10-15", "Lower A"), "v1");

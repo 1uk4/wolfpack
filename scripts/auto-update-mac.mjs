@@ -172,6 +172,13 @@ export function buildPlist(p, nodePath, home = os.homedir(), binDirs = []) {
 `;
 }
 
+/** Is the launchd agent loaded? true | false, or null when the user id is unknown (no `gui/undefined` question) or launchctl cannot run. */
+export function macTimerEnabled(uid, spawn = spawnSync) {
+	if (uid === undefined) return null;
+	const r = spawn("launchctl", ["print", `gui/${uid}/${LABEL}`], { stdio: "ignore" });
+	return r.error ? null : r.status === 0;
+}
+
 export async function main(argv, env = process.env) {
 	const [cmd, ...flags] = argv;
 	const p = macPaths(env);
@@ -212,6 +219,8 @@ export async function main(argv, env = process.env) {
 		lockFile: p.lockFile,
 		disabledFile: p.disabledFile,
 		enabled: env.WOLFPACK_AUTO_UPDATE === "1",
+		// The launchd agent is the timer: not loaded means no scheduled checks.
+		timerEnabled: () => macTimerEnabled(process.getuid?.(), spawnSync),
 		mode: sub.mode,
 		channel: sub.channel,
 		manual: flags.includes("--now"),

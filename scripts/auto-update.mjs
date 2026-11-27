@@ -216,6 +216,8 @@ export function acquireLock(file, hooks = {}, log = console.error) {
  *   only         [component] limit the run to these components
  *   enabled      the host opted in (timer runs); manual  a `--now` run; clearFailed  forget recorded failures first
  *   wolfd is never updated by a timer run (button only): an unattended run skips it, a manual run does not.
+ *   timerEnabled () => true|false|null: is the scheduled timer on? false marks the status enabled:false, disabledReason "timer off" (a
+ *                manual run still installs); null/absent (no systemd) keeps `enabled` as the mode says.
  *   now          clock () => Date
  *   deps         { fetchManifest() -> manifest, currentVersion(unit) -> string|null, verify?(unit, entry) -> {ok, sha256?, code?, message?},
  *                  install(unit, entry, verified) -> {ok, code?, message?}, probe(unit, entry) -> {healthy, message?} }
@@ -225,7 +227,22 @@ export function acquireLock(file, hooks = {}, log = console.error) {
 export async function runAutoUpdate(o) {
 	const now = () => (o.now ? o.now() : new Date()).toISOString();
 	const log = o.log ?? (() => {});
-	const base = (extra) => ({ schema: 1, host: o.host, enabled: o.mode ? o.mode === "auto" : !!o.enabled, lastCheck: now(), ...extra });
+	const timerOff = (() => {
+		try {
+			return o.timerEnabled?.() === false;
+		} catch {
+			return false;
+		}
+	})();
+	const base = (extra) => ({
+		schema: 1,
+		host: o.host,
+		enabled: o.mode ? o.mode === "auto" : !!o.enabled,
+		lastCheck: now(),
+		// The real timer state beats the configured mode, so a manual run never claims regular checks that will not happen.
+		...(timerOff ? { enabled: false, disabledReason: "timer off" } : {}),
+		...extra,
+	});
 
 	// Every branch writes the status file, so every branch takes the lock first; a held lock means the other run owns the file.
 	const release = acquireLock(o.lockFile);
@@ -557,6 +574,18 @@ export function sfoDeps(env, { dir = path.dirname(fileURLToPath(import.meta.url)
  * did nothing is never shown as success. Timer runs keep exiting 0 for those, so the timer unit does not show failed.
  * Exit 2 is usage; 203 is systemd's "cannot exec" (the script is missing).
  */
+/**
+ * `systemctl is-enabled` result → true | false | null. Only a recognised state answers; anything else (no systemctl, no D-Bus in a sandbox:
+ * non-zero with empty stdout) is unknown (null) and keeps the mode's answer.
+ */
+export function systemdTimerEnabled(r) {
+	if (r.error || r.status === null) return null;
+	const out = String(r.stdout ?? "").trim();
+	if (/^enabled/.test(out)) return r.status === 0;
+	if (/^(disabled|static|masked|masked-runtime|generated|transient|indirect|alias|linked|linked-runtime|bad|not-found)$/.test(out)) return false;
+	return null;
+}
+
 export function exitCodeFor(result, manual) {
 	if (result === "failed" || result === "manifest-error") return 1;
 	if (manual && result === "disabled") return 3;
@@ -584,6 +613,9 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import
 			units: sfoUnits(env),
 			...paths,
 			enabled: env.WOLFPACK_AUTO_UPDATE === "1",
+			timerEnabled: () => {
+				return systemdTimerEnabled(spawnSync("systemctl", ["is-enabled", "wolfpack-auto-update.timer"], { encoding: "utf8" }));
+			},
 			mode: sub.mode,
 			channel: sub.channel,
 			only: oi >= 0 && flags[oi + 1] ? [flags[oi + 1]] : undefined,

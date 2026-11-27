@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs script
-import { macChannel, macDeps, macPaths } from "./auto-update-mac.mjs";
+import { macChannel, macDeps, macPaths, macTimerEnabled } from "./auto-update-mac.mjs";
 
 let dir: string;
 beforeEach(() => void (dir = fs.mkdtempSync(path.join(os.tmpdir(), "mac-upd-"))));
@@ -27,5 +27,15 @@ describe("auto-update-mac channel", () => {
 		} finally {
 			globalThis.fetch = realFetch;
 		}
+	});
+});
+
+describe("mac timer state", () => {
+	it("is unknown (null) when the user id cannot be read, and never asks launchctl about gui/undefined", () => {
+		const calls: unknown[] = [];
+		expect(macTimerEnabled(undefined, (...a: unknown[]) => (calls.push(a), { status: 0 }))).toBeNull();
+		expect(calls).toEqual([]);
+		expect(macTimerEnabled(501, () => ({ status: 0 }))).toBe(true);
+		expect(macTimerEnabled(501, () => ({ status: 113 }))).toBe(false);
 	});
 });

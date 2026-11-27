@@ -58,8 +58,8 @@ export interface OverlayHost {
 	colors: { node: string; edge: string; label: string; hoverText: string };
 	fontFamily: string;
 }
-export interface OverlaySettings { enabled: boolean; intensity: number; trailSec: number; subagentFadeSec: number; motion: MotionMode }
-export const LIVE_DEFAULTS: OverlaySettings = { enabled: true, intensity: 1, trailSec: 15, subagentFadeSec: 15, motion: "follow" };
+export interface OverlaySettings { enabled: boolean; intensity: number; trailSec: number; subagentFadeSec: number; motion: MotionMode; memory: boolean }
+export const LIVE_DEFAULTS: OverlaySettings = { enabled: true, intensity: 1, trailSec: 15, subagentFadeSec: 15, motion: "follow", memory: true };
 
 /** `settings.live ?? defaults`, typed loosely so it works before and after the settings panel gains the field. */
 export function liveSettingsOf(settings: unknown): OverlaySettings {
@@ -71,6 +71,7 @@ export function liveSettingsOf(settings: unknown): OverlaySettings {
 		trailSec: num(l.trailSec, LIVE_DEFAULTS.trailSec, 0, 300),
 		subagentFadeSec: num(l.subagentFadeSec, LIVE_DEFAULTS.subagentFadeSec, 0, 300),
 		motion: l.motion === "always" ? "always" : "follow",
+		memory: l.memory !== false,
 	};
 }
 
@@ -373,7 +374,9 @@ export class LiveOverlay {
 
 	configure(s: OverlaySettings): void {
 		const was = this.settings.enabled;
+		const wasMemory = this.settings.memory;
 		this.settings = s;
+		if (wasMemory && !s.memory) this.kb = emptyKbLife(Date.now(), this.reduced);
 		if (!s.enabled && was) {
 			this.state = emptyLiveState(Date.now());
 			this.bodies.clear();
@@ -415,10 +418,10 @@ export class LiveOverlay {
 
 	dispatch(a: LiveAction): void {
 		if (!this.settings.enabled) return;
-		if (a.type === "event" && isKbVerb(a.event.verb)) {
+		if (a.type === "event" && this.settings.memory && isKbVerb(a.event.verb)) {
 			this.kb = stepKbLife(reduceKbLife({ ...this.kb, reduced: this.reduced }, a.event, a.now), a.now);
 			this.requestFrame();
-		} else if (a.type === "tick") this.kb = stepKbLife(this.kb, a.now);
+		} else if (a.type === "tick" && this.settings.memory) this.kb = stepKbLife(this.kb, a.now);
 		const sigBefore = liveSignature(this.state);
 		const next = reduceLive(this.state, a, this.liveOpts());
 		if (next === this.state) return; // nothing changed: no frame
@@ -479,7 +482,7 @@ export class LiveOverlay {
 	/** fast > float > slow. No spreads or Object.values here: this runs on every rAF. The idle float holds the loop (at its own, lower, rate) while any wolf is shown; it also carries the needs-you ring's breathing. */
 	private classifyNeed(now: number): FrameNeed {
 		const s = this.state;
-		const kbRate = kbLifeRate(this.kb, this.wall);
+		const kbRate = this.settings.memory ? kbLifeRate(this.kb, this.wall) : "none";
 		if (this.highlight || s.pulses.length > 0 || kbRate === "fast") return "fast";
 		const wall = this.wall;
 		// Subagents darting to a target, launching from a hub or reeling back are fast motion; the wolves' slow roam is not.
@@ -1231,7 +1234,7 @@ export class LiveOverlay {
 				EFFECTS.ring!({ ctx, x: it.x, y: it.y, r: it.r, k, t: 0, color: AMBER, intensity: I, reduced, time: now, alpha: it.alpha });
 			}
 		}
-		if (this.settings.enabled) drawKbLife(ctx, this.kb, host, (n) => this.wolfItems.get(n), k, wall, reduced, this.kbFocus);
+		if (this.settings.enabled && this.settings.memory) drawKbLife(ctx, this.kb, host, (n) => this.wolfItems.get(n), k, wall, reduced, this.kbFocus);
 		this.drawPills(ctx, host, items, k);
 		const hl = this.highlight;
 		if (hl) {

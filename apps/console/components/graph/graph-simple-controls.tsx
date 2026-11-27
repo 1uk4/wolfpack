@@ -16,7 +16,7 @@
 
 import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { osPrefersReducedMotion, type MotionMode } from "@/src/core";
-import { Blend, EyeOff, Expand, Ghost, Gauge, Kanban, LayoutGrid, Layers, Radio, Route, Tags } from "lucide-react";
+import { Blend, Brain, EyeOff, Expand, Ghost, Gauge, Kanban, LayoutGrid, Layers, Radio, Route, Tags } from "lucide-react";
 import { Hint } from "@/components/ui/hint";
 import {
 	PRESET_IDS,
@@ -395,6 +395,15 @@ export function SimpleControls({
 					value={settings.live.intensity}
 					onChange={(n) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, intensity: n } }))}
 				/>
+				<div className="flex items-stretch gap-1">
+					<Switch
+						label="Memory"
+						hint="Show the memory and KB animations"
+						Icon={Brain}
+						checked={settings.live.memory}
+						onChange={(on) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, memory: on } }))}
+					/>
+				</div>
 				<MotionControl value={settings.live.motion} onChange={(m) => changeSettings((cur) => ({ ...cur, live: { ...cur.live, motion: m } }))} />
 			</div>
 			{children}

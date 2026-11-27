@@ -594,24 +594,39 @@ describe("subagent openers: the modal opens over the page, with the wolf the cal
 	const archivedFeature = { id: "1uk4/f1", title: "Old feature", kind: "feature", closed: true };
 	const liveUnderArchived = { ...child(1), parentThreadId: "1uk4/f1" };
 
-	it("a live subagent under a collapsed Archived parent shows a running indicator on the toggle", async () => {
+	it("there is no Archived section; a closed thread (and its live subagent) still shows as a row when searching", async () => {
 		await mountSidebar([], [], [{ id: PARENT, title: "Home", kind: "home" }, archivedFeature, liveUnderArchived]);
-		const toggle = q('[data-testid="archived-toggle"]')!;
-		assert.match(toggle.textContent!, /Archived \(1\)/);
-		assert.match(q('[data-testid="archived-running"]')!.textContent!, /1 running/);
-		await click(toggle);
-		assert.equal(q('[data-testid="archived-running"]'), null); // open: the row itself is visible
-		assert.ok(qa('[data-testid^="session-row"]').some((b) => b.textContent?.includes("Task 1")));
-	});
-
-	it("while searching, the Archived toggle is disabled", async () => {
-		await mountSidebar([], [], [{ id: PARENT, title: "Home", kind: "home" }, archivedFeature]);
+		assert.equal(q('[data-testid="archived-toggle"]'), null);
+		assert.ok(!qa('[data-testid^="session-row"]').some((b) => b.textContent?.includes("Old feature")));
 		const input = q('[data-testid="session-search"]') as HTMLInputElement;
-		assert.equal((q('[data-testid="archived-toggle"]') as HTMLButtonElement).disabled, false);
 		const key = Object.keys(input).find((k) => k.startsWith("__reactProps$"))!;
 		await act(async () => void (input as unknown as Record<string, { onChange: (e: unknown) => void }>)[key]!.onChange({ target: { value: "old" }, currentTarget: { value: "old" } }));
 		await settle(30);
-		assert.equal((q('[data-testid="archived-toggle"]') as HTMLButtonElement).disabled, true);
+		assert.ok(qa('[data-testid^="session-row"]').some((b) => b.textContent?.includes("Old feature")));
+	});
+
+	it("the Den hides a wolf that needs you and badges its count; dropping a wolf on the Den hides it, dropping it on the list shows it", async () => {
+		store.set("wolfpack:sidebar-wolf-prefs", JSON.stringify({ pinned: [], hidden: ["1uk4"] }));
+		await mountSidebar([], [], [{ id: PARENT, title: "Home", kind: "home", status: "needs-you" }]);
+		assert.equal(q('[data-testid="den-badge"]')!.textContent, "1");
+		assert.equal(qa('[data-testid^="session-row"]').length, 0); // hidden: not in the list
+		const fire = (testid: string, handler: string, wolf: string) => {
+			const el = q(`[data-testid="${testid}"]`)!;
+			const key = Object.keys(el).find((k) => k.startsWith("__reactProps$"))!;
+			const dt = { types: ["application/x-wolfpack-wolf"], getData: () => wolf };
+			return act(async () => void (el as unknown as Record<string, Record<string, (e: unknown) => void>>)[key]![handler]!({ dataTransfer: dt, preventDefault() {}, stopPropagation() {} }));
+		};
+		await fire("den", "onDrop", "1uk4"); // already in the Den: stays there
+		assert.equal(qa('[data-testid^="session-row"]').length, 0);
+		const list = q('[data-testid="den"]')!.parentElement!;
+		const key = Object.keys(list).find((k) => k.startsWith("__reactProps$"))!;
+		await act(async () => void (list as unknown as Record<string, Record<string, (e: unknown) => void>>)[key]!.onDrop!({ dataTransfer: { types: ["application/x-wolfpack-wolf"], getData: () => "1uk4" }, preventDefault() {} }));
+		assert.equal(q('[data-testid="den-badge"]'), null);
+		assert.ok(qa('[data-testid^="session-row"]').some((b) => b.textContent?.includes("needs you")));
+		await fire("den", "onDrop", "1uk4");
+		assert.equal(qa('[data-testid^="session-row"]').length, 0);
+		assert.equal(JSON.parse(store.get("wolfpack:sidebar-wolf-prefs")!).hidden[0], "1uk4");
+		store.clear();
 	});
 
 	it("the kbd scroll targets session rows only (the archived toggle button does not shift the index)", async () => {

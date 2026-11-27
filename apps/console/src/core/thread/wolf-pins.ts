@@ -36,6 +36,21 @@ export function toggleHidden(p: WolfPrefs, wolf: string): WolfPrefs {
 	return { pinned: p.pinned.filter((w) => w !== wolf), hidden: p.hidden.includes(wolf) ? p.hidden.filter((w) => w !== wolf) : [...p.hidden, wolf] };
 }
 
+/** Moves a wolf into the Den (idempotent; unpins it). */
+export function hideWolf(p: WolfPrefs, wolf: string): WolfPrefs {
+	return p.hidden.includes(wolf) ? p : toggleHidden(p, wolf);
+}
+
+/** Takes a wolf out of the Den (idempotent). */
+export function showWolf(p: WolfPrefs, wolf: string): WolfPrefs {
+	return p.hidden.includes(wolf) ? toggleHidden(p, wolf) : p;
+}
+
+/** The Den badge: how many threads of Den wolves wait on the owner. */
+export function denNeedsYou(rows: readonly { id: string; meta?: string; needsYou?: boolean }[], prefs: WolfPrefs): number {
+	return rows.filter((r) => r.needsYou === true && prefs.hidden.includes(rowWolf(r))).length;
+}
+
 /** Splits the sidebar groups by their wolf: pinned (in pin order), hidden, and the rest (original order). */
 export function partitionWolves<G extends { top: { id: string; meta?: string } }>(groups: readonly G[], prefs: WolfPrefs): { pinned: G[]; main: G[]; hidden: G[] } {
 	const pinned = prefs.pinned.flatMap((w) => groups.filter((g) => rowWolf(g.top) === w));

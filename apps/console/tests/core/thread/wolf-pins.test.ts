@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { partitionWolves, togglePinned, toggleHidden, loadWolfPrefs, saveWolfPrefs, type WolfPrefsStore } from "../../../src/core/thread/wolf-pins.ts";
+import { hideWolf, showWolf, denNeedsYou, partitionWolves, togglePinned, toggleHidden, loadWolfPrefs, saveWolfPrefs, type WolfPrefsStore } from "../../../src/core/thread/wolf-pins.ts";
 
 const g = (wolf: string, id = `${wolf}/home`) => ({ top: { id, meta: wolf } });
 
@@ -21,6 +21,16 @@ describe("wolf pins and hides", () => {
 		const h = toggleHidden(prefs, "x");
 		assert.deepEqual(h, { pinned: ["y"], hidden: ["x"] });
 		assert.deepEqual(toggleHidden(h, "x").hidden, []);
+	});
+
+	it("moving to the Den is idempotent and unpins; showing is idempotent; the badge counts needs-you rows of Den wolves only", () => {
+		const prefs = hideWolf({ pinned: ["a"], hidden: [] }, "a");
+		assert.deepEqual(prefs, { pinned: [], hidden: ["a"] });
+		assert.equal(hideWolf(prefs, "a"), prefs);
+		assert.deepEqual(showWolf(prefs, "a").hidden, []);
+		assert.equal(showWolf({ pinned: [], hidden: [] }, "a").hidden.length, 0);
+		const rows = [{ id: "a/home", meta: "a", needsYou: true }, { id: "a/f", meta: "a", needsYou: true }, { id: "a/g", meta: "a" }, { id: "b/home", meta: "b", needsYou: true }];
+		assert.equal(denNeedsYou(rows, prefs), 2);
 	});
 
 	it("persists in storage and falls back to empty when storage throws or holds junk", () => {

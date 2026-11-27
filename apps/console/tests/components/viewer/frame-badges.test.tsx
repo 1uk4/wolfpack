@@ -173,6 +173,12 @@ describe("frame badges", () => {
 		assert.deepEqual(labels(), ["plan", "\u{1F389}".repeat(15) + "\u2026"]);
 	});
 
+	it("trailing punctuation is dropped from the chip but kept in the full title", async () => {
+		await mount([framePart("f1", 1, "a.html", "Plan: next steps."), framePart("f2", 1, "b.html", "Roadmap, \u2014"), framePart("f3", 1, "c.html", "Really?!")]);
+		assert.deepEqual(labels(), ["Plan: next", "Roadmap", "Really"]);
+		assert.equal(qa('[data-testid="frame-badge-open"]')[0]!.getAttribute("aria-label"), "Plan: next steps.");
+	});
+
 	it("the row sits directly above the page composer", async () => {
 		await mount([framePart("f1", 1, "a.html", "A")]);
 		const row = q('[data-testid="thread-main"] [data-testid="frame-badges"]')!;

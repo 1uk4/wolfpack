@@ -68,6 +68,26 @@ describe("GET /api/updates", () => {
 		}
 	});
 
+	it("on a Mac with no WOLFPACK_HUB_URL / WOLFPACK_API_URL, reads hubd and workerd versions from the Mac's local services so Update can be offered", async () => {
+		const manifestBase = await serve({ schema: 1, generatedAt: "2026-11-09T03:30:00Z", components: { console: entry("console", "0.1.18"), hubd: entry("hubd", "0.1.15"), workerd: entry("workerd", "0.1.5"), wolfd: entry("wolfd", "0.1.14") } });
+		const hub = await serve({ ok: true, service: "hubd", version: "0.1.14" });
+		const worker = await serve({ ok: true, service: "workerd", version: "0.1.5" });
+		const dir = mkdtempSync(join(tmpdir(), "console-ver-"));
+		writeFileSync(join(dir, "VERSION"), "0.1.18\n");
+		try {
+			const get = createUpdatesHandler({
+				platform: "darwin",
+				env: { ...NO_SUBSCRIPTION, WOLFPACK_HOME: dir, WOLFPACK_AUTO_UPDATE_STATUS: join(tmpdir(), "no-such-status.json"), WOLFPACK_UPDATE_MANIFEST_URL: `${manifestBase}/stable.json`, WOLFPACK_HEALTH_HUB_URL: hub, WOLFPACK_HEALTH_WORKERDS: `workerd=${worker}` },
+				consoleDir: dir,
+				probeTimeoutMs: 1_000,
+			});
+			const body = await get();
+			assert.deepEqual(body.components.map((c) => [c.component, c.running, c.outdated]), [["console", "0.1.18", false], ["hubd", "0.1.14", true], ["workerd", "0.1.5", false], ["wolfd", null, null]]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("compares against the subscribed channel's manifest: on main a -main.N prerelease is newer than the running one, on stable the stable manifest is used", async () => {
 		const stable = await serve({ schema: 1, generatedAt: "2026-11-09T03:30:00Z", components: { workerd: entry("workerd", "0.1.5") } });
 		const main = await serve({ schema: 1, channel: "main", sha: "abc", ref: "wolf/1uk4", generatedAt: "2026-11-09T03:30:00Z", components: { workerd: entry("workerd", "0.1.6-main.2") } });

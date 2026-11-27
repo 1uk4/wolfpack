@@ -115,7 +115,7 @@ export function serviceCards(links: HealthLink[], actions: HealthActionsView | u
 			running: component === "console" ? (rb?.from ?? selfVersion) : (ls[0]?.version ?? null),
 			latest: unit?.to ?? null,
 			tone: component === "console" ? "green" : ls.length ? worst : "grey",
-			canUpdate: systemd && !!unit,
+			canUpdate: (systemd || !!actions?.macUpdate) && !!unit,
 			rollbackTo: systemd && rb && rollbackOffered(rb) ? rb.to : null,
 		};
 	});

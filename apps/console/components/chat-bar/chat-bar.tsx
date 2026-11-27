@@ -633,12 +633,12 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 			aria-haspopup={BAR_EXTRAS.switcher ? "dialog" : undefined}
 			aria-expanded={BAR_EXTRAS.switcher ? switcher : undefined}
 			onClick={() => (BAR_EXTRAS.switcher ? (vizOn ? undefined : setSwitcher((s) => !s)) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
-			className={cn("flex items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-11 max-w-[60vw]" : "max-w-56")}
+			className={cn("flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-11 max-w-[60vw]" : "max-w-56")}
 			title={`${target.wolf} · ${title}`}
 		>
 			<span data-testid="chat-bar-dot" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
 			<span className="truncate">{title}</span>
-			<span className="text-muted-foreground">{target.wolf}</span>
+			<span className="shrink-0 truncate text-muted-foreground max-w-20">{target.wolf}</span>
 			{working && <BrailleSpinner />}
 			{dictation.active && <MicIcon data-testid="chat-bar-listening" className="size-3 shrink-0 text-red-500" />}
 		</button>

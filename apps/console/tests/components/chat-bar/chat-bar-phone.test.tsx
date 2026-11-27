@@ -203,8 +203,12 @@ describe("ChatBar on a phone", () => {
 		assert.equal(q('[data-testid="chat-bar-overflow"]'), null);
 		await act(async () => registerColumn(column(100, 400)));
 		await frame();
-		assert.match(bar().getAttribute("style")!, /width:\s*368px/);
+		assert.match(bar().getAttribute("style")!, /width:\s*420px/);
 		assert.equal(q('[data-testid="chat-bar-settings"]'), null, "narrow column: the gear leaves the header");
+		// The thread title truncates with an ellipsis and the chip may shrink, so nothing overflows the bar.
+		const chip = q('[data-testid="chat-bar-chip"]')!;
+		assert.match(chip.className, /\bmin-w-0\b/);
+		assert.match(chip.querySelector("span.truncate")!.className, /\btruncate\b/);
 		await click(q('[data-testid="chat-bar-overflow"]'));
 		assert.ok(q('[data-testid="chat-bar-overflow-menu"] [data-testid="chat-bar-settings"]'), "and waits in the menu");
 		await act(async () => registerColumn(null));

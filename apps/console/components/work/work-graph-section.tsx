@@ -6,7 +6,7 @@ import { ExternalLinkIcon, GitPullRequestIcon, MessageSquareIcon, XIcon } from "
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
 import { TaskGraphLarge } from "@/components/work/task-graph";
-import { fetchWolfThreads, fetchWolves, fetchWorkList, fetchWorkRecord } from "@/components/kb/kb-client";
+import { THREADS_MOUNT_MAX_AGE_MS, fetchWolfThreads, fetchWolves, fetchWorkList, fetchWorkRecord } from "@/components/kb/kb-client";
 import { progressBar, progressPanel, TONE_LABEL, type ProgressPanel, type StageTone, type TaskGraphModel, type ThreadFact, type ThreadLive } from "@/src/core";
 
 type GraphModel = Extract<TaskGraphModel, { kind: "graph" }>;
@@ -45,7 +45,7 @@ function useNodeProgress(model: GraphModel, id: string | null, wolf: string | un
 						.filter((w) => w.status !== "offline")
 						.map(async (w) => {
 							try {
-								const r = await fetchWolfThreads<{ threads?: Omit<ThreadFact, "wolf">[] }>(w.name, 0);
+								const r = await fetchWolfThreads<{ threads?: Omit<ThreadFact, "wolf">[] }>(w.name, THREADS_MOUNT_MAX_AGE_MS);
 								if (r.ok) for (const t of r.data.threads ?? []) threads.push({ ...t, wolf: w.name });
 							} catch {
 								/* an unreachable wolf: no thread shown from it */
@@ -67,7 +67,17 @@ function useNodeProgress(model: GraphModel, id: string | null, wolf: string | un
 
 /** The inline progress of one node: a side card on desktop, a bottom sheet on the phone. */
 export function ProgressPanelView({ panel, onClose, onOpenTask }: { panel: ProgressPanel; onClose: () => void; onOpenTask?: (id: string) => void }) {
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") onClose();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onClose]);
 	return (
+		<>
+		{/* Phone: a backdrop behind the bottom sheet, tap outside closes. */}
+		<div data-testid="work-progress-backdrop" className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={onClose} aria-hidden />
 		<aside
 			data-testid="work-progress-panel"
 			data-work={panel.id}
@@ -134,6 +144,7 @@ export function ProgressPanelView({ panel, onClose, onOpenTask }: { panel: Progr
 				)}
 			</div>
 		</aside>
+		</>
 	);
 }
 

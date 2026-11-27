@@ -52,4 +52,8 @@ describe("progressPanel", () => {
 		assert.equal(p.pr, "https://github.com/acme/repo/pull/42");
 		assert.equal(progressPanel({ ...item, record: "" }, "building", []).pr, null);
 	});
+	it("a node whose record could not be read still yields a panel: no notes, commits, PR or thread", () => {
+		const p = progressPanel({ id: "work-wolfpack-T2", title: "Unread", kind: "task", stage: "" }, "ready", []);
+		assert.deepEqual({ notes: p.notes, commits: p.commits, pr: p.pr, thread: p.thread, wolf: p.wolf, tone: p.tone }, { notes: [], commits: [], pr: null, thread: null, wolf: null, tone: "plan" });
+	});
 });

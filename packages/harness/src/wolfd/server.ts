@@ -55,6 +55,8 @@ import {
 } from "../engine/index.js";
 import { graduationActionsFor, memoryActionsFor, type MemoryActions } from "../memory/actions.js";
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
+import { memoryActivityListener } from "./activity-memory.js";
+import { getPoolStats } from "../memory/consolidation.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@wolfpack/kb/graph";
 import { readDenTopics, recordOwnerMessage } from "@wolfpack/memory";
@@ -188,6 +190,7 @@ export class WolfServer {
   private readonly opening = new Map<string, Promise<{ summary: ThreadSummary; created: boolean }>>();
   private homeCreated = false;
   private readonly memoryBus?: MemoryEventBus;
+  private unsubMemoryActivity: (() => void) | undefined;
   private readonly subagents?: SubagentManager;
   // wolf-scoped activity stream (thread-status, card events): own id space, bounded replay buffer
   /** Starts at 1: a baseline carries the current cursor as its id, and ids are positive. */
@@ -212,6 +215,14 @@ export class WolfServer {
     this.host = opts.host ?? "local";
     this.settleMs = opts.settleTimeoutMs ?? 5000;
     if (opts.den) this.memoryBus = memoryEventsFor(opts.den, opts.name);
+    if (opts.den && opts.activity && this.memoryBus) {
+      const den = opts.den;
+      this.unsubMemoryActivity = this.memoryBus.subscribe(memoryActivityListener(opts.activity, {
+        wolf: opts.name,
+        poolTokens: async () => (await getPoolStats(den)).tokens,
+        capacity: opts.memoryConfig?.consolidation.threshold ?? 20000,
+      }));
+    }
     this.homeId = `${this.name}/home`;
     this.gitInfo = new GitInfo(opts.gitCacheMs ?? 5000);
     if (opts.subagents && opts.den) {
@@ -347,6 +358,7 @@ export class WolfServer {
   async close(): Promise<void> {
     this.closing = true;
     this.stopApprovalWatch?.();
+    this.unsubMemoryActivity?.();
     this.activityTap?.stop(); // queues wolf-offline
     void this.opts.activity?.stop().catch(() => {});
     this.lag?.stop();

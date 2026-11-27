@@ -21,6 +21,8 @@ export const ACTIVITY_VERBS = [
   "wolf-online", "wolf-offline",
   // a work-item tool call (note, stage, done, ...) by any thread or subagent: the actor touched that work item. Added later: an older hub drops it per event.
   "work-touch",
+  // memory pipeline stages (wolf: observe/consolidate/promote; hub: curator start/done). Added later: an older hub drops them per event.
+  "memory-observe", "memory-consolidate", "memory-promote", "curate-start", "curate-done",
 ] as const;
 export type ActivityVerb = (typeof ACTIVITY_VERBS)[number];
 export const ACTIVITY_ACTOR_KINDS = ["wolf", "thread", "subagent", "owner", "hub"] as const;
@@ -50,6 +52,22 @@ export const ActivityTargetSchema = z.object({
 });
 export type ActivityTarget = z.infer<typeof ActivityTargetSchema>;
 
+/** Small optional numbers and labels for memory-pipeline events. Never content. Over-long strings are cut, not rejected. */
+const cut = (n: number) => z.string().transform((x) => x.trim().slice(0, n));
+export const ActivityDetailSchema = z.object({
+  count: z.number().int().nonnegative().optional(),
+  capacity: z.number().int().positive().optional(),
+  outcome: cut(24).optional(),
+  section: cut(80).optional(),
+  sectionTitle: cut(ACTIVITY_TITLE_MAX).optional(),
+  reason: cut(160).optional(),
+  tokens: z.number().int().nonnegative().optional(),
+  ms: z.number().int().nonnegative().optional(),
+  topicIds: z.array(z.string().min(1)).transform((a) => a.slice(0, 20)).optional(),
+  ref: cut(80).optional(),
+});
+export type ActivityDetail = z.infer<typeof ActivityDetailSchema>;
+
 export const ActivityEventSchema = z.object({
   v: z.literal(ACTIVITY_VERSION),
   id: z.string().min(1),
@@ -60,6 +78,7 @@ export const ActivityEventSchema = z.object({
   verb: z.enum(ACTIVITY_VERBS),
   target: ActivityTargetSchema.optional(),
   domain: z.string().min(1).optional(),
+  detail: ActivityDetailSchema.optional(),
 });
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 

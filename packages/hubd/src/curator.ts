@@ -50,6 +50,7 @@ import { contentHash, entriesDir, type KbEvent, type KbRoots } from "@wolfpack/k
 import type { Actor, KbChange, KbCommitRequest, KbCommitResponse } from "@wolfpack/protocol";
 import type { HubEventDraft } from "./events.js";
 import { watchSweepProgress } from "./sweep-progress.js";
+import { resolveEntrySection } from "./entry-section.js";
 import { CONTRIBUTIONS_LANE } from "./layout.js";
 
 export const SYSTEM_ACTOR: Actor = { id: "system", kind: "system" };
@@ -377,7 +378,12 @@ export function createCurator(deps: CuratorDeps): Curator {
         else if (e.outcome === "merge") tally.merged++;
         else if (e.outcome === "reject") tally.rejected++;
         else tally.parked++;
-        emit({ type: "sweep_item", from: e.from, denTopicId: e.denTopicId, outcome: e.outcome, ...(e.entryId ? { entryId: e.entryId } : {}), ...(e.decision ? { decision: e.decision } : {}) });
+        const where = e.entryId && (e.outcome === "create" || e.outcome === "merge") ? resolveEntrySection(deps.roots, e.entryId) : undefined;
+        emit({
+          type: "sweep_item", from: e.from, denTopicId: e.denTopicId, outcome: e.outcome,
+          ...(e.entryId ? { entryId: e.entryId } : {}), ...(e.decision ? { decision: e.decision } : {}),
+          ...(where ? { domain: where.domain, ...(where.section ? { section: where.section } : {}), ...(where.sectionTitle ? { sectionTitle: where.sectionTitle } : {}) } : {}),
+        });
       }
     };
     const splitDue: Array<[string, { id: string; count: number }[]]> = [];

@@ -104,6 +104,22 @@ describe("derive fan-out queue", () => {
     expect(seen[0]!.actor.wolf).toBeUndefined();
   });
 
+  it("the curator's per-item events publish curate-start once per item and curate-done with section, outcome and elapsed ms", async () => {
+    let t = 5000;
+    const bus = createMemoryBus();
+    const seen: ActivityEvent[] = [];
+    bus.subscribe("p", (e) => seen.push(e));
+    const d = createActivityDeriver({ bus, presence: createPresenceStore(), pack: "p", now: () => t });
+    d.onSweep({ type: "sweep_progress", from: "w", denTopicId: "tp1", startedAt: 4000 });
+    d.onSweep({ type: "sweep_progress", from: "w", denTopicId: "tp1", startedAt: 4000 }); // route known: same item
+    t = 6500;
+    d.onSweep({ type: "sweep_item", from: "w", denTopicId: "tp1", outcome: "create", entryId: "kb-wp-aaaaaaa", domain: "wp", section: "s1", sectionTitle: "Caching", decision: { reason: "new subject" } });
+    await drain();
+    expect(seen.map((e) => e.verb)).toEqual(["curate-start", "curate-done"]);
+    expect(seen[0]).toMatchObject({ actor: { kind: "hub" }, detail: { ref: "tp1" } });
+    expect(seen[1]).toMatchObject({ actor: { kind: "hub" }, target: { kind: "kb-entry", id: "kb-wp-aaaaaaa", domain: "wp" }, detail: { outcome: "create", section: "s1", sectionTitle: "Caching", reason: "new subject", ms: 2500, ref: "tp1" } });
+  });
+
   it("derives at most 20 events from one ledger batch, and drains a big backlog in chunks of 50", async () => {
     const { seen, d } = mk();
     for (let i = 0; i < 6; i++) d.run({}, () => d.onLedger({ actor: { id: "owner", kind: "operator" }, events: ledger(100) }));

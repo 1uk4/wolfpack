@@ -1236,7 +1236,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     if (opts.socketPath === undefined) port = (server.address() as AddressInfo).port;
     revisions.start();
     // After the KB writer, the bus and the link exist: a refused start (wolf lease, foreign lane) throws here and releases everything.
-    curator = createCurator({ dataDir: opts.dataDir, roots, inboxRoot, receiptsRoot, commit: (a, r) => kbWriter!.commit(a, r), exclusive: (fn) => kbWriter!.exclusive(fn), emit: (d) => void bus.emit(d), options: { now: opts.now, ...opts.curator, ...(opts.curator?.autoRebuildPreview === true ? { onSplitDue: (domain: string, list: { id: string; count: number }[]) => rebuildRequester.onSplitDue(domain, list).then(() => undefined) } : {}) } });
+    curator = createCurator({ dataDir: opts.dataDir, roots, inboxRoot, receiptsRoot, commit: (a, r) => kbWriter!.commit(a, r), exclusive: (fn) => kbWriter!.exclusive(fn), emit: (d) => { bus.emit(d); derive.onSweep(d); }, options: { now: opts.now, ...opts.curator, ...(opts.curator?.autoRebuildPreview === true ? { onSplitDue: (domain: string, list: { id: string; count: number }[]) => rebuildRequester.onSplitDue(domain, list).then(() => undefined) } : {}) } });
     curator.start();
     kbActivity = createKbActivity({ roots, inboxRoot, receiptsRoot, curator, now: opts.now });
     rebuild = createRebuildService({

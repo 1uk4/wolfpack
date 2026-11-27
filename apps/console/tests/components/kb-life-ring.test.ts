@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { ActivityEvent } from "@wolfpack/protocol";
+import { emptyKbLife, reduceKbLife } from "../../src/core/index.ts";
 import { flightPos, ITEM_TRAVEL_MS, itemPos } from "../../components/graph/live/kb-life-draw.ts";
 import { LIVE_TUNING } from "../../components/graph/live/live-tuning.ts";
 
@@ -11,6 +13,26 @@ describe("memory items orbit Home on the inner ring", () => {
 		const r = Math.hypot(p.x - home.x, p.y - home.y);
 		assert.ok(Math.abs(r - 40) < 1e-6, `radius ${r}`);
 		assert.ok(r > LIVE_TUNING.denRadiusPx && r < LIVE_TUNING.restRadiusPx);
+	});
+});
+
+describe("a promoted item keeps its place on the ring", () => {
+	const ev = (verb: string, detail: object): ActivityEvent => ({ v: 1, id: `e-${verb}-${Math.random()}`, pack: "p", ts: 0, ttlMs: 60_000, actor: { kind: "wolf", wolf: "hal" }, verb, target: verb === "memory-promote" ? { kind: "domain", id: "d" } : undefined, detail }) as unknown as ActivityEvent;
+	const home = { x: 0, y: 0 };
+	const wolf = { x: 200, y: 0 };
+	it("the flight is where its topic dot was at the promote, not back at the wolf", () => {
+		const T0 = 10_000;
+		let s = reduceKbLife(emptyKbLife(T0), ev("memory-consolidate", { count: 5, topicIds: ["t1", "t2"] }), T0);
+		const t2 = s.topics[1]!;
+		const at = T0 + 5000;
+		const before = itemPos(wolf, home, t2.slot, t2.born, at, 1, false);
+		s = reduceKbLife(s, ev("memory-promote", { ref: "c2", topicIds: ["t2"] }), at);
+		const p = flightPos(s.flights[0]!, wolf, home, null, at, 1, false, 1);
+		assert.ok(Math.hypot(p.x - before.x, p.y - before.y) < 0.5, `jumped to ${p.x},${p.y} from ${before.x},${before.y}`);
+	});
+	it("a promote with no earlier topic starts at the wolf", () => {
+		const s = reduceKbLife(emptyKbLife(10_000), ev("memory-promote", { ref: "c9", topicIds: ["t9"] }), 10_000);
+		assert.deepEqual(flightPos(s.flights[0]!, wolf, home, null, 10_000, 1, false, 1), wolf);
 	});
 });
 

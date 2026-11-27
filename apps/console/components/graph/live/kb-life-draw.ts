@@ -98,7 +98,8 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 		const topics = topicsOf(kb, name);
 		topics.forEach((t, i) => {
 			// Born at the wolf and flown to Home; items past the cap wait beside their wolf.
-			const p = shown >= LIVE_TUNING.kbMaxItems ? beside(b, i, k) : itemPos({ x: b.x, y: b.y }, cur, 100 + shown++, t.born, wall, m, reduced);
+			const p = shown >= LIVE_TUNING.kbMaxItems ? beside(b, i, k) : itemPos({ x: b.x, y: b.y }, cur, t.slot, t.born, wall, m, reduced);
+			if (shown < LIVE_TUNING.kbMaxItems) shown++;
 			const grow = reduced ? smooth((wall - t.born) / 400) : 1;
 			ctx.fillStyle = rgba(b.color, 0.85 * b.alpha);
 			ctx.beginPath();
@@ -139,7 +140,7 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 		}
 		const start = body ? beside(body, idx, k) : cur;
 		const p = flightPos(f, start, cur, resultPos(host, f.result, f.domain), wall, k, reduced, m);
-		if (f.stage !== "queued" && f.stage !== "fade" && shown++ >= LIVE_TUNING.kbMaxItems) continue;
+		if ((f.stage !== "queued" || f.born !== undefined) && f.stage !== "fade" && shown++ >= LIVE_TUNING.kbMaxItems) continue;
 		const alpha = f.stage === "fade" ? 1 - smooth((wall - f.at) / Math.max(1, f.endAt - f.at)) : 1;
 		const r = 4.2 / k;
 		if (!reduced) {
@@ -197,6 +198,8 @@ function ring(ctx: CanvasRenderingContext2D, p: Pt, r: number, color: string, k:
 /** Where a flight is at `wall` (exported for the draw tests). */
 export function flightPos(f: KbFlight, start: Pt, cur: Pt, target: Pt | null, wall: number, k: number, reduced: boolean, m = KB_UNIT): Pt {
 	const slot = slotPos(cur, f.slot, wall, reduced, m);
+	// A flight made from a topic dot that reached the ring carries on from that place (no second trip from the wolf).
+	if (f.born !== undefined && (f.stage === "queued" || f.stage === "travel")) return itemPos(start, cur, f.slot, f.born, wall, m, reduced);
 	switch (f.stage) {
 		case "queued":
 			return start;

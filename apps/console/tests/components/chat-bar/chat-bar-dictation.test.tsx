@@ -438,7 +438,7 @@ describe("floating chat dictation: docking details", () => {
 describe("the phone dock dictates in place", () => {
 	it("the live transcript replaces the text field while dictating, and the words land in the field for review on finish, unsent", async () => {
 		const w = window as unknown as { matchMedia?: unknown };
-		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+		w.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
 		try {
 			await mount("/kb", A);
 			const form = () => q('[data-testid="chat-bar"] [data-testid="composer"]')!;
@@ -462,10 +462,10 @@ describe("the phone dock dictates in place", () => {
 	});
 });
 
-/** The phone dock: matchMedia says below md for the duration of `run`. */
+/** The phone dock: matchMedia says the shared PHONE_QUERY matches for the duration of `run`. */
 async function onPhone(run: () => Promise<void>) {
 	const w = window as unknown as { matchMedia?: unknown };
-	w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+	w.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
 	try {
 		await run();
 	} finally {
@@ -592,7 +592,7 @@ describe("the phone dock's voice layout", () => {
 describe("a mounted composer keeps both the owner's edit and the dictated tail", () => {
 	it("phone (no dock on thread pages): an edited page composer ends with its text plus the tail, and the store keeps both after the next debounced write", async () => {
 		const w = window as unknown as { matchMedia?: unknown };
-		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+		w.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
 		try {
 			await mount("/kb", A, <OnThreadA />);
 			await fire(q('[data-testid="chat-bar"] [data-testid="composer"]')!, "submit"); // the phone dock's big mic starts the run

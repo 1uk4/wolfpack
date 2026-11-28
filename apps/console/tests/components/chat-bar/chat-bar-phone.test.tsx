@@ -33,16 +33,17 @@ let focused: Element | null = null;
 (dom.window.HTMLElement.prototype as any).focus = function () { focused = this; };
 Object.defineProperty(dom.document, "activeElement", { get: () => focused, configurable: true });
 
-// matchMedia stub: `phone` decides the md query; flipping it notifies listeners like a real resize.
+// matchMedia stub: `phone` decides the shared PHONE_QUERY (answered through isPhoneViewport, the same rule); flipping it notifies listeners like a real resize.
 let phone = true;
 const mqls = new Set<() => void>();
 (window as any).matchMedia = (query: string) => ({
-	get matches() { return /min-width: 768px/.test(query) ? !phone : false; },
+	get matches() { return query === PHONE_QUERY ? isPhoneViewport(phone ? 390 : 1280, 800, false) : false; },
 	addEventListener: (_: string, cb: () => void) => void mqls.add(cb),
 	removeEventListener: (_: string, cb: () => void) => void mqls.delete(cb),
 });
 const resize = (toPhone: boolean) => act(async () => { phone = toPhone; mqls.forEach((cb) => cb()); });
 
+const { PHONE_QUERY, isPhoneViewport } = await import("../../../src/core/thread/phone-viewport.ts");
 const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { FakeNav } = await import("../../helpers/fake-nav.tsx");
 const { AttachedThreadProvider } = await import("../../../components/chat-bar/attached-thread.tsx");

@@ -33,16 +33,17 @@ let focused: Element | null = null;
 (dom.window.HTMLElement.prototype as any).focus = function () { focused = this; };
 Object.defineProperty(dom.document, "activeElement", { get: () => focused, configurable: true });
 
-// matchMedia stub: `phone` decides the md query; flipping it notifies listeners like a real resize.
+// matchMedia stub: `phone` decides the shared PHONE_QUERY (answered through isPhoneViewport, the same rule); flipping it notifies listeners like a real resize.
 let phone = true;
 const mqls = new Set<() => void>();
 (window as any).matchMedia = (query: string) => ({
-	get matches() { return /min-width: 768px/.test(query) ? !phone : false; },
+	get matches() { return query === PHONE_QUERY ? isPhoneViewport(phone ? 390 : 1280, 800, false) : false; },
 	addEventListener: (_: string, cb: () => void) => void mqls.add(cb),
 	removeEventListener: (_: string, cb: () => void) => void mqls.delete(cb),
 });
 const resize = (toPhone: boolean) => act(async () => { phone = toPhone; mqls.forEach((cb) => cb()); });
 
+const { PHONE_QUERY, isPhoneViewport } = await import("../../../src/core/thread/phone-viewport.ts");
 const { ServerEventsProvider } = await import("../../../components/shell/server-events.tsx");
 const { FakeNav } = await import("../../helpers/fake-nav.tsx");
 const { AttachedThreadProvider } = await import("../../../components/chat-bar/attached-thread.tsx");
@@ -77,7 +78,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		return new Response(JSON.stringify({ disposition: "started" }), { status: 200 });
 	}
 	if (url === "/api/needs-you") return needsYou ? Response.json({ items: needsYou }) : new Response("{}", { status: 500 });
-	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w", ...(wolfColor ? { color: wolfColor } : {}) }] });
+	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w", ...(wolfColor ? { color: wolfColor } : {}) }, ...otherWolves.map((name) => ({ name }))] });
 	if (url === "/api/wolves/w/threads") return Response.json({ threads: [...(noHome ? [] : [th("w/home", { kind: "home" })]), th("w/a"), th("w/b"), th("w/c"), ...extraThreads] });
 	const g = /^\/api\/wolves\/w\/threads\/([^/?]+)\?/.exec(url);
 	if (g) {
@@ -103,6 +104,7 @@ const q = (s: string) => document.querySelector(s) as HTMLElement | null;
 const qa = (s: string) => Array.from(document.querySelectorAll(s)) as HTMLElement[];
 let startPath = "/kb";
 let wolfColor: string | undefined; // the roster's colour for wolf "w"
+let otherWolves: string[] = []; // more wolves on the roster (their den avatars)
 let noHome = false; // the wolf has no home thread: nothing to auto-attach
 async function mount(stored: object | null = A, extra?: React.ReactNode, expectBar = true) {
 	if (stored) mem.set(ATTACHED_KEY, JSON.stringify(stored));
@@ -132,6 +134,10 @@ const type = (v: string) =>
 		el.value = v;
 		props(el, "onChange")({ target: el, currentTarget: el });
 	});
+const openFull = async () => {
+	await click(q('[data-testid="chat-bar-settings"]'));
+	await click(q('[data-testid="bar-sheet-open"]'));
+};
 const click = (el: HTMLElement | null) => act(async () => void props(el!, "onClick")({ currentTarget: el, target: el, preventDefault() {}, stopPropagation() {} }));
 const submit = () => act(async () => void ta().closest("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
 const byText = (sel: string, t: string) => qa(sel).find((b) => b.textContent?.trim() === t) ?? null;
@@ -160,6 +166,7 @@ afterEach(async () => {
 	startPath = "/kb";
 	noHome = false;
 	wolfColor = undefined;
+	otherWolves = [];
 	document.body.style.overflow = "";
 	document.documentElement.style.removeProperty("--chat-bar-reserve");
 	delete (window as any).visualViewport;
@@ -258,9 +265,9 @@ describe("ChatBar on a phone", () => {
 
 	it("keeps every dock control at 44px or more and respects the safe area", async () => {
 		await mount();
-		for (const id of ["chat-bar-chip", "bar-sheet-open", "chat-bar-minimize"]) assert.match(q(`[data-testid="${id}"]`)!.className, /min-h-11/, id);
+		for (const id of ["chat-bar-chip", "chat-bar-settings", "chat-bar-minimize"]) assert.match(q(`[data-testid="${id}"]`)!.className, /min-h-11/, id);
 		assert.match(bar().getAttribute("style")!, /env\(safe-area-inset-bottom\)/);
-		await click(q('[data-testid="bar-sheet-open"]'));
+		await openFull();
 		assert.match(q('[data-testid="bar-sheet-close"]')!.className, /min-h-11/);
 	});
 
@@ -273,14 +280,57 @@ describe("ChatBar on a phone", () => {
 		assert.equal(main.getAttribute("aria-label"), "Start dictation");
 		assert.match(q('[data-testid="composer"] button[aria-label="Attach images"]')!.className, /size-11/); // 44px
 		assert.deepEqual(order().filter((x) => x !== "input"), ["attach", "send"], "add-image sits beside the mic");
-		// The text field is one tap away: the keyboard icon, or the compact field.
-		await click(q('[data-testid="voice-keyboard"]'));
+		// The text field is one tap away: the compact field in the same row.
+		await click(q('[data-testid="voice-field"]'));
 		assert.equal(form().getAttribute("data-field"), "text");
 		await type("hello");
 		assert.equal(q('[data-testid="voice-main"]')!.getAttribute("aria-label"), "Send", "with text the big button sends");
 		await resize(false);
 		assert.equal(q('[data-testid="voice-main"]'), null, "the wide panel keeps its classic composer");
 		assert.deepEqual(order(), ["attach", "input", "send"]);
+	});
+
+	it("the phone dock is one composer row (attach, field, mic) with the wolf avatars on the header line and the name shown once", async () => {
+		await mount();
+		const row = q('[data-testid="composer"]')!;
+		assert.doesNotMatch(row.className, /flex-wrap/, "one row, never wrapped");
+		assert.equal(row.querySelector('[data-testid="voice-field"]')!.className.includes("basis-full"), false, "the field shares the row");
+		assert.equal(q('[data-testid="voice-keyboard"]'), null, "no keyboard button: the field itself opens the input");
+		assert.match(q('[data-testid="voice-main"]')!.className, /max-md:size-11/);
+		assert.equal(q('[data-testid="voice-main"]')!.className.includes("size-14"), false, "the mic is no longer the big circle");
+		const strip = q('[data-testid="den-strip"]')!;
+		assert.equal(strip.getAttribute("data-inline"), "true");
+		assert.ok(strip.parentElement!.querySelector('[data-testid="chat-bar-chip"]'), "the avatars share the header line with the chip");
+		assert.match(q('[data-testid="den-wolf"],[data-testid="chat-bar-swap"]')!.className, /size-11/, "44px hit area");
+		const chip = q('[data-testid="chat-bar-chip"]')!;
+		const title = chip.getAttribute("title")!.split(" \u00b7 ");
+		assert.equal(title[0] === title[1] ? chip.querySelector('[data-testid="chat-bar-chip-wolf"]') : null, null, "a thread named like its wolf shows the name once");
+	});
+
+	it("at 320px the header line keeps one avatar plus a +N button, the name stays whole, and every control is a 44px target the tray can reveal the rest from", async () => {
+		otherWolves = ["hal", "jack", "solo"];
+		await mount();
+		await until(() => q('[data-testid="den-more"]'), "the overflow button");
+		const strip = q('[data-testid="den-strip"]')!;
+		assert.equal(strip.querySelectorAll('[data-testid="den-wolf"],[data-testid="chat-bar-swap"]').length, 1, "only the current wolf has an avatar on the line");
+		assert.equal(q('[data-testid="den-more"]')!.textContent, "+3");
+		assert.match(strip.className, /shrink-0/, "the avatar group never squeezes the name or overlaps the buttons");
+		const chip = q('[data-testid="chat-bar-chip"]')!;
+		assert.match(chip.className, /min-w-24/, "the chip keeps room for a short name");
+		assert.equal(q('[data-testid="bar-sheet-open"]'), null, "Open full screen is not on the header line (it lives in the settings menu)");
+		assert.equal(chip.querySelector("span.truncate")!.textContent, "w/a", "the name is shown whole, not cut");
+		for (const el of [...strip.querySelectorAll("button"), q('[data-testid="chat-bar-settings"]')!, q('[data-testid="chat-bar-minimize"]')!]) assert.match(el.className, /size-11|min-h-11/, `${el.getAttribute("aria-label")} is 44px`);
+		assert.equal(q('[data-testid="den-more-tray"]'), null);
+		await click(q('[data-testid="den-more"]'));
+		assert.equal(q('[data-testid="den-more-tray"]')!.querySelectorAll('[data-testid="den-wolf"]').length, 3, "the tray lists the other wolves");
+		await esc();
+		assert.equal(q('[data-testid="den-more-tray"]'), null, "Escape closes the tray");
+		await click(q('[data-testid="den-more"]'));
+		await click(q('[data-testid="den-more-tray"] [data-testid="den-wolf"]'));
+		assert.equal(q('[data-testid="den-more-tray"]'), null, "picking a wolf closes the tray");
+		await click(q('[data-testid="den-more"]'));
+		await act(async () => void document.dispatchEvent(new window.Event("pointerdown")));
+		assert.equal(q('[data-testid="den-more-tray"]'), null, "an outside press closes the tray");
 	});
 
 	it("the compact field opens the text input too", async () => {
@@ -324,7 +374,7 @@ describe("ChatBar on a phone", () => {
 		await mount();
 		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
 		assert.equal(q('[data-testid="bar-strip"]'), null, "no cards, so no strip");
-		await click(q('[data-testid="bar-sheet-open"]'));
+		await openFull();
 		assert.equal(bar().getAttribute("data-state"), "sheet");
 		assert.ok(q('[data-testid="ask-sheet"]'), "the ask is in the full-screen sheet");
 	});
@@ -341,7 +391,7 @@ describe("ChatBar on a phone", () => {
 	it("the chevron closes the sheet and the draft survives", async () => {
 		await mount();
 		await type("half a thought");
-		await click(q('[data-testid="bar-sheet-open"]'));
+		await openFull();
 		assert.equal(bar().getAttribute("data-state"), "sheet");
 		assert.equal(ta().value, "half a thought");
 		await click(q('[data-testid="bar-sheet-close"]'));
@@ -352,7 +402,7 @@ describe("ChatBar on a phone", () => {
 	it("a swipe down on the handle closes the sheet; a short one does not", async () => {
 		await mount();
 		await type("keep me");
-		await click(q('[data-testid="bar-sheet-open"]'));
+		await openFull();
 		const handle = () => q('[data-testid="bar-sheet-handle"]')!;
 		await touch(handle(), "onTouchStart", 100);
 		await touch(handle(), "onTouchEnd", 130);
@@ -460,8 +510,7 @@ describe("ChatBar on a phone", () => {
 		const { WorkReaderPanel } = await import("../../../components/work/work-reader.tsx");
 		let readerClosed = 0;
 		await mount(A, <WorkReaderPanel id="f1" onClose={() => void readerClosed++} />);
-		const opener = q('[data-testid="bar-sheet-open"]')!;
-		await click(opener);
+		await openFull();
 		assert.equal(bar().getAttribute("role"), "dialog");
 		assert.equal(bar().getAttribute("aria-modal"), "true");
 		assert.ok(bar().getAttribute("aria-label"));
@@ -472,7 +521,7 @@ describe("ChatBar on a phone", () => {
 		assert.equal(bar().getAttribute("data-state"), "open");
 		assert.equal(readerClosed, 0);
 		assert.equal(document.body.style.overflow, "");
-		assert.equal(document.activeElement?.getAttribute("data-testid"), "bar-sheet-open");
+		assert.equal(document.activeElement?.getAttribute("data-testid"), "chat-bar-settings", "focus returns to the settings button that held Full screen");
 	});
 
 	it("auto-closes a sheet opened for a card once it is answered, but not while typing", async () => {
@@ -501,7 +550,7 @@ describe("ChatBar on a phone", () => {
 		(window as any).visualViewport = { height: 500, offsetTop: 0, addEventListener: (n: string, cb: () => void) => void (listeners[n] = cb), removeEventListener() {} };
 		await mount();
 		assert.match(bar().getAttribute("style")!, /bottom:\s*300px/);
-		assert.doesNotMatch(bar().getAttribute("style")!, /env\(safe-area/);
+		assert.doesNotMatch(bar().getAttribute("style")!, /env\(safe-area-inset-bottom\)/);
 		(window as any).visualViewport.height = 800;
 		await act(async () => listeners.resize?.());
 		assert.match(bar().getAttribute("style")!, /bottom:\s*0(px)?\b/);
@@ -538,7 +587,7 @@ describe("ChatBar on a phone", () => {
 		startPath = "/wolf/w/thread/b";
 		await mount(A);
 		assert.equal(bar().getAttribute("data-layout"), "dock", "another thread page: the dock floats");
-		assert.match(q('[data-testid="chat-bar-swap"]')!.className, /max-md:size-11/, "the swap den button is thumb-sized");
+		assert.match(q('[data-testid="chat-bar-swap"]')!.className, /size-11/, "the swap den button is thumb-sized");
 		assert.equal(q('[data-testid="chat-bar-swap-wrap"]'), null, "no separate swap pill any more");
 		assert.equal(over(), "90px", "the page pads its bottom by the dock's height");
 		await act(async () => root?.unmount());
@@ -587,7 +636,7 @@ describe("ChatBar on a phone", () => {
 		await fire("resize");
 		await flush();
 		assert.equal(over(), "150px", "re-measured");
-		await click(q('[data-testid="bar-sheet-open"]'));
+		await openFull();
 		await flush();
 		assert.equal(bar().getAttribute("data-state"), "sheet");
 		await fire("resize"); // in a browser the bar growing to full screen fires the ResizeObserver; the stub here does not
@@ -664,5 +713,85 @@ describe("the phone dock's compact composer (work-wolfpack-qoLvFIe)", () => {
 		assert.ok(!ta().parentElement!.contains(submit), "the submit sits beside the field, not inside it");
 		assert.doesNotMatch(submit.className, /\babsolute\b/);
 		assert.match(ta().className, /min-h-11/);
+	});
+});
+
+describe("the phone dock and questionnaire use the full width; typing folds the questionnaire (work-wolfpack-ZrBqJSr)", () => {
+	const ASK2 = { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00Z", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "single", label: "Pick", options: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }] }, { id: "q2", kind: "free-text", label: "Why" }], steps: [{ title: "First", fields: ["q1"] }, { title: "Second", fields: ["q2"] }] } };
+	const focusField = () => act(async () => void props(bar(), "onFocusCapture")({ target: ta() }));
+	const blurField = () => act(async () => void props(bar(), "onBlurCapture")({ target: ta() }));
+
+	it("the dock and the inline questionnaire take the whole width: no side margin or inset, only the safe area", async () => {
+		bodies.a = { messages: [], pendingCards: [ASK2] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		assert.match(bar().getAttribute("style")!, /padding-left: ?env\(safe-area-inset-left\)/);
+		assert.match(bar().getAttribute("style")!, /padding-right: ?env\(safe-area-inset-right\)/);
+		assert.doesNotMatch(bar().className, /\bm[xl]-|\brounded-/);
+		assert.doesNotMatch(q('[data-testid="bar-ask-inline"]')!.className, /\bp[xlr]-|\bm[xlr]-/);
+		assert.doesNotMatch(q('[data-testid="ask-sheet-host"]')!.className, /rounded|\bborder\b/);
+	});
+
+	it("focusing the composer folds the questionnaire to a title + 'n of m' header; tapping it restores the page with its answers", async () => {
+		bodies.a = { messages: [], pendingCards: [ASK2] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await click(qa('[data-testid="ask-option"]')[1]!);
+		await focusField();
+		assert.equal(q('[data-testid="ask-sheet"]'), null);
+		const head = q('[data-testid="ask-sheet-reopen"]')!;
+		assert.equal(q('[data-testid="ask-reopen-title"]')!.textContent, "First");
+		assert.equal(q('[data-testid="ask-reopen-count"]')!.textContent, "1 of 2");
+		assert.match(head.className, /min-h-11/);
+		await click(head);
+		assert.equal(q('[data-testid="ask-sheet-reopen"]'), null);
+		assert.equal(qa('[data-testid="ask-option"]')[1]!.getAttribute("aria-checked"), "true");
+	});
+
+	it("blurring the composer restores the questionnaire; one the owner folded by hand stays folded", async () => {
+		bodies.a = { messages: [], pendingCards: [ASK2] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await focusField();
+		await blurField();
+		assert.ok(q('[data-testid="ask-sheet"]'));
+		await click(q('[data-testid="ask-collapse"]'));
+		await blurField();
+		assert.ok(q('[data-testid="ask-sheet-reopen"]'));
+	});
+
+	it("focusing the in-place answer composer of a free-text question does not fold the questionnaire being answered", async () => {
+		bodies.a = { messages: [], pendingCards: [{ ...ASK2, card: { ...ASK2.card, steps: [{ title: "Only", fields: ["q2"] }] } }] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await click(q('[data-testid="ask-free"], [data-testid="ask-other"]'));
+		const inline = q('[data-testid="ask-inline-composer"] textarea')!;
+		await act(async () => void props(bar(), "onFocusCapture")({ target: inline }));
+		assert.ok(q('[data-testid="ask-sheet"]'), "still open");
+		await act(async () => void props(bar(), "onBlurCapture")({ target: inline }));
+		assert.ok(q('[data-testid="ask-sheet"]'));
+	});
+
+	it("a fold left over from one questionnaire does not reopen the next one the owner folded by hand", async () => {
+		bodies.a = { messages: [], pendingCards: [ASK2] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await focusField();
+		assert.equal(q('[data-testid="ask-sheet"]'), null);
+		bodies.a = { messages: [], pendingCards: [{ ...ASK2, callId: "p2" }] };
+		await emit("thread-updated", { wolf: "w", thread: { id: "w/a", status: "needs-you" } });
+		await until(() => q('[data-testid="ask-sheet"]')?.getAttribute("data-call-id") === "p2", "the new questionnaire");
+		await click(q('[data-testid="ask-collapse"]'));
+		await blurField();
+		assert.ok(q('[data-testid="ask-sheet-reopen"]'), "stays folded");
+	});
+
+	it("desktop: the bar has no focus-fold and keeps its 'Questions waiting' header", async () => {
+		bodies.a = { messages: [], pendingCards: [ASK2] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await resize(false);
+		await until(() => !q('[data-layout="dock"]'), "the desktop bar");
+		assert.equal(props(bar(), "onFocusCapture"), undefined);
 	});
 });

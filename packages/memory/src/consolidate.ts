@@ -22,10 +22,11 @@ import type { Engine } from "@wolfpack/engine";
 import { promoteTopics } from "./distill.js";
 import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { readTopics, readEvictedTopics, readJourney, type TopicFile } from "./session/memory.js";
 import {
   readDenJourney,
+  readDenTopics,
   writeDenTopic,
   bodyHash,
   readDenTopicStates,
@@ -36,7 +37,8 @@ import {
   type DenConfig,
 } from "./den.js";
 import { renderDenIndex } from "./den-index.js";
-import { isAbsorbed, reconcileDen } from "./den-reconcile.js";
+import { denTopicStates, isAbsorbed, reconcileDen } from "./den-reconcile.js";
+import { readPromoteState } from "./promote-state.js";
 
 const LEGACY_WRITE_SLACK_MS = 2 * 60 * 1000;
 
@@ -147,7 +149,30 @@ export async function consolidateSession(
     liveIds.has(t.id) ? { ...t, id: `${t.id}-evicted-${t.filename.replace(/\.md$/, "").replace(/[^A-Za-z0-9_-]/g, "")}` } : t,
   );
   const only = options.onlyIds ? new Set(options.onlyIds) : null;
-  const sessionTopics = refuseTagged([...live, ...evictedTopics], onProgress).filter((t) => !only || only.has(t.id));
+  // A chosen, promotable den topic with no session copy (written straight into the den) still promotes: the den file is
+  // its source. A topic with a session copy is read from there, so it is never emitted twice.
+  // It goes through the same gates as a session copy: work-tagged ones are refused below (the tags are carried), a parked
+  // topic (promote state) or one the KB is waiting on a domain for stays out, and an evicted copy chosen under its renamed id is that topic.
+  const sessionIds = new Set([...live, ...evictedTopics].map((t) => t.id));
+  const sessionList = [...sessionIds];
+  const parkedHere = (id: string): boolean => readPromoteState(den.denRoot).topics[id]?.state === "parked";
+  const waiting = kbRoots
+    ? new Set(denTopicStates(den.denRoot, kbRoots, den.wolfName).filter((s) => s.status.kind === "parked" || s.status.kind === "awaiting-domain").map((s) => s.topic.id))
+    : new Set<string>();
+  const denOnly: TopicFile[] = only
+    ? readDenTopics(den.denRoot)
+        .filter((d) => only.has(d.id) && d.promotable && !sessionIds.has(d.id) && !parkedHere(d.id) && !waiting.has(d.id))
+        .filter((d) => !sessionList.some((s) => s.startsWith(`${d.id}-evicted-`) && only.has(s)))
+        .map((d) => ({
+          id: d.id, title: d.title, summary: d.summary, updated: d.updated, body: d.body, filename: basename(d.filePath),
+          ...(d.domain ? { domain: d.domain } : {}),
+          ...(d.work ? { work: d.work } : {}),
+          ...(d.feature ? { feature: d.feature } : {}),
+          ...(d.keepLocal ? { keepLocal: true } : {}),
+          ...(d.routingHint ? { routingHint: d.routingHint } : {}),
+        }))
+    : [];
+  const sessionTopics = refuseTagged([...live, ...evictedTopics, ...denOnly], onProgress).filter((t) => !only || only.has(t.id));
   const sessionJourney = readJourney(sessionDir);
   if (sessionTopics.length === 0) {
     onProgress?.("no session topics to promote — nothing to do");

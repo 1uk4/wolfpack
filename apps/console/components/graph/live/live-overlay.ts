@@ -8,7 +8,6 @@ import {
 	emptyLiveState,
 	featureOfThread,
 	workShortId,
-	HUB_WOLF,
 	homeDomainOf,
 	liveActive,
 	liveSignature,
@@ -25,7 +24,7 @@ import {
 	type LiveState,
 	type LiveTarget,
 } from "@/src/core";
-import { activeFocus, isFocusNode, touchFocus, type FocusTouch, ownerThreadKey, targetNodeId, threadKey, threadSlugOf, youLinkTarget, effectiveWolfColor, wolfColorTokens } from "@/src/core";
+import { activeFocus, isFocusNode, touchFocus, type FocusTouch, hubWorkNodeId, ownerThreadKey, subagentTaskNodeId, targetNodeId, treePathOf, threadKey, threadSlugOf, youLinkTarget, effectiveWolfColor, wolfColorTokens } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba, safeArc, safeZoom } from "./live-effects";
 import { floatOffset, nameHash } from "./live-float";
@@ -36,8 +35,8 @@ import { newMotion, orbitTarget, restSlot, tetherStrength, wolfEvent, wolfStep, 
 import { elasticStep, orbitPhase, pullFor, ringSlots, trailOrigin, type Elastic } from "./live-rings";
 import { newRepeller, repelStep, setRep, type Repeller } from "./live-repel";
 import { redact } from "@/src/core";
-import { emptyKbLife, isKbVerb, kbLifeRate, reduceKbLife, stepKbLife } from "@/src/core";
-import { drawKbLife, type KbFocus } from "./kb-life-draw";
+import { emptyKbLife, isKbVerb, kbLifeRate, reduceKbLife, stepKbLife, syncPendingKb, type KbPendingItem } from "@/src/core";
+import { drawKbLife, type KbFocus, type KbHoverTarget } from "./kb-life-draw";
 import { isMotionReduced, type MotionMode } from "@/src/core";
 
 export interface Pt { x: number; y: number }
@@ -192,7 +191,8 @@ const botGlyph = (): Path2D => (botPath ??= new Path2D("M4 10a2 2 0 0 1 2-2h12a2
 let wolfHead: Path2D | null = null;
 const wolfHeadPath = (): Path2D => (wolfHead ??= new Path2D(WOLF_HEAD_PATH));
 
-export type OverlayKind = "wolf" | "thread" | "feature" | "subagent" | "you";
+/** "kb": a lit filed entry or a mote in flight; its `label` is the one-line hover summary. */
+export type OverlayKind = "wolf" | "thread" | "feature" | "subagent" | "you" | "kb";
 export interface OverlayItem {
 	kind: OverlayKind;
 	key: string;
@@ -224,7 +224,7 @@ export interface OverlayCard {
 }
 export interface AttachedRef { wolf: string; threadId: string }
 /** What the activity feed asks the overlay to ring: a graph node id, an event target (resolved like a trail), or a wolf's glyph. */
-export interface OverlayHighlight { nodeId?: string; target?: LiveTarget; wolf?: string }
+export interface OverlayHighlight { nodeId?: string; target?: LiveTarget; wolf?: string; /** The filed entry's section chain (ids without `sec:`), for its tree path. */ sectionPath?: string[] }
 
 /** What the overlay is animating right now: fast (pulses, wolf motion, tugs, you-node, highlight), float (the idle drift) or slow (fades). */
 export type FrameNeed = "none" | "slow" | "float" | "fast";
@@ -288,6 +288,8 @@ export class LiveOverlay {
 	/** The wall clock of the current frame (set in step, read by classifyNeed in the same frame). */
 	private wall = Date.now();
 	private kbFocus: KbFocus | null = null;
+	/** What the last frame's KB life drew that the pointer can hover (world coordinates). */
+	private kbTargets: KbHoverTarget[] = [];
 	private settings: OverlaySettings = LIVE_DEFAULTS;
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private mobileNow = false;
@@ -407,6 +409,15 @@ export class LiveOverlay {
 	loadState(s: LiveState): void {
 		if (this.settings.enabled && Object.keys(s.wolves).length > 0) this.state = s;
 		this.arm();
+		this.requestFrame();
+	}
+
+	/** The hub's pending queue: items not seen live join the Home orbit at once (a fresh page shows the real queue). */
+	syncPending(items: readonly KbPendingItem[]): void {
+		if (!this.settings.enabled || !this.settings.memory) return;
+		const next = syncPendingKb({ ...this.kb, reduced: this.reduced }, items, Date.now());
+		if (next === this.kb) return;
+		this.kb = next;
 		this.requestFrame();
 	}
 
@@ -613,10 +624,6 @@ export class LiveOverlay {
 			} else if (t.featureKey) {
 				const c = this.groupCentre.get(t.featureKey);
 				if (c) ref = { actor: "chat", key: t.featureKey, last: { x: c.x, y: c.y } };
-			} else if (t.wolf === HUB_WOLF) {
-				// A hub-side write (curator) starts at the domain hub node, drawn in the neutral node colour.
-				const p = t.target.domain ? host.nodePos(`dom:${t.target.domain}`) : null;
-				if (p) ref = { actor: "pt", key: "", last: { x: p.x, y: p.y } };
 			} else {
 				const b = this.bodies.get(t.wolf);
 				if (b) ref = { actor: "wolf", key: t.wolf, last: { x: b.x, y: b.y } };
@@ -655,7 +662,7 @@ export class LiveOverlay {
 		for (const t of s.trails) {
 			if (this.seenTrails.has(t.id)) continue;
 			this.seenTrails.add(t.id);
-			if (t.wolf === HUB_WOLF || wall - t.at > EVENT_MAX_AGE_MS) continue;
+			if (wall - t.at > EVENT_MAX_AGE_MS) continue;
 			const id = targetNodeId(t.target, (n) => host.hasNode(n));
 			const tp = id ? host.nodePos(id) : null;
 			const wb = this.bodies.get(t.wolf);
@@ -798,10 +805,7 @@ export class LiveOverlay {
 
 	/** The work node a feature hub replaces (its `work:<short>` node), or null when that node is not on the graph. */
 	private hubNodeId(t: LiveThread, host: OverlayHost): string | null {
-		const wid = t.feature!;
-		const dom = /^work-([a-z0-9]+)-/i.exec(wid)?.[1] ?? this.wolfMeta.get(t.wolf)?.dom;
-		const id = targetNodeId({ kind: "work-item", id: wid, domain: dom }, (n) => host.hasNode(n));
-		return id !== null && id.startsWith("work:") ? id : null;
+		return hubWorkNodeId(t, (n) => host.hasNode(n), this.wolfMeta.get(t.wolf)?.dom);
 	}
 
 	private replaced = new Set<string>();
@@ -907,7 +911,9 @@ export class LiveOverlay {
 		const phase = orbitPhase(wall, T.orbitSec, reduced);
 		for (const b of list) {
 			if (Number.isNaN(b.ang)) b.ang = (this.hashOf(b.a.key) % 360) * (Math.PI / 180);
-			const fc = b.parentKey ? this.groupCentre.get(b.parentKey) : undefined;
+			const taskNode = subagentTaskNodeId(b.a, s.threads[b.pk], (n) => host.hasNode(n), this.wolfMeta.get(b.a.wolf)?.dom);
+			const tp = taskNode ? host.nodePos(taskNode) : null;
+			const fc = tp ?? (b.parentKey ? this.groupCentre.get(b.parentKey) : undefined);
 			const wb = this.bodies.get(b.a.wolf);
 			const c = fc ?? wb ?? host.center();
 			const radius = subOrbitRadiusPx(this.mobileNow, T, fc ? "feature" : "home") * OVERLAY_UNIT;
@@ -1089,8 +1095,11 @@ export class LiveOverlay {
 			const dots = sc.compact ? [] : all.filter((x) => !x.t.feature).sort((a, c) => (a.t.id < c.t.id ? -1 : 1));
 			dots.forEach(({ t, alpha }, i) => {
 				const ang = -Math.PI / 2 + (i - (dots.length - 1) / 2) * 0.75 + 0.35;
-				const tx = wx + Math.cos(ang) * SAT_ORBIT * m;
-				const ty = wy + Math.sin(ang) * SAT_ORBIT * m;
+				// A thread bound to a task whose node is on the map sits on that node; otherwise it orbits its wolf.
+				const onTask = t.bound ? (hubWorkNodeId({ bound: t.bound }, (n) => host.hasNode(n), this.wolfMeta.get(t.wolf)?.dom) ?? null) : null;
+				const taskPos = onTask ? host.nodePos(onTask) : null;
+				const tx = taskPos ? taskPos.x : wx + Math.cos(ang) * SAT_ORBIT * m;
+				const ty = taskPos ? taskPos.y : wy + Math.sin(ang) * SAT_ORBIT * m;
 				const tkey = threadKey(t.wolf, t.id);
 				const threadItem: OverlayItem = { kind: "thread", key: tkey, wolf: t.wolf, threadId: t.id, x: tx, y: ty, r: THREAD_DOT_R * m, alpha: (t.active ? 1 : 0.45) * alpha, needsYou: t.needsYou, online: w.online, working: t.active, color, label: t.title ?? threadSlugOf(t.wolf, t.id) };
 				out.push(threadItem);
@@ -1156,7 +1165,7 @@ export class LiveOverlay {
 		// Trails: the path the wolf took to the thing it touched, fading over trailSec.
 		for (const t of s.trails) {
 			if (reduced) break; // no travel trails under reduced motion
-			const to = this.resolveTo(t.target, !t.subagentKey && !t.featureKey && t.wolf !== HUB_WOLF, host);
+			const to = this.resolveTo(t.target, !t.subagentKey && !t.featureKey, host);
 			const from = this.trailStart(t);
 			if (!to || !from) continue;
 			const age = 1 - trailAlpha(t, wall, this.settings.trailSec);
@@ -1165,7 +1174,7 @@ export class LiveOverlay {
 		}
 		// Pulses on the touched node.
 		for (const p of s.pulses) {
-			const at = this.resolveTo(p.target, !p.subagentKey && !p.featureKey && p.wolf !== HUB_WOLF, host);
+			const at = this.resolveTo(p.target, !p.subagentKey && !p.featureKey, host);
 			if (!at) continue;
 			const w = this.wolfItems.get(p.wolf);
 			EFFECTS.pulse!({ ctx, x: at.x, y: at.y, r: PULSE_R * m, k, t: Math.min(1, (wall - p.at) / DEFAULT_LIVE_OPTIONS.pulseMs), color: w?.color ?? host.colors.node, intensity: I, reduced });
@@ -1186,8 +1195,11 @@ export class LiveOverlay {
 		for (const it of items) {
 			if (it.kind === "thread") {
 				const wolf = this.wolfItems.get(it.wolf);
-				if (wolf) this.line(ctx, wolf, it, rgba(it.color, 0.25 * it.alpha));
 				const t = s.threads[it.key];
+				// A dot sitting on its feature's hub has the wolf's own link to that hub already: no second line over it.
+				const feat = t?.feature ? this.featureByWork.get(workShortId(t.feature)) : t?.bound?.kind === "work-item" ? this.featureByWork.get(workShortId(t.bound.id)) : undefined;
+				const onHub = !!feat && Math.abs(feat.x - it.x) < 0.5 && Math.abs(feat.y - it.y) < 0.5;
+				if (wolf && !onHub) this.line(ctx, wolf, it, rgba(it.color, 0.25 * it.alpha));
 				if (t?.bound) {
 					const p = this.resolveTo(t.bound, true, host);
 					if (p) {
@@ -1266,7 +1278,10 @@ export class LiveOverlay {
 				EFFECTS.ring!({ ctx, x: it.x, y: it.y, r: it.r, k, t: 0, color: AMBER, intensity: I, reduced, time: now, alpha: it.alpha });
 			}
 		}
-		if (this.settings.enabled && this.settings.memory) drawKbLife(ctx, this.kb, host, (n) => this.wolfItems.get(n), k, wall, reduced, this.kbFocus, m);
+		if (this.settings.enabled && this.settings.memory) {
+			this.kbTargets = [];
+			drawKbLife(ctx, this.kb, host, (n) => this.wolfItems.get(n), k, wall, reduced, this.kbFocus, m, this.kbTargets);
+		}
 		this.drawPills(ctx, host, items, k);
 		const hl = this.highlight;
 		if (hl) {
@@ -1280,6 +1295,18 @@ export class LiveOverlay {
 			if (!at) {
 				const id = hl.nodeId && host.hasNode(hl.nodeId) ? hl.nodeId : hl.target ? targetNodeId(hl.target, (n) => host.hasNode(n)) : null;
 				at = id ? host.nodePos(id) : null;
+			}
+			// A filed entry rings every node on its tree path (domain, sections, entry), up to the first one the map does not have.
+			const treeIds = hl.target ? treePathOf(host.edgesOf?.() ?? [], hl.target, hl.sectionPath) : [];
+			const gap = treeIds.findIndex((id) => !host.hasNode(id));
+			for (const id of gap >= 0 ? treeIds.slice(0, gap) : treeIds) {
+				const p = host.nodePos(id);
+				if (!p || (at && p.x === at.x && p.y === at.y)) continue;
+				ctx.beginPath();
+				safeArc(ctx, p.x, p.y, HL_R * m * 0.8, 0, Math.PI * 2);
+				ctx.lineWidth = 1.2 / k;
+				ctx.strokeStyle = rgba(color, 0.55);
+				ctx.stroke();
 			}
 			if (at) {
 				const pulse = reduced ? 0 : 0.5 + 0.5 * Math.sin(now / 260);
@@ -1494,7 +1521,7 @@ export class LiveOverlay {
 		}
 		let best: OverlayHit | null = null;
 		let bestD = Infinity;
-		const prio: Record<OverlayKind, number> = { subagent: 0, thread: 1, feature: 1, you: 2, wolf: 3 };
+		const prio: Record<OverlayKind, number> = { subagent: 0, thread: 1, feature: 1, you: 2, wolf: 3, kb: 4 };
 		for (const it of this.cachedItems) {
 			const px = it.x * tr.k + tr.x;
 			const py = it.y * tr.k + tr.y;
@@ -1505,6 +1532,19 @@ export class LiveOverlay {
 			if (score < bestD) {
 				bestD = score;
 				best = { item: it, ring: it.needsYou && d > -2, sx: px, sy: py };
+			}
+		}
+		if (best) return best;
+		if (this.settings.memory) {
+			let kd = Infinity;
+			for (const t of this.kbTargets) {
+				const px = t.x * tr.k + tr.x;
+				const py = t.y * tr.k + tr.y;
+				const d = Math.hypot(px - sx, py - sy) - t.r * tr.k;
+				if (d > slop || d >= kd) continue;
+				kd = d;
+				const item: OverlayItem = { kind: "kb", key: t.key, wolf: "", x: t.x, y: t.y, r: t.r, alpha: 1, needsYou: false, online: true, color: "", label: t.text };
+				best = { item, ring: false, sx: px, sy: py };
 			}
 		}
 		return best;
@@ -1522,6 +1562,7 @@ export class LiveOverlay {
 		const s = this.state;
 		const p = this.privateView;
 		const it = hit.item;
+		if (it.kind === "kb") return { title: it.label, lines: [] };
 		if (it.kind === "wolf") {
 			const w = s.wolves[it.wolf];
 			const t = w?.activeThreadId ? s.threads[threadKey(it.wolf, w.activeThreadId)] : undefined;

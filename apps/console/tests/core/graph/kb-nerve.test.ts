@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { nerveHead, nervePath, nerveTrail } from "../../../src/core/index.ts";
+import { nerveHead, nervePath, nerveTrail, treePathOf } from "../../../src/core/index.ts";
 
 const edges = [
 	{ from: "dom:wp", to: "sec:a" },
@@ -26,6 +26,32 @@ describe("nervePath", () => {
 	});
 	it("ignores a section that is not under the domain and still reaches the entry", () => {
 		assert.deepEqual(nervePath(edges, "dom:wp", "sec:z", "ent:1"), ["dom:wp", "sec:a", "sec:b", "ent:1"]);
+	});
+});
+
+describe("treePathOf (the nodes a hover or highlight rings)", () => {
+	it("is the tree path domain, sections, entry for a filed entry, using the event's chain when it has one", () => {
+		assert.deepEqual(treePathOf(edges, { kind: "kb-entry", id: "1", domain: "wp" }, ["a", "b"]), ["dom:wp", "sec:a", "sec:b", "ent:1"]);
+		assert.deepEqual(treePathOf(edges, { kind: "kb-entry", id: "1", domain: "wp" }), ["dom:wp", "sec:a", "sec:b", "ent:1"]);
+	});
+	it("is empty for anything that is not a filed entry in a domain, so only its own node rings", () => {
+		assert.deepEqual(treePathOf(edges, { kind: "work-item", id: "w", domain: "wp" }), []);
+		assert.deepEqual(treePathOf(edges, { kind: "kb-entry", id: "1" }), []);
+	});
+});
+
+describe("nervePath with the event's section chain", () => {
+	it("walks domain, every section of the chain, then the entry", () => {
+		assert.deepEqual(nervePath(edges, "dom:wp", "sec:b", "ent:1", ["a", "b"]), ["dom:wp", "sec:a", "sec:b", "ent:1"]);
+	});
+	it("ends the pulse at the last hop that has a tree edge: no shortcut across a section missing from the map", () => {
+		const noB = edges.filter((e) => e.to !== "sec:b");
+		assert.deepEqual(nervePath(noB, "dom:wp", "sec:b", "ent:1", ["a", "b"]), ["dom:wp", "sec:a"]);
+		assert.deepEqual(nervePath([], "dom:wp", "sec:b", "ent:1", ["a", "b"]), ["dom:wp"]);
+	});
+	it("without a chain it finds the path in the tree, then falls back to the domain", () => {
+		assert.deepEqual(nervePath(edges, "dom:wp", "sec:b", "ent:1", undefined), ["dom:wp", "sec:a", "sec:b", "ent:1"]);
+		assert.deepEqual(nervePath([], "dom:wp", "sec:b", "ent:1", []), ["dom:wp"]);
 	});
 });
 

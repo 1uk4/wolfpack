@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpIcon, CornerDownLeftIcon, ImageIcon, KeyboardIcon, Loader2Icon, MicIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, CornerDownLeftIcon, ImageIcon, Loader2Icon, MicIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { endOnFocus, endOnOutsideMouseDown } from "@/components/composer/caret-end";
 import { useBusyAction } from "@/components/ui/use-busy-action";
@@ -14,8 +14,8 @@ import { droppedFiles, pastedImages, PICKER_ACCEPT, type PendingAttachment } fro
 function mainButtonMode(state: { dictating: boolean; finishing: boolean; busy: boolean; canSend: boolean; voice?: boolean }): "stop-dictation" | "finishing" | "stop-wolf" | "send" | "dictate" {
 	if (state.finishing) return "finishing";
 	if (state.dictating) return "stop-dictation";
-	// The phone's voice-first composer: with nothing to send the big button is the mic, even while the wolf works (a separate small Stop sits beside it).
-	if (state.voice && !state.canSend) return "dictate";
+	// The phone's voice-first composer: with nothing to send the button is the mic; while the wolf works it is Stop (one row, one button).
+	if (state.voice && !state.canSend && !state.busy) return "dictate";
 	if (state.busy && !state.canSend) return "stop-wolf";
 	return "send";
 }
@@ -196,7 +196,6 @@ export function Composer({
 			disabled={mode === "finishing" || sendLocked || (mode === "send" && !canSend)}
 			className={cn(
 				"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors max-md:size-11 max-md:rounded-full",
-				voice && "max-md:size-14",
 				mode === "dictate" && "bg-(color:--thread-accent) text-(color:--thread-accent-foreground) hover:opacity-90",
 				labelled && "wp-send-label w-auto px-3 font-ui text-xs",
 				// Dictation modes win over the armed ("Send anyway?") look: while the mic is live the button must read as the mic.
@@ -236,7 +235,7 @@ export function Composer({
 			<form
 				data-testid="composer"
 				data-field={voice?.field}
-				className={cn("flex items-end gap-1.5 p-1.5", !phoneRow && "max-md:flex-wrap", voice && "items-center justify-center gap-x-5")}
+				className={cn("flex items-end gap-1.5 p-1.5", !phoneRow && (!voice || voice.field === "transcript") && "max-md:flex-wrap", voice && "items-center")}
 				onSubmit={(e) => {
 					e.preventDefault();
 					act();
@@ -285,7 +284,7 @@ export function Composer({
 					</>
 				)}
 				{voice?.field === "voice" && (
-					<button type="button" data-testid="voice-field" onClick={voice.onOpenField} className="order-first flex min-h-11 w-full basis-full items-center truncate rounded-xl border bg-secondary/50 px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-secondary">
+					<button type="button" data-testid="voice-field" onClick={voice.onOpenField} className="flex min-h-11 min-w-0 flex-1 items-center truncate rounded-xl border bg-secondary/50 px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-secondary">
 						<span className="truncate">{voice.error ?? "Tap to type, or talk"}</span>
 					</button>
 				)}
@@ -299,7 +298,7 @@ export function Composer({
 						{voice.meter}
 					</div>
 				)}
-				<div className={cn("relative flex min-w-0 flex-1", !phoneRow && "max-md:order-first max-md:basis-full", voice && voice.field !== "text" && "hidden")}>
+				<div className={cn("relative flex min-w-0 flex-1", !phoneRow && !voice && "max-md:order-first max-md:basis-full", voice && voice.field !== "text" && "hidden")}>
 				<textarea
 					ref={inputRef}
 					value={value}
@@ -354,20 +353,6 @@ export function Composer({
 				)}
 				{/* Always wrapped so a mode switch keeps the button mounted (focus stays). */}
 				<Hint label={buttonLabel}>{mainButton}</Hint>
-				{voice && busy && mode === "dictate" && (
-					<Hint label="Stop the wolf">
-						<button type="button" data-testid="voice-stop" aria-label="Stop the wolf" onClick={onStop} className="flex size-11 shrink-0 items-center justify-center rounded-full bg-secondary text-foreground transition-colors hover:bg-accent">
-							<SquareIcon className="size-4 fill-current" />
-						</button>
-					</Hint>
-				)}
-				{voice && (
-					<Hint label="Type a message">
-						<button type="button" data-testid="voice-keyboard" aria-label="Type a message" onClick={voice.onOpenField} disabled={voice.field !== "voice"} className="flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:invisible">
-							<KeyboardIcon className="size-5" />
-						</button>
-					</Hint>
-				)}
 			</form>
 		</>
 	);

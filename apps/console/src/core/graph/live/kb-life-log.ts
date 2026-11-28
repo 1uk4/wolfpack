@@ -14,7 +14,7 @@ export const FOLD_WINDOW_MS = 60_000;
 export const ITEM_WINDOW_MS = 30 * 60_000;
 
 /** What the map should highlight for a row: a wolf, a node (an event target), a flying topic, the curator. */
-export interface KbLogFocus { wolf?: string; target?: { kind: string; id: string; domain?: string }; topicId?: string; curator?: boolean }
+export interface KbLogFocus { wolf?: string; target?: { kind: string; id: string; domain?: string }; topicId?: string; curator?: boolean; sectionPath?: string[] }
 
 export interface KbLogRow {
 	/** Stable id of the row (its first event). */
@@ -103,7 +103,7 @@ export function rowOfEvent(e: ActivityEvent, at: number, domains: TopicDomains):
 		default: {
 			const title = e.target?.title ?? entryId ?? `curator → ${domain ?? "KB"}`;
 			const target = e.target ? { kind: e.target.kind, id: e.target.id, ...(tdom ? { domain: tdom } : {}) } : undefined;
-			return { ...base, title, ...(e.target?.title ? { titled: true as const } : {}), fold: `${verb}|${entryId ?? topic ?? e.id}`, focus: { ...(target ? { target } : { curator: true }), topicId: topic } };
+			return { ...base, title, ...(e.target?.title ? { titled: true as const } : {}), fold: `${verb}|${entryId ?? topic ?? e.id}`, focus: { ...(target ? { target } : { curator: true }), topicId: topic, ...(Array.isArray(e.detail?.sectionPath) && e.detail.sectionPath.length ? { sectionPath: e.detail.sectionPath as string[] } : {}) } };
 		}
 	}
 }

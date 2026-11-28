@@ -10,7 +10,8 @@
  * Threads cannot open in the viewer panel (it shows work items and KB entries only), so they open on their own page.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { pickComposerAnchor, trackSettle, SETTLE_FRAMES, SETTLE_MAX_FRAMES, type Anchor, type SettleState } from "@/src/core";
 import { BellIcon, ExternalLinkIcon, XIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { kbdEventForAction, featureOfThread, type RosterThread } from "@/src/core";
@@ -18,7 +19,7 @@ import { talkToWolf } from "./live-talk";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
 import { acquireLiveFeed, getLiveSnapshot, onLiveAction, useLiveConnected } from "./live-store";
-import { getKbHover, demoTargets, onKbReset, startKbDemo, subscribeKbHover } from "./kb-life-store";
+import { getKbHover, demoTargets, demoWorkId, onKbReset, startKbDemo, subscribeKbHover, watchKbPending } from "./kb-life-store";
 import { LiveOverlay, liveSettingsOf, type OverlayCard, type OverlayHit } from "./live-overlay";
 
 interface Shown { hit: OverlayHit; card: OverlayCard; pinned: boolean; width: number }
@@ -68,6 +69,7 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 			},
 			onOverlaySelect: (hit, pointerType) => {
 				const touch = pointerType === "touch";
+				if (hit.item.kind === "kb") return void setShown({ hit, card: o.cardFor(hit), pinned: false, width: width() }); // a filed entry's summary: a tap shows it, nothing to pin
 				if (hit.ring) {
 					const t = o.needsYouThread(hit.item.wolf, hit.item.threadId);
 					if (t) return void answer(t.wolf, t.threadId);
@@ -97,7 +99,7 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 		const apply = () => {
 			const h = getKbHover();
 			overlayRef.current?.setKbFocus(h && (h.topicId || h.curator) ? { topicId: h.topicId, curator: h.curator } : null);
-			renderer.setOverlayHighlight(h && (h.wolf || h.target) ? { wolf: h.wolf, target: h.target } : null);
+			renderer.setOverlayHighlight(h && (h.wolf || h.target) ? { wolf: h.wolf, target: h.target, ...(h.sectionPath ? { sectionPath: h.sectionPath } : {}) } : null);
 		};
 		const off = subscribeKbHover(apply);
 		const offReset = onKbReset(() => overlayRef.current?.resetKb());
@@ -133,10 +135,15 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 		};
 	}, [renderer, live.enabled]);
 
+	// The curator's real queue: entries already pending when the graph opens orbit Home at once (and the list is re-read every 20 s). Not while the demo plays.
+	const kbdemo = useSearchParams()?.get("kbdemo") === "1";
+	const demoOn = kbdemo;
+	useEffect(() => (renderer && live.enabled && live.memory && !demoOn ? watchKbPending((items) => overlayRef.current?.syncPending(items)) : undefined), [renderer, live.enabled, live.memory, demoOn]);
+
 	// `?kbdemo=1` (dev builds only) plays the scripted memory life on /graph, as the first wolf on the map (else the attached thread's wolf, else a made-up one).
-	const demoAsked = useSearchParams()?.get("kbdemo") === "1" && process.env.NODE_ENV !== "production";
+	const demoAsked = kbdemo && process.env.NODE_ENV !== "production";
 	const demoWolf = Object.keys(getLiveSnapshot().state.wolves)[0] ?? attachedApi?.wolves[0]?.name ?? attachedApi?.attached?.wolf;
-	useEffect(() => (renderer && demoAsked ? startKbDemo(demoWolf, () => { const g = renderer.demoGraph(); return demoTargets(g.edges, g.ids); }) : undefined), [renderer, demoAsked, demoWolf]);
+	useEffect(() => (renderer && demoAsked ? startKbDemo(demoWolf, () => { const g = renderer.demoGraph(); return demoTargets(g.edges, g.ids); }, (dom) => demoWorkId(renderer.demoGraph().ids, dom)) : undefined), [renderer, demoAsked, demoWolf]);
 
 	// Every pack wolf, offline ones dimmed at home: only once the hub has answered, so with no hub the graph is exactly as before.
 	const connected = useLiveConnected();
@@ -179,12 +186,30 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 	// The floating chat's rect (the you badge sits above it): measured on resize / scroll / size change / bar toggles, never per frame.
 	// Absent or hidden (collapsed, phone with it closed): null, and the badge falls back to bottom-centre of the canvas.
 	const minimized = attachedApi?.minimized ?? false;
+	const pathname = usePathname();
 	useEffect(() => {
 		const wrap = wrapRef.current;
 		if (!renderer || !wrap) return;
 		let bar: Element | null = null;
 		let ro: ResizeObserver | null = null;
-		const measure = () => {
+		let last: Anchor | null = null; // a hidden / mid-mount element reads 0,0: keep the last good anchor instead (see pickComposerAnchor)
+		let settle: SettleState = { anchor: null, still: 0 };
+		let frames = 0;
+		let loop = 0;
+		const EMPTY = { left: 0, top: 0, width: 0, height: 0 };
+		// The icon slides (left/top transition) and a ResizeObserver never fires for a move: after any trigger, re-read every frame until the anchor holds still.
+		const tick = () => {
+			loop = 0;
+			read();
+			settle = trackSettle(settle, last);
+			if (settle.still < SETTLE_FRAMES && ++frames < SETTLE_MAX_FRAMES) loop = requestAnimationFrame(tick);
+		};
+		const kick = () => {
+			frames = 0;
+			settle = { anchor: null, still: 0 };
+			if (!loop) loop = requestAnimationFrame(tick);
+		};
+		const read = () => {
 			const el = document.querySelector('[data-testid="chat-bar"]');
 			if (el !== bar) {
 				ro?.disconnect();
@@ -194,24 +219,30 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 					ro.observe(el);
 				}
 			}
-			const w = wrap.getBoundingClientRect();
-			const r = el?.getBoundingClientRect();
-			if (!r || r.width === 0 || r.height === 0) return void overlayRef.current?.setComposerRect(null);
-			overlayRef.current?.setComposerRect({ x: r.left - w.left, y: r.top - w.top, w: r.width, h: r.height });
+			last = pickComposerAnchor(wrap.getBoundingClientRect(), [el && getComputedStyle(el).visibility === "hidden" ? EMPTY : el?.getBoundingClientRect()], last);
+			overlayRef.current?.setComposerRect(last);
+		};
+		const measure = () => {
+			kick();
+			read();
 		};
 		ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => measure()) : null;
 		ro?.observe(wrap);
 		measure();
-		const raf = requestAnimationFrame(measure); // the bar re-renders after an attach / minimize: measure again once it has
 		window.addEventListener("resize", measure);
 		window.addEventListener("scroll", measure, true);
+		const vv = window.visualViewport; // the phone keyboard resizes / scrolls the visual viewport only
+		vv?.addEventListener("resize", measure);
+		vv?.addEventListener("scroll", measure);
 		return () => {
-			cancelAnimationFrame(raf);
+			cancelAnimationFrame(loop);
+			vv?.removeEventListener("resize", measure);
+			vv?.removeEventListener("scroll", measure);
 			ro?.disconnect();
 			window.removeEventListener("resize", measure);
 			window.removeEventListener("scroll", measure, true);
 		};
-	}, [renderer, att?.wolf, att?.threadId, minimized]);
+	}, [renderer, att?.wolf, att?.threadId, minimized, pathname]);
 
 	// A pinned card closes on any press outside it.
 	useEffect(() => {
@@ -231,7 +262,16 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 	const flip = shown ? shown.hit.sx > shown.width - 250 : false;
 	return (
 		<div ref={wrapRef} className="pointer-events-none absolute inset-0 z-[5] overflow-hidden">
-			{shown && live.enabled && (
+			{shown && live.enabled && shown.hit.item.kind === "kb" && (
+				<div
+					role="tooltip"
+					className="absolute max-w-[260px] truncate rounded-[10px] border border-border/50 bg-background/70 px-2.5 py-1.5 text-xs text-foreground shadow-md backdrop-blur-md"
+					style={{ left: flip ? undefined : shown.hit.sx + 12, right: flip ? shown.width - shown.hit.sx + 12 : undefined, top: Math.max(8, shown.hit.sy - 12) }}
+				>
+					{shown.card.title}
+				</div>
+			)}
+			{shown && live.enabled && shown.hit.item.kind !== "kb" && (
 				<div
 					ref={cardRef}
 					className={`absolute w-56 rounded-[11px] border border-border/50 bg-background/70 p-2.5 text-xs shadow-lg backdrop-blur-md ${shown.pinned ? "pointer-events-auto" : ""}`}

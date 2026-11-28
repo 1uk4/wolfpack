@@ -5,8 +5,9 @@
  * The curator is a small mark near the KB domains (the hub has no node on the map): the middle of the domain nodes seen, eased toward
  * the graph centre, so it never sits on a domain.
  */
-import { curatorBusy, displayFill, KB_FILL_EASE_MS, kbNerveState, nerveHead, nervePath, nerveTrail, topicsOf, type KbPulse, type KbFlight, type KbLife, type KbResult } from "@/src/core";
+import { curatorBusy, displayFill, KB_FILL_EASE_MS, KB_NERVE_GLOW_MS, kbHoverText, kbNerveState, kbVisualOf, nerveHead, nervePath, nerveTrail, topicsOf, type KbPulse, type KbFlight, type KbLife, type KbResult } from "@/src/core";
 import { rgba } from "./live-effects";
+import { drawGraduatedMark, drawOrbitOverflow, flightWorkPos, orbitOverflow, workFlightPos } from "./kb-orbit";
 import { LIVE_TUNING } from "./live-tuning";
 
 /** The overlay unit (live-overlay OVERLAY_UNIT), duplicated to avoid a circular import. */
@@ -25,8 +26,11 @@ export interface KbDrawHost {
 }
 /** What the log hovers or selects: a flying topic and / or the curator mark. */
 export interface KbFocus { topicId?: string; curator?: boolean }
+/** A lit entry or a mote in flight the pointer can hover: world position, pick radius (world units) and the one-line summary. */
+export interface KbHoverTarget { key: string; x: number; y: number; r: number; text: string }
 export interface KbWolfBody { x: number; y: number; r: number; color: string; alpha: number }
 
+const KB_LIT_S = KB_NERVE_GLOW_MS / 1000;
 const AMBER = "#ffd166";
 const smooth = (t: number) => { const c = Math.max(0, Math.min(1, t)); return c * c * (3 - 2 * c); };
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -58,7 +62,9 @@ function nerveIds(host: KbDrawHost, pl: KbPulse): string[] {
 	let ids = per.get(pl.id);
 	if (!ids) {
 		if (per.size > 200) per.clear();
-		per.set(pl.id, (ids = nervePath(edges, `dom:${pl.domain}`, pl.section ? `sec:${pl.section}` : undefined, pl.entryId ? `ent:${pl.entryId}` : undefined).filter((id) => host.hasNode(id))));
+		per.set(pl.id, (ids = nervePath(edges, `dom:${pl.domain}`, pl.section ? `sec:${pl.section}` : undefined, pl.entryId ? `ent:${pl.entryId}` : undefined, pl.sectionPath)));
+		const gap = ids.findIndex((id) => !host.hasNode(id)); // a node missing from the map ends the pulse there: no straight hop across the gap
+		if (gap >= 0) per.set(pl.id, (ids = ids.slice(0, gap)));
 	}
 	return ids;
 }
@@ -81,7 +87,7 @@ export function itemPos(start: Pt, cur: Pt, slot: number, born: number, wall: nu
 	return { x: lerp(start.x, ring.x, t), y: lerp(start.y, ring.y, t) };
 }
 
-export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDrawHost, wolfOf: (name: string) => KbWolfBody | undefined, k: number, wall: number, reduced: boolean, focus: KbFocus | null, m = KB_UNIT): void {
+export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDrawHost, wolfOf: (name: string) => KbWolfBody | undefined, k: number, wall: number, reduced: boolean, focus: KbFocus | null, m = KB_UNIT, targets?: KbHoverTarget[]): void {
 	const cur = curatorPos(kb, host);
 	const view = viewOf(ctx) ?? undefined;
 	const busy = curatorBusy(kb);
@@ -161,8 +167,9 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 			idx = (queuedIdx.get(f.wolf) ?? 0) + topicsOf(kb, f.wolf).length;
 			queuedIdx.set(f.wolf, (queuedIdx.get(f.wolf) ?? 0) + 1);
 		}
-		const start = body ? beside(body, idx, k) : cur;
-		const p = flightPos(f, start, cur, domainPos(host, f.result?.domain ?? f.domain) ?? resultPos(host, f.result, f.domain), wall, k, reduced, m, view);
+		const wp = f.workItem ? flightWorkPos(host, f) : null; // work-record save: ends at the feature's node; graduation: starts there
+		const start = f.graduated && wp ? wp : body ? beside(body, idx, k) : cur;
+		const p = f.kind === "work" && wp ? workFlightPos(f, start, wp, wall) : flightPos(f, start, cur, domainPos(host, f.result?.domain ?? f.domain) ?? resultPos(host, f.result, f.domain), wall, k, reduced, m, view);
 		if ((f.stage !== "queued" || f.born !== undefined) && f.stage !== "fade" && shown++ >= LIVE_TUNING.kbMaxItems) continue;
 		const alpha = f.stage === "fade" ? 1 - smooth((wall - f.at) / Math.max(1, f.endAt - f.at)) : 1;
 		const r = 4.2 / k;
@@ -179,8 +186,11 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 		ctx.beginPath();
 		ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
 		ctx.fill();
+		if (f.graduated) drawGraduatedMark(ctx, p, k, color);
 		if (focus?.topicId === f.id) ring(ctx, p, 9 / k, host.colors.hoverText, k);
+		if (targets && f.stage !== "queued") targets.push({ key: "kbf:" + f.id, x: p.x, y: p.y, r: 8 / k, text: kbHoverText({ title: f.result?.title ?? "Memory item", outcome: f.result?.outcome ?? "in flight", ...(f.result?.domain ?? f.domain ? { domain: (f.result?.domain ?? f.domain)! } : {}), ...(f.result?.sectionTitle ? { sectionTitle: f.result.sectionTitle } : {}) }) });
 	}
+	drawOrbitOverflow(ctx, cur, orbitOverflow(kb.flights.filter((f) => f.kind !== "work" && !f.result).length, LIVE_TUNING.kbMaxItems), k, hr, host.colors.label, host.fontFamily);
 
 	// Results: the filed entry's nerve. A pulse runs down the tree edges (domain, section(s), entry), the path stays lit, then a ring at the entry.
 	for (const pl of kb.pulses) {
@@ -215,7 +225,31 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 			ctx.arc(end.x + 10 / k, end.y - 8 / k, 3.6 / k, 0, Math.PI * 2);
 			ctx.fill();
 		}
-		if (st.phase === "ring") {
+		if (targets && st.phase !== "run") targets.push({ key: "kbp:" + pl.id, x: end.x, y: end.y, r: 11 / k, text: kbHoverText({ ...(pl.title ? { title: pl.title } : {}), outcome: pl.outcome ?? pl.kind, ...(pl.domain ? { domain: pl.domain } : {}), ...(pl.sectionTitle ? { sectionTitle: pl.sectionTitle } : {}) }) });
+		if (st.phase === "lit" && kbVisualOf(pl.outcome ?? pl.kind) === "ring") {
+			// an updated / merged entry: a ring pulses out from it again and again while its path is lit (reduced motion: one static ring)
+			const u = reduced ? 0.3 : (st.t * KB_LIT_S / 1.6) % 1;
+			ctx.lineWidth = 1.6 / k;
+			ctx.strokeStyle = rgba(color, 0.85 * (1 - u));
+			ctx.beginPath();
+			ctx.arc(end.x, end.y, (6 + u * 14) / k, 0, Math.PI * 2);
+			ctx.stroke();
+		}
+		if (pl.kind === "retire" && st.phase !== "run") {
+			// a retired entry becomes a dashed ghost of itself that fades out (reduced motion: static, fading over the same time)
+			const left = st.phase === "lit" ? 1 - st.t : 0;
+			ctx.save();
+			ctx.setLineDash([3 / k, 3 / k]);
+			ctx.lineWidth = 1.6 / k;
+			ctx.strokeStyle = rgba(color, 0.9 * left);
+			ctx.fillStyle = rgba(color, 0.12 * left);
+			ctx.beginPath();
+			ctx.arc(end.x, end.y, 7 / k, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.stroke();
+			ctx.restore();
+		}
+		if (st.phase === "ring" && pl.kind !== "retire") {
 			const u = reduced ? 0.4 : st.t;
 			ctx.lineWidth = 1.6 / k;
 			ctx.strokeStyle = rgba(color, 0.8 * (1 - u));

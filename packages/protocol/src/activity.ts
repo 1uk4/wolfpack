@@ -40,6 +40,8 @@ export const ActivityActorSchema = z.object({
   threadId: z.string().min(1).optional(),
   subagent: z.string().min(1).optional(),
   parentThreadId: z.string().min(1).optional(),
+  /** Additive, subagents: the work item (full id) it serves: the first one in its brief, else its parent's bound item. */
+  workItem: z.string().min(1).optional(),
   title: Title,
 });
 export type ActivityActor = z.infer<typeof ActivityActorSchema>;
@@ -59,11 +61,17 @@ export const ActivityDetailSchema = z.object({
   capacity: z.number().int().positive().optional(),
   outcome: cut(24).optional(),
   section: cut(80).optional(),
+  /** Section ids from the domain's top section down to the entry's section (curate-done), so a pulse can walk every hop. Old events lack it. */
+  sectionPath: z.array(cut(80)).transform((a) => a.slice(0, 12)).optional(),
   sectionTitle: cut(ACTIVITY_TITLE_MAX).optional(),
   tokens: z.number().int().nonnegative().optional(),
   ms: z.number().int().nonnegative().optional(),
   topicIds: z.array(z.string().min(1)).transform((a) => a.slice(0, 20)).optional(),
   ref: cut(80).optional(),
+  /** memory-promote only: `work` = a work-record save (flies to `workItem`'s node, never to the curator), `graduation` = a finished item's entries (fly from `workItem`'s node to Home). Absent = a plain den promote. */
+  kind: z.enum(["work", "graduation"]).optional().catch(undefined),
+  /** The work item (full id) a `work` / `graduation` promote belongs to. */
+  workItem: cut(80).optional(),
 });
 export type ActivityDetail = z.infer<typeof ActivityDetailSchema>;
 

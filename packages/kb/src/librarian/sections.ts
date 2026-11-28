@@ -103,6 +103,15 @@ export function foldSections(events: KbEvent[]): Section[] {
         }
         break;
       }
+      case "section_removed": {
+        const gone = sections.get(e.sectionId);
+        sections.delete(e.sectionId);
+        if (gone?.parent) {
+          const p = sections.get(gone.parent);
+          if (p) p.childIds = p.childIds.filter((c) => c !== e.sectionId);
+        }
+        break;
+      }
       case "section_split": {
         const section = sections.get(e.sectionId);
         if (section) {

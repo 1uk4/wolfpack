@@ -10,19 +10,22 @@
  *   - `private` shows only "<wolf> · <verb>" (the private view sets `settings.privateView`).
  * The relative times re-render on a 15 s timer, never per frame.
  */
-import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { ActivityIcon, ChevronDownIcon } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ActivityIcon, XIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
+import { useWide } from "@/components/chat-bar/chat-bar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { feedCountReducer, feedPillLabel, formatFeed, formatPool, memoryRows, pendingNotice, poolBars, relativeTime, resolveTab, tabItems, tabsFor, wolfColor, type ActivityTab, type FeedLine, type MemoryRow } from "@/src/core";
+import { SEEN_KEY, activityPanelBox, loadSeenUpTo, replayTargetIds, saveSeenUpTo, unseenCount, formatFeed, formatPool, memoryRows, pendingNotice, poolBars, relativeTime, resolveTab, tabItems, tabsFor, wolfColor, type ActivityTab, type FeedLine, type MemoryRow } from "@/src/core";
 import type { MemoryStatus } from "@wolfpack/client";
 import { fetchMemoryStatus } from "@/components/kb/kb-client";
 import { setKbHover, useKbLiveEvents } from "./kb-life-store";
+import { CuratorLine } from "./curator-line";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
 import { liveSettingsOf, type OverlayHighlight } from "./live-overlay";
 import { useLiveActivity } from "./live-store";
+import { OPEN_KEY, patchActivityPanel, toggleActivityPanel, useActivityPanel } from "./activity-panel-store";
 
 const KEY = "wolfpack.graph.activityFeed.collapsed";
 const TAB_KEY = "wolfpack.graph.activityFeed.tab";
@@ -57,15 +60,27 @@ const VISIBLE = 8;
 const isPhone = () =>
 	typeof window !== "undefined" && ((typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) || window.innerWidth < 700);
 
-function initialCollapsed(): boolean {
+/** localStorage, or null where there is none (SSR, tests, blocked storage): every access goes through this. */
+function store(): Storage | null {
 	try {
-		const v = localStorage.getItem(KEY);
+		return typeof localStorage === "undefined" ? null : localStorage;
+	} catch {
+		return null;
+	}
+}
+
+function initialOpen(): boolean {
+	try {
+		const v = localStorage.getItem(OPEN_KEY);
 		if (v === "1") return true;
 		if (v === "0") return false;
+		const old = localStorage.getItem(KEY); // the earlier collapsed flag
+		if (old === "1") return false;
+		if (old === "0") return true;
 	} catch {
 		/* storage blocked: fall through to the default */
 	}
-	return isPhone();
+	return !isPhone();
 }
 
 const reducedMotion = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -74,6 +89,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	const live = liveSettingsOf(settings);
 	const priv = (settings as { privateView?: boolean } | null)?.privateView === true;
 	const router = useRouter();
+	const wide = useWide();
 	const attachApi = useAttachedThread();
 	const { recent, connected, state } = useLiveActivity({ enabled: live.enabled });
 	const memoryOn = live.memory;
@@ -84,23 +100,35 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	const tab = resolveTab(savedTab, memoryOn);
 	const wolfNames = useMemo(() => [...new Set([...Object.keys(state.wolves), ...Object.keys(bars)])].sort(), [state.wolves, bars]);
 	const pending = usePending(wolfNames, memoryOn && tab === "memory");
-	const [count, dispatch] = useReducer(feedCountReducer, { collapsed: false, count: 0 });
-	const [ready, setReady] = useState(false);
+	const panel = useActivityPanel();
+	const params = useSearchParams();
+	const activityParam = params?.get("activity") ?? null;
+	const ready = panel.ready;
 	const [now, setNow] = useState(() => Date.now());
 	const [active, setActive] = useState<string | null>(null);
-	const seen = useRef<string | null>(null);
+	const seenUpTo = useRef(0);
 	const listRef = useRef<HTMLDivElement | null>(null);
 
 	// Read the remembered state after mount (SSR-safe).
 	useEffect(() => {
-		if (initialCollapsed()) dispatch({ type: "collapse" });
 		try {
-			setSavedTab(localStorage.getItem(TAB_KEY));
+			const s = store();
+			setSavedTab(s?.getItem(TAB_KEY) ?? null);
+			// First visit: everything already in the feed counts as seen.
+			if (s && s.getItem(SEEN_KEY) === null) saveSeenUpTo(s, Date.now());
+			seenUpTo.current = loadSeenUpTo(s);
 		} catch {
 			/* storage blocked: All */
 		}
-		setReady(true);
+		patchActivityPanel({ open: initialOpen(), ready: true });
 	}, []);
+
+	// /kb-activity redirects to /graph?activity=kb: open the panel on the KB tab.
+	useEffect(() => {
+		if (activityParam === null) return;
+		if (activityParam === "kb") setSavedTab("kb");
+		toggleActivityPanel(true);
+	}, [activityParam]);
 
 	const lines = useMemo(() => formatFeed(recent, { private: priv }), [recent, priv]);
 	const items = useMemo(() => tabItems(tab, lines, rows, memoryOn), [tab, lines, rows, memoryOn]);
@@ -108,7 +136,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	const memFocus = useRef(new Map<string, MemoryRow["focus"]>());
 	const pickTab = (t: ActivityTab) => {
 		try {
-			localStorage.setItem(TAB_KEY, t);
+			store()?.setItem(TAB_KEY, t);
 		} catch {
 			/* ignore */
 		}
@@ -116,21 +144,20 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 		highlight(null);
 	};
 
-	// Events since collapsing: everything after the last id seen.
+	// The toolbar badge: lines newer than the persisted seen-up-to mark while the panel is closed; open moves the mark to the newest line.
 	useEffect(() => {
-		const last = recent[recent.length - 1]?.id ?? null;
-		if (seen.current === null) {
-			seen.current = last;
-			return;
+		if (!ready) return;
+		if (panel.open) {
+			const newest = lines.reduce((m, l) => Math.max(m, l.time), seenUpTo.current);
+			if (newest > seenUpTo.current) {
+				seenUpTo.current = newest;
+				saveSeenUpTo(store(), newest);
+			}
+			patchActivityPanel({ unseen: 0 });
+		} else {
+			patchActivityPanel({ unseen: unseenCount(lines.map((l) => ({ at: l.time })), seenUpTo.current) });
 		}
-		if (last === seen.current) return;
-		const at = recent.findIndex((e) => e.id === seen.current);
-		const prev = seen.current;
-		seen.current = last;
-		if (!count.collapsed) return; // the count only matters while collapsed: no second formatFeed pass otherwise
-		const fresh = formatFeed(prev === null || at < 0 ? recent : recent.slice(at + 1), { private: priv }).length;
-		if (fresh > 0) dispatch({ type: "new", n: fresh });
-	}, [recent, priv, count.collapsed]);
+	}, [ready, panel.open, lines]);
 
 	useEffect(() => {
 		const t = setInterval(() => setNow(Date.now()), 15_000);
@@ -141,7 +168,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	useEffect(() => {
 		const el = listRef.current;
 		if (el) el.scrollTop = el.scrollHeight;
-	}, [items.length, count.collapsed, tab]);
+	}, [items.length, panel.open, tab]);
 
 	const highlight = useCallback(
 		(h: OverlayHighlight | null) => {
@@ -152,14 +179,9 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	);
 	useEffect(() => () => highlight(null), [highlight]);
 
-	const toggle = (collapse: boolean) => {
-		try {
-			localStorage.setItem(KEY, collapse ? "1" : "0");
-		} catch {
-			/* ignore */
-		}
+	const close = () => {
 		highlight(null);
-		dispatch({ type: collapse ? "collapse" : "expand" });
+		toggleActivityPanel(false);
 	};
 
 	// Touch has no leave: a highlight pinned by a tap clears after about 3 s or on the next press, so it can never keep the graph animating.
@@ -194,6 +216,13 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 		highlight(null);
 	};
 	const open = (l: FeedLine) => {
+		// Replay: fly the camera to the filed entry (else its deepest section on the map, else the domain) and ring its tree path.
+		if (renderer && l.target?.kind === "kb-entry") {
+			const path = memFocus.current.get(l.key)?.sectionPath;
+			const cands = [`ent:${l.target.id}`, ...(path ?? []).map((s) => `sec:${s}`), ...(l.target.domain ? [`dom:${l.target.domain}`] : [])];
+			const ids = replayTargetIds(renderer.nodesOnMap(cands), l.target, path);
+			if (ids.length > 0) renderer.focusOn(ids, 3, !reducedMotion());
+		}
 		if (!l.thread) return;
 		if (attachApi) attachApi.attach(l.thread);
 		else router.push(threadHref(l.thread.wolf, l.thread.threadId));
@@ -203,25 +232,13 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	const handlersRef = useRef({ enter, leave, open, pointer: (t: string) => void (lastPointer.current = t) });
 	handlersRef.current = { enter, leave, open, pointer: (t: string) => void (lastPointer.current = t) };
 
-	// Once the hub has answered, always show at least the collapsed pill ("Quiet" when nothing is going on).
-	if (!live.enabled || !ready || !connected) return null;
+	// The toolbar's Activity button opens it; closed, nothing is drawn.
+	if (!live.enabled || !ready || !connected || !panel.open) return null;
 	const motion = reducedMotion() ? "" : "transition-[opacity,transform] duration-200 ease-[cubic-bezier(.34,1.56,.64,1)]";
 
-	if (count.collapsed || (lines.length === 0 && rows.length === 0 && !(memoryOn && tab === "memory" && wolfNames.length > 0))) {
-		return (
-			<div className="pointer-events-none absolute bottom-[calc(var(--chat-bar-top,0px)+12px)] left-3 z-[6]">
-				<button
-					type="button"
-					aria-label="Show activity feed"
-					onClick={() => toggle(false)}
-					className={`pointer-events-auto inline-flex items-center gap-1.5 rounded-[10px] border border-border/50 bg-background/70 px-2.5 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur-md hover:text-foreground ${motion}`}
-				>
-					<ActivityIcon className="size-3.5" />
-					<span>{feedPillLabel(count.count, lines.length)}</span>
-				</button>
-			</div>
-		);
-	}
+	const box = activityPanelBox(!wide);
+	const sheet = box.kind === "sheet";
+	const tap = sheet ? "min-h-11 min-w-11 justify-center" : "";
 
 	const shown: FeedLine[] = items.slice(-50).map((it) => {
 		if (it.kind === "line") return it.line;
@@ -231,26 +248,32 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	});
 	const tabs = tabsFor(memoryOn);
 	return (
-		<div className="pointer-events-none absolute bottom-[calc(var(--chat-bar-top,0px)+12px)] left-3 z-[6] w-[280px] max-w-[calc(100%-1.5rem)]">
-			<div className={`pointer-events-auto overflow-hidden rounded-[12px] border border-border/50 bg-background/70 shadow-sm backdrop-blur-md ${motion}`}>
-				<div className="flex items-center justify-between px-2.5 pt-1.5 text-[11px] text-muted-foreground">
+		<div style={{ bottom: `calc(${box.bottom})` }} className={`pointer-events-none absolute z-[6] ${sheet ? "inset-x-2" : "left-3 w-[280px] max-w-[calc(100%-1.5rem)]"}`}>
+			<div role={sheet ? "dialog" : undefined} aria-label={sheet ? "Activity" : undefined} className={`pointer-events-auto overflow-hidden border border-border/50 bg-background/70 shadow-sm backdrop-blur-md ${sheet ? "rounded-[14px]" : "rounded-[12px]"} ${motion}`}>
+				{sheet && (
+					<button type="button" aria-label="Close activity" onClick={close} className="flex h-6 w-full items-center justify-center">
+						<span className="h-1 w-9 rounded-full bg-muted-foreground/40" />
+					</button>
+				)}
+				<div className={`flex items-center justify-between px-2.5 text-[11px] text-muted-foreground ${sheet ? "text-[13px]" : "pt-1.5"}`}>
 					<span className="inline-flex items-center gap-1" role="tablist" aria-label="Activity">
 						<ActivityIcon className="mr-0.5 size-3.5" />
 						{tabs.map((t) => (
-							<button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => pickTab(t)} className={`rounded px-1.5 py-0.5 ${tab === t ? "bg-muted/70 text-foreground" : "hover:text-foreground"}`}>{TAB_LABEL[t]}</button>
+							<button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => pickTab(t)} className={`inline-flex items-center rounded px-1.5 py-0.5 ${tap} ${tab === t ? "bg-muted/70 text-foreground" : "hover:text-foreground"}`}>{TAB_LABEL[t]}</button>
 						))}
 					</span>
 					<TooltipProvider>
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button type="button" aria-label="Collapse activity feed" onClick={() => toggle(true)} className="rounded p-0.5 hover:text-foreground">
-								<ChevronDownIcon className="size-3.5" />
+							<button type="button" aria-label="Close activity" onClick={close} className={`inline-flex items-center rounded p-0.5 hover:text-foreground ${tap}`}>
+								<XIcon className="size-3.5" />
 							</button>
 						</TooltipTrigger>
-						<TooltipContent>Collapse</TooltipContent>
+						<TooltipContent>Close</TooltipContent>
 					</Tooltip>
 					</TooltipProvider>
 				</div>
+				{memoryOn && tab === "memory" && <CuratorLine events={events} />}
 				{memoryOn && tab === "memory" && wolfNames.length > 0 && (
 					<div className="space-y-1 px-2.5 pt-1.5">
 						{wolfNames.map((w) => {
@@ -271,12 +294,12 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 						})}
 					</div>
 				)}
-				<div ref={listRef} className="max-h-[168px] overflow-y-auto px-1.5 pb-1.5 pt-1" onMouseLeave={leave}>
+				<div ref={listRef} className={`overflow-y-auto px-1.5 pb-1.5 pt-1 ${sheet ? "max-h-[40vh]" : "max-h-[168px]"}`} onMouseLeave={leave}>
 					{shown.length === 0 && <div className="px-1.5 py-1 text-[12px] text-muted-foreground">Quiet</div>}
 					{shown.map((l, i) => {
 						const fromEnd = shown.length - 1 - i;
 						const fade = fromEnd >= VISIBLE ? 0.35 : 1 - Math.max(0, fromEnd - 3) * 0.14;
-						return <FeedRow key={l.key} l={l} opacity={active === l.key ? 1 : fade} on={active === l.key} rel={relativeTime(now, l.time)} motion={motion} handlers={handlersRef} />;
+						return <FeedRow key={l.key} l={l} opacity={active === l.key ? 1 : fade} on={active === l.key} rel={relativeTime(now, l.time)} motion={motion} tall={sheet} handlers={handlersRef} />;
 					})}
 				</div>
 			</div>
@@ -287,8 +310,8 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 interface RowHandlers { enter(l: FeedLine): void; leave(): void; open(l: FeedLine): void; pointer(type: string): void }
 
 /** One feed line, memoised by its key and primitive props: a new event re-renders only the rows that changed. */
-const FeedRow = memo(function FeedRow({ l, opacity, on, rel, motion, handlers }: { l: FeedLine; opacity: number; on: boolean; rel: string; motion: string; handlers: { current: RowHandlers } }) {
-	const clickable = !!l.thread;
+const FeedRow = memo(function FeedRow({ l, opacity, on, rel, motion, tall, handlers }: { l: FeedLine; opacity: number; on: boolean; rel: string; motion: string; tall: boolean; handlers: { current: RowHandlers } }) {
+	const clickable = !!l.thread || l.target?.kind === "kb-entry";
 	return (
 		<div
 			role={clickable ? "button" : undefined}
@@ -303,11 +326,11 @@ const FeedRow = memo(function FeedRow({ l, opacity, on, rel, motion, handlers }:
 				if (e.key === "Enter") handlers.current.open(l);
 			}}
 			style={{ opacity }}
-			className={`flex items-center gap-2 rounded-md px-1.5 py-[3px] text-[12px] leading-4 ${clickable ? "cursor-pointer" : ""} ${on ? "bg-muted/60" : ""} ${motion}`}
+			className={`flex items-center gap-2 rounded-md px-1.5 py-[3px] ${tall ? "min-h-11" : ""} text-[12px] leading-4 ${clickable ? "cursor-pointer" : ""} ${on ? "bg-muted/60" : ""} ${motion}`}
 		>
 			<span className="size-1.5 shrink-0 rounded-full" style={{ background: l.tone === "amber" ? "#f59e0b" : l.color }} />
 			<span className={`min-w-0 flex-1 truncate ${l.tone === "amber" ? "text-amber-500" : "text-foreground"}`}>{l.text}</span>
 			<span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">{rel}</span>
 		</div>
 	);
-}, (a, b) => a.l.key === b.l.key && a.l.text === b.l.text && a.l.time === b.l.time && a.l.tone === b.l.tone && a.opacity === b.opacity && a.on === b.on && a.rel === b.rel && a.motion === b.motion);
+}, (a, b) => a.l.key === b.l.key && a.l.text === b.l.text && a.l.time === b.l.time && a.l.tone === b.l.tone && a.opacity === b.opacity && a.on === b.on && a.rel === b.rel && a.motion === b.motion && a.tall === b.tall);

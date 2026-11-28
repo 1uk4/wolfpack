@@ -61,11 +61,30 @@ export function memoryActivityListener(pub: Pick<ActivityPublisher, "emit">, o: 
           return;
         }
         case "contribution_emitted": {
-          const topic = ev.target.kind === "work" ? undefined : ev.target.topicId;
+          // A work target is a graduation: it flies from the feature's node to Home (kind + workItem), and its id is what the curator reports.
+          if (ev.target.kind === "work") {
+            pub.emit({
+              verb: "memory-promote", actor, domain: ev.domain,
+              target: { kind: "domain", id: ev.domain },
+              detail: { kind: "graduation", workItem: ev.target.workId, ref: ev.contributionId, topicIds: [ev.contributionId] },
+            });
+            return;
+          }
+          const topic = ev.target.topicId;
           pub.emit({
             verb: "memory-promote", actor, domain: ev.domain,
             target: { kind: "domain", id: ev.domain },
             detail: { ref: ev.contributionId, ...(topic ? { topicIds: [topic] } : {}) },
+          });
+          return;
+        }
+        case "record_written": {
+          // A work-record save: flies from the wolf to the feature's node, never to Home.
+          if (ev.target.kind !== "work") return;
+          pub.emit({
+            verb: "memory-promote", actor, domain: ev.domain,
+            target: { kind: "domain", id: ev.domain },
+            detail: { kind: "work", workItem: ev.target.workId, ref: `rec-${ev.target.workId}-${Date.parse(ev.timestamp) || now()}` },
           });
           return;
         }

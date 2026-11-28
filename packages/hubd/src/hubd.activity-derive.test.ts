@@ -113,12 +113,25 @@ describe("derive fan-out queue", () => {
     d.onSweep({ type: "sweep_progress", from: "w", denTopicId: "tp1", startedAt: 4000 });
     d.onSweep({ type: "sweep_progress", from: "w", denTopicId: "tp1", startedAt: 4000 }); // route known: same item
     t = 6500;
-    d.onSweep({ type: "sweep_item", from: "w", denTopicId: "tp1", outcome: "create", entryId: "kb-wp-aaaaaaa", domain: "wp", section: "s1", sectionTitle: "Caching", decision: { reason: "new subject" } } as never);
+    d.onSweep({ type: "sweep_item", from: "w", denTopicId: "tp1", outcome: "create", entryId: "kb-wp-aaaaaaa", domain: "wp", section: "s1", sectionPath: ["s0", "s1"], sectionTitle: "Caching", decision: { reason: "new subject" } } as never);
     await drain();
     expect(seen.map((e) => e.verb)).toEqual(["curate-start", "curate-done"]);
     expect(seen[0]).toMatchObject({ actor: { kind: "hub" }, detail: { ref: "tp1" } });
-    expect(seen[1]).toMatchObject({ actor: { kind: "hub" }, target: { kind: "kb-entry", id: "kb-wp-aaaaaaa", domain: "wp" }, detail: { outcome: "create", section: "s1", sectionTitle: "Caching", ms: 2500, ref: "tp1" } });
+    expect(seen[1]).toMatchObject({ actor: { kind: "hub" }, target: { kind: "kb-entry", id: "kb-wp-aaaaaaa", domain: "wp" }, detail: { outcome: "create", section: "s1", sectionPath: ["s0", "s1"], sectionTitle: "Caching", ms: 2500, ref: "tp1" } });
     expect("reason" in (seen[1]!.detail ?? {})).toBe(false); // the curator's reason is not broadcast on the activity bus
+  });
+
+  it("a delivered graduation publishes one memory-promote per contribution, from the hub, tied to the work item and carrying the inbox id the curator reports", async () => {
+    const bus = createMemoryBus();
+    const seen: ActivityEvent[] = [];
+    bus.subscribe("p", (e) => seen.push(e));
+    const d = createActivityDeriver({ bus, presence: createPresenceStore(), pack: "p" });
+    d.onGraduation({ workId: "work-wp-abc", domain: "wp", wolf: "w", denTopicIds: ["g1", "g2"] });
+    await drain();
+    expect(seen.map((e) => [e.verb, e.actor.kind, e.detail])).toEqual([
+      ["memory-promote", "hub", { kind: "graduation", workItem: "work-wp-abc", ref: "g1", topicIds: ["g1"] }],
+      ["memory-promote", "hub", { kind: "graduation", workItem: "work-wp-abc", ref: "g2", topicIds: ["g2"] }],
+    ]);
   });
 
   it("past 200 in-flight items the oldest is forgotten, not the rest", async () => {

@@ -46,6 +46,13 @@ describe("live overlay reducer", () => {
 		assert.deepEqual(Object.keys(s.threads), []);
 	});
 
+	it("a subagent stores the work item its actor names, and a bind of its own replaces it", () => {
+		let s = feed(emptyLiveState(), ev("subagent-spawned", { actor: { ...sub, workItem: "work-wolfpack-aaa" } }), 0);
+		assert.equal(Object.values(s.subagents)[0]!.workItem, "work-wolfpack-aaa");
+		s = feed(s, ev("bound", { actor: sub, target: { kind: "work-item", id: "work-wolfpack-bbb" } }), 10);
+		assert.equal(Object.values(s.subagents)[0]!.workItem, "work-wolfpack-bbb");
+	});
+
 	it("an idle thread stays visible as long as its subagent runs, and fades after the subagent finished", () => {
 		let s = feed(emptyLiveState(), ev("thread-active"), 0);
 		s = feed(s, ev("subagent-spawned", { actor: sub, ttlMs: 600_000 }), 100);
@@ -149,12 +156,11 @@ describe("live overlay reducer", () => {
 		assert.equal(tick(s, 5000 + 180_001).wolves.hal!.online, false);
 	});
 
-	it("a hub actor's kb-write draws a trail from the hub origin and creates no wolf", () => {
+	it("a hub actor's kb-write draws no straight trail or pulse and creates no wolf", () => {
 		const hub = ev("kb-write", { actor: { kind: "hub", title: "curator" }, target: kb });
 		const s = feed(emptyLiveState(), hub, 1000);
 		assert.deepEqual(Object.keys(s.wolves), []);
-		assert.deepEqual(s.trails.map((t) => [t.wolf, t.verb, t.target.id]), [["@hub", "kb-write", "kb-x"]]);
-		assert.equal(s.pulses.length, 1);
+		assert.deepEqual([s.trails.length, s.pulses.length], [0, 0]);
 	});
 
 	it("restores a finished subagent from a snapshot with its real remaining life", () => {

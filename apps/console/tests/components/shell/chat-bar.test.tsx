@@ -274,6 +274,18 @@ describe("ChatBar", () => {
 			assert.equal(swap(), null, "no pill on the attached thread's own page");
 		});
 
+		it("the bottom fade backdrop shows over a thread page's transcript only, not on the graph or other pages", async () => {
+			const backdrop = () => q('[data-testid="chat-bar-backdrop"]');
+			await mount("/wolf/w/thread/b", A);
+			assert.notEqual(backdrop(), null, "fades the transcript on a thread page");
+			for (const path of ["/graph", "/kb"]) {
+				await act(async () => root?.unmount());
+				document.body.innerHTML = "";
+				await mount(path, A);
+				assert.equal(backdrop(), null, `no fade on ${path}`);
+			}
+		});
+
 		it("stays open over a thread page even when minimized elsewhere (the pill is the way to type there)", async () => {
 			mem.set("wolfpack:chatbar:minimized", "1");
 			await mount("/wolf/w/thread/b", A);

@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
-import { abortThread as abortBarThread, onOwnThreadPage, swapTarget } from "@/components/chat-bar/chat-bar-io";
+import { abortThread as abortBarThread, onOwnThreadPage, pageThreadOf, swapTarget } from "@/components/chat-bar/chat-bar-io";
 import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/composer/dictation";
 import { appendToDraft, draftKey, readDraft } from "@/lib/composer-draft";
 import { setSpaceContext } from "@/components/composer/space-dictation";
@@ -47,7 +47,7 @@ import type { Answering } from "@/components/ask/ask-sheet";
 import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask/ask-session";
 import { replyLabel } from "@/components/ask/ask-reply";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
-import { effectiveWolfColor, hasWolfColor, wolfColorStyle, wolfAccentForeground, attachable, barGeometry, barHiddenFor, pickHomeThread, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread } from "@/src/core";
+import { effectiveWolfColor, hasWolfColor, wolfColorStyle, wolfAccentForeground, attachable, barGeometry, barHiddenFor, PHONE_QUERY, pickHomeThread, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread } from "@/src/core";
 import { ZC } from "@/lib/z-layers";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar/chat-bar-io";
@@ -84,18 +84,17 @@ const BarCardSurface = dynamic(() => import("@/components/chat-bar/bar-card-surf
 /** Full-height screens (the graph canvas, the new-chat page, a thread page) run under the bar; every other page scrolls, so the open bar reserves room under its content. */
 const FULL_HEIGHT = /^\/(graph|chat)(\/|$)|^\/wolf\/[^/]+\/thread(\/|$)/;
 
-/** md+ (768px): the floating pill. Below it the bar is a full-width dock at the bottom (phone layout). */
-const WIDE_QUERY = "(min-width: 768px)";
+/** Wide (desktop): the floating pill. A phone (narrow, or a short touch screen in landscape: PHONE_QUERY) gets the full-width dock at the bottom. */
 const canMatch = () => typeof window !== "undefined" && typeof window.matchMedia === "function";
 function subscribeWide(cb: () => void): () => void {
 	if (!canMatch()) return () => {};
-	const mq = window.matchMedia(WIDE_QUERY);
+	const mq = window.matchMedia(PHONE_QUERY);
 	mq.addEventListener?.("change", cb);
 	return () => mq.removeEventListener?.("change", cb);
 }
 /** Read synchronously (useSyncExternalStore), so a phone never paints the pill for a frame; the server snapshot is wide (desktop first). */
 export function useWide(): boolean {
-	return useSyncExternalStore(subscribeWide, () => (canMatch() ? window.matchMedia(WIDE_QUERY).matches : true), () => true);
+	return useSyncExternalStore(subscribeWide, () => (canMatch() ? !window.matchMedia(PHONE_QUERY).matches : true), () => true);
 }
 
 export function ChatBar() {
@@ -429,6 +428,12 @@ export function ChatBar() {
 }
 
 /** The icon with nothing attached: it opens the owner's home thread (the bar attaches it) when there is one. */
+/** The bar's own message composer, not a field of the questionnaire or its in-place answer composer (focusing those must not fold it). */
+function isBarComposerField(t: EventTarget): boolean {
+	const el = t as HTMLElement;
+	return el.tagName === "TEXTAREA" && !!el.closest('[data-testid="composer"]') && !el.closest('[data-testid="ask-inline-composer"]');
+}
+
 function DetachedIcon({ phone, dictation }: { phone: boolean; dictation: Dictation }) {
 	const api = useAttachedThread()!;
 	const needsYou = api.groups.reduce((n, g) => n + g.needsYou, 0);
@@ -485,7 +490,10 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	const wolfKey = effectiveWolfColor({ name: target.wolf, color: wolfColor }, api.threads[target.wolf]?.find((t) => t.kind === "home")?.id);
 	const wolfTint = hasWolfColor(wolfKey);
 	const router = useRouter();
-	const onThreadPage = onOwnThreadPage(usePathname(), target);
+	const pathname = usePathname();
+	const onThreadPage = onOwnThreadPage(pathname, target);
+	// The fade backdrop is for a thread page's scrolling transcript only; derived from the route on render, so it switches with the page and never flashes.
+	const overTranscript = pageThreadOf(pathname) !== null;
 	const rawCards = useBarCards(target, working, BAR_EXTRAS.cards || BAR_EXTRAS.peek || BAR_EXTRAS.ask);
 	// A paged `ask` questionnaire has its own sheet (never the classic card path: the whole-card route refuses it). The other cards and the peek follow their extras.
 	const queue = useAskQueue(BAR_EXTRAS.ask ? askQueue(rawCards.pending) : []);
@@ -527,15 +535,31 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	const inset = useKeyboardInset(phone);
 	// Inline, the ask scrolls inside the visible area: 55% of the viewport, less the iOS keyboard (the dock sits above it, `inset` is its height).
 	const inlineCap = `min(55dvh, 55vh, calc((100dvh - ${inset}px) * 0.55))`;
+	// Phone: focusing the composer folds an open questionnaire to its header so the keyboard fits; blurring (or tapping the header) brings it back. Answers live in the session, so nothing is lost.
+	const focusCollapsed = useRef(false);
+	// A fold belongs to one questionnaire: a new card (or none) starts clean, so a stale flag never reopens the next one.
+	const askCallId = askCard?.callId;
+	useEffect(() => {
+		focusCollapsed.current = false;
+	}, [askCallId]);
 	const sheetCard = askCard ? (
 		session.expanded ? (
 			<div data-testid="ask-sheet-host" data-composing={composing ? "true" : undefined} style={phone ? (sheet ? undefined : { maxHeight: inlineCap }) : composing ? undefined : { borderColor: color }} className={cn("flex min-h-0 flex-col overflow-hidden bg-card", phone ? (sheet ? "flex-1" : "shrink-0") : cn("rounded-t-2xl border border-b-0 shadow-lg", composing ? "max-h-[85vh]" : "max-h-[70vh]"))}>
 				<AskSheet key={askCard.callId} target={target} session={session} queue={queue} answering={answering} setAnswering={setAnswering} dictation={dictation} />
 			</div>
 		) : (
-			<button type="button" data-testid="ask-sheet-reopen" onClick={() => session.setExpanded(true)} className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border border-l-2 border-l-(color:--thread-accent) bg-card px-3 text-left font-ui text-xs shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
-				<span className="font-medium text-foreground">{queue.count >= 2 ? `Questions waiting (${queue.count})` : "Questions waiting"}</span>
-				<ChevronUpIcon aria-hidden className="size-4 text-muted-foreground" />
+			<button type="button" data-testid="ask-sheet-reopen" aria-label={phone ? "Show the questions" : undefined} onClick={() => { focusCollapsed.current = false; session.setExpanded(true); }} className={cn("wp-card-enter flex min-h-11 w-full items-center justify-between gap-2 border-l-2 border-l-(color:--thread-accent) bg-card px-3 text-left font-ui text-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", phone ? "rounded-none border-y" : "rounded-xl border shadow-sm")}>
+				{phone ? (
+					<>
+						<span className="min-w-0 truncate font-medium text-foreground" data-testid="ask-reopen-title">{askCard.card.steps?.[session.page]?.title ?? askCard.card.title ?? "Questions"}</span>
+						<span className="flex shrink-0 items-center gap-1 text-muted-foreground"><span data-testid="ask-reopen-count">{session.page + 1} of {session.pages}</span><ChevronUpIcon aria-hidden className="size-4" /></span>
+					</>
+				) : (
+					<>
+						<span className="font-medium text-foreground">{queue.count >= 2 ? `Questions waiting (${queue.count})` : "Questions waiting"}</span>
+						<ChevronUpIcon aria-hidden className="size-4 text-muted-foreground" />
+					</>
+				)}
 			</button>
 		)
 	) : null;
@@ -570,7 +594,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 		if (!sheet) {
 			if (wasSheet.current) {
 				wasSheet.current = false;
-				const back = document.querySelector<HTMLElement>(`[data-testid="${opener.current === "strip" ? "bar-strip" : "bar-sheet-open"}"]`) ?? document.querySelector<HTMLElement>('[data-testid="bar-sheet-open"]');
+				const back = document.querySelector<HTMLElement>(`[data-testid="${opener.current === "strip" ? "bar-strip" : "bar-sheet-open"}"]`) ?? document.querySelector<HTMLElement>('[data-testid="chat-bar-settings"]');
 				back?.focus();
 			}
 			return;
@@ -628,12 +652,12 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 			aria-haspopup={BAR_EXTRAS.switcher ? "dialog" : undefined}
 			aria-expanded={BAR_EXTRAS.switcher ? switcher !== null : undefined}
 			onClick={() => (BAR_EXTRAS.switcher ? (vizOn ? undefined : setSwitcher((s) => (s ? null : target.wolf))) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
-			className={cn("flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-11 max-w-[60vw]" : "max-w-56")}
+			className={cn("flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-24 max-w-[60vw] shrink" : "max-w-56")}
 			title={`${target.wolf} · ${title}`}
 		>
 			<span data-testid="chat-bar-dot" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
 			<span className="truncate">{title}</span>
-			<span className="shrink-0 truncate text-muted-foreground max-w-20">{target.wolf}</span>
+			{title !== target.wolf && <span data-testid="chat-bar-chip-wolf" className="shrink-0 truncate text-muted-foreground max-w-20">{target.wolf}</span>}
 			{working && <BrailleSpinner />}
 			{dictation.active && <MicIcon data-testid="chat-bar-listening" className="size-3 shrink-0 text-red-500" />}
 		</button>
@@ -704,12 +728,17 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				// Docked in the thread page's slot (not a sheet): the dock is a static block that takes its own height in the page, so the last messages are never under it.
 				className={cn("flex flex-col border-t bg-card shadow-lg", dropping && "ring-2 ring-inset ring-(color:--thread-accent)", docked && !sheet ? "relative w-full" : "fixed inset-x-0", sheet ? cn(ZC.chatSheet, askCard ? "" : "rounded-t-2xl") : docked ? "" : ZC.chatBar)}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
-				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey), backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : {}), ...(composing ? {} : { borderColor: wolfTint ? "var(--wolf-accent)" : color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
+				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, paddingLeft: "env(safe-area-inset-left)", paddingRight: "env(safe-area-inset-right)", ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey), backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : {}), ...(composing ? {} : { borderColor: wolfTint ? "var(--wolf-accent)" : color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
+				onFocusCapture={(e) => {
+					if (askCard && !composing && session.expanded && !sheet && isBarComposerField(e.target)) { focusCollapsed.current = true; session.setExpanded(false); }
+				}}
+				onBlurCapture={(e) => {
+					if (focusCollapsed.current && isBarComposerField(e.target)) { focusCollapsed.current = false; session.setExpanded(true); }
+				}}
 			>
 				{!sheet && phoneTree}
-				{!sheet && !minimized && !vizOn && <DenStrip swap={denSwap} onSwap={onDenSwap} open={BAR_EXTRAS.switcher ? switcher : null} setOpen={setSwitcher} />}
-				{!sheet && !minimized && sheetCard && <div data-testid="bar-ask-inline" className="flex min-h-0 shrink-0 flex-col px-2 pb-1 pt-2">{sheetCard}</div>}
+				{!sheet && !minimized && sheetCard && <div data-testid="bar-ask-inline" className="flex min-h-0 shrink-0 flex-col pb-1 pt-2">{sheetCard}</div>}
 				{sheet && !minimized && (
 					<div
 						data-testid="bar-sheet-handle"
@@ -754,15 +783,16 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				{!minimized && !sheet && chipRow}
 				<div className="relative flex items-center gap-1 px-1.5">
 					{chip}
+					{!sheet && !minimized && !vizOn && <DenStrip inline swap={denSwap} onSwap={onDenSwap} open={BAR_EXTRAS.switcher ? switcher : null} setOpen={setSwitcher} />}
 					{sheet && badge}
 					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
 					<div className="ml-auto flex items-center">
-						{!sheet && (
-							<button type="button" aria-label="Open full screen" data-testid="bar-sheet-open" onClick={() => openSheet(false)} className={tap}>
-								<ChevronUpIcon className="size-5" />
+						<BarSettings wolf={target.wolf} slug={target.slug} phone buttonClass={tap} extra={sheet ? undefined : (close) => (
+							<button type="button" aria-label="Open full screen" data-testid="bar-sheet-open" onClick={() => { close(); openSheet(false); }} className="flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-muted/60">
+								<ChevronUpIcon aria-hidden className="size-4" />
+								<span>Full screen</span>
 							</button>
-						)}
-						<BarSettings wolf={target.wolf} slug={target.slug} phone buttonClass={tap} />
+						)} />
 						<Hint label="Minimize">
 							<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className={tap}>
 								<ChevronDownIcon className="size-4" />
@@ -809,8 +839,8 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 
 	return (
 		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-dropping={dropping ? "true" : undefined} {...dropProps} data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} data-wolf-color={wolfTint ? wolfKey : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={{ ...(docked ? {} : { left: geo.left, width: geo.width }), ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey) } : {}) } as CSSProperties}>
-			{/* Floating only: an opaque page-colour backdrop under the den strip, the bar and the gap below it, with a soft fade at its top edge, so thread text never shows through. */}
-			{!docked && <div aria-hidden data-testid="chat-bar-backdrop" className="pointer-events-none absolute -bottom-3 -top-6 -inset-x-3 -z-10 bg-gradient-to-t from-background from-[calc(100%-1.5rem)] to-transparent" />}
+			{/* Floating over a thread page only: an opaque page-colour backdrop under the den strip, the bar and the gap below it, with a soft fade at its top edge, so thread text never shows through. */}
+			{!docked && overTranscript && <div aria-hidden data-testid="chat-bar-backdrop" className="pointer-events-none absolute -bottom-3 -top-6 -inset-x-3 -z-10 bg-gradient-to-t from-background from-[calc(100%-1.5rem)] to-transparent" />}
 			{!vizOn && <DenStrip swap={denSwap} onSwap={onDenSwap} open={BAR_EXTRAS.switcher ? switcher : null} setOpen={setSwitcher} />}
 			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>

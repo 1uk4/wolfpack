@@ -29,9 +29,21 @@ function bfs(adj: Map<string, string[]>, from: string, to: string): string[] | n
 
 /**
  * The node ids a nerve pulse visits: from `dom` down the tree edges to `ent` (the sections between are on the way).
+ * The event's own section chain (`chain`, ids without the `sec:` prefix), when it has one, is walked as it is; older events fall back to the tree search below.
  * An entry the map does not have yet (or cannot reach) ends the path at its section, or at the domain when that is missing too.
  */
-export function nervePath(edges: readonly NerveEdge[], dom: string, sec?: string, ent?: string): string[] {
+export function nervePath(edges: readonly NerveEdge[], dom: string, sec?: string, ent?: string, chain?: readonly string[]): string[] {
+	if (chain?.length) {
+		// the event carries the whole chain: walk it hop by hop, and end at the last hop that has a tree edge (never a shortcut across a gap)
+		const has = new Set(edges.map((e) => `${e.from}\u0000${e.to}`));
+		const hop = (a: string, b: string) => has.has(`${a}\u0000${b}`) || has.has(`${b}\u0000${a}`);
+		const out = [dom];
+		for (const id of [...chain.map((s) => `sec:${s}`), ...(ent ? [ent] : [])]) {
+			if (!hop(out[out.length - 1]!, id)) break;
+			out.push(id);
+		}
+		return out;
+	}
 	const adj = new Map<string, string[]>();
 	const link = (a: string, b: string) => (adj.get(a) ?? adj.set(a, []).get(a)!).push(b);
 	for (const e of edges) {
@@ -39,6 +51,15 @@ export function nervePath(edges: readonly NerveEdge[], dom: string, sec?: string
 		link(e.to, e.from);
 	}
 	return (ent && bfs(adj, dom, ent)) || (sec && bfs(adj, dom, sec)) || [dom];
+}
+
+/**
+ * The node ids a hover or Activity highlight rings for a filed entry: its tree path (domain, sections, entry), the same as the nerve pulse.
+ * Empty for any other target (only its own node rings). `sectionPath` is the event's own chain, when it has one.
+ */
+export function treePathOf(edges: readonly NerveEdge[], target: { kind: string; id: string; domain?: string }, sectionPath?: readonly string[]): string[] {
+	if (target.kind !== "kb-entry" || !target.domain) return [];
+	return nervePath(edges, `dom:${target.domain}`, undefined, `ent:${target.id}`, sectionPath);
 }
 
 const segLen = (a: NervePt, b: NervePt) => Math.hypot(b.x - a.x, b.y - a.y);

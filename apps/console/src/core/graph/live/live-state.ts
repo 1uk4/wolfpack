@@ -62,6 +62,8 @@ export interface LiveSubagent {
 	name: string;
 	wolf: string;
 	parentThreadId?: string;
+	/** The work item (full id) it serves: its brief's first work id, else its parent's bound item; a bind of its own replaces it. */
+	workItem?: string;
 	title?: string;
 	/** Set when `subagent-finished` arrived (fades from there). */
 	finishedAt?: number;
@@ -107,8 +109,6 @@ export type LiveAction =
 	| { type: "resync"; now: number }
 	| { type: "tick"; now: number };
 
-/** Trail/pulse origin name for hub-side writes (curator, system). Not a wolf: it never gets a body. */
-export const HUB_WOLF = "@hub";
 
 /** Fallback when the thread roster is unavailable: an idle feature thread stays on the map this long after it went idle (the hub keeps idle presence for only 60 s; there is no archive event). Roster-seeded features do not expire. */
 export const FEATURE_IDLE_MS = 30 * 60_000;
@@ -211,10 +211,8 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 		return { ...st, owner: { viewing: t, expiresAt } };
 	}
 	if (e.actor.kind === "hub") {
-		// The hub's curator / system commits: a trail from the hub origin (no wolf body, no presence).
-		const t = targetOf(e);
-		if (!fresh || !t || e.verb !== "kb-write") return st;
-		return addTrail(st, { id: e.id, wolf: HUB_WOLF, target: t, verb: e.verb, at: now }, { id: e.id, wolf: HUB_WOLF, target: t, verb: e.verb, at: now }, o);
+		// The hub's curator / system commits draw nothing here: the filed entry's nerve pulse down the tree edges (kb-life) is its only visual.
+		return st;
 	}
 	if (!wolfName) return st;
 
@@ -246,7 +244,7 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 		const prev = st.subagents[key];
 		const keep = prev && prev.finishedAt === undefined ? prev : undefined;
 		const touched = fresh && target !== undefined && TRAIL_VERBS.has(e.verb);
-		st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, ownThreadId: ownThreadId ?? keep?.ownThreadId, title: e.actor.title ?? keep?.title, expiresAt: Math.max(keep?.expiresAt ?? 0, expiresAt), target: touched ? target : keep?.target, targetAt: touched ? now : keep?.targetAt } } };
+		st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, workItem: (e.verb === "bound" && target?.kind === "work-item" ? target.id : undefined) ?? e.actor.workItem ?? keep?.workItem, ownThreadId: ownThreadId ?? keep?.ownThreadId, title: e.actor.title ?? keep?.title, expiresAt: Math.max(keep?.expiresAt ?? 0, expiresAt), target: touched ? target : keep?.target, targetAt: touched ? now : keep?.targetAt } } };
 		if (e.verb === "thread-active" || e.verb === "thread-idle" || e.verb === "subagent-spawned") {
 			st = { ...st, wolves: { ...st.wolves, [wolfName]: wolf } };
 			return withWolfNeeds(st);
@@ -288,7 +286,7 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 			const name = e.actor.subagent;
 			if (!name) break;
 			const key = subKey(name);
-			st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, ownThreadId, title: e.actor.title, expiresAt } } };
+			st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, workItem: e.actor.workItem, ownThreadId, title: e.actor.title, expiresAt } } };
 			break;
 		}
 		case "subagent-finished": {

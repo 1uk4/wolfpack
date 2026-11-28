@@ -48,6 +48,10 @@ import {
 import { GraphCanvasRenderer } from "./graph-canvas.ts";
 import { LiveGraphLayer } from "./live/live-layer";
 import { ActivityFeed } from "./live/activity-feed";
+import { ActivityToggle } from "./live/activity-toggle";
+import { useActivityPanel } from "./live/activity-panel-store";
+import { useWide } from "@/components/chat-bar/chat-bar";
+import { liveSettingsOf } from "./live/live-overlay";
 import { LiveErrorBoundary } from "./live/live-error-boundary";
 import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
@@ -90,6 +94,7 @@ export function openNodeInViewer(nodeId: string, open: OpenViewFn | null): boole
 /** The default node look when a node carries no colour of its own. */
 const NODE_COLOR_TOKEN = "--primary";
 /** The controls container leaves this much room on its left for the sidebar handle (graph-home.tsx draws it at the left edge, with the KB label beside it), so the two never overlap. A literal class: Tailwind only sees whole strings. */
+// Fit and Settings hit area (before:-inset-[5px]): 36px border-box = 34px padding box; +5px a side = 44px.
 const CHROME_LEFT_GUTTER = "left-[5rem]";
 
 type RenderSettings = GraphRenderSettings;
@@ -164,6 +169,8 @@ export function GraphChromeRow({
 	groups?: GraphGroups;
 	changeGroups?: (update: (cur: GraphGroups) => GraphGroups) => void;
 }) {
+	// On a phone the open Activity sheet covers the bottom corner: the corner buttons step aside (the sheet has its own close).
+	const sheetOpen = !useWide() && useActivityPanel().open;
 	return (
 		<>
 			{!isEmpty && (
@@ -190,14 +197,15 @@ export function GraphChromeRow({
 					{noMatch && <div className="px-1.5 pt-1 text-[11px] text-muted-foreground">No matching nodes.</div>}
 				</div>
 			)}
-			<div className="graph-chrome-fade-in pointer-events-auto absolute bottom-0 right-0 flex shrink-0 items-center gap-2">
+			<div className={`graph-chrome-fade-in pointer-events-auto absolute bottom-0 right-0 flex shrink-0 items-center gap-2 ${sheetOpen ? "hidden" : ""}`}>
+				{!isEmpty && liveSettingsOf(settings).enabled && <ActivityToggle />}
 				{!isEmpty && onHome && (
 					<Hint label="Fit graph in view" side="top">
 						<button
 							type="button"
 							onClick={onHome}
 							aria-label="Fit graph in view"
-							className="flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent"
+							className="relative flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors before:absolute before:-inset-[5px] before:content-[''] hover:bg-accent"
 						>
 							<HomeIcon className="size-4" />
 						</button>

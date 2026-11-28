@@ -26,7 +26,9 @@ export * from "./graph/live/kb-nerve.ts";
 export * from "./graph/live/kb-life-log.ts";
 export * from "./graph/live/live-physics.ts";
 export * from "./graph/live/feed.ts";
+export * from "./graph/live/activity-panel.ts";
 export * from "./graph/live/memory-tab.ts";
+export * from "./graph/live/composer-anchor.ts";
 export * from "./graph/simple-settings.ts";
 export * from "./graph/label-lod.ts";
 export * from "./graph/groups.ts";
@@ -88,6 +90,7 @@ export * from "./thread/den-strip.ts";
 export * from "./thread/page-pending.ts";
 // bar-icon.ts: the collapsed chat icon's position, clamping, edge snapping and drag threshold. Pure.
 export * from "./thread/bar-icon.ts";
+export * from "./thread/phone-viewport.ts";
 export * from "./graph/graph-layout.ts";
 export * from "./thread/thread-cards.ts";
 export * from "./thread/tool-rows.ts";

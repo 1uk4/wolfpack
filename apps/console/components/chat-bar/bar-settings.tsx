@@ -13,7 +13,7 @@ import { useThreadSettings } from "@/components/composer/composer-controls";
 import { cn } from "@/lib/utils";
 import { ZC } from "@/lib/z-layers";
 
-export function BarSettings({ wolf, slug, phone, buttonClass }: { wolf: string; slug: string; phone: boolean; buttonClass: string }) {
+export function BarSettings({ wolf, slug, phone, buttonClass, extra }: { wolf: string; slug: string; phone: boolean; buttonClass: string; /** Extra rows above the toggles (the phone's Full screen); gets the menu's close. */ extra?: (close: () => void) => React.ReactNode }) {
 	const [open, setOpen] = useState(false);
 	const box = useRef<HTMLDivElement | null>(null);
 	const gear = useRef<HTMLButtonElement | null>(null);
@@ -49,7 +49,7 @@ export function BarSettings({ wolf, slug, phone, buttonClass }: { wolf: string; 
 					<SettingsIcon aria-hidden className="size-4" />
 				</button>
 			</Hint>
-			{open && <SettingsMenu wolf={wolf} slug={slug} phone={phone} onClose={close} />}
+			{open && <SettingsMenu wolf={wolf} slug={slug} phone={phone} onClose={close} extra={extra} />}
 		</div>
 	);
 }
@@ -57,7 +57,7 @@ export function BarSettings({ wolf, slug, phone, buttonClass }: { wolf: string; 
 const FOCUSABLE = "button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex='-1'])";
 
 /** Mounted only while open, so the thread's settings are fetched when the owner looks, not for every bar. */
-function SettingsMenu({ wolf, slug, phone, onClose }: { wolf: string; slug: string; phone: boolean; onClose: () => void }) {
+function SettingsMenu({ wolf, slug, phone, onClose, extra }: { wolf: string; slug: string; phone: boolean; onClose: () => void; extra?: (close: () => void) => React.ReactNode }) {
 	const { settings, loaded, loadFailed, error, change } = useThreadSettings(wolf, slug);
 	const dialog = useRef<HTMLDivElement | null>(null);
 	const row = cn("flex w-full items-center gap-2 rounded-md px-2 py-1 text-sm", phone && "min-h-11");
@@ -107,6 +107,7 @@ function SettingsMenu({ wolf, slug, phone, onClose }: { wolf: string; slug: stri
 					phone ? "fixed inset-x-0 bottom-0 rounded-t-2xl border-b-0 pb-[env(safe-area-inset-bottom)] shadow-2xl motion-safe:slide-in-from-bottom-4" : "absolute bottom-full right-0 mb-2 w-64 rounded-xl shadow-lg motion-safe:zoom-in-95",
 				)}
 			>
+				{extra?.(onClose)}
 				{loadFailed && !loaded ? (
 					<p data-testid="bar-settings-load-failed" className={cn(row, "text-muted-foreground")}>
 						Couldn't load settings

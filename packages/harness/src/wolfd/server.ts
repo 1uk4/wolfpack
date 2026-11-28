@@ -61,7 +61,9 @@ import { getPoolStats } from "../memory/consolidation.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, listDomainDirs, readKbEntry } from "@wolfpack/kb/graph";
 import { readDenTopics, recordOwnerMessage } from "@wolfpack/memory";
-import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryNode, readMemoryObservations, readMemoryStatus, readMemoryTree, readMemoryTopic, readSessionTopics, setTopicKeepLocal, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
+import { startPendingRetry } from "./pending-retry.js";
+import { readPool } from "../memory/consolidation.js";
+import { pooledKeys, fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryNode, readMemoryObservations, readMemoryStatus, readMemoryTree, readMemoryTopic, readSessionTopics, setTopicKeepLocal, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
 import type { AskBridge } from "../extensions/ask.js";
@@ -338,6 +340,7 @@ export class WolfServer {
     });
     this.lag ??= createLagMonitor();
     this.startApprovalWatch();
+    this.startPendingRetry();
     this.registerRunningCheck();
     this.baseUrl = `http://127.0.0.1:${(this.http.address() as AddressInfo).port}`;
     return this.baseUrl;
@@ -352,6 +355,7 @@ export class WolfServer {
     });
     this.lag ??= createLagMonitor();
     this.startApprovalWatch();
+    this.startPendingRetry();
     this.registerRunningCheck();
     this.socketPath = path;
     this.baseUrl = `unix:${path}`;
@@ -361,6 +365,7 @@ export class WolfServer {
   async close(): Promise<void> {
     this.closing = true;
     this.stopApprovalWatch?.();
+    this.stopPendingRetry?.();
     this.unsubMemoryActivity?.();
     if (this.opts.den && this.runningCheck) unregisterThreadRunningCheck(this.opts.den, this.runningCheck);
     this.activityTap?.stop(); // queues wolf-offline
@@ -496,6 +501,27 @@ export class WolfServer {
     if (!this.opts.den || this.runningCheck) return;
     this.runningCheck = (id, except) => this.threadRunningReason(id, except);
     registerThreadRunningCheck(this.opts.den, this.runningCheck);
+  }
+
+  private stopPendingRetry: (() => void) | undefined;
+  /** Retry stuck work saves on a timer and drop the ones that can never clear (see pending-retry.ts). */
+  private startPendingRetry(): void {
+    const den = this.opts.den;
+    if (!den || this.stopPendingRetry) return;
+    const work = this.opts.work ?? {};
+    const t = startPendingRetry({
+      den,
+      readLive: async () => pooledKeys(await readPool(den)),
+      isArchived: async (key) => {
+        const r = await fetchWorkItem(key, work);
+        if (r.kind === "error" || r.kind === "unconfigured") throw new Error("work api unavailable");
+        return r.kind === "ok" && r.item.stage === "archived";
+      },
+      retry: async () => { const a = memoryActionsFor(den); if (a) await a.consolidate(); },
+      isBusy: () => memoryActionsFor(den)?.isBusy() ?? true,
+      log: (l) => console.error(`[wolfd] ${l}`),
+    });
+    this.stopPendingRetry = () => t.stop();
   }
 
   private stopApprovalWatch: (() => void) | undefined;

@@ -42,7 +42,7 @@ export const KB_RING_MAX = 6;
 /** `slot` is the topic's fixed place on the ring round Home; the flight made from it inherits it. */
 export interface KbTopic { id: string; wolf: string; born: number; slot: number }
 export type KbOutcome = "create" | "merge" | "reject" | "parked";
-export interface KbResult { outcome: string; entryId?: string; domain?: string; section?: string; sectionTitle?: string; ms?: number; tokens?: number }
+export interface KbResult { outcome: string; title?: string; entryId?: string; domain?: string; section?: string; sectionPath?: string[]; sectionTitle?: string; ms?: number; tokens?: number }
 export type FlightStage = "queued" | "travel" | "wait" | "place" | "fade";
 export interface KbFlight {
 	/** The den topic id (the correlation key). */
@@ -63,8 +63,16 @@ export interface KbFlight {
 	born?: number;
 	/** A flight made from a curate-done alone (no promote seen): it starts at the curator. */
 	synthetic?: true;
+	/** "work": a work-record save, flies to `workItem`'s node and fades there. Absent: a den promote to the curator. */
+	kind?: "work";
+	/** The work item (full id) of a work-record save or a graduation. */
+	workItem?: string;
+	/** A graduated feature's entry: starts at its work node, marked on the orbit. */
+	graduated?: true;
+	/** Seeded from the hub's pending queue when the graph opened (it waits at Home until filed; no timeout). */
+	pending?: true;
 }
-export interface KbPulse { id: string; kind: "create" | "merge"; entryId?: string; domain?: string; section?: string; at: number }
+export interface KbPulse { id: string; kind: "create" | "merge" | "retire"; outcome?: string; title?: string; sectionTitle?: string; entryId?: string; domain?: string; section?: string; sectionPath?: string[]; at: number }
 export interface KbLife {
 	wolves: Record<string, KbWolf>;
 	topics: KbTopic[];
@@ -113,16 +121,17 @@ export function reduceKbLife(s: KbLife, e: ActivityEvent, now: number): KbLife {
 			return { ...s, now, wolves, topics, slotSeq };
 		}
 		case "memory-promote": {
-			const wolf = e.actor.wolf;
+			const grad = d.kind === "graduation";
+			const wolf = e.actor.wolf ?? (grad ? "" : undefined);
 			const id = topicOf(e);
-			if (!wolf || !id) return s;
+			if (wolf === undefined || !id) return s;
 			const domain = e.target?.id ?? e.domain;
 			const topics = s.topics.filter((t) => t.id !== id);
 			const own = s.topics.findIndex((t) => t.id === id);
 			const ownT = own >= 0 && own < KB_RING_MAX ? s.topics[own] : undefined;
 			const domains = withDomain(s.domains, domain);
 			if (s.flights.some((f) => f.id === id)) return { ...s, now, topics, domains }; // a repeat of the same promote
-			let flights = [...s.flights, { id, wolf, ...(domain ? { domain } : {}), ...(d.ref ? { ref: d.ref } : {}), stage: "queued" as const, queuedAt: now, at: now, endAt: now, slot: ownT ? ownT.slot : s.slotSeq, ...(ownT ? { born: ownT.born } : {}) }];
+			let flights = [...s.flights, { id, wolf, ...(domain ? { domain } : {}), ...(d.ref ? { ref: d.ref } : {}), ...(d.kind === "work" ? { kind: "work" as const } : {}), ...(d.workItem && d.kind ? { workItem: d.workItem } : {}), ...(grad ? { graduated: true as const } : {}), stage: "queued" as const, queuedAt: now, at: now, endAt: now, slot: ownT ? ownT.slot : s.slotSeq, ...(ownT ? { born: ownT.born } : {}) }];
 			const queued = flights.filter((f) => f.stage === "queued");
 			if (queued.length > KB_MAX_QUEUE) {
 				const drop = queued[0]!;
@@ -141,9 +150,11 @@ export function reduceKbLife(s: KbLife, e: ActivityEvent, now: number): KbLife {
 			if (id) delete curator[id];
 			const result: KbResult = {
 				outcome: d.outcome ?? "merge",
+				...(e.target?.title ? { title: e.target.title } : {}),
 				...(e.target?.kind === "kb-entry" ? { entryId: e.target.id } : {}),
 				...(e.target?.domain ?? e.domain ? { domain: (e.target?.domain ?? e.domain)! } : {}),
 				...(d.section ? { section: d.section } : {}),
+				...(d.sectionPath?.length ? { sectionPath: d.sectionPath } : {}),
 				...(d.sectionTitle ? { sectionTitle: d.sectionTitle } : {}),
 				...(d.ms !== undefined ? { ms: d.ms } : {}),
 				...(d.tokens !== undefined ? { tokens: d.tokens } : {}),
@@ -199,13 +210,14 @@ export function stepKbLife(s: KbLife, now: number): KbLife {
 		if (n.stage === "travel" && now >= n.endAt) n = { ...n, stage: "wait", at: n.endAt, endAt: n.endAt };
 		if (n.stage === "wait") {
 			if (n.result) {
-				const landing = ["create", "merge"].includes(n.result.outcome);
+				const landing = kbVisualOf(n.result.outcome) !== "none";
 				const at = Math.max(now, n.at);
 				n = landing ? { ...n, stage: "place", at, endAt: at + dur(s, KB_PLACE_MS) } : { ...n, stage: "fade", at, endAt: at + dur(s, KB_FADE_MS) };
-			} else if (now - n.at > KB_WAIT_MAX_MS) n = { ...n, stage: "fade", at: now, endAt: now + dur(s, KB_FADE_MS) };
+			} else if (n.kind === "work") n = { ...n, stage: "fade", at: now, endAt: now + dur(s, KB_FADE_MS) }; // a work-record save ends at its node
+			else if (!n.pending && now - n.at > KB_WAIT_MAX_MS) n = { ...n, stage: "fade", at: now, endAt: now + dur(s, KB_FADE_MS) };
 		}
 		if ((n.stage === "place" || n.stage === "fade") && now >= n.endAt) {
-			if (n.stage === "place" && n.result) pulses.push({ id: n.id, kind: n.result.outcome === "create" ? "create" : "merge", ...(n.result.entryId ? { entryId: n.result.entryId } : {}), ...(n.result.domain ?? n.domain ? { domain: (n.result.domain ?? n.domain)! } : {}), ...(n.result.section ? { section: n.result.section } : {}), at: n.endAt });
+			if (n.stage === "place" && n.result) pulses.push({ id: n.id, kind: kbVisualOf(n.result.outcome) === "ghost" ? "retire" : n.result.outcome === "create" ? "create" : "merge", outcome: n.result.outcome, ...(n.result.title ? { title: n.result.title } : {}), ...(n.result.sectionTitle ? { sectionTitle: n.result.sectionTitle } : {}), ...(n.result.entryId ? { entryId: n.result.entryId } : {}), ...(n.result.domain ?? n.domain ? { domain: (n.result.domain ?? n.domain)! } : {}), ...(n.result.section ? { section: n.result.section } : {}), ...(n.result.sectionPath?.length ? { sectionPath: n.result.sectionPath } : {}), at: n.endAt });
 			changed = true;
 			continue; // flight over
 		}
@@ -258,6 +270,48 @@ export const kbLifeBusy = (s: KbLife, now: number): boolean => kbLifeRate(s, now
 
 /** The curator shimmers while it works a topic (curate-start) or a flight is waiting at it. */
 export const curatorBusy = (s: KbLife): boolean => Object.keys(s.curator).length > 0 || s.flights.some((f) => f.stage === "wait" && !f.result);
+
+export type KbVisual = "grow" | "ring" | "ghost" | "none";
+/** The filing visual of a curator outcome: a create grows in, an update / merge pulses a ring, a retire turns into a fading dashed ghost; reject / parked file nothing. */
+export function kbVisualOf(outcome: string): KbVisual {
+	if (outcome === "create") return "grow";
+	if (outcome === "merge" || outcome === "update" || outcome === "supersede") return "ring";
+	if (outcome === "retire" || outcome === "retired") return "ghost";
+	return "none";
+}
+
+const OUTCOME_WORD: Record<string, string> = { create: "created", merge: "merged", update: "updated", supersede: "superseded", retire: "retired", retired: "retired", reject: "rejected", parked: "parked" };
+/** The one-line hover summary of a filed entry or a flying item: "Title · outcome · domain › section". Missing parts are left out. */
+export function kbHoverText(x: { title?: string; outcome: string; domain?: string; sectionTitle?: string }): string {
+	const where = x.domain ? (x.sectionTitle ? `${x.domain} › ${x.sectionTitle}` : x.domain) : "";
+	return [x.title || "Entry", OUTCOME_WORD[x.outcome] ?? x.outcome, where].filter(Boolean).join(" · ");
+}
+
+/** Items still waiting for the curator: queued, flying to Home, or orbiting it (not yet answered). Also what the Activity panel's pending count reads. */
+export const kbPendingCount = (s: KbLife): number => s.flights.filter((f) => f.kind !== "work" && !f.result && f.stage !== "fade").length;
+
+/** One waiting contribution as the hub lists it (GET /v1/kb/activity incoming.wolves[].items). */
+export interface KbPendingItem { wolf: string; denTopicId: string; domain?: string }
+/** Cap on items seeded from the queue (the draw shows fewer; the rest are a count). */
+export const KB_PENDING_MAX = 60;
+
+/**
+ * Make the orbit match the hub's real queue: unseen items join it already waiting at Home; items seeded earlier that the hub no longer lists
+ * (filed while no event reached us) leave. Flights fed by live events are never touched. Returns `s` when nothing changed.
+ */
+export function syncPendingKb(s: KbLife, items: readonly KbPendingItem[], now: number): KbLife {
+	const listed = new Set(items.map((i) => i.denTopicId));
+	const have = new Set(s.flights.map((f) => f.id));
+	let flights = s.flights.filter((f) => !f.pending || f.result || listed.has(f.id));
+	let slotSeq = s.slotSeq;
+	let domains = s.domains;
+	for (const i of items) {
+		if (have.has(i.denTopicId) || flights.length >= KB_PENDING_MAX) continue;
+		flights = [...flights, { id: i.denTopicId, wolf: i.wolf, ...(i.domain ? { domain: i.domain } : {}), stage: "wait", queuedAt: now, at: now, endAt: now, slot: slotSeq++, pending: true }];
+		domains = withDomain(domains, i.domain);
+	}
+	return flights.length === s.flights.length && flights.every((f, i) => f === s.flights[i]) ? s : { ...s, now, flights, slotSeq, domains };
+}
 
 /** The wolf's gathered topics in slot order (for drawing them beside it). */
 export const topicsOf = (s: KbLife, wolf: string): KbTopic[] => s.topics.filter((t) => t.wolf === wolf);

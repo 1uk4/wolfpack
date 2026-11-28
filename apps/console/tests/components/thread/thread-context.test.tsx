@@ -92,9 +92,11 @@ describe("formatting", () => {
 });
 
 describe("ThreadContextChip", () => {
-	it("shows the size against the window, not amber under startAt", async () => {
+	it("shows the bare token count (no window, no monospace; the window is in the tooltip), not amber under startAt", async () => {
 		await mount(new CtxClient());
-		assert.equal(q('[data-testid="context-label"]')?.textContent, "312k / 1M");
+		assert.equal(q('[data-testid="context-label"]')?.textContent, "312k");
+		assert.doesNotMatch(q('[data-testid="context-chip-button"]')!.className, /font-mono/);
+		assert.match(q('[data-testid="context-chip-button"]')!.getAttribute("title")!, /312k \/ 1M/);
 		assert.equal(q('[data-testid="context-pct"]'), null); // moved into the tooltip
 		assert.equal(q('[data-testid="context-chip-button"]')?.getAttribute("data-amber"), null);
 	});
@@ -104,7 +106,7 @@ describe("ThreadContextChip", () => {
 			await mount(new CtxClient(), turn);
 			assert.deepEqual([...document.querySelectorAll('[data-testid="context-chip"] [role="img"]')].map((e) => e.getAttribute("aria-label")), [label]);
 			assert.ok(q('[data-testid="context-chip-bar"]'));
-			assert.equal(q('[data-testid="context-label"]')?.textContent, "312k / 1M");
+			assert.equal(q('[data-testid="context-label"]')?.textContent, "312k");
 			const tip = q('[data-testid="context-chip-button"]')?.getAttribute("title") ?? "";
 			assert.match(tip, /31%/);
 			assert.match(tip, new RegExp(label));

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ActivityEvent } from "@wolfpack/protocol";
-import { formatPool, memoryRows, pendingNotice, poolBars, resolveTab, tabItems, tabsFor, type FeedLine } from "../../../src/core/index.ts";
+import { curatorCounts, curatorText, formatPool, memoryRows, pendingNotice, poolBars, resolveTab, tabItems, tabsFor, type FeedLine } from "../../../src/core/index.ts";
 
 let n = 0;
 const ev = (verb: string, o: Partial<ActivityEvent> = {}): ActivityEvent => ({ v: 1, id: `m${++n}`, pack: "p", ts: 0, ttlMs: 1000, actor: { kind: "wolf", wolf: "jack" }, verb, ...o }) as ActivityEvent;
@@ -63,6 +63,11 @@ describe("stuck saves notice", () => {
 		assert.deepEqual(pendingNotice({ stuck: 1, oldestAgeMs: 90_000, nextRetryInMs: 0 }), { text: "Saves stuck for 1m · retry due", title: "" });
 		assert.equal(pendingNotice(undefined), null);
 	});
+
+	it("names the real error once a save has failed 3 times, instead of only \"retry due\"", () => {
+		assert.deepEqual(pendingNotice({ stuck: 1, oldestAgeMs: 172_800_000, nextRetryInMs: 0, tries: 3, message: "Work API PATCH k: HTTP 502" }), { text: "Saves stuck for 2d · Work API PATCH k: HTTP 502", title: "Work API PATCH k: HTTP 502" });
+		assert.equal(pendingNotice({ stuck: 1, oldestAgeMs: 90_000, nextRetryInMs: 0, tries: 2, message: "boom" })?.text, "Saves stuck for 1m · retry due");
+	});
 });
 
 describe("tabs", () => {
@@ -78,14 +83,29 @@ describe("tabs", () => {
 		assert.equal(resolveTab(null, true), "all");
 	});
 
-	it("All merges feed lines and memory rows by time, KB shows lines only, Memory rows only, and Memory off drops the rows everywhere", () => {
-		const lines = [line("l1", 1000), line("l2", 3000)];
+	it("All merges feed lines and memory rows by time, KB shows only KB-target lines (no thread or work lines), Memory rows only, and Memory off drops the rows everywhere", () => {
+		const kbLine = (key: string, time: number): FeedLine => ({ ...line(key, time), target: { kind: "kb-entry", id: "kb-wolfpack-A" } });
+		const lines = [kbLine("l1", 1000), kbLine("l2", 3000), line("thread", 3500)];
 		const rows = [row("r1", 2000)];
 		const keys = (t: Parameters<typeof tabItems>[0], on: boolean) => tabItems(t, lines, rows, on).map((i) => i.key);
-		assert.deepEqual(keys("all", true), ["l1", "r1", "l2"]);
+		assert.deepEqual(keys("all", true), ["l1", "r1", "l2", "thread"]);
 		assert.deepEqual(keys("kb", true), ["l1", "l2"]);
+		assert.deepEqual(keys("kb", false), ["l1", "l2"]);
 		assert.deepEqual(keys("memory", true), ["r1"]);
-		assert.deepEqual(keys("all", false), ["l1", "l2"]);
-		assert.deepEqual(keys("memory", false), ["l1", "l2"]);
+		assert.deepEqual(keys("all", false), ["l1", "l2", "thread"]);
+		assert.deepEqual(keys("memory", false), ["l1", "l2", "thread"]);
+	});
+});
+
+describe("curator line", () => {
+	const start = (id: string) => at(ev("curate-start", { actor: hub, detail: { topicIds: [id] } }), 1);
+	const done = (id: string) => at(ev("curate-done", { actor: hub, detail: { outcome: "merge", topicIds: [id] } }), 2);
+	it("counts filing as curate-start without its curate-done, and words pending and filing", () => {
+		assert.deepEqual(curatorCounts(3, [start("a"), start("b"), done("a")]), { pending: 3, filing: 1 });
+		assert.deepEqual(curatorCounts(0, [start("a"), done("a")]), { pending: 0, filing: 0 });
+		assert.equal(curatorText({ pending: 3, filing: 1 }), "Curator · 3 pending · 1 filing");
+		assert.equal(curatorText({ pending: 3, filing: 0 }), "Curator · 3 pending");
+		assert.equal(curatorText({ pending: 0, filing: 2 }), "Curator · 2 filing");
+		assert.equal(curatorText({ pending: 0, filing: 0 }), null);
 	});
 });

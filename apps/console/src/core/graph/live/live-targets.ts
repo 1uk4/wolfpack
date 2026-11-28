@@ -22,6 +22,33 @@ export function targetNodeId(target: { kind: string; id: string; domain?: string
 	return null;
 }
 
+const workNode = (id: string, domain: string | undefined, has: (n: string) => boolean): string | null => {
+	const dom = /^work-([a-z0-9]+)-/i.exec(id)?.[1] ?? domain;
+	const n = targetNodeId({ kind: "work-item", id, domain: dom }, has);
+	return n !== null && n.startsWith("work:") ? n : null;
+};
+
+/**
+ * The work node a thread sits on. A feature thread sits on its FEATURE node (stable across rebinds), else its bound task's node;
+ * a thread with no feature sits on its bound task. Null when no node is on the map (the caller falls back to the domain, then the centre).
+ */
+export function hubWorkNodeId(t: { bound?: { kind: string; id: string }; feature?: string }, has: (n: string) => boolean, domain?: string): string | null {
+	if (t.feature) {
+		const f = workNode(t.feature, domain, has);
+		if (f) return f;
+	}
+	return t.bound?.kind === "work-item" ? workNode(t.bound.id, domain, has) : null;
+}
+
+/** The work node a sub-agent is tethered to: the task its brief named, else its parent thread's bound item; null when not on the map. */
+export function subagentTaskNodeId(a: { workItem?: string }, parent: { bound?: { kind: string; id: string } } | undefined, has: (n: string) => boolean, domain?: string): string | null {
+	if (a.workItem) {
+		const n = workNode(a.workItem, domain, has);
+		if (n) return n;
+	}
+	return parent?.bound?.kind === "work-item" ? workNode(parent.bound.id, domain, has) : null;
+}
+
 /** A wolfd thread id (`1uk4/feature-x`) or a URL slug (`feature-x`) reduced to the slug, so the two compare equal. */
 export function threadSlugOf(wolf: string, id: string): string {
 	return id.startsWith(`${wolf}/`) ? id.slice(wolf.length + 1) : id;

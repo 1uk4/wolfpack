@@ -322,6 +322,22 @@ export function createMemoryApi(source: ClientSource) {
 			}
 		},
 
+		/**
+		 * The curator's pending queue for the graph's Home orbit (work-wolfpack-W24l0C6): the hub's `incoming` slice of GET /v1/kb/activity, as a small list.
+		 * No hub client or an unreachable hub: an empty queue (200), so the graph simply has no orbit.
+		 */
+		async kbPending(): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.getKbActivity) return json({ items: [], total: 0 });
+				const a = await client.getKbActivity({ limit: 1 });
+				const items = a.incoming.wolves.flatMap((w) => w.items.map((i) => ({ wolf: w.wolf, denTopicId: i.denTopicId, ...(i.domain ? { domain: i.domain } : {}) })));
+				return json({ items, total: a.incoming.total });
+			} catch {
+				return json({ items: [], total: 0 });
+			}
+		},
+
 		/** Entry for the browser: relay mode reads the hub's KB copy (token-scoped); local mode finds a KB wolf exactly as the browser used to. */
 		async kbEntryAuto(id: string): Promise<Response> {
 			try {

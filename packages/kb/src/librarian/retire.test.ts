@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { retireEntries } from "./retire.js";
+import { readSections, writeSections } from "./sections.js";
 import { readLedger, appendLedger, foldRegistry } from "./ledger.js";
 import { ev, resolveRetiredIds, type KbRoots } from "../shared/index.js";
 
@@ -54,6 +55,31 @@ describe("retireEntries", () => {
     expect(registry).toContain("# fit — topic registry");
     expect(registry).not.toContain("kb-fit-aaaaaaa");
     expect(readFileSync(d("INDEX.md"), "utf-8")).toContain("0 entries");
+  });
+
+  it("removes a section left empty by the retire, and keeps the ones that still hold entries", () => {
+    seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa"], "kb-fit-bbbbbbb": ["kb-fit-bbbbbbb"] });
+    writeFileSync(d("entries", "kb-fit-aaaaaaa.md"), "---\ntitle: a\nsummary: s\nsection: sec-fit-aaaaaa\n---\nbody");
+    writeFileSync(d("entries", "kb-fit-bbbbbbb.md"), "---\ntitle: b\nsummary: s\nsection: sec-fit-bbbbbb\n---\nbody");
+    const mk = (id: string) => ({ id, domain: "fit", parent: null, depth: 0, label: id, title: id, centroid: [], memberCount: 1, childIds: [], summary: "s", summaryHash: "", dirty: false, memberCountAtLastLabel: 1, created: "2026-11-01", updated: "2026-11-01" }) as never;
+    writeSections(roots, [mk("sec-fit-aaaaaa"), mk("sec-fit-bbbbbb")]);
+
+    retireEntries(roots, ["kb-fit-aaaaaaa"], { reason: "user deleted" });
+
+    expect(readSections(roots).map((s) => s.id)).toEqual(["sec-fit-bbbbbb"]);
+    expect(readLedger(roots).filter((e) => e.t === "section_removed")).toMatchObject([{ sectionId: "sec-fit-aaaaaa" }]);
+  });
+
+  it("cascades: retiring the last entry of a child also removes the parent section left with nothing", () => {
+    seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa"] });
+    writeFileSync(d("entries", "kb-fit-aaaaaaa.md"), "---\ntitle: a\nsummary: s\nsection: sec-fit-child1\n---\nbody");
+    const mk = (id: string, parent: string | null, childIds: string[]) => ({ id, domain: "fit", parent, depth: parent ? 1 : 0, label: id, title: id, centroid: [], memberCount: 0, childIds, summary: "s", summaryHash: "", dirty: false, memberCountAtLastLabel: 0, created: "2026-11-01", updated: "2026-11-01" }) as never;
+    writeSections(roots, [mk("sec-fit-parent", null, ["sec-fit-child1"]), mk("sec-fit-child1", "sec-fit-parent", [])]);
+
+    retireEntries(roots, ["kb-fit-aaaaaaa"], { reason: "user deleted" });
+
+    expect(readSections(roots)).toEqual([]);
+    expect(readLedger(roots).filter((e) => e.t === "section_removed").map((e) => (e as { sectionId: string }).sectionId).sort()).toEqual(["sec-fit-child1", "sec-fit-parent"]);
   });
 
   it("records survivors: explicit ones win, a 'merged into' reason names one, no replacement is an explicit empty list", () => {

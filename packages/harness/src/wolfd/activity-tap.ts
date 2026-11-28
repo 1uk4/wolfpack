@@ -22,6 +22,8 @@ export interface TapThread {
   title: string;
   boundWorkItem?: string;
   parentThreadId?: string;
+  /** The work item a subagent serves (its brief's first work id, else its parent's bound item). */
+  taskId?: string;
   state?: string;
   /** Set when the thread was removed (wolfd emits thread-updated with closed:true on removeThread). */
   closed?: boolean;
@@ -45,7 +47,7 @@ export class ActivityTap {
 
   private actor(t: TapThread | undefined, threadId: string): ActivityActor {
     if (t?.kind === "subagent") {
-      return { kind: "subagent", threadId, subagent: t.title || threadId, ...(t.parentThreadId ? { parentThreadId: t.parentThreadId } : {}), title: t.title };
+      return { kind: "subagent", threadId, subagent: t.title || threadId, ...(t.parentThreadId ? { parentThreadId: t.parentThreadId } : {}), ...(t.taskId ? { workItem: t.taskId } : {}), title: t.title };
     }
     return { kind: "thread", threadId, ...(t ? { title: t.title } : {}) };
   }

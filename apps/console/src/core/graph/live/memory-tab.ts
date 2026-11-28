@@ -15,7 +15,7 @@ export interface MemoryRow {
 	text: string;
 	wolf?: string;
 	/** What the map rings on hover: the wolf, the entry a curator result landed in, and the topic's dot (same shape as the KB log's focus). */
-	focus: { wolf?: string; target?: { kind: string; id: string; domain?: string }; topicId?: string };
+	focus: { wolf?: string; target?: { kind: string; id: string; domain?: string }; topicId?: string; sectionPath?: string[] };
 }
 
 /** Promotes of one wolf this close together read as one row ("3 topics to the curator"). */
@@ -52,7 +52,7 @@ export function memoryRows(events: readonly { event: ActivityEvent; at: number }
 				: o === "parked" ? "Parked"
 				: e.target?.title ? `Merged into ${e.target.title}` : "Merged";
 			const target = e.target ? { kind: e.target.kind, id: e.target.id, ...(domain ? { domain } : {}) } : undefined;
-			rows.push({ key: e.id, at, text, ...(w ? { wolf: w } : {}), focus: { ...(w ? { wolf: w } : {}), ...(target ? { target } : {}), ...(topic ? { topicId: topic } : {}) } });
+			rows.push({ key: e.id, at, text, ...(w ? { wolf: w } : {}), focus: { ...(w ? { wolf: w } : {}), ...(target ? { target } : {}), ...(topic ? { topicId: topic } : {}), ...(d.sectionPath?.length ? { sectionPath: d.sectionPath } : {}) } });
 		}
 	}
 	return rows.map(({ promotes: _p, ...r }) => r).sort((a, b) => b.at - a.at);
@@ -85,8 +85,11 @@ const duration = (ms: number) => {
 };
 
 /** The warning for stuck saves ("Saves stuck for 2h · retry in 40m") with the failure message as hover text; null when none. */
-export function pendingNotice(p: { stuck: number; oldestAgeMs: number; nextRetryInMs: number; message?: string } | undefined): { text: string; title: string } | null {
+/** After this many failed tries the banner names the error rather than the countdown. */
+const SHOW_ERROR_AFTER_TRIES = 3;
+export function pendingNotice(p: { stuck: number; oldestAgeMs: number; nextRetryInMs: number; tries?: number; message?: string } | undefined): { text: string; title: string } | null {
 	if (!p || p.stuck <= 0) return null;
+	if (p.message && (p.tries ?? 0) >= SHOW_ERROR_AFTER_TRIES) return { text: `Saves stuck for ${duration(p.oldestAgeMs)} · ${p.message.length > 80 ? `${p.message.slice(0, 79)}…` : p.message}`, title: p.message };
 	return { text: `Saves stuck for ${duration(p.oldestAgeMs)} · retry ${p.nextRetryInMs <= 0 ? "due" : `in ${duration(p.nextRetryInMs)}`}`, title: p.message ?? "" };
 }
 
@@ -106,7 +109,27 @@ export type TabItem = { kind: "line"; key: string; time: number; line: FeedLine 
 export function tabItems(tab: ActivityTab, lines: readonly FeedLine[], rows: readonly MemoryRow[], memoryOn: boolean): TabItem[] {
 	const l: TabItem[] = lines.map((line) => ({ kind: "line", key: line.key, time: line.time, line }));
 	const m: TabItem[] = rows.map((row) => ({ kind: "memory", key: row.key, time: row.at, row }));
-	if (!memoryOn || tab === "kb") return l;
+	// KB = what was read, written or filed in the KB: lines whose target is a KB entry or section (thread starts, work touches and the rest are All only).
+	if (tab === "kb") return l.filter((i) => i.kind === "line" && i.line.target?.kind.startsWith("kb-"));
+	if (!memoryOn) return l;
 	if (tab === "memory") return [...m].sort((a, b) => a.time - b.time);
 	return [...l, ...m].sort((a, b) => a.time - b.time);
+}
+
+/** The curator line's numbers: `pending` entries waiting at Home (the hub queue), `filing` = curate-start seen without its curate-done. */
+export function curatorCounts(pending: number, events: readonly { event: ActivityEvent; at: number }[]): { pending: number; filing: number } {
+	const open = new Set<string>();
+	for (const { event: e } of events) {
+		const id = e.detail?.topicIds?.[0] ?? e.detail?.ref;
+		if (!id) continue;
+		if (e.verb === "curate-start") open.add(id);
+		else if (e.verb === "curate-done") open.delete(id);
+	}
+	return { pending, filing: open.size };
+}
+
+/** "Curator · 3 pending · 1 filing"; null when both are 0 (nothing extra to show). */
+export function curatorText(c: { pending: number; filing: number }): string | null {
+	const parts = [c.pending > 0 ? `${c.pending} pending` : "", c.filing > 0 ? `${c.filing} filing` : ""].filter(Boolean);
+	return parts.length ? ["Curator", ...parts].join(" · ") : null;
 }

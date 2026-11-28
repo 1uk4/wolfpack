@@ -272,3 +272,27 @@ describe("sections — snapshot read cache", () => {
     }
   });
 });
+
+describe("sections — section_removed (work-wolfpack-BfcVF3Z)", () => {
+  const created = (n: number, sectionId: string, parent: string | null): KbEvent =>
+    ({ id: `evt-${n}`, at: "2024-01-01T00:00:00.000Z", t: "section_created", sectionId, domain: "fit", parent, label: sectionId }) as KbEvent;
+  const removed = (n: number, sectionId: string): KbEvent => ({ id: `evt-r${n}`, at: "2024-01-02T00:00:00.000Z", t: "section_removed", sectionId, domain: "fit" }) as KbEvent;
+  const tree = [created(1, "sec-fit-parent", null), created(2, "sec-fit-child", "sec-fit-parent")];
+
+  it("removes the section and its id from the parent's children", () => {
+    const out = foldSections([...tree, removed(1, "sec-fit-child")]);
+    expect(out.map((s) => String(s.id))).toEqual(["sec-fit-parent"]);
+    expect(out[0].childIds).toEqual([]);
+  });
+
+  it("replaying the same removal twice changes nothing", () => {
+    const out = foldSections([...tree, removed(1, "sec-fit-child"), removed(2, "sec-fit-child")]);
+    expect(out.map((s) => String(s.id))).toEqual(["sec-fit-parent"]);
+    expect(out[0].childIds).toEqual([]);
+  });
+
+  it("cascades: an emptied child, then its now-childless parent, leave nothing", () => {
+    const out = foldSections([...tree, removed(1, "sec-fit-child"), removed(2, "sec-fit-parent")]);
+    expect(out).toEqual([]);
+  });
+});

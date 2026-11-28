@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ActivityEvent } from "@wolfpack/protocol";
-import { KB_MAX_DOMAINS, KB_NERVE_GLOW_MS, KB_NERVE_MS, KB_PULSE_MS, kbNerveState, KB_MAX_QUEUE, KB_MAX_TOPICS_PER_WOLF, addRow, displayFill, emptyKbLife, foldEvents, groupRows, kbLifeBusy, mergeSeed, reduceKbLife, stepKbLife, withReasons, withTitles, type KbLife } from "../../../src/core/index.ts";
+import { KB_MAX_DOMAINS, KB_NERVE_GLOW_MS, KB_NERVE_MS, KB_PULSE_MS, kbNerveState, kbVisualOf, kbHoverText, KB_MAX_QUEUE, KB_MAX_TOPICS_PER_WOLF, addRow, displayFill, emptyKbLife, foldEvents, groupRows, kbLifeBusy, mergeSeed, reduceKbLife, stepKbLife, withReasons, withTitles, type KbLife } from "../../../src/core/index.ts";
 
 const T0 = 1_000_000;
 let n = 0;
@@ -49,13 +49,13 @@ describe("kb life model", () => {
 		assert.equal(s.flights[0]!.stage, "travel");
 		s = stepKbLife(s, T0 + 5000);
 		assert.equal(s.flights[0]!.stage, "wait");
-		s = reduceKbLife(reduceKbLife(s, start("t1"), T0 + 5100), done("t1", "create", { target: { kind: "kb-entry", id: "kb-x", domain: "wolfpack" } }), T0 + 6000);
+		s = reduceKbLife(reduceKbLife(s, start("t1"), T0 + 5100), done("t1", "create", { target: { kind: "kb-entry", id: "kb-x", domain: "wolfpack" }, detail: { outcome: "create", ref: "t1", section: "memory", sectionPath: ["top", "memory"] } }), T0 + 6000);
 		assert.deepEqual(Object.keys(s.curator), []);
 		s = stepKbLife(s, T0 + 6000);
 		assert.equal(s.flights[0]!.stage, "place");
 		s = stepKbLife(s, T0 + 9000);
 		assert.equal(s.flights.length, 0);
-		assert.deepEqual(s.pulses.map((p) => [p.kind, p.entryId]), [["create", "kb-x"]]);
+		assert.deepEqual(s.pulses.map((p) => [p.kind, p.entryId, p.sectionPath]), [["create", "kb-x", ["top", "memory"]]]); // the section chain rides on the pulse
 		// the pulse outlives the flight: nerve run, 10 s lit, then the final ring
 		assert.equal(stepKbLife(s, T0 + 9000 + KB_PULSE_MS).pulses.length, 1);
 		assert.equal(stepKbLife(s, T0 + 9000 + KB_NERVE_MS + KB_NERVE_GLOW_MS + KB_PULSE_MS - 1).pulses.length, 1);
@@ -104,6 +104,28 @@ describe("kb life model", () => {
 		s = reduceKbLife(s, done("t1", "merge", { target: { kind: "kb-entry", id: "kb-y" } }), T0);
 		s = stepKbLife(stepKbLife(s, T0), T0);
 		assert.deepEqual([s.flights.length, s.pulses.length], [0, 1]);
+	});
+});
+
+describe("kb filing visuals", () => {
+	it("maps each curator outcome to one visual: create grows, update/merge ring, retire ghosts, reject/parked have none", () => {
+		assert.deepEqual(
+			["create", "merge", "update", "supersede", "retire", "retired", "reject", "parked", "weird"].map(kbVisualOf),
+			["grow", "ring", "ring", "ring", "ghost", "ghost", "none", "none", "none"],
+		);
+	});
+
+	it("a retired result lands as a retire pulse carrying its title and outcome", () => {
+		let s = feed([promote("t1"), done("t1", "retire", { target: { kind: "kb-entry", id: "kb-old", domain: "wolfpack", title: "Old note" } })]);
+		s = stepKbLife(stepKbLife(s, T0), T0 + 7000);
+		s = stepKbLife(s, T0 + 20_000);
+		assert.deepEqual(s.pulses.map((p) => [p.kind, p.outcome, p.title]), [["retire", "retire", "Old note"]]);
+	});
+
+	it("hover text is one line: title, outcome, domain › section", () => {
+		assert.equal(kbHoverText({ title: "Caching rules", outcome: "merge", domain: "wolfpack", sectionTitle: "Memory" }), "Caching rules · merged · wolfpack › Memory");
+		assert.equal(kbHoverText({ outcome: "retire", domain: "spot" }), "Entry · retired · spot");
+		assert.equal(kbHoverText({ title: "New", outcome: "create" }), "New · created");
 	});
 });
 

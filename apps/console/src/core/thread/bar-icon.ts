@@ -51,13 +51,9 @@ export function defaultIconPos(vp: Viewport, insets: Insets = NO_INSETS, centreX
 
 const offScreen = (pos: IconPos, vp: Viewport): boolean => pos.x < 0 || pos.y < 0 || pos.x + ICON_SIZE > vp.width || pos.y + ICON_SIZE > vp.height;
 
-/** The nearer left or right screen edge (by the icon's centre), height kept (clamped). The phone calls this when a drag ends. */
-export function snapIconToEdge(pos: IconPos, vp: Viewport, insets: Insets = NO_INSETS): IconPos {
-	const b = bounds(vp, insets);
-	const clamped = clampIconPos(pos, vp, insets);
-	const centre = clamped.x + ICON_SIZE / 2;
-	const mid = (insets.left + vp.width - insets.right) / 2;
-	return { x: centre < mid ? b.minX : b.maxX, y: clamped.y };
+/** The phone's collapsed icon: always the bottom centre of the safe area (not draggable, no remembered spot), so it never covers the page's bottom corner controls. */
+export function phoneIconPos(vp: Viewport, insets: Insets = NO_INSETS): IconPos {
+	return defaultIconPos(vp, insets, (insets.left + vp.width - insets.right) / 2);
 }
 
 /** More than DRAG_THRESHOLD px of travel from where the press began. */

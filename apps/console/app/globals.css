@@ -717,6 +717,10 @@ body {
 		height: 100%;
 		padding-bottom: var(--wp-safe-bottom, env(safe-area-inset-bottom)); /* viewport-vars sets 0px while the keyboard is open */
 	}
+	/* the docked chat carries the inset in its own card, so it sits on the screen edge with no empty band under it */
+	[data-testid="thread-chat"]:has([data-testid="chat-bar"][data-layout="dock"]) {
+		padding-bottom: 0;
+	}
 	/* composer + card answers + list rows: >= 44px tap targets */
 	[data-testid="composer"] > button,
 	[data-testid="composer"] textarea {

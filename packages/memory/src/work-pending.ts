@@ -263,6 +263,11 @@ export class WorkPendingState {
     this.dirty = true;
   }
 
+  /** Keys held in the state. */
+  keys(): string[] {
+    return Object.keys(this.data);
+  }
+
   /** Written or discarded: forget the group. */
   clear(key: string): void {
     if (key in this.data) { delete this.data[key]; this.dirty = true; }
@@ -291,22 +296,49 @@ export class WorkPendingState {
 }
 
 /** The pending summary the observations route serves: keys waiting, and the oldest wait. */
-export function readPendingSummary(root: string, now: number = Date.now()): { keys: Record<string, PendingCause>; firstPendingAt: Record<string, number>; assignees: Record<string, string>; messages: Record<string, string>; nextAttemptAt: Record<string, number>; oldestAgeMs?: number } {
+export function readPendingSummary(root: string, now: number = Date.now(), live?: Set<string>): { keys: Record<string, PendingCause>; firstPendingAt: Record<string, number>; assignees: Record<string, string>; messages: Record<string, string>; nextAttemptAt: Record<string, number>; tries: Record<string, number>; oldestAgeMs?: number } {
   const st = new WorkPendingState(root, () => now);
   const keys: Record<string, PendingCause> = {};
   const firstPendingAt: Record<string, number> = {};
   const assignees: Record<string, string> = {};
   const messages: Record<string, string> = {};
   const nextAttemptAt: Record<string, number> = {};
+  const tries: Record<string, number> = {};
   let oldest: number | undefined;
   for (const [k, e] of Object.entries((st as unknown as { data: StateFile }).data)) {
     if (e.tries === 0) continue;
+    if (live && !live.has(k)) continue; // an orphan: nothing in the pool waits on it
     keys[k] = e.cause;
+    tries[k] = e.tries;
     firstPendingAt[k] = e.firstPendingAt;
     nextAttemptAt[k] = e.nextAttemptAt;
     if (e.assignee) assignees[k] = e.assignee;
     if (e.message) messages[k] = e.message;
     oldest = Math.min(oldest ?? e.firstPendingAt, e.firstPendingAt);
   }
-  return { keys, firstPendingAt, assignees, messages, nextAttemptAt, ...(oldest !== undefined ? { oldestAgeMs: now - oldest } : {}) };
+  return { keys, firstPendingAt, assignees, messages, nextAttemptAt, tries, ...(oldest !== undefined ? { oldestAgeMs: now - oldest } : {}) };
+}
+
+/**
+ * Forget pending keys that can never clear: no pooled observation references them (`live` = the work/feature keys of the
+ * tagged observations in the pool), or their item is archived (`isArchived`; a throw means the hub is unreachable and
+ * the key stays). Returns what was dropped and why; the caller logs it.
+ */
+export async function sweepPending(root: string, opts: { live: Set<string>; isArchived?: (key: string) => Promise<boolean>; now?: number }): Promise<Array<{ key: string; reason: "no observations" | "item archived" }>> {
+  const st = new WorkPendingState(root, () => opts.now ?? Date.now());
+  const dropped: Array<{ key: string; reason: "no observations" | "item archived" }> = [];
+  for (const key of st.keys()) {
+    if (!opts.live.has(key)) { dropped.push({ key, reason: "no observations" }); continue; }
+    if (!opts.isArchived) continue;
+    try { if (await opts.isArchived(key)) dropped.push({ key, reason: "item archived" }); } catch { /* hub unreachable: quiet, retried next tick */ }
+  }
+  for (const d of dropped) st.clear(d.key);
+  st.save();
+  return dropped;
+}
+
+/** Keys whose backoff is over and that a timer may retry (cause forbidden waits for a rule change instead). */
+export function dueKeys(root: string, now: number = Date.now()): string[] {
+  const st = new WorkPendingState(root, () => now);
+  return st.keys().filter((k) => st.entry(k)!.cause !== "forbidden" && st.entry(k)!.tries > 0 && st.due(k));
 }

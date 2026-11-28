@@ -131,6 +131,8 @@ export { renderDenContext, renderRetiredContext, renderKbAccess } from "./prompt
 export {
   reconcileDen,
   isAbsorbed,
+  absorbedEntryIds,
+  kbOutcome,
   denTopicStates,
   describeStatus,
   denArchiveDir,
@@ -206,6 +208,8 @@ export {
   archivePath,
   discardLogPath,
   readPendingSummary,
+  sweepPending,
+  dueKeys,
   poolDir,
   type PendingCause,
   type ArchiveEntry,

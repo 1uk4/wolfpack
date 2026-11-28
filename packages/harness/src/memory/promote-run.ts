@@ -4,7 +4,7 @@
  * Consolidation never calls this; the triggers do (owner click, graduation, the daily pass).
  */
 import { join } from "node:path";
-import { ConsolidationResultSchema, denTopicStates, readTopics, runPromotePass, writeTopic, type ConsolidateResult, type PassResult, type PassTrigger, type TopicFile, type TopicOutcome } from "@wolfpack/memory";
+import { ConsolidationResultSchema, kbOutcome, readTopics, runPromotePass, writeTopic, type ConsolidateResult, type PassResult, type PassTrigger, type TopicFile, type TopicOutcome } from "@wolfpack/memory";
 import { CONSOLIDATE_SYSTEM, type Engine } from "@wolfpack/engine";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { durableSessionTopics, promoteSessionTopics } from "./consolidation.js";
@@ -53,16 +53,10 @@ export async function runSessionPromotePass(c: PromoteRunConfig): Promise<Sessio
   let promoteResult: ConsolidateResult | undefined;
   const loc = durableSessionTopics(c.wolfDen);
   const root = join(loc.memoryRoot, loc.sessionId);
-  const outcomeOf = (topic: { id: string }): TopicOutcome => {
-    const s = denTopicStates(c.wolfDen, c.kbRoots, c.wolfName).find((x) => x.topic.id === topic.id)?.status;
-    if (!s) return { kind: "pending" };
-    switch (s.kind) {
-      case "absorbed": return s.entryIds.length ? { kind: "create", entryIds: s.entryIds } : { kind: "reject" };
-      case "parked": return { kind: "parked" };
-      case "awaiting-domain": return { kind: "parked" };
-      case "held": return { kind: "held", reason: s.reason };
-      default: return { kind: "pending" };
-    }
+  const outcomeOf = (topic: { id: string; body?: string }): TopicOutcome => {
+    // Consolidate's skip rule compares the session copy's body; the pass lists the den body. Either one counts.
+    const session = readTopics(root).find((x) => x.id === topic.id)?.body;
+    return kbOutcome(c.wolfDen, c.kbRoots, c.wolfName, topic, [topic.body, session].filter((x): x is string => typeof x === "string"));
   };
   const pass = await runPromotePass({
     den: c.wolfDen,

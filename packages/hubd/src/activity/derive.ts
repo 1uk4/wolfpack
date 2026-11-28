@@ -112,7 +112,7 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
      * The curator's per-item events (hub bus drafts) -> curate-start (first sweep_progress of an item) and curate-done (sweep_item).
      * The sweep carries no contribution id, so `detail.ref` is the den topic id (what the wolf's memory-promote event carries in topicIds).
      */
-    onSweep(d: { type: string; from?: string; denTopicId?: string; startedAt?: number; outcome?: string; entryId?: string; domain?: string; section?: string; sectionTitle?: string }): void {
+    onSweep(d: { type: string; from?: string; denTopicId?: string; startedAt?: number; outcome?: string; entryId?: string; domain?: string; section?: string; sectionPath?: string[]; sectionTitle?: string }): void {
       try {
         if (d.type !== "sweep_progress" && d.type !== "sweep_item") return;
         if (!d.denTopicId || !d.from) return;
@@ -130,6 +130,7 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
           ref: d.denTopicId, topicIds: [d.denTopicId],
           ...(d.outcome ? { outcome: d.outcome } : {}),
           ...(d.section ? { section: d.section } : {}),
+          ...(d.sectionPath?.length ? { sectionPath: d.sectionPath } : {}),
           ...(d.sectionTitle ? { sectionTitle: d.sectionTitle } : {}),
           ...(startedAt !== undefined ? { ms: Math.max(0, now() - startedAt) } : {}),
         };
@@ -174,6 +175,19 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
         }
       } catch (e) {
         console.error("hubd: activity derive (work) failed:", (e as Error)?.message);
+      }
+    },
+    /**
+     * A graduation was delivered to the curator inbox: one memory-promote (kind "graduation") per contribution, from the hub, so the map
+     * flies each entry from the feature's node to the Home orbit. `topicIds[0]` is the inbox `denTopicId`, which curate-start/-done carry.
+     */
+    onGraduation(g: { workId: string; domain: string; wolf: string; denTopicIds: readonly string[] }): void {
+      try {
+        for (const id of g.denTopicIds.slice(0, 20)) {
+          emit({ kind: "hub", title: "graduation" }, "memory-promote", { kind: "domain", id: g.domain }, g.domain, { kind: "graduation", workItem: g.workId, ref: id, topicIds: [id] });
+        }
+      } catch (e) {
+        console.error("hubd: activity derive (graduation) failed:", (e as Error)?.message);
       }
     },
     /** A KB commit landed for `domain`. With no request context (the hub's curator, system commits) the actor is the hub ("curator"). */

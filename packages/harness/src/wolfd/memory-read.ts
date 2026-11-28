@@ -95,6 +95,9 @@ export function memoryState(i: MemoryStateInput): { state: MemoryState; reason: 
 
 const PENDING_MESSAGE_MAX = 200;
 
+/** The work/feature keys the tagged observations in the pool are grouped under: a pending key outside this set is an orphan. */
+export const pooledKeys = (pool: Array<{ work?: string; feature?: string }>): Set<string> => new Set(pool.flatMap((o) => [o.work, o.feature].filter((k): k is string => !!k)));
+
 /** The compact stuck-saves summary the status route serves: group count, oldest wait, soonest retry, the first message (clipped). Undefined when nothing waits. */
 export function summarizePending(p: ReturnType<typeof readPendingSummary>, now: number): NonNullable<MemoryStatus["pending"]> | undefined {
   const keys = Object.keys(p.keys);
@@ -102,7 +105,8 @@ export function summarizePending(p: ReturnType<typeof readPendingSummary>, now: 
   const next = Math.min(...keys.map((k) => p.nextAttemptAt[k] ?? now));
   const message = keys.map((k) => p.messages[k]).find(Boolean);
   const oldest = p.oldestAgeMs ?? Math.max(...keys.map((k) => now - (p.firstPendingAt[k] ?? now)));
-  return { stuck: keys.length, oldestAgeMs: Math.max(0, oldest), nextRetryInMs: Math.max(0, next - now), ...(message ? { message: message.slice(0, PENDING_MESSAGE_MAX) } : {}) };
+  const tries = Math.max(...keys.map((k) => p.tries?.[k] ?? 1));
+  return { stuck: keys.length, oldestAgeMs: Math.max(0, oldest), nextRetryInMs: Math.max(0, next - now), tries, ...(message ? { message: message.slice(0, PENDING_MESSAGE_MAX) } : {}) };
 }
 
 export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPromote | null, bound: BoundWork | null, promotingJobId: string | null = null): Promise<MemoryStatus> {
@@ -113,7 +117,7 @@ export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPro
   }
   const stats = await getPoolStats(i.den);
   const c = i.config.consolidation;
-  const pending = summarizePending(readPendingSummary(i.den), Date.now());
+  const pending = summarizePending(readPendingSummary(i.den, Date.now(), pooledKeys(await readPool(i.den))), Date.now());
   return {
     state,
     reason,
@@ -154,7 +158,7 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
   // Same resolution as consolidation: the configured Work API, else WORK_ENDPOINT / WORK_TOKEN.
   const api = { endpoint: work?.endpoint || process.env.WORK_ENDPOINT, token: work?.token || process.env.WORK_TOKEN };
   const unavailable = tagged.length > 0 && (await workApiUnavailable(den, tagged[0]!.work || tagged[0]!.feature!, api, now));
-  const waiting = readPendingSummary(den, now);
+  const waiting = readPendingSummary(den, now, pooledKeys(pool));
   // A state entry blocks an observation only if it is not an orphan: it must be under a key the observation
   // is grouped under (feature or work) and started after the observation was recorded. An entry older than the
   // observation was left by an earlier grouping and is ignored (consolidation clears it on the next success).

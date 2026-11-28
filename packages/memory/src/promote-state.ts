@@ -17,6 +17,8 @@ export interface TopicPromoteState {
   state?: "parked";
   /** The one forced rewrite of a held topic has been tried: if it is still held, it retires. */
   heldRewriteTried?: boolean;
+  /** Hash of the title and body when that rewrite was tried: an edit since then clears the "tried" (a state without it counts as stale). */
+  heldHash?: string;
 }
 export interface PromoteState {
   version: 1;

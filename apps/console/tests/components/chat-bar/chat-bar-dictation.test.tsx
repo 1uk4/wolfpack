@@ -438,7 +438,7 @@ describe("floating chat dictation: docking details", () => {
 describe("the phone dock dictates in place", () => {
 	it("the live transcript replaces the text field while dictating, and the words land in the field for review on finish, unsent", async () => {
 		const w = window as unknown as { matchMedia?: unknown };
-		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+		w.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
 		try {
 			await mount("/kb", A);
 			const form = () => q('[data-testid="chat-bar"] [data-testid="composer"]')!;
@@ -462,10 +462,10 @@ describe("the phone dock dictates in place", () => {
 	});
 });
 
-/** The phone dock: matchMedia says below md for the duration of `run`. */
+/** The phone dock: matchMedia says the shared PHONE_QUERY matches for the duration of `run`. */
 async function onPhone(run: () => Promise<void>) {
 	const w = window as unknown as { matchMedia?: unknown };
-	w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+	w.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
 	try {
 		await run();
 	} finally {
@@ -484,21 +484,22 @@ const remount = async (stored: object | null) => {
 };
 
 describe("the phone dock's voice layout", () => {
-	it("the big button is the mic when idle and empty, Send with a draft, mic plus a small Stop while the wolf works, Stop dictation while recording and a spinner while flushing", async () => {
+	it("the big button is the mic when idle and empty, Send with a draft, Stop while the wolf works with nothing to send, Stop dictation while recording and a spinner while flushing", async () => {
 		await onPhone(async () => {
 			await mount("/kb", A);
 			assert.equal(mainBtn().getAttribute("aria-label"), "Start dictation");
-			assert.equal(q('[data-testid="voice-stop"]'), null, "no Stop while the wolf is idle");
 			await typeInBar("a draft");
 			assert.equal(mainBtn().getAttribute("aria-label"), "Send");
 			busyA = true;
 			await remount(A);
 			await wait();
 			assert.equal(mainBtn().getAttribute("aria-label"), "Send", "a draft is still Send while the wolf works");
-			assert.equal(q('[data-testid="voice-stop"]'), null, "Send only, no Stop beside it");
 			await typeInBar("");
-			assert.equal(mainBtn().getAttribute("aria-label"), "Start dictation", "working and empty: the mic");
-			assert.equal(q('[data-testid="voice-stop"]')!.getAttribute("aria-label"), "Stop the wolf");
+			assert.equal(mainBtn().getAttribute("aria-label"), "Stop", "working and empty: the one button is Stop");
+			busyA = false;
+			await remount(A);
+			await wait();
+			assert.equal(mainBtn().getAttribute("aria-label"), "Start dictation", "idle again: the mic");
 			await fire(phoneForm(), "submit");
 			await wait();
 			const ws = await say("spoken");
@@ -510,12 +511,12 @@ describe("the phone dock's voice layout", () => {
 		});
 	});
 
-	it("the small Stop aborts the working wolf's turn", async () => {
+	it("the Stop button aborts the working wolf's turn", async () => {
 		busyA = true;
 		await onPhone(async () => {
 			await mount("/kb", A);
 			await wait();
-			await act(async () => void reactProps(q('[data-testid="voice-stop"]')!).onClick());
+			await fire(phoneForm(), "submit");
 			await wait();
 			assert.equal(posts.filter((u) => /\/threads\/a\/abort$/.test(u)).length, 1);
 		});
@@ -591,7 +592,7 @@ describe("the phone dock's voice layout", () => {
 describe("a mounted composer keeps both the owner's edit and the dictated tail", () => {
 	it("phone (no dock on thread pages): an edited page composer ends with its text plus the tail, and the store keeps both after the next debounced write", async () => {
 		const w = window as unknown as { matchMedia?: unknown };
-		w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+		w.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
 		try {
 			await mount("/kb", A, <OnThreadA />);
 			await fire(q('[data-testid="chat-bar"] [data-testid="composer"]')!, "submit"); // the phone dock's big mic starts the run

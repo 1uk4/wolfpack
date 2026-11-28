@@ -34,6 +34,8 @@ export interface DenTopic {
   domain?: string;
   /** `keep_local: true` in the frontmatter: a promote pass never selects this topic. */
   keepLocal?: boolean;
+  /** `routing_hint` (frontmatter), if any: the KB entry a den-only topic was routed to before. */
+  routingHint?: string;
 }
 
 export interface DenConfig {
@@ -145,6 +147,7 @@ function readTopicFiles(dir: string, idFromStem: (stem: string) => string = (ste
       ...(fields.feature ? { feature: String(fields.feature) } : {}),
       ...(fields.domain ? { domain: String(fields.domain) } : {}),
       ...(String(fields.keep_local) === "true" ? { keepLocal: true } : {}),
+      ...(fields.routing_hint ? { routingHint: String(fields.routing_hint) } : {}),
     };
     return { topic, fields, mtimeMs: statSync(filePath).mtimeMs };
   });

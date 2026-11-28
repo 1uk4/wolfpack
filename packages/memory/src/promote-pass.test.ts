@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -135,6 +135,17 @@ describe("promote pass", () => {
     await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...d });
     expect(rewrites).toBe(2);
     expect(existsSync(join(root, "retired", "a.md"))).toBe(false);
+  });
+
+  it("a den-only topic's routing_hint reaches promote as its target, and a gone hint creates no session file for it", async () => {
+    const { den, root } = setup([20]);
+    mkdirSync(join(den, "memory", "topics"), { recursive: true });
+    for (const id of ["live", "gone"]) writeFileSync(join(den, "memory", "topics", `${id}.md`), `---\nid: ${id}\ntitle: ${id}\nsummary: s\nupdated: 2026-11-13 00:00\nrouting_hint: kb-${id}\n---\n\nbody ${id}\n`);
+    let targets: Record<string, string> = {};
+    const d: PassDeps = { ...deps({}), promote: async (_t, tg) => { targets = tg; }, resolveEntry: (id) => (id === "kb-live" ? id : null) };
+    await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...d });
+    expect(targets).toEqual({ live: "kb-live" });
+    expect(readTopics(root)).toEqual([]);
   });
 
   it("over the byte cap, retires the least recently updated confirmed topic first, then evicts unconfirmed ones, never keep-local", async () => {

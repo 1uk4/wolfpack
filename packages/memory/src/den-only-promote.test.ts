@@ -3,11 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
-import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
+import { type KbRoots } from "@wolfpack/kb/shared";
 import { consolidateSession } from "./consolidate.js";
 import { writeDenTopic } from "./den.js";
 import { denTopicStates, kbOutcome } from "./den-reconcile.js";
 import { readDistillRecord } from "./distill.js";
+import { updateTopicState } from "./promote-state.js";
 import { writeTopic } from "./session/memory.js";
 
 const WOLF = "w1";
@@ -45,7 +46,9 @@ describe("promote of a den-only topic (no session copy)", () => {
     const out = readDistillRecord(roots, "only-den")!.outputs[0];
     const dir = join(roots.opsRoot, "receipts", WOLF);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${out.id}-${contentHash(out.body.trim()).slice(7, 17)}.md`), `---\nfrom: ${WOLF}\nden_topic_id: only-den\noutcome: create\nprocessed: 2026-11-27 10:00\n---\n\nkb-wolfpack-BBBBBBB\n`);
+    const stem = inbox()[0]!; // the sweep names its receipt like the inbox file it answers: `<id>-<hash10>.md`
+    expect(out.id).toBe("only-den");
+    writeFileSync(join(dir, stem), `---\nfrom: ${WOLF}\nden_topic_id: only-den\noutcome: create\nprocessed: 2026-11-27 10:00\n---\n\nkb-wolfpack-BBBBBBB\n`);
     expect(kbOutcome(den, roots, WOLF, { id: "only-den" }, ["den only body"])).toEqual({ kind: "create", entryIds: ["kb-wolfpack-BBBBBBB"] });
   });
 
@@ -53,6 +56,40 @@ describe("promote of a den-only topic (no session copy)", () => {
     writeTopic(join(memoryRoot, "durable"), { id: "both", title: "Both", summary: "s", updated: "2026-11-01 00:00", body: "same body" });
     writeDenTopic(den, { id: "both", title: "Both", summary: "s", updated: "2026-11-01 00:00", body: "same body" });
     const r = await promote(["both"]);
+    expect(r.claimsSubmitted).toBe(1);
+    expect(inbox()).toHaveLength(1);
+  });
+
+  const rawDen = (id: string, front: string, body = "raw den body") => {
+    mkdirSync(join(den, "memory", "topics"), { recursive: true });
+    writeFileSync(join(den, "memory", "topics", `${id}.md`), `---\nid: ${id}\ntitle: ${id}\nsummary: s\nupdated: 2026-11-01 00:00\n${front}---\n\n${body}\n`);
+  };
+
+  it("emits a den-only topic the owner edited by hand (its session_hash no longer matches its body)", async () => {
+    rawDen("hand", "session_hash: 0000000000000000\n");
+    const r = await promote(["hand"]);
+    expect(r.claimsSubmitted).toBe(1);
+  });
+
+  it("never emits a work-tagged den-only topic: work knowledge reaches the KB only through graduation", async () => {
+    rawDen("tagged", "work: work-wolfpack-AAAAAAA\n");
+    const r = await promote(["tagged"]);
+    expect(r.claimsSubmitted).toBe(0);
+    expect(inbox()).toHaveLength(0);
+  });
+
+  it("does not emit a parked den-only topic", async () => {
+    writeDenTopic(den, { id: "parked", title: "Parked", summary: "s", updated: "2026-11-01 00:00", body: "parked body" });
+    updateTopicState(den, "parked", { state: "parked" });
+    const r = await promote(["parked"]);
+    expect(r.claimsSubmitted).toBe(0);
+    expect(inbox()).toHaveLength(0);
+  });
+
+  it("a den topic whose session copy sits only under <id>-evicted-... is emitted once when both ids are chosen", async () => {
+    writeDenTopic(den, { id: "ev", title: "Ev", summary: "s", updated: "2026-11-01 00:00", body: "evicted body" });
+    writeTopic(join(memoryRoot, "durable", "evicted"), { id: "ev-evicted-abc", title: "Ev", summary: "s", updated: "2026-11-01 00:00", body: "evicted body" });
+    const r = await promote(["ev", "ev-evicted-abc"]);
     expect(r.claimsSubmitted).toBe(1);
     expect(inbox()).toHaveLength(1);
   });

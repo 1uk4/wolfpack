@@ -45,7 +45,7 @@ function promoteSources(den: string, root: string): TopicFile[] {
       updated: d.updated || s?.updated || "",
       body: d.body,
       filename: s?.filename ?? basename(d.filePath),
-      ...(s ? {} : { ...(d.domain ? { domain: d.domain } : {}), ...(d.keepLocal ? { keepLocal: true } : {}) }),
+      ...(s ? {} : { ...(d.domain ? { domain: d.domain } : {}), ...(d.keepLocal ? { keepLocal: true } : {}), ...(d.routingHint ? { routingHint: d.routingHint } : {}) }),
       ...(d.work ? { work: d.work } : {}),
       ...(d.feature ? { feature: d.feature } : {}),
     });
@@ -135,7 +135,7 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
       if (!t.routingHint) continue;
       const live = opts.resolveEntry(t.routingHint);
       if (live) targets[t.id] = live;
-      if (live !== t.routingHint) writeTopic(root, { ...t, routingHint: live ?? undefined });
+      if (live !== t.routingHint && existsSync(join(root, t.filename))) writeTopic(root, { ...t, routingHint: live ?? undefined });
     }
     await opts.promote(chosen, targets);
     for (const t of chosen) result.promoted.push(t.id);

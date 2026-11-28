@@ -28,13 +28,16 @@ const workNode = (id: string, domain: string | undefined, has: (n: string) => bo
 	return n !== null && n.startsWith("work:") ? n : null;
 };
 
-/** The work node a thread's hub sits on: its bound task, else its feature; null when neither node is on the map (the caller falls back to the domain, then the centre). */
+/**
+ * The work node a thread sits on. A feature thread sits on its FEATURE node (stable across rebinds), else its bound task's node;
+ * a thread with no feature sits on its bound task. Null when no node is on the map (the caller falls back to the domain, then the centre).
+ */
 export function hubWorkNodeId(t: { bound?: { kind: string; id: string }; feature?: string }, has: (n: string) => boolean, domain?: string): string | null {
-	if (t.bound?.kind === "work-item") {
-		const n = workNode(t.bound.id, domain, has);
-		if (n) return n;
+	if (t.feature) {
+		const f = workNode(t.feature, domain, has);
+		if (f) return f;
 	}
-	return t.feature ? workNode(t.feature, domain, has) : null;
+	return t.bound?.kind === "work-item" ? workNode(t.bound.id, domain, has) : null;
 }
 
 /** The work node a sub-agent is tethered to: the task its brief named, else its parent thread's bound item; null when not on the map. */

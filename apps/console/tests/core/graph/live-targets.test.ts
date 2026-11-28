@@ -11,11 +11,21 @@ describe("where a thread hub and a sub-agent attach", () => {
 	it("a bound thread with no feature sits on its task node", () => {
 		assert.equal(hubWorkNodeId({ bound }, on("work:TASK", "dom:wolfpack")), "work:TASK");
 	});
-	it("falls back from the task to the feature node, then to nothing (the caller uses the domain, then the centre)", () => {
+	it("a feature thread bound to a child task sits on the feature node, not the task", () => {
 		const t = { bound, feature: "work-wolfpack-FEAT" };
-		assert.equal(hubWorkNodeId(t, on("work:FEAT", "dom:wolfpack")), "work:FEAT");
-		assert.equal(hubWorkNodeId(t, on("dom:wolfpack")), null);
+		assert.equal(hubWorkNodeId(t, on("work:FEAT", "work:TASK", "dom:wolfpack")), "work:FEAT");
 		assert.equal(hubWorkNodeId({ feature: "work-wolfpack-FEAT" }, on("work:FEAT")), "work:FEAT");
+	});
+	it("a feature thread whose feature node is missing falls back to its task node, then to nothing", () => {
+		const t = { bound, feature: "work-wolfpack-FEAT" };
+		assert.equal(hubWorkNodeId(t, on("work:TASK", "dom:wolfpack")), "work:TASK");
+		assert.equal(hubWorkNodeId(t, on("dom:wolfpack")), null);
+	});
+	it("rebinding a feature thread between child tasks never changes its hub node", () => {
+		const has = on("work:FEAT", "work:A", "work:B");
+		const at = (id: string) => hubWorkNodeId({ bound: { kind: "work-item", id }, feature: "work-wolfpack-FEAT" }, has);
+		assert.equal(at("work-wolfpack-A"), "work:FEAT");
+		assert.equal(at("work-wolfpack-B"), "work:FEAT");
 	});
 	it("a sub-agent with a work id in its brief sits on that task", () => {
 		assert.equal(subagentTaskNodeId({ workItem: "work-wolfpack-SUB" }, { bound }, on("work:SUB", "work:TASK")), "work:SUB");

@@ -777,7 +777,7 @@ export class LiveOverlay {
 
 	/** Where a feature hub sits (world, no float): beside its work node, else beside its domain node, else near its wolf's home domain / the centre. */
 	private hubPos(t: LiveThread, host: OverlayHost, m: number, out: Pt): Pt {
-		const nodeId = hubWorkNodeId(t, (n) => host.hasNode(n), this.wolfMeta.get(t.wolf)?.dom);
+		const nodeId = this.hubNodeId(t, host);
 		const dom = this.wolfMeta.get(t.wolf)?.dom;
 		const domPos = dom ? host.nodePos("dom:" + dom) : null;
 		const p = (nodeId ? host.nodePos(nodeId) : null) ?? domPos ?? host.center();
@@ -796,10 +796,7 @@ export class LiveOverlay {
 
 	/** The work node a feature hub replaces (its `work:<short>` node), or null when that node is not on the graph. */
 	private hubNodeId(t: LiveThread, host: OverlayHost): string | null {
-		const wid = t.feature!;
-		const dom = /^work-([a-z0-9]+)-/i.exec(wid)?.[1] ?? this.wolfMeta.get(t.wolf)?.dom;
-		const id = targetNodeId({ kind: "work-item", id: wid, domain: dom }, (n) => host.hasNode(n));
-		return id !== null && id.startsWith("work:") ? id : null;
+		return hubWorkNodeId(t, (n) => host.hasNode(n), this.wolfMeta.get(t.wolf)?.dom);
 	}
 
 	private replaced = new Set<string>();
@@ -1191,7 +1188,7 @@ export class LiveOverlay {
 				const wolf = this.wolfItems.get(it.wolf);
 				const t = s.threads[it.key];
 				// A dot sitting on its feature's hub has the wolf's own link to that hub already: no second line over it.
-				const feat = t?.bound?.kind === "work-item" ? this.featureByWork.get(workShortId(t.bound.id)) : undefined;
+				const feat = t?.feature ? this.featureByWork.get(workShortId(t.feature)) : t?.bound?.kind === "work-item" ? this.featureByWork.get(workShortId(t.bound.id)) : undefined;
 				const onHub = !!feat && Math.abs(feat.x - it.x) < 0.5 && Math.abs(feat.y - it.y) < 0.5;
 				if (wolf && !onHub) this.line(ctx, wolf, it, rgba(it.color, 0.25 * it.alpha));
 				if (t?.bound) {

@@ -760,6 +760,32 @@ describe("the phone dock and questionnaire use the full width; typing folds the 
 		assert.ok(q('[data-testid="ask-sheet-reopen"]'));
 	});
 
+	it("focusing the in-place answer composer of a free-text question does not fold the questionnaire being answered", async () => {
+		bodies.a = { messages: [], pendingCards: [{ ...ASK2, card: { ...ASK2.card, steps: [{ title: "Only", fields: ["q2"] }] } }] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await click(q('[data-testid="ask-free"], [data-testid="ask-other"]'));
+		const inline = q('[data-testid="ask-inline-composer"] textarea')!;
+		await act(async () => void props(bar(), "onFocusCapture")({ target: inline }));
+		assert.ok(q('[data-testid="ask-sheet"]'), "still open");
+		await act(async () => void props(bar(), "onBlurCapture")({ target: inline }));
+		assert.ok(q('[data-testid="ask-sheet"]'));
+	});
+
+	it("a fold left over from one questionnaire does not reopen the next one the owner folded by hand", async () => {
+		bodies.a = { messages: [], pendingCards: [ASK2] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await focusField();
+		assert.equal(q('[data-testid="ask-sheet"]'), null);
+		bodies.a = { messages: [], pendingCards: [{ ...ASK2, callId: "p2" }] };
+		await emit("thread-updated", { wolf: "w", thread: { id: "w/a", status: "needs-you" } });
+		await until(() => q('[data-testid="ask-sheet"]')?.getAttribute("data-call-id") === "p2", "the new questionnaire");
+		await click(q('[data-testid="ask-collapse"]'));
+		await blurField();
+		assert.ok(q('[data-testid="ask-sheet-reopen"]'), "stays folded");
+	});
+
 	it("desktop: the bar has no focus-fold and keeps its 'Questions waiting' header", async () => {
 		bodies.a = { messages: [], pendingCards: [ASK2] };
 		await mount();

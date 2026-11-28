@@ -428,6 +428,12 @@ export function ChatBar() {
 }
 
 /** The icon with nothing attached: it opens the owner's home thread (the bar attaches it) when there is one. */
+/** The bar's own message composer, not a field of the questionnaire or its in-place answer composer (focusing those must not fold it). */
+function isBarComposerField(t: EventTarget): boolean {
+	const el = t as HTMLElement;
+	return el.tagName === "TEXTAREA" && !!el.closest('[data-testid="composer"]') && !el.closest('[data-testid="ask-inline-composer"]');
+}
+
 function DetachedIcon({ phone, dictation }: { phone: boolean; dictation: Dictation }) {
 	const api = useAttachedThread()!;
 	const needsYou = api.groups.reduce((n, g) => n + g.needsYou, 0);
@@ -531,6 +537,11 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	const inlineCap = `min(55dvh, 55vh, calc((100dvh - ${inset}px) * 0.55))`;
 	// Phone: focusing the composer folds an open questionnaire to its header so the keyboard fits; blurring (or tapping the header) brings it back. Answers live in the session, so nothing is lost.
 	const focusCollapsed = useRef(false);
+	// A fold belongs to one questionnaire: a new card (or none) starts clean, so a stale flag never reopens the next one.
+	const askCallId = askCard?.callId;
+	useEffect(() => {
+		focusCollapsed.current = false;
+	}, [askCallId]);
 	const sheetCard = askCard ? (
 		session.expanded ? (
 			<div data-testid="ask-sheet-host" data-composing={composing ? "true" : undefined} style={phone ? (sheet ? undefined : { maxHeight: inlineCap }) : composing ? undefined : { borderColor: color }} className={cn("flex min-h-0 flex-col overflow-hidden bg-card", phone ? (sheet ? "flex-1" : "shrink-0") : cn("rounded-t-2xl border border-b-0 shadow-lg", composing ? "max-h-[85vh]" : "max-h-[70vh]"))}>
@@ -720,10 +731,10 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, paddingLeft: "env(safe-area-inset-left)", paddingRight: "env(safe-area-inset-right)", ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey), backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : {}), ...(composing ? {} : { borderColor: wolfTint ? "var(--wolf-accent)" : color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
 				onFocusCapture={(e) => {
-					if (askCard && session.expanded && !sheet && (e.target as HTMLElement).tagName === "TEXTAREA") { focusCollapsed.current = true; session.setExpanded(false); }
+					if (askCard && !composing && session.expanded && !sheet && isBarComposerField(e.target)) { focusCollapsed.current = true; session.setExpanded(false); }
 				}}
 				onBlurCapture={(e) => {
-					if (focusCollapsed.current && (e.target as HTMLElement).tagName === "TEXTAREA") { focusCollapsed.current = false; session.setExpanded(true); }
+					if (focusCollapsed.current && isBarComposerField(e.target)) { focusCollapsed.current = false; session.setExpanded(true); }
 				}}
 			>
 				{!sheet && phoneTree}

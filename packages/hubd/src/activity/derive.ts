@@ -177,6 +177,19 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
         console.error("hubd: activity derive (work) failed:", (e as Error)?.message);
       }
     },
+    /**
+     * A graduation was delivered to the curator inbox: one memory-promote (kind "graduation") per contribution, from the hub, so the map
+     * flies each entry from the feature's node to the Home orbit. `topicIds[0]` is the inbox `denTopicId`, which curate-start/-done carry.
+     */
+    onGraduation(g: { workId: string; domain: string; wolf: string; denTopicIds: readonly string[] }): void {
+      try {
+        for (const id of g.denTopicIds.slice(0, 20)) {
+          emit({ kind: "hub", title: "graduation" }, "memory-promote", { kind: "domain", id: g.domain }, g.domain, { kind: "graduation", workItem: g.workId, ref: id, topicIds: [id] });
+        }
+      } catch (e) {
+        console.error("hubd: activity derive (graduation) failed:", (e as Error)?.message);
+      }
+    },
     /** A KB commit landed for `domain`. With no request context (the hub's curator, system commits) the actor is the hub ("curator"). */
     onKb(entryIds: readonly string[], domain: string): void {
       try {

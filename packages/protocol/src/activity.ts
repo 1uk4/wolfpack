@@ -68,6 +68,10 @@ export const ActivityDetailSchema = z.object({
   ms: z.number().int().nonnegative().optional(),
   topicIds: z.array(z.string().min(1)).transform((a) => a.slice(0, 20)).optional(),
   ref: cut(80).optional(),
+  /** memory-promote only: `work` = a work-record save (flies to `workItem`'s node, never to the curator), `graduation` = a finished item's entries (fly from `workItem`'s node to Home). Absent = a plain den promote. */
+  kind: z.enum(["work", "graduation"]).optional().catch(undefined),
+  /** The work item (full id) a `work` / `graduation` promote belongs to. */
+  workItem: cut(80).optional(),
 });
 export type ActivityDetail = z.infer<typeof ActivityDetailSchema>;
 

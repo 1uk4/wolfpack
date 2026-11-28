@@ -430,7 +430,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   const writeWork = writer.write;
   const workIdempotency = new WorkIdempotency(join(opts.dataDir, "link", "work-idempotency.jsonl"), { now: opts.now });
   let registry: ReturnType<typeof createRegistry>;
-  const approvals = createApprovalStore({ roots, dataDir: opts.dataDir, inboxRoot: opts.inboxRoot ?? contributionsRoot(opts.dataDir), now: () => new Date(opts.now?.() ?? Date.now()), knownWolf: (n) => (registry.list("wolves") as { name: string; status?: string }[]).some((w) => w.name === n && w.status === "active") });
+  const approvals = createApprovalStore({ roots, dataDir: opts.dataDir, inboxRoot: opts.inboxRoot ?? contributionsRoot(opts.dataDir), now: () => new Date(opts.now?.() ?? Date.now()), onGraduated: (g) => derive.onGraduation(g), knownWolf: (n) => (registry.list("wolves") as { name: string; status?: string }[]).some((w) => w.name === n && w.status === "active") });
   try {
     registry = createRegistry({
       dataDir: opts.dataDir,

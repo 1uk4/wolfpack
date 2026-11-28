@@ -32,6 +32,8 @@ export interface ApprovalDeps {
   now?: () => Date;
   /** Is this an active wolf the hub knows (reassign target)? */
   knownWolf: (name: string) => boolean;
+  /** A graduation set was delivered to the curator inbox (the live map flies it from the feature to Home). Best effort. */
+  onGraduated?: (g: { workId: string; domain: string; wolf: string; denTopicIds: string[] }) => void;
 }
 
 export interface Decider {
@@ -69,6 +71,7 @@ export function createApprovalStore(d: ApprovalDeps) {
   const sendAndArchive = (workId: string, wolf: string, item: { domain: unknown }, contributions: GraduationContribution[], at: string, toArchive: string[], tag: string, resume = false, afterSend?: () => void): void => {
     if (!resume) {
       deliverContributions(d, wolf, item, contributions, at);
+      try { d.onGraduated?.({ workId, domain: String(item.domain), wolf, denTopicIds: contributions.map((c) => c.id) }); } catch { /* the map event never blocks a graduation */ }
       graduateItem(d.roots, workId);
     }
     afterSend?.();

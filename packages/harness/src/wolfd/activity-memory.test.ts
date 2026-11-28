@@ -58,6 +58,13 @@ describe("memory activity events", () => {
       vi.useRealTimers();
     }
   });
+  it("a record write is a work-record promote on its work item; a contribution with a work target is a graduation promote", () => {
+    const { sent, l } = rig();
+    l({ ...base, type: "record_written", observationCount: 3, target: { kind: "work", workId: "work-personal-abc" } } as MemoryEvent);
+    expect(sent[0]).toMatchObject({ verb: "memory-promote", detail: { kind: "work", workItem: "work-personal-abc" } });
+    l({ ...base, type: "contribution_emitted", contributionId: "g-1", lane: "inbox/w", target: { kind: "work", workId: "work-personal-abc" } } as MemoryEvent);
+    expect(sent[1]).toMatchObject({ verb: "memory-promote", detail: { kind: "graduation", workItem: "work-personal-abc", ref: "g-1", topicIds: ["g-1"] } });
+  });
   it("a contribution -> memory-promote on the domain with the contribution id and den topic; a throwing publisher never escapes", () => {
     const { sent, l } = rig();
     l(contrib);

@@ -121,6 +121,19 @@ describe("derive fan-out queue", () => {
     expect("reason" in (seen[1]!.detail ?? {})).toBe(false); // the curator's reason is not broadcast on the activity bus
   });
 
+  it("a delivered graduation publishes one memory-promote per contribution, from the hub, tied to the work item and carrying the inbox id the curator reports", async () => {
+    const bus = createMemoryBus();
+    const seen: ActivityEvent[] = [];
+    bus.subscribe("p", (e) => seen.push(e));
+    const d = createActivityDeriver({ bus, presence: createPresenceStore(), pack: "p" });
+    d.onGraduation({ workId: "work-wp-abc", domain: "wp", wolf: "w", denTopicIds: ["g1", "g2"] });
+    await drain();
+    expect(seen.map((e) => [e.verb, e.actor.kind, e.detail])).toEqual([
+      ["memory-promote", "hub", { kind: "graduation", workItem: "work-wp-abc", ref: "g1", topicIds: ["g1"] }],
+      ["memory-promote", "hub", { kind: "graduation", workItem: "work-wp-abc", ref: "g2", topicIds: ["g2"] }],
+    ]);
+  });
+
   it("past 200 in-flight items the oldest is forgotten, not the rest", async () => {
     let t = 1000;
     const bus = createMemoryBus();

@@ -126,6 +126,14 @@ describe("replaceMisfits", () => {
     expect(ledger).toEqual([]);
   });
 
+  it("logs a dry-run 'would re-place' finding once per entry and target, not on every sweep", async () => {
+    add("m1", [0.1, 1]);
+    const msgs: string[] = [];
+    await run({ dryRun: true, notify: (m: string) => msgs.push(m) });
+    await run({ dryRun: true, notify: (m: string) => msgs.push(m) });
+    expect(msgs.filter((m) => m.includes("would re-place m1"))).toHaveLength(1);
+  });
+
   it("leaves a domain alone for 24h after a rebuild apply (sections_replaced), and works again later", async () => {
     add("m1", [0.1, 1]);
     const rebuilt = ev.sectionsReplaced("d", []);

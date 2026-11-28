@@ -16,6 +16,7 @@ import { hideSourceProperties } from "./source-props.js";
 import { Entry } from "../schema/knowledge.js";
 import { lintKnowledge } from "../shared/knowledgeLint.js";
 import { writeEntrySection } from "./reorg.js";
+import { readSections } from "./sections.js";
 import { foldRegistry, readLedger } from "./ledger.js";
 import { flushWorkLinks, pendingWorkLinks, workIdOfTopic, parseKbNotes } from "./work-links.js";
 import type { KbRoots } from "../shared/index.js";
@@ -110,6 +111,21 @@ describe("sweep: graduated work", () => {
     expect(parent.split("\n---\n")[1].length).toBeLessThanOrEqual(6000);
     const queued = readdirSync(inbox());
     expect(queued.some((f) => f.includes("~split-1-bsec"))).toBe(true);
+  });
+
+  it("a ~split- part of an oversize entry is placed in its parent's section and never opens a new section", async () => {
+    produceDetail = `## A\n\n${"a".repeat(4000)}\n\n## Bsec\n\n${"b".repeat(4000)}\n`;
+    drop("topic-big", "Big topic");
+    await run({});
+    const sectionsBefore = readSections(roots).map((s) => String(s.id));
+    expect(sectionsBefore).toHaveLength(1); // the parent's own section
+    produceDetail = undefined;
+    // an embedding far from the parent's section: the router leaves the part unplaced
+    await sweep({ engine, roots, notify: (m) => notes.push(m), getEmbedder: () => ({ embed: async () => [0, 1, 0] }), loadEntryVectors: async () => [] } as any);
+    expect(readSections(roots).map((s) => String(s.id))).toEqual(sectionsBefore);
+    const written = readdirSync(entries()).filter((f) => !f.startsWith("kb-wp-AAAAAAA") && !f.startsWith("kb-wp-BBBBBBB"));
+    expect(written).toHaveLength(2); // the trimmed parent and its split part
+    for (const f of written) expect(readFileSync(join(entries(), f), "utf8")).toContain(`section: ${sectionsBefore[0]}`);
   });
 
   describe("graduation provenance", () => {

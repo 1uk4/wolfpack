@@ -175,6 +175,13 @@ export const KbEventSchema = z.discriminatedUnion("t", [
   }),
   z.object({
     ...base,
+    t: z.literal("section_removed"),
+    /** An emptied section was dropped (a retire left it with no entries and no child sections). */
+    sectionId: z.string(),
+    domain: z.string(),
+  }),
+  z.object({
+    ...base,
     t: z.literal("entry_placed"),
     entryId: z.string(),
     sectionId: z.string(),

@@ -800,6 +800,22 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         }
       }
 
+      // The section of the entry a `~split-` contribution was cut from (alias of the base topic), if it has one.
+      const splitParentSection = (sc: ParsedContribution): SectionId | undefined => {
+        const at = sc.denTopicId.search(/~split-\d+-/); // numbered: an oversize cut, not a second-subject overflow
+        if (at < 0) return undefined;
+        const base = sc.denTopicId.slice(0, at);
+        for (const topic of reg.values()) {
+          if (!topic.aliases.some((a) => a.wolf === sc.from && a.denTopicId === base)) continue;
+          for (const id of topic.entries) {
+            const md = readEntryMarkdown(roots, domain, id);
+            const sec = md ? String(parseFrontmatter(md).fields.section ?? "") : "";
+            if (sec && sections.some((s) => String(s.id) === sec)) return SectionId.parse(sec);
+          }
+        }
+        return undefined;
+      };
+
       // A new entry is placed by deterministic tree descent.
       if (!sectionId) {
         // Build section members map for placeEntry (grouped entries follow their
@@ -824,6 +840,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         const decision = placeEntry(vec, {}, domainSections, domainCentroid, sectionMembers);
         if (decision.sectionId !== "_unplaced") {
           sectionId = decision.sectionId as SectionId;
+          placement = { basis: "routed", fit: clampFit(decision.fit) };
+        } else if ((sectionId = splitParentSection(c))) {
+          // A `~split-` piece of an entry stays in the entry's own section: a split never opens a new (top-level) section.
           placement = { basis: "routed", fit: clampFit(decision.fit) };
         } else {
           // ── CLASSIFY FALLBACK (LLM section-pick, confined) ──────────────

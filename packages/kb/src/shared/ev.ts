@@ -80,6 +80,8 @@ export const ev = {
     childIds,
   }),
 
+  sectionRemoved: (sectionId: string, domain: string): KbEvent => ({ t: "section_removed", ...stamp(), sectionId, domain }),
+
   /** A rebuild replaced the domain's tree: folds as "drop every section of the domain, take this snapshot". */
   sectionsReplaced: (domain: string, sections: Array<Record<string, unknown>>): KbEvent => ({
     t: "sections_replaced",

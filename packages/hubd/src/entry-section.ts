@@ -10,6 +10,8 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 export interface EntrySection {
   domain: string;
   section?: string;
+  /** Section ids from the top of the tree down to `section`. */
+  sectionPath?: string[];
   sectionTitle?: string;
 }
 
@@ -27,11 +29,17 @@ export function resolveEntrySection(roots: KbRoots, entryId: string): EntrySecti
       const section = fm ? (/^section:[ \t]*([^\r\n]*?)[ \t\r]*$/m.exec(fm[1]!)?.[1] ?? "").replace(/^(["'])(.*)\1$/, "$2") : "";
       if (!section) return { domain };
       let sectionTitle: string | undefined;
+      let sectionPath: string[] | undefined;
       try {
-        const t = readSections(roots).find((s) => String(s.id) === section)?.title;
+        const all = readSections(roots);
+        const byId = new Map(all.map((s) => [String(s.id), s]));
+        const t = byId.get(section)?.title;
         if (typeof t === "string" && t) sectionTitle = t;
-      } catch { /* the name is optional */ }
-      return { domain, section, ...(sectionTitle ? { sectionTitle } : {}) };
+        const chain: string[] = [];
+        for (let cur = byId.get(section); cur && chain.length < 12 && !chain.includes(String(cur.id)); cur = cur.parent ? byId.get(String(cur.parent)) : undefined) chain.unshift(String(cur.id));
+        if (chain.length) sectionPath = chain;
+      } catch { /* the name and chain are optional */ }
+      return { domain, section, ...(sectionPath ? { sectionPath } : {}), ...(sectionTitle ? { sectionTitle } : {}) };
     }
   } catch { /* best effort */ }
   return undefined;

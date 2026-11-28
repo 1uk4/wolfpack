@@ -113,11 +113,11 @@ describe("derive fan-out queue", () => {
     d.onSweep({ type: "sweep_progress", from: "w", denTopicId: "tp1", startedAt: 4000 });
     d.onSweep({ type: "sweep_progress", from: "w", denTopicId: "tp1", startedAt: 4000 }); // route known: same item
     t = 6500;
-    d.onSweep({ type: "sweep_item", from: "w", denTopicId: "tp1", outcome: "create", entryId: "kb-wp-aaaaaaa", domain: "wp", section: "s1", sectionTitle: "Caching", decision: { reason: "new subject" } } as never);
+    d.onSweep({ type: "sweep_item", from: "w", denTopicId: "tp1", outcome: "create", entryId: "kb-wp-aaaaaaa", domain: "wp", section: "s1", sectionPath: ["s0", "s1"], sectionTitle: "Caching", decision: { reason: "new subject" } } as never);
     await drain();
     expect(seen.map((e) => e.verb)).toEqual(["curate-start", "curate-done"]);
     expect(seen[0]).toMatchObject({ actor: { kind: "hub" }, detail: { ref: "tp1" } });
-    expect(seen[1]).toMatchObject({ actor: { kind: "hub" }, target: { kind: "kb-entry", id: "kb-wp-aaaaaaa", domain: "wp" }, detail: { outcome: "create", section: "s1", sectionTitle: "Caching", ms: 2500, ref: "tp1" } });
+    expect(seen[1]).toMatchObject({ actor: { kind: "hub" }, target: { kind: "kb-entry", id: "kb-wp-aaaaaaa", domain: "wp" }, detail: { outcome: "create", section: "s1", sectionPath: ["s0", "s1"], sectionTitle: "Caching", ms: 2500, ref: "tp1" } });
     expect("reason" in (seen[1]!.detail ?? {})).toBe(false); // the curator's reason is not broadcast on the activity bus
   });
 

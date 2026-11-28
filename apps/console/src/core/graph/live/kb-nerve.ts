@@ -29,9 +29,11 @@ function bfs(adj: Map<string, string[]>, from: string, to: string): string[] | n
 
 /**
  * The node ids a nerve pulse visits: from `dom` down the tree edges to `ent` (the sections between are on the way).
+ * The event's own section chain (`chain`, ids without the `sec:` prefix), when it has one, is walked as it is; older events fall back to the tree search below.
  * An entry the map does not have yet (or cannot reach) ends the path at its section, or at the domain when that is missing too.
  */
-export function nervePath(edges: readonly NerveEdge[], dom: string, sec?: string, ent?: string): string[] {
+export function nervePath(edges: readonly NerveEdge[], dom: string, sec?: string, ent?: string, chain?: readonly string[]): string[] {
+	if (chain?.length) return [dom, ...chain.map((s) => `sec:${s}`), ...(ent ? [ent] : [])]; // the event carries the whole chain: no search needed
 	const adj = new Map<string, string[]>();
 	const link = (a: string, b: string) => (adj.get(a) ?? adj.set(a, []).get(a)!).push(b);
 	for (const e of edges) {

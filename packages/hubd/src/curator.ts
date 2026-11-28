@@ -382,7 +382,7 @@ export function createCurator(deps: CuratorDeps): Curator {
         emit({
           type: "sweep_item", from: e.from, denTopicId: e.denTopicId, outcome: e.outcome,
           ...(e.entryId ? { entryId: e.entryId } : {}), ...(e.decision ? { decision: e.decision } : {}),
-          ...(where ? { domain: where.domain, ...(where.section ? { section: where.section } : {}), ...(where.sectionTitle ? { sectionTitle: where.sectionTitle } : {}) } : {}),
+          ...(where ? { domain: where.domain, ...(where.section ? { section: where.section } : {}), ...(where.sectionPath?.length ? { sectionPath: where.sectionPath } : {}), ...(where.sectionTitle ? { sectionTitle: where.sectionTitle } : {}) } : {}),
         });
       }
     };

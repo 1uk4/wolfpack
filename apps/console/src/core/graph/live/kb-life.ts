@@ -42,7 +42,7 @@ export const KB_RING_MAX = 6;
 /** `slot` is the topic's fixed place on the ring round Home; the flight made from it inherits it. */
 export interface KbTopic { id: string; wolf: string; born: number; slot: number }
 export type KbOutcome = "create" | "merge" | "reject" | "parked";
-export interface KbResult { outcome: string; entryId?: string; domain?: string; section?: string; sectionTitle?: string; ms?: number; tokens?: number }
+export interface KbResult { outcome: string; entryId?: string; domain?: string; section?: string; sectionPath?: string[]; sectionTitle?: string; ms?: number; tokens?: number }
 export type FlightStage = "queued" | "travel" | "wait" | "place" | "fade";
 export interface KbFlight {
 	/** The den topic id (the correlation key). */
@@ -64,7 +64,7 @@ export interface KbFlight {
 	/** A flight made from a curate-done alone (no promote seen): it starts at the curator. */
 	synthetic?: true;
 }
-export interface KbPulse { id: string; kind: "create" | "merge"; entryId?: string; domain?: string; section?: string; at: number }
+export interface KbPulse { id: string; kind: "create" | "merge"; entryId?: string; domain?: string; section?: string; sectionPath?: string[]; at: number }
 export interface KbLife {
 	wolves: Record<string, KbWolf>;
 	topics: KbTopic[];
@@ -144,6 +144,7 @@ export function reduceKbLife(s: KbLife, e: ActivityEvent, now: number): KbLife {
 				...(e.target?.kind === "kb-entry" ? { entryId: e.target.id } : {}),
 				...(e.target?.domain ?? e.domain ? { domain: (e.target?.domain ?? e.domain)! } : {}),
 				...(d.section ? { section: d.section } : {}),
+				...(d.sectionPath?.length ? { sectionPath: d.sectionPath } : {}),
 				...(d.sectionTitle ? { sectionTitle: d.sectionTitle } : {}),
 				...(d.ms !== undefined ? { ms: d.ms } : {}),
 				...(d.tokens !== undefined ? { tokens: d.tokens } : {}),
@@ -205,7 +206,7 @@ export function stepKbLife(s: KbLife, now: number): KbLife {
 			} else if (now - n.at > KB_WAIT_MAX_MS) n = { ...n, stage: "fade", at: now, endAt: now + dur(s, KB_FADE_MS) };
 		}
 		if ((n.stage === "place" || n.stage === "fade") && now >= n.endAt) {
-			if (n.stage === "place" && n.result) pulses.push({ id: n.id, kind: n.result.outcome === "create" ? "create" : "merge", ...(n.result.entryId ? { entryId: n.result.entryId } : {}), ...(n.result.domain ?? n.domain ? { domain: (n.result.domain ?? n.domain)! } : {}), ...(n.result.section ? { section: n.result.section } : {}), at: n.endAt });
+			if (n.stage === "place" && n.result) pulses.push({ id: n.id, kind: n.result.outcome === "create" ? "create" : "merge", ...(n.result.entryId ? { entryId: n.result.entryId } : {}), ...(n.result.domain ?? n.domain ? { domain: (n.result.domain ?? n.domain)! } : {}), ...(n.result.section ? { section: n.result.section } : {}), ...(n.result.sectionPath?.length ? { sectionPath: n.result.sectionPath } : {}), at: n.endAt });
 			changed = true;
 			continue; // flight over
 		}

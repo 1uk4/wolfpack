@@ -112,7 +112,7 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
      * The curator's per-item events (hub bus drafts) -> curate-start (first sweep_progress of an item) and curate-done (sweep_item).
      * The sweep carries no contribution id, so `detail.ref` is the den topic id (what the wolf's memory-promote event carries in topicIds).
      */
-    onSweep(d: { type: string; from?: string; denTopicId?: string; startedAt?: number; outcome?: string; entryId?: string; domain?: string; section?: string; sectionTitle?: string }): void {
+    onSweep(d: { type: string; from?: string; denTopicId?: string; startedAt?: number; outcome?: string; entryId?: string; domain?: string; section?: string; sectionPath?: string[]; sectionTitle?: string }): void {
       try {
         if (d.type !== "sweep_progress" && d.type !== "sweep_item") return;
         if (!d.denTopicId || !d.from) return;
@@ -130,6 +130,7 @@ export function createActivityDeriver(o: ActivityDeriverOptions) {
           ref: d.denTopicId, topicIds: [d.denTopicId],
           ...(d.outcome ? { outcome: d.outcome } : {}),
           ...(d.section ? { section: d.section } : {}),
+          ...(d.sectionPath?.length ? { sectionPath: d.sectionPath } : {}),
           ...(d.sectionTitle ? { sectionTitle: d.sectionTitle } : {}),
           ...(startedAt !== undefined ? { ms: Math.max(0, now() - startedAt) } : {}),
         };

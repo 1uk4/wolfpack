@@ -29,6 +29,16 @@ describe("nervePath", () => {
 	});
 });
 
+describe("nervePath with the event's section chain", () => {
+	it("walks domain, every section of the chain, then the entry, without needing the edges", () => {
+		assert.deepEqual(nervePath([], "dom:wp", "sec:b", "ent:1", ["a", "b"]), ["dom:wp", "sec:a", "sec:b", "ent:1"]);
+	});
+	it("without a chain it finds the path in the tree, then falls back to the domain", () => {
+		assert.deepEqual(nervePath(edges, "dom:wp", "sec:b", "ent:1", undefined), ["dom:wp", "sec:a", "sec:b", "ent:1"]);
+		assert.deepEqual(nervePath([], "dom:wp", "sec:b", "ent:1", []), ["dom:wp"]);
+	});
+});
+
 describe("nerve geometry", () => {
 	const pts = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 30 }]; // length 40
 	it("nerveHead is the point t of the way along the polyline, by length", () => {

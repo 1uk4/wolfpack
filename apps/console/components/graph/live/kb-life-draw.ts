@@ -58,7 +58,7 @@ function nerveIds(host: KbDrawHost, pl: KbPulse): string[] {
 	let ids = per.get(pl.id);
 	if (!ids) {
 		if (per.size > 200) per.clear();
-		per.set(pl.id, (ids = nervePath(edges, `dom:${pl.domain}`, pl.section ? `sec:${pl.section}` : undefined, pl.entryId ? `ent:${pl.entryId}` : undefined).filter((id) => host.hasNode(id))));
+		per.set(pl.id, (ids = nervePath(edges, `dom:${pl.domain}`, pl.section ? `sec:${pl.section}` : undefined, pl.entryId ? `ent:${pl.entryId}` : undefined, pl.sectionPath).filter((id) => host.hasNode(id))));
 	}
 	return ids;
 }

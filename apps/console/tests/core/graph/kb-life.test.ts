@@ -49,13 +49,13 @@ describe("kb life model", () => {
 		assert.equal(s.flights[0]!.stage, "travel");
 		s = stepKbLife(s, T0 + 5000);
 		assert.equal(s.flights[0]!.stage, "wait");
-		s = reduceKbLife(reduceKbLife(s, start("t1"), T0 + 5100), done("t1", "create", { target: { kind: "kb-entry", id: "kb-x", domain: "wolfpack" } }), T0 + 6000);
+		s = reduceKbLife(reduceKbLife(s, start("t1"), T0 + 5100), done("t1", "create", { target: { kind: "kb-entry", id: "kb-x", domain: "wolfpack" }, detail: { outcome: "create", ref: "t1", section: "memory", sectionPath: ["top", "memory"] } }), T0 + 6000);
 		assert.deepEqual(Object.keys(s.curator), []);
 		s = stepKbLife(s, T0 + 6000);
 		assert.equal(s.flights[0]!.stage, "place");
 		s = stepKbLife(s, T0 + 9000);
 		assert.equal(s.flights.length, 0);
-		assert.deepEqual(s.pulses.map((p) => [p.kind, p.entryId]), [["create", "kb-x"]]);
+		assert.deepEqual(s.pulses.map((p) => [p.kind, p.entryId, p.sectionPath]), [["create", "kb-x", ["top", "memory"]]]); // the section chain rides on the pulse
 		// the pulse outlives the flight: nerve run, 10 s lit, then the final ring
 		assert.equal(stepKbLife(s, T0 + 9000 + KB_PULSE_MS).pulses.length, 1);
 		assert.equal(stepKbLife(s, T0 + 9000 + KB_NERVE_MS + KB_NERVE_GLOW_MS + KB_PULSE_MS - 1).pulses.length, 1);

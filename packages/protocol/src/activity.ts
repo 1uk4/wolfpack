@@ -59,6 +59,8 @@ export const ActivityDetailSchema = z.object({
   capacity: z.number().int().positive().optional(),
   outcome: cut(24).optional(),
   section: cut(80).optional(),
+  /** Section ids from the domain's top section down to the entry's section (curate-done), so a pulse can walk every hop. Old events lack it. */
+  sectionPath: z.array(cut(80)).transform((a) => a.slice(0, 12)).optional(),
   sectionTitle: cut(ACTIVITY_TITLE_MAX).optional(),
   tokens: z.number().int().nonnegative().optional(),
   ms: z.number().int().nonnegative().optional(),

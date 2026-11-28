@@ -97,7 +97,7 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 		const apply = () => {
 			const h = getKbHover();
 			overlayRef.current?.setKbFocus(h && (h.topicId || h.curator) ? { topicId: h.topicId, curator: h.curator } : null);
-			renderer.setOverlayHighlight(h && (h.wolf || h.target) ? { wolf: h.wolf, target: h.target } : null);
+			renderer.setOverlayHighlight(h && (h.wolf || h.target) ? { wolf: h.wolf, target: h.target, ...(h.sectionPath ? { sectionPath: h.sectionPath } : {}) } : null);
 		};
 		const off = subscribeKbHover(apply);
 		const offReset = onKbReset(() => overlayRef.current?.resetKb());

@@ -15,7 +15,7 @@ export interface MemoryRow {
 	text: string;
 	wolf?: string;
 	/** What the map rings on hover: the wolf, the entry a curator result landed in, and the topic's dot (same shape as the KB log's focus). */
-	focus: { wolf?: string; target?: { kind: string; id: string; domain?: string }; topicId?: string };
+	focus: { wolf?: string; target?: { kind: string; id: string; domain?: string }; topicId?: string; sectionPath?: string[] };
 }
 
 /** Promotes of one wolf this close together read as one row ("3 topics to the curator"). */
@@ -52,7 +52,7 @@ export function memoryRows(events: readonly { event: ActivityEvent; at: number }
 				: o === "parked" ? "Parked"
 				: e.target?.title ? `Merged into ${e.target.title}` : "Merged";
 			const target = e.target ? { kind: e.target.kind, id: e.target.id, ...(domain ? { domain } : {}) } : undefined;
-			rows.push({ key: e.id, at, text, ...(w ? { wolf: w } : {}), focus: { ...(w ? { wolf: w } : {}), ...(target ? { target } : {}), ...(topic ? { topicId: topic } : {}) } });
+			rows.push({ key: e.id, at, text, ...(w ? { wolf: w } : {}), focus: { ...(w ? { wolf: w } : {}), ...(target ? { target } : {}), ...(topic ? { topicId: topic } : {}), ...(d.sectionPath?.length ? { sectionPath: d.sectionPath } : {}) } });
 		}
 	}
 	return rows.map(({ promotes: _p, ...r }) => r).sort((a, b) => b.at - a.at);

@@ -24,7 +24,7 @@ import {
 	type LiveState,
 	type LiveTarget,
 } from "@/src/core";
-import { activeFocus, isFocusNode, touchFocus, type FocusTouch, ownerThreadKey, targetNodeId, threadKey, threadSlugOf, youLinkTarget, effectiveWolfColor, wolfColorTokens } from "@/src/core";
+import { activeFocus, isFocusNode, touchFocus, type FocusTouch, ownerThreadKey, targetNodeId, treePathOf, threadKey, threadSlugOf, youLinkTarget, effectiveWolfColor, wolfColorTokens } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba, safeArc, safeZoom } from "./live-effects";
 import { floatOffset, nameHash } from "./live-float";
@@ -223,7 +223,7 @@ export interface OverlayCard {
 }
 export interface AttachedRef { wolf: string; threadId: string }
 /** What the activity feed asks the overlay to ring: a graph node id, an event target (resolved like a trail), or a wolf's glyph. */
-export interface OverlayHighlight { nodeId?: string; target?: LiveTarget; wolf?: string }
+export interface OverlayHighlight { nodeId?: string; target?: LiveTarget; wolf?: string; /** The filed entry's section chain (ids without `sec:`), for its tree path. */ sectionPath?: string[] }
 
 /** What the overlay is animating right now: fast (pulses, wolf motion, tugs, you-node, highlight), float (the idle drift) or slow (fades). */
 export type FrameNeed = "none" | "slow" | "float" | "fast";
@@ -1275,6 +1275,18 @@ export class LiveOverlay {
 			if (!at) {
 				const id = hl.nodeId && host.hasNode(hl.nodeId) ? hl.nodeId : hl.target ? targetNodeId(hl.target, (n) => host.hasNode(n)) : null;
 				at = id ? host.nodePos(id) : null;
+			}
+			// A filed entry rings every node on its tree path (domain, sections, entry), up to the first one the map does not have.
+			const treeIds = hl.target ? treePathOf(host.edgesOf?.() ?? [], hl.target, hl.sectionPath) : [];
+			const gap = treeIds.findIndex((id) => !host.hasNode(id));
+			for (const id of gap >= 0 ? treeIds.slice(0, gap) : treeIds) {
+				const p = host.nodePos(id);
+				if (!p || (at && p.x === at.x && p.y === at.y)) continue;
+				ctx.beginPath();
+				safeArc(ctx, p.x, p.y, HL_R * m * 0.8, 0, Math.PI * 2);
+				ctx.lineWidth = 1.2 / k;
+				ctx.strokeStyle = rgba(color, 0.55);
+				ctx.stroke();
 			}
 			if (at) {
 				const pulse = reduced ? 0 : 0.5 + 0.5 * Math.sin(now / 260);

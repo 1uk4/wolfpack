@@ -53,6 +53,15 @@ export function nervePath(edges: readonly NerveEdge[], dom: string, sec?: string
 	return (ent && bfs(adj, dom, ent)) || (sec && bfs(adj, dom, sec)) || [dom];
 }
 
+/**
+ * The node ids a hover or Activity highlight rings for a filed entry: its tree path (domain, sections, entry), the same as the nerve pulse.
+ * Empty for any other target (only its own node rings). `sectionPath` is the event's own chain, when it has one.
+ */
+export function treePathOf(edges: readonly NerveEdge[], target: { kind: string; id: string; domain?: string }, sectionPath?: readonly string[]): string[] {
+	if (target.kind !== "kb-entry" || !target.domain) return [];
+	return nervePath(edges, `dom:${target.domain}`, undefined, `ent:${target.id}`, sectionPath);
+}
+
 const segLen = (a: NervePt, b: NervePt) => Math.hypot(b.x - a.x, b.y - a.y);
 
 /** The point `dist` along the polyline (clamped to its ends). */

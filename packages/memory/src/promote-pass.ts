@@ -14,6 +14,8 @@ import { existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { activeHoursSince } from "./active-hours.js";
 import { readPromoteState, updateTopicState } from "./promote-state.js";
+import type { TopicOutcome } from "./topic-outcome.js";
+import { bodyHash } from "./den.js";
 import { recordReject, recordRouting, routingHint } from "./routing-index.js";
 import { readTopics, writeTopic, type TopicFile } from "./session/memory.js";
 import { readDenTopics } from "./den.js";
@@ -61,13 +63,7 @@ export type PassTrigger =
   | { kind: "daily" }
   | { kind: "migration" };
 
-/** What the KB said about a topic after promote (from its receipts / distill record). */
-export type TopicOutcome =
-  | { kind: "create" | "merge"; entryIds: string[] }
-  | { kind: "reject" }
-  | { kind: "parked" }
-  | { kind: "held"; reason: string }
-  | { kind: "pending" };
+export type { TopicOutcome };
 
 export interface PassDeps {
   /** Distill and emit these topics to the KB (never throws for one bad topic). */
@@ -166,13 +162,16 @@ export async function runPromotePass(opts: PassOptions): Promise<PassResult> {
         continue;
       } else if (out.kind === "held") {
         result.held.push(t.id);
-        const seen = readPromoteState(den).topics[t.id]?.heldRewriteTried;
+        // The one retry belongs to this exact title and body: an edit since the failed rewrite earns a new one.
+        const held = readPromoteState(den).topics[t.id];
+        const heldHash = bodyHash(`${t.title}\n${t.body}`);
+        const seen = held?.heldRewriteTried && held.heldHash === heldHash;
         if (seen) {
           updateTopicState(den, t.id, { retiredAt: now.toISOString() });
           retireTopic(root, t, now);
           result.retired.push(t.id);
         } else {
-          updateTopicState(den, t.id, { heldRewriteTried: true });
+          updateTopicState(den, t.id, { heldRewriteTried: true, heldHash });
           const fixed = await opts.rewriteHeld(t, out.reason);
           if (fixed) {
             const again = readTopics(root).find((x) => x.id === t.id);

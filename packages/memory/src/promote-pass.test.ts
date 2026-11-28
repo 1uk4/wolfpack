@@ -125,6 +125,18 @@ describe("promote pass", () => {
     expect(existsSync(join(root, "retired", "a.md"))).toBe(true);
   });
 
+  it("a held topic the owner edited after its failed rewrite is retried, not retired (work-wolfpack-64n2bO3)", async () => {
+    const { den, root } = setup([20]);
+    topic(root, "a");
+    let rewrites = 0;
+    const d = { ...deps({ a: { kind: "held", reason: "distill: log-like" } }), rewriteHeld: async () => { rewrites++; return false; } };
+    await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...d });
+    topic(root, "a", { body: "a rewritten body" });
+    await runPromotePass({ den, root, trigger: { kind: "owner" }, now: NOW, ...d });
+    expect(rewrites).toBe(2);
+    expect(existsSync(join(root, "retired", "a.md"))).toBe(false);
+  });
+
   it("over the byte cap, retires the least recently updated confirmed topic first, then evicts unconfirmed ones, never keep-local", async () => {
     const { den, root } = setup([20]);
     const big = "x".repeat(50);

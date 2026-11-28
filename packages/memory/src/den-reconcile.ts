@@ -102,13 +102,22 @@ function readEmittedMap(roots: KbRoots): Record<string, string> {
  */
 export function denTopicStates(denRoot: string, roots: KbRoots | undefined, wolf: string): DenTopicState[] {
   const topics = readDenTopics(denRoot);
-  if (!roots) return topics.map((topic) => ({ topic, status: { kind: "pending-promote" } }));
+  if (!roots) return topics.map((topic) => ({ topic, status: heldIfNotPromotable(topic, { kind: "pending-promote" }) }));
 
   const receipts = receiptsDir(roots, wolf);
   const inbox = inboxDir(roots, wolf);
   const emitted = readEmittedMap(roots);
 
-  return topics.map((topic): DenTopicState => ({ topic, status: statusOf(topic, roots, wolf, receipts, inbox, emitted) }));
+  return topics.map((topic): DenTopicState => ({ topic, status: heldIfNotPromotable(topic, statusOf(topic, roots, wolf, receipts, inbox, emitted)) }));
+}
+
+/**
+ * A topic the promote gate holds (`promotable: false`) is never sent, so "pending promote" would wait forever for
+ * nothing: it reads as held, with the reason the gate recorded. Any other status (absorbed, awaiting the sweep, ...) stands.
+ */
+function heldIfNotPromotable(topic: DenTopic, status: DenTopicStatus): DenTopicStatus {
+  if (topic.promotable || status.kind !== "pending-promote") return status;
+  return { kind: "held", reason: topic.promotableReason || "not promotable" };
 }
 
 /**

@@ -147,6 +147,13 @@ describe("renderDenContext", () => {
     ]);
   });
 
+  it("lists a promotable: false topic as held back with its reason, not as pending promote", () => {
+    writeDenTopic(den, { id: "loglike", title: "loglike", summary: "a log", updated: "2026-10-20 10:00", body: "did a then b", promotable: false, promotableReason: "reads as a session log" });
+
+    expect(denTopicStates(den, roots, WOLF)[0].status).toEqual({ kind: "held", reason: "reads as a session log" });
+    expect(renderDenContext(den, WOLF, roots)!.split("\n")[1]).toBe("- loglike.md [held back (reads as a session log)] -- a log");
+  });
+
   it("hides absorbed topics even before reconcile moves them", () => {
     receipt("absorbed", topic("absorbed"), "create", "kb-wolfpack-AAAAAAA");
     expect(renderDenContext(den, WOLF, roots)).toBeNull();

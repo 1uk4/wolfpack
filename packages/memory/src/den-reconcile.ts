@@ -14,9 +14,9 @@
 import { existsSync, readFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWrite } from "@wolfpack/engine";
-import type { TopicOutcome } from "./promote-pass.js";
+import type { TopicOutcome } from "./topic-outcome.js";
 import { contentHash, inboxDir, receiptsDir, type KbRoots } from "@wolfpack/kb/shared";
-import { readDenTopics, type DenTopic } from "./den.js";
+import { bodyHash, readDenTopicStates, readDenTopics, type DenTopic } from "./den.js";
 import { readDistillRecord } from "./distill.js";
 
 /** Receipt outcomes meaning the KB holds this content (or deliberately newer truth). */
@@ -205,9 +205,15 @@ export function kbOutcome(denRoot: string, roots: KbRoots, wolf: string, topic: 
     case "awaiting-domain": return { kind: "parked" };
     case "held": return { kind: "held", reason: s.reason };
     default: {
-      for (const b of bodies) {
+      // bodies[0] is the den body. A session body counts only while the den file is still what consolidate wrote from it:
+      // a den body edited since (its session_hash no longer matches) is new content the KB has not seen.
+      const den = readDenTopicStates(denRoot).get(topic.id);
+      const edited = !!den?.sessionHash && den.sessionHash !== bodyHash(den.body);
+      for (const b of edited ? bodies.slice(0, 1) : bodies) {
         const ids = absorbedEntryIds(roots, wolf, topic.id, b);
-        if (ids) return { kind: "create", entryIds: ids };
+        if (!ids) continue;
+        // A reject receipt names no entry: it is a reject, as in the absorbed case above.
+        return ids.length ? { kind: "create", entryIds: ids } : { kind: "reject" };
       }
       return { kind: "pending" };
     }

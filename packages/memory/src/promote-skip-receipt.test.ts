@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
-import { writeDenTopic } from "./den.js";
+import { bodyHash, writeDenTopic } from "./den.js";
 import { denTopicStates, kbOutcome } from "./den-reconcile.js";
 import { runPromotePass } from "./promote-pass.js";
 import { readPromoteState } from "./promote-state.js";
@@ -60,5 +60,20 @@ describe("a topic the skip rule judged already in the KB", () => {
     expect(readPromoteState(den).topics.t?.receipt).toBeUndefined();
     expect(sent).toHaveLength(2);
     expect(denTopicStates(den, roots, WOLF)[0].status.kind).toBe("pending-promote");
+  });
+
+  it("a reject receipt on the session copy is recorded as a reject, not as a promotion into no entry (work-wolfpack-64n2bO3)", () => {
+    const dir = join(roots.opsRoot, "receipts", WOLF);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `t-${contentHash("session body").slice(7, 17)}.md`), `---\nfrom: ${WOLF}\nden_topic_id: t\noutcome: reject\nprocessed: 2026-10-22 10:00\n---\n\nnot knowledge\n`);
+    expect(kbOutcome(den, roots, WOLF, { id: "t" }, ["den body", "session body"])).toEqual({ kind: "reject" });
+  });
+
+  it("a den body the owner edited after consolidate wrote it stays pending when only the session body was absorbed, so it is sent again", () => {
+    writeDenTopic(den, { id: "e", title: "E", summary: "s", updated: "2026-10-01 00:00", body: "edited den body", sessionHash: bodyHash("session body") });
+    const dir = join(roots.opsRoot, "receipts", WOLF);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `e-${contentHash("session body").slice(7, 17)}.md`), `---\nfrom: ${WOLF}\nden_topic_id: e\noutcome: merge\nprocessed: 2026-10-22 10:00\n---\n\nkb-wolfpack-AAAAAAA\n`);
+    expect(kbOutcome(den, roots, WOLF, { id: "e" }, ["edited den body", "session body"])).toEqual({ kind: "pending" });
   });
 });

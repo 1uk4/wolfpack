@@ -166,7 +166,9 @@ describe("scrubDeployStatus", () => {
     ["drops the whole sentence for a mid-text status phrase", "The panel opens. It was verified live on the VPS today. Config applies at next boot.", "The panel opens. Config applies at next boot."],
     ["drops a final status sentence", "The panel opens on tap. Status: done", "The panel opens on tap."],
     ["drops a bullet that is only a status sentence", "- Deployed to the VPS.", ""],
-    ["leaves a need-a-restart fact for the retry", "Config changes need a restart.", "Config changes need a restart."],
+    ["rewords a need-a-restart fact instead of dropping it", "Config changes need a restart.", "Config changes take effect after a restart."],
+    ["rewords needs-a-restart, keeping a leading capital", "Each wolf. Needs a restart.", "Each wolf. Takes effect after a restart."],
+    ["drops a sentence awaiting a deploy", "The panel opens. It is awaiting a deploy. Done.", "The panel opens. Done."],
     ["does not touch inline code or spacing elsewhere", "Run `a  b` here  now (shipped) ok", "Run `a  b` here  now ok"],
   ];
   it.each(cases)("%s", (_n, before, after) => {

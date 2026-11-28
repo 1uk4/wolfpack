@@ -79,7 +79,7 @@ const DEPLOY_STATUS: Array<{ re: RegExp; scrub: ScrubMode }> = [
   { re: /\bverified\s+(?:live|on the vps|in prod(?:uction)?|end-to-end|working|green)\b/i, scrub: "sentence" },
   { re: /\b(?:status|state)\s*:\s*(?:deployed|verified|shipped|done|complete[d]?)\b/i, scrub: "sentence" },
   { re: /^\W*(?:\*\*)?(?:deployed|verified|shipped|live)\b(?:\*\*)?\s*[:\-–—]/i, scrub: "lead" },
-  { re: /\b(?:needs?|awaiting|pending)\s+(?:a\s+)?(?:deploy|sync|restart)\b/i, scrub: "none" },
+  { re: /\b(?:needs?|awaiting|pending)\s+(?:a\s+)?(?:deploy|sync|restart)\b/i, scrub: "sentence" },
 ];
 const hasDeployStatus = (line: string) => DEPLOY_STATUS.some((e) => e.re.test(line));
 const MONTH = "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?";
@@ -181,8 +181,16 @@ function dropSentence(line: string, re: RegExp): string | null {
   return before + rest.trimStart();
 }
 
+/** "needs a restart" is usually a real fact: reworded to "takes effect after a restart" (the lint's restart form), never dropped. */
+function rewordRestart(line: string): string {
+  return line.replace(/\b(needs?)\s+(?:a\s+)?restart\b/gi, (_m, verb: string) => {
+    const take = verb.toLowerCase() === "needs" ? "takes" : "take";
+    return `${verb[0] === verb[0].toUpperCase() ? take[0].toUpperCase() + take.slice(1) : take} effect after a restart`;
+  });
+}
+
 function scrubStatusLine(line: string): string {
-  let out = line;
+  let out = rewordRestart(line);
   for (let pass = 0; pass < 6 && hasDeployStatus(out); pass++) {
     let next = out;
     for (const e of DEPLOY_STATUS) if (e.scrub === "paren") next = dropParens(next, e.re);

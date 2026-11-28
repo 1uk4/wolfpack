@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { PresenceSnapshot } from "@wolfpack/protocol";
-import { feedCountReducer, feedPillLabel, formatFeed, relativeTime, seedFeedFromSnapshot, type FeedEvent } from "../../../src/core/graph/live/feed.ts";
+import { formatFeed, relativeTime, seedFeedFromSnapshot, type FeedEvent } from "../../../src/core/graph/live/feed.ts";
 
 let n = 0;
 const ev = (verb: string, o: Partial<FeedEvent> = {}): FeedEvent => ({ id: `e${++n}`, at: 1000, ts: 0, verb, actor: { kind: "thread", wolf: "1uk4", threadId: "t1" }, ...o });
@@ -72,12 +72,6 @@ describe("activity feed formatter", () => {
 		assert.equal(seedFeedFromSnapshot(many, 0).length, 50);
 	});
 
-	it("the collapsed pill always has a label: Quiet with no lines, Activity otherwise, with the new count", () => {
-		assert.equal(feedPillLabel(0, 0), "Quiet");
-		assert.equal(feedPillLabel(0, 3), "Activity");
-		assert.equal(feedPillLabel(2, 3), "Activity · 2 new");
-	});
-
 	it("merges a consecutive duplicate within 30 s, keeps it apart after", () => {
 		const a = ev("kb-read", { at: 1000, target: kb });
 		const b = ev("kb-read", { at: 20_000, target: kb });
@@ -97,18 +91,5 @@ describe("relative time", () => {
 		assert.equal(relativeTime(13_000, 1000), "12s");
 		assert.equal(relativeTime(181_000, 1000), "3m");
 		assert.equal(relativeTime(3_700_000, 0), "1h");
-	});
-});
-
-describe("collapsed counter", () => {
-	it("counts new events while collapsed, keeps rising, resets on expand", () => {
-		let s = feedCountReducer({ collapsed: false, count: 0 }, { type: "new", n: 3 });
-		assert.equal(s.count, 0);
-		s = feedCountReducer(s, { type: "collapse" });
-		s = feedCountReducer(s, { type: "new", n: 2 });
-		s = feedCountReducer(s, { type: "new", n: 1 });
-		assert.deepEqual(s, { collapsed: true, count: 3 });
-		s = feedCountReducer(s, { type: "expand" });
-		assert.deepEqual(s, { collapsed: false, count: 0 });
 	});
 });

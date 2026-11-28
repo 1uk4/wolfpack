@@ -136,12 +136,6 @@ export function seedFeedFromSnapshot(snap: PresenceSnapshot, now: number, max = 
 	return out.sort((a, b) => a.at - b.at).slice(-max);
 }
 
-/** The collapsed pill: "Quiet" with nothing to show, "Activity" otherwise, with how many arrived since collapsing. */
-export function feedPillLabel(newCount: number, lineCount: number): string {
-	if (newCount > 0) return `Activity · ${newCount} new`;
-	return lineCount === 0 ? "Quiet" : "Activity";
-}
-
 /** "now", "12s", "3m", "1h". */
 export function relativeTime(now: number, at: number): string {
 	const s = Math.max(0, Math.floor((now - at) / 1000));
@@ -149,14 +143,4 @@ export function relativeTime(now: number, at: number): string {
 	if (s < 60) return `${s}s`;
 	if (s < 3600) return `${Math.floor(s / 60)}m`;
 	return `${Math.floor(s / 3600)}h`;
-}
-
-export interface FeedCount { collapsed: boolean; count: number }
-export type FeedCountAction = { type: "collapse" } | { type: "expand" } | { type: "new"; n: number };
-
-/** The "Activity · N new" chip: N counts events since collapsing, keeps rising, resets on expand. */
-export function feedCountReducer(s: FeedCount, a: FeedCountAction): FeedCount {
-	if (a.type === "collapse") return { collapsed: true, count: 0 };
-	if (a.type === "expand") return { collapsed: false, count: 0 };
-	return s.collapsed ? { collapsed: true, count: s.count + a.n } : s;
 }

@@ -1,9 +1,30 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { emptyLiveState, reduceLive } from "../../../src/core/graph/live/live-state.ts";
-import { ownerThreadKey, targetNodeId, youLinkTarget } from "../../../src/core/graph/live/live-targets.ts";
+import { hubWorkNodeId, ownerThreadKey, subagentTaskNodeId, targetNodeId, youLinkTarget } from "../../../src/core/graph/live/live-targets.ts";
 
 const ev = (verb: string, o: Record<string, unknown>) => ({ v: 1, id: verb, pack: "p", ts: 0, ttlMs: 60_000, verb, ...o }) as never;
+
+describe("where a thread hub and a sub-agent attach", () => {
+	const on = (...ids: string[]) => (n: string) => ids.includes(n);
+	const bound = { kind: "work-item", id: "work-wolfpack-TASK" };
+	it("a bound thread with no feature sits on its task node", () => {
+		assert.equal(hubWorkNodeId({ bound }, on("work:TASK", "dom:wolfpack")), "work:TASK");
+	});
+	it("falls back from the task to the feature node, then to nothing (the caller uses the domain, then the centre)", () => {
+		const t = { bound, feature: "work-wolfpack-FEAT" };
+		assert.equal(hubWorkNodeId(t, on("work:FEAT", "dom:wolfpack")), "work:FEAT");
+		assert.equal(hubWorkNodeId(t, on("dom:wolfpack")), null);
+		assert.equal(hubWorkNodeId({ feature: "work-wolfpack-FEAT" }, on("work:FEAT")), "work:FEAT");
+	});
+	it("a sub-agent with a work id in its brief sits on that task", () => {
+		assert.equal(subagentTaskNodeId({ workItem: "work-wolfpack-SUB" }, { bound }, on("work:SUB", "work:TASK")), "work:SUB");
+	});
+	it("a sub-agent with no work id sits on its parent's bound item", () => {
+		assert.equal(subagentTaskNodeId({}, { bound }, on("work:TASK")), "work:TASK");
+		assert.equal(subagentTaskNodeId({}, { bound }, on("dom:wolfpack")), null);
+	});
+});
 
 describe("owner thread and target matching", () => {
 	it("matches the owner's URL slug to a wolfd thread id", () => {

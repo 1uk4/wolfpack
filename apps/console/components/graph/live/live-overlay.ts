@@ -24,7 +24,7 @@ import {
 	type LiveState,
 	type LiveTarget,
 } from "@/src/core";
-import { activeFocus, isFocusNode, touchFocus, type FocusTouch, ownerThreadKey, targetNodeId, treePathOf, threadKey, threadSlugOf, youLinkTarget, effectiveWolfColor, wolfColorTokens } from "@/src/core";
+import { activeFocus, isFocusNode, touchFocus, type FocusTouch, hubWorkNodeId, ownerThreadKey, subagentTaskNodeId, targetNodeId, treePathOf, threadKey, threadSlugOf, youLinkTarget, effectiveWolfColor, wolfColorTokens } from "@/src/core";
 import { WOLF_HEAD_BOX, WOLF_HEAD_PATH } from "@/components/shell/wolf-head-path";
 import { AMBER, EFFECTS, rgba, safeArc, safeZoom } from "./live-effects";
 import { floatOffset, nameHash } from "./live-float";
@@ -774,7 +774,7 @@ export class LiveOverlay {
 
 	/** Where a feature hub sits (world, no float): beside its work node, else beside its domain node, else near its wolf's home domain / the centre. */
 	private hubPos(t: LiveThread, host: OverlayHost, m: number, out: Pt): Pt {
-		const nodeId = this.hubNodeId(t, host);
+		const nodeId = hubWorkNodeId(t, (n) => host.hasNode(n), this.wolfMeta.get(t.wolf)?.dom);
 		const dom = this.wolfMeta.get(t.wolf)?.dom;
 		const domPos = dom ? host.nodePos("dom:" + dom) : null;
 		const p = (nodeId ? host.nodePos(nodeId) : null) ?? domPos ?? host.center();
@@ -902,7 +902,9 @@ export class LiveOverlay {
 		const phase = orbitPhase(wall, T.orbitSec, reduced);
 		for (const b of list) {
 			if (Number.isNaN(b.ang)) b.ang = (this.hashOf(b.a.key) % 360) * (Math.PI / 180);
-			const fc = b.parentKey ? this.groupCentre.get(b.parentKey) : undefined;
+			const taskNode = subagentTaskNodeId(b.a, s.threads[b.pk], (n) => host.hasNode(n), this.wolfMeta.get(b.a.wolf)?.dom);
+			const tp = taskNode ? host.nodePos(taskNode) : null;
+			const fc = tp ?? (b.parentKey ? this.groupCentre.get(b.parentKey) : undefined);
 			const wb = this.bodies.get(b.a.wolf);
 			const c = fc ?? wb ?? host.center();
 			const radius = subOrbitRadiusPx(this.mobileNow, T, fc ? "feature" : "home") * OVERLAY_UNIT;
@@ -1084,8 +1086,11 @@ export class LiveOverlay {
 			const dots = sc.compact ? [] : all.filter((x) => !x.t.feature).sort((a, c) => (a.t.id < c.t.id ? -1 : 1));
 			dots.forEach(({ t, alpha }, i) => {
 				const ang = -Math.PI / 2 + (i - (dots.length - 1) / 2) * 0.75 + 0.35;
-				const tx = wx + Math.cos(ang) * SAT_ORBIT * m;
-				const ty = wy + Math.sin(ang) * SAT_ORBIT * m;
+				// A thread bound to a task whose node is on the map sits on that node; otherwise it orbits its wolf.
+				const onTask = t.bound ? (hubWorkNodeId({ bound: t.bound }, (n) => host.hasNode(n), this.wolfMeta.get(t.wolf)?.dom) ?? null) : null;
+				const taskPos = onTask ? host.nodePos(onTask) : null;
+				const tx = taskPos ? taskPos.x : wx + Math.cos(ang) * SAT_ORBIT * m;
+				const ty = taskPos ? taskPos.y : wy + Math.sin(ang) * SAT_ORBIT * m;
 				const tkey = threadKey(t.wolf, t.id);
 				const threadItem: OverlayItem = { kind: "thread", key: tkey, wolf: t.wolf, threadId: t.id, x: tx, y: ty, r: THREAD_DOT_R * m, alpha: (t.active ? 1 : 0.45) * alpha, needsYou: t.needsYou, online: w.online, working: t.active, color, label: t.title ?? threadSlugOf(t.wolf, t.id) };
 				out.push(threadItem);
@@ -1181,8 +1186,11 @@ export class LiveOverlay {
 		for (const it of items) {
 			if (it.kind === "thread") {
 				const wolf = this.wolfItems.get(it.wolf);
-				if (wolf) this.line(ctx, wolf, it, rgba(it.color, 0.25 * it.alpha));
 				const t = s.threads[it.key];
+				// A dot sitting on its feature's hub has the wolf's own link to that hub already: no second line over it.
+				const feat = t?.bound?.kind === "work-item" ? this.featureByWork.get(workShortId(t.bound.id)) : undefined;
+				const onHub = !!feat && Math.abs(feat.x - it.x) < 0.5 && Math.abs(feat.y - it.y) < 0.5;
+				if (wolf && !onHub) this.line(ctx, wolf, it, rgba(it.color, 0.25 * it.alpha));
 				if (t?.bound) {
 					const p = this.resolveTo(t.bound, true, host);
 					if (p) {

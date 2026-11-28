@@ -62,6 +62,8 @@ export interface LiveSubagent {
 	name: string;
 	wolf: string;
 	parentThreadId?: string;
+	/** The work item (full id) it serves: its brief's first work id, else its parent's bound item; a bind of its own replaces it. */
+	workItem?: string;
 	title?: string;
 	/** Set when `subagent-finished` arrived (fades from there). */
 	finishedAt?: number;
@@ -242,7 +244,7 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 		const prev = st.subagents[key];
 		const keep = prev && prev.finishedAt === undefined ? prev : undefined;
 		const touched = fresh && target !== undefined && TRAIL_VERBS.has(e.verb);
-		st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, ownThreadId: ownThreadId ?? keep?.ownThreadId, title: e.actor.title ?? keep?.title, expiresAt: Math.max(keep?.expiresAt ?? 0, expiresAt), target: touched ? target : keep?.target, targetAt: touched ? now : keep?.targetAt } } };
+		st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, workItem: (e.verb === "bound" && target?.kind === "work-item" ? target.id : undefined) ?? e.actor.workItem ?? keep?.workItem, ownThreadId: ownThreadId ?? keep?.ownThreadId, title: e.actor.title ?? keep?.title, expiresAt: Math.max(keep?.expiresAt ?? 0, expiresAt), target: touched ? target : keep?.target, targetAt: touched ? now : keep?.targetAt } } };
 		if (e.verb === "thread-active" || e.verb === "thread-idle" || e.verb === "subagent-spawned") {
 			st = { ...st, wolves: { ...st.wolves, [wolfName]: wolf } };
 			return withWolfNeeds(st);
@@ -284,7 +286,7 @@ function applyEvent(s: LiveState, e: ActivityEvent, now: number, o: LiveOptions,
 			const name = e.actor.subagent;
 			if (!name) break;
 			const key = subKey(name);
-			st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, ownThreadId, title: e.actor.title, expiresAt } } };
+			st = { ...st, subagents: { ...st.subagents, [key]: { key, name, wolf: wolfName, parentThreadId: threadId, workItem: e.actor.workItem, ownThreadId, title: e.actor.title, expiresAt } } };
 			break;
 		}
 		case "subagent-finished": {

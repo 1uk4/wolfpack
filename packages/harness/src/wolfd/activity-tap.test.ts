@@ -101,6 +101,12 @@ describe("ActivityTap", () => {
     expect(emitted[0]).toMatchObject({ actor: { kind: "subagent", subagent: "wolfd-Abc", parentThreadId: "t1" }, target: { kind: "thread", id: "t1" } });
   });
 
+  it("a subagent's actor carries the work item it serves (its taskId)", () => {
+    const { tap, emitted } = setup();
+    tap.onWolfEvent({ type: "thread-updated", thread: { ...threads.c1, taskId: "work-wolfpack-zzz" } });
+    expect(emitted[0]!.actor).toMatchObject({ kind: "subagent", workItem: "work-wolfpack-zzz" });
+  });
+
   it("cards raised and settled send needs-you and answered for the thread", () => {
     const { tap, emitted } = setup();
     tap.onWolfEvent({ type: "card-pending", card: { callId: "k", threadId: "t1" } });

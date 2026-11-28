@@ -46,6 +46,13 @@ describe("live overlay reducer", () => {
 		assert.deepEqual(Object.keys(s.threads), []);
 	});
 
+	it("a subagent stores the work item its actor names, and a bind of its own replaces it", () => {
+		let s = feed(emptyLiveState(), ev("subagent-spawned", { actor: { ...sub, workItem: "work-wolfpack-aaa" } }), 0);
+		assert.equal(Object.values(s.subagents)[0]!.workItem, "work-wolfpack-aaa");
+		s = feed(s, ev("bound", { actor: sub, target: { kind: "work-item", id: "work-wolfpack-bbb" } }), 10);
+		assert.equal(Object.values(s.subagents)[0]!.workItem, "work-wolfpack-bbb");
+	});
+
 	it("an idle thread stays visible as long as its subagent runs, and fades after the subagent finished", () => {
 		let s = feed(emptyLiveState(), ev("thread-active"), 0);
 		s = feed(s, ev("subagent-spawned", { actor: sub, ttlMs: 600_000 }), 100);

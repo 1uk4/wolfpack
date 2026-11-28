@@ -40,6 +40,8 @@ export const ActivityActorSchema = z.object({
   threadId: z.string().min(1).optional(),
   subagent: z.string().min(1).optional(),
   parentThreadId: z.string().min(1).optional(),
+  /** Additive, subagents: the work item (full id) it serves: the first one in its brief, else its parent's bound item. */
+  workItem: z.string().min(1).optional(),
   title: Title,
 });
 export type ActivityActor = z.infer<typeof ActivityActorSchema>;

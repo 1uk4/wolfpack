@@ -14,6 +14,7 @@
 import { existsSync, readFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWrite } from "@wolfpack/engine";
+import type { TopicOutcome } from "./promote-pass.js";
 import { contentHash, inboxDir, receiptsDir, type KbRoots } from "@wolfpack/kb/shared";
 import { readDenTopics, type DenTopic } from "./den.js";
 import { readDistillRecord } from "./distill.js";
@@ -159,15 +160,49 @@ function asAbsorbed(r: Receipt): Extract<DenTopicStatus, { kind: "absorbed" }> |
  * session would otherwise resurrect every absorbed topic on each promote).
  */
 export function isAbsorbed(roots: KbRoots, wolf: string, id: string, body: string): boolean {
+  return absorbedEntryIds(roots, wolf, id, body) !== null;
+}
+
+/** The rule behind isAbsorbed, with the entries it found (primary first, empty for an old receipt that names none); null when not absorbed. */
+export function absorbedEntryIds(roots: KbRoots, wolf: string, id: string, body: string): string[] | null {
   const rec = readDistillRecord(roots, id);
   if (rec && !rec.held && contentHash(rec.rawBody.trim()) === contentHash(body.trim())) {
-    return rec.outputs.every((o) => {
+    const ids: string[] = [];
+    for (const o of rec.outputs) {
       const r = readReceiptFor(receiptsDir(roots, wolf), o.id, o.body);
-      return !!(r && asAbsorbed(r));
-    });
+      const a = r ? asAbsorbed(r) : null;
+      if (!a) return null;
+      for (const e of a.entryIds) if (!ids.includes(e)) ids.push(e);
+    }
+    return ids;
   }
   const r = readReceiptFor(receiptsDir(roots, wolf), id, body);
-  return !!(r && asAbsorbed(r));
+  const a = r ? asAbsorbed(r) : null;
+  return a ? a.entryIds : null;
+}
+
+/**
+ * What the KB said about a topic, for the promote pass. Reads the receipts; when they still say pending but the
+ * consolidate skip rule (isAbsorbed) judged one of `bodies` already in the KB, the topic is recorded as promoted into
+ * the entries that rule found. Without this a skipped topic never got a receipt in the promote state and stayed
+ * "pending promote" forever. A topic that did not reach the KB stays pending and is sent again.
+ */
+export function kbOutcome(denRoot: string, roots: KbRoots, wolf: string, topic: { id: string }, bodies: string[]): TopicOutcome {
+  const s = denTopicStates(denRoot, roots, wolf).find((x) => x.topic.id === topic.id)?.status;
+  if (!s) return { kind: "pending" };
+  switch (s.kind) {
+    case "absorbed": return s.entryIds.length ? { kind: "create", entryIds: s.entryIds } : { kind: "reject" };
+    case "parked": return { kind: "parked" };
+    case "awaiting-domain": return { kind: "parked" };
+    case "held": return { kind: "held", reason: s.reason };
+    default: {
+      for (const b of bodies) {
+        const ids = absorbedEntryIds(roots, wolf, topic.id, b);
+        if (ids) return { kind: "create", entryIds: ids };
+      }
+      return { kind: "pending" };
+    }
+  }
 }
 
 /** Add absorbed_into / absorbed_at to a topic file's frontmatter. */

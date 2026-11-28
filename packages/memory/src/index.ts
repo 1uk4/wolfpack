@@ -131,6 +131,8 @@ export { renderDenContext, renderRetiredContext, renderKbAccess } from "./prompt
 export {
   reconcileDen,
   isAbsorbed,
+  absorbedEntryIds,
+  kbOutcome,
   denTopicStates,
   describeStatus,
   denArchiveDir,

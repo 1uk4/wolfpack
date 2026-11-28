@@ -137,7 +137,7 @@ describe("consolidate treats an existing den topic file as the source of truth",
     renameSync(join(dir, "t1.md"), join(dir, "other.md"));
     writeFileSync(join(dir, "other.md"), readFileSync(join(dir, "other.md"), "utf-8").replace("related: []", "related: []\nwork: work-wolfpack-X1"));
     sessionTopic("t1", "session v2");
-    const junk = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ contributions: [{ slug: "main", title: "Sweep performance", summary: "How the sweep budgets its time.", body: "## Design\nVerified live on a real inbox item." }] }) } as unknown as Engine;
+    const junk = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ contributions: [{ slug: "main", title: "Sweep performance", summary: "How the sweep budgets its time.", body: "## Design\nAll 120 tests pass on a real inbox item." }] }) } as unknown as Engine;
     await consolidateSession({
       engine: junk, den: { denRoot: den, wolfName: WOLF }, memoryRoot, sessionId: "sess-1",
       kbRoots: { kbBase: join(root, "kb"), opsRoot: join(root, "ops"), denLocal: join(den, "kb") },

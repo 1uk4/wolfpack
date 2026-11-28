@@ -834,7 +834,8 @@ describe("ThreadChat on the thread's own page shows a pending paged ask as a she
 
 	it("phone: Esc and the close button put the questions away to a strip that reopens them; the composer stays", async () => {
 		const mm = (window as any).matchMedia;
-		(window as any).matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+		const { PHONE_QUERY } = await import("../../../src/core/thread/phone-viewport.ts");
+		(window as any).matchMedia = (query: string) => ({ matches: query === PHONE_QUERY, addEventListener() {}, removeEventListener() {} });
 		try {
 			await mount(new CardClient(PAGED));
 			await settle();

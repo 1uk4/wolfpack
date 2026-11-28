@@ -29,8 +29,9 @@ describe("pickComposerAnchor", () => {
 // Replays the per-frame reads the layer makes (pick, then track) and returns every anchor it would hand to the overlay.
 const replay = (reads: ({ left: number; top: number; width: number; height: number } | null)[]) => {
 	const wrapR = { left: 288, top: 0, width: 992, height: 800 };
-	let last: ReturnType<typeof pickComposerAnchor> = null;
-	const out: (typeof last)[] = [];
+	type Picked = ReturnType<typeof pickComposerAnchor>;
+	let last: Picked = null;
+	const out: Picked[] = [];
 	for (const r of reads) out.push((last = pickComposerAnchor(wrapR, [r], last)));
 	return out;
 };

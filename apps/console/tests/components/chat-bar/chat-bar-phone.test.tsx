@@ -77,7 +77,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		return new Response(JSON.stringify({ disposition: "started" }), { status: 200 });
 	}
 	if (url === "/api/needs-you") return needsYou ? Response.json({ items: needsYou }) : new Response("{}", { status: 500 });
-	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w", ...(wolfColor ? { color: wolfColor } : {}) }] });
+	if (url === "/api/wolves") return Response.json({ wolves: [{ name: "w", ...(wolfColor ? { color: wolfColor } : {}) }, ...otherWolves.map((name) => ({ name }))] });
 	if (url === "/api/wolves/w/threads") return Response.json({ threads: [...(noHome ? [] : [th("w/home", { kind: "home" })]), th("w/a"), th("w/b"), th("w/c"), ...extraThreads] });
 	const g = /^\/api\/wolves\/w\/threads\/([^/?]+)\?/.exec(url);
 	if (g) {
@@ -103,6 +103,7 @@ const q = (s: string) => document.querySelector(s) as HTMLElement | null;
 const qa = (s: string) => Array.from(document.querySelectorAll(s)) as HTMLElement[];
 let startPath = "/kb";
 let wolfColor: string | undefined; // the roster's colour for wolf "w"
+let otherWolves: string[] = []; // more wolves on the roster (their den avatars)
 let noHome = false; // the wolf has no home thread: nothing to auto-attach
 async function mount(stored: object | null = A, extra?: React.ReactNode, expectBar = true) {
 	if (stored) mem.set(ATTACHED_KEY, JSON.stringify(stored));
@@ -132,6 +133,10 @@ const type = (v: string) =>
 		el.value = v;
 		props(el, "onChange")({ target: el, currentTarget: el });
 	});
+const openFull = async () => {
+	await click(q('[data-testid="chat-bar-settings"]'));
+	await click(q('[data-testid="bar-sheet-open"]'));
+};
 const click = (el: HTMLElement | null) => act(async () => void props(el!, "onClick")({ currentTarget: el, target: el, preventDefault() {}, stopPropagation() {} }));
 const submit = () => act(async () => void ta().closest("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
 const byText = (sel: string, t: string) => qa(sel).find((b) => b.textContent?.trim() === t) ?? null;
@@ -160,6 +165,7 @@ afterEach(async () => {
 	startPath = "/kb";
 	noHome = false;
 	wolfColor = undefined;
+	otherWolves = [];
 	document.body.style.overflow = "";
 	document.documentElement.style.removeProperty("--chat-bar-reserve");
 	delete (window as any).visualViewport;
@@ -258,9 +264,9 @@ describe("ChatBar on a phone", () => {
 
 	it("keeps every dock control at 44px or more and respects the safe area", async () => {
 		await mount();
-		for (const id of ["chat-bar-chip", "bar-sheet-open", "chat-bar-minimize"]) assert.match(q(`[data-testid="${id}"]`)!.className, /min-h-11/, id);
+		for (const id of ["chat-bar-chip", "chat-bar-settings", "chat-bar-minimize"]) assert.match(q(`[data-testid="${id}"]`)!.className, /min-h-11/, id);
 		assert.match(bar().getAttribute("style")!, /env\(safe-area-inset-bottom\)/);
-		await click(q('[data-testid="bar-sheet-open"]'));
+		await openFull();
 		assert.match(q('[data-testid="bar-sheet-close"]')!.className, /min-h-11/);
 	});
 
@@ -298,6 +304,32 @@ describe("ChatBar on a phone", () => {
 		const chip = q('[data-testid="chat-bar-chip"]')!;
 		const title = chip.getAttribute("title")!.split(" \u00b7 ");
 		assert.equal(title[0] === title[1] ? chip.querySelector('[data-testid="chat-bar-chip-wolf"]') : null, null, "a thread named like its wolf shows the name once");
+	});
+
+	it("at 320px the header line keeps one avatar plus a +N button, the name stays whole, and every control is a 44px target the tray can reveal the rest from", async () => {
+		otherWolves = ["hal", "jack", "solo"];
+		await mount();
+		await until(() => q('[data-testid="den-more"]'), "the overflow button");
+		const strip = q('[data-testid="den-strip"]')!;
+		assert.equal(strip.querySelectorAll('[data-testid="den-wolf"],[data-testid="chat-bar-swap"]').length, 1, "only the current wolf has an avatar on the line");
+		assert.equal(q('[data-testid="den-more"]')!.textContent, "+3");
+		assert.match(strip.className, /shrink-0/, "the avatar group never squeezes the name or overlaps the buttons");
+		const chip = q('[data-testid="chat-bar-chip"]')!;
+		assert.match(chip.className, /min-w-24/, "the chip keeps room for a short name");
+		assert.equal(q('[data-testid="bar-sheet-open"]'), null, "Open full screen is not on the header line (it lives in the settings menu)");
+		assert.equal(chip.querySelector("span.truncate")!.textContent, "w/a", "the name is shown whole, not cut");
+		for (const el of [...strip.querySelectorAll("button"), q('[data-testid="chat-bar-settings"]')!, q('[data-testid="chat-bar-minimize"]')!]) assert.match(el.className, /size-11|min-h-11/, `${el.getAttribute("aria-label")} is 44px`);
+		assert.equal(q('[data-testid="den-more-tray"]'), null);
+		await click(q('[data-testid="den-more"]'));
+		assert.equal(q('[data-testid="den-more-tray"]')!.querySelectorAll('[data-testid="den-wolf"]').length, 3, "the tray lists the other wolves");
+		await esc();
+		assert.equal(q('[data-testid="den-more-tray"]'), null, "Escape closes the tray");
+		await click(q('[data-testid="den-more"]'));
+		await click(q('[data-testid="den-more-tray"] [data-testid="den-wolf"]'));
+		assert.equal(q('[data-testid="den-more-tray"]'), null, "picking a wolf closes the tray");
+		await click(q('[data-testid="den-more"]'));
+		await act(async () => void document.dispatchEvent(new window.Event("pointerdown")));
+		assert.equal(q('[data-testid="den-more-tray"]'), null, "an outside press closes the tray");
 	});
 
 	it("the compact field opens the text input too", async () => {
@@ -341,7 +373,7 @@ describe("ChatBar on a phone", () => {
 		await mount();
 		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
 		assert.equal(q('[data-testid="bar-strip"]'), null, "no cards, so no strip");
-		await click(q('[data-testid="bar-sheet-open"]'));
+		await openFull();
 		assert.equal(bar().getAttribute("data-state"), "sheet");
 		assert.ok(q('[data-testid="ask-sheet"]'), "the ask is in the full-screen sheet");
 	});
@@ -358,7 +390,7 @@ describe("ChatBar on a phone", () => {
 	it("the chevron closes the sheet and the draft survives", async () => {
 		await mount();
 		await type("half a thought");
-		await click(q('[data-testid="bar-sheet-open"]'));
+		await openFull();
 		assert.equal(bar().getAttribute("data-state"), "sheet");
 		assert.equal(ta().value, "half a thought");
 		await click(q('[data-testid="bar-sheet-close"]'));
@@ -369,7 +401,7 @@ describe("ChatBar on a phone", () => {
 	it("a swipe down on the handle closes the sheet; a short one does not", async () => {
 		await mount();
 		await type("keep me");
-		await click(q('[data-testid="bar-sheet-open"]'));
+		await openFull();
 		const handle = () => q('[data-testid="bar-sheet-handle"]')!;
 		await touch(handle(), "onTouchStart", 100);
 		await touch(handle(), "onTouchEnd", 130);
@@ -477,8 +509,7 @@ describe("ChatBar on a phone", () => {
 		const { WorkReaderPanel } = await import("../../../components/work/work-reader.tsx");
 		let readerClosed = 0;
 		await mount(A, <WorkReaderPanel id="f1" onClose={() => void readerClosed++} />);
-		const opener = q('[data-testid="bar-sheet-open"]')!;
-		await click(opener);
+		await openFull();
 		assert.equal(bar().getAttribute("role"), "dialog");
 		assert.equal(bar().getAttribute("aria-modal"), "true");
 		assert.ok(bar().getAttribute("aria-label"));
@@ -489,7 +520,7 @@ describe("ChatBar on a phone", () => {
 		assert.equal(bar().getAttribute("data-state"), "open");
 		assert.equal(readerClosed, 0);
 		assert.equal(document.body.style.overflow, "");
-		assert.equal(document.activeElement?.getAttribute("data-testid"), "bar-sheet-open");
+		assert.equal(document.activeElement?.getAttribute("data-testid"), "chat-bar-settings", "focus returns to the settings button that held Full screen");
 	});
 
 	it("auto-closes a sheet opened for a card once it is answered, but not while typing", async () => {
@@ -604,7 +635,7 @@ describe("ChatBar on a phone", () => {
 		await fire("resize");
 		await flush();
 		assert.equal(over(), "150px", "re-measured");
-		await click(q('[data-testid="bar-sheet-open"]'));
+		await openFull();
 		await flush();
 		assert.equal(bar().getAttribute("data-state"), "sheet");
 		await fire("resize"); // in a browser the bar growing to full screen fires the ResizeObserver; the stub here does not

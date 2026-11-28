@@ -572,7 +572,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 		if (!sheet) {
 			if (wasSheet.current) {
 				wasSheet.current = false;
-				const back = document.querySelector<HTMLElement>(`[data-testid="${opener.current === "strip" ? "bar-strip" : "bar-sheet-open"}"]`) ?? document.querySelector<HTMLElement>('[data-testid="bar-sheet-open"]');
+				const back = document.querySelector<HTMLElement>(`[data-testid="${opener.current === "strip" ? "bar-strip" : "bar-sheet-open"}"]`) ?? document.querySelector<HTMLElement>('[data-testid="chat-bar-settings"]');
 				back?.focus();
 			}
 			return;
@@ -630,7 +630,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 			aria-haspopup={BAR_EXTRAS.switcher ? "dialog" : undefined}
 			aria-expanded={BAR_EXTRAS.switcher ? switcher !== null : undefined}
 			onClick={() => (BAR_EXTRAS.switcher ? (vizOn ? undefined : setSwitcher((s) => (s ? null : target.wolf))) : afterBarDictation(() => router.push(threadHref(target.wolf, target.threadId))))}
-			className={cn("flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-11 max-w-[60vw]" : "max-w-56")}
+			className={cn("flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 font-ui text-xs hover:bg-accent", phone ? "min-h-11 min-w-24 max-w-[60vw] shrink" : "max-w-56")}
 			title={`${target.wolf} · ${title}`}
 		>
 			<span data-testid="chat-bar-dot" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
@@ -759,12 +759,12 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 					{sheet && badge}
 					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
 					<div className="ml-auto flex items-center">
-						{!sheet && (
-							<button type="button" aria-label="Open full screen" data-testid="bar-sheet-open" onClick={() => openSheet(false)} className={tap}>
-								<ChevronUpIcon className="size-5" />
+						<BarSettings wolf={target.wolf} slug={target.slug} phone buttonClass={tap} extra={sheet ? undefined : (close) => (
+							<button type="button" aria-label="Open full screen" data-testid="bar-sheet-open" onClick={() => { close(); openSheet(false); }} className="flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-muted/60">
+								<ChevronUpIcon aria-hidden className="size-4" />
+								<span>Full screen</span>
 							</button>
-						)}
-						<BarSettings wolf={target.wolf} slug={target.slug} phone buttonClass={tap} />
+						)} />
 						<Hint label="Minimize">
 							<button type="button" aria-label="Minimize chat bar" data-testid="chat-bar-minimize" onClick={() => setMinimized(true)} className={tap}>
 								<ChevronDownIcon className="size-4" />

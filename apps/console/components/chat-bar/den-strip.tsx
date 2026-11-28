@@ -68,10 +68,32 @@ export function DenStrip({ swap = null, onSwap, open, setOpen, inline = false }:
 		if (open !== null && !strip.some((s) => s.wolf === open)) setOpen(null);
 	}, [open, strip, setOpen]);
 
-	if (strip.length === 0) return null;
-	return (
-		<div data-testid="den-strip" data-inline={inline ? "true" : undefined} className={inline ? "relative flex min-w-0 items-center" : "relative flex items-center justify-center gap-3 px-2 pb-2 pt-1"}>
-			{strip.map((s) => (
+	// Phone header line: only the wolf the chat is on gets an avatar; the others fold into one "+N" button (it wears a red dot while any of them needs you) that opens them in a small tray above.
+	const [more, setMore] = useState(false);
+	const current = strip.find((s) => s.swap || s.wolf === api.attached?.wolf) ?? strip[0];
+	const visible = inline ? strip.filter((s) => s === current) : strip;
+	const rest = inline ? strip.filter((s) => s !== current) : [];
+	const box = useRef<HTMLDivElement | null>(null);
+	// The tray closes on an outside press, on Escape, and after a wolf is picked.
+	useEffect(() => {
+		if (!more) return;
+		const onDown = (e: Event) => {
+			if (box.current && !box.current.contains(e.target as Node)) setMore(false);
+		};
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return;
+			e.stopPropagation();
+			setMore(false);
+		};
+		document.addEventListener("pointerdown", onDown);
+		document.addEventListener("keydown", onKey, true);
+		return () => {
+			document.removeEventListener("pointerdown", onDown);
+			document.removeEventListener("keydown", onKey, true);
+		};
+	}, [more]);
+	const restNeeds = rest.reduce((n, s) => n + s.needsYou, 0);
+	const item = (s: (typeof strip)[number]) => (
 					<Hint key={s.wolf} label={s.swap && swap ? swap.label : s.wolf}>
 						<button
 							type="button"
@@ -86,6 +108,7 @@ export function DenStrip({ swap = null, onSwap, open, setOpen, inline = false }:
 							onMouseEnter={() => setHovered(s.wolf)}
 							onMouseLeave={() => setHovered((h) => (h === s.wolf ? null : h))}
 							onClick={() => {
+								setMore(false);
 								if (s.swap && swap) {
 									setOpen(null);
 									onSwap?.();
@@ -111,7 +134,31 @@ export function DenStrip({ swap = null, onSwap, open, setOpen, inline = false }:
 							</span>
 						</button>
 					</Hint>
-				))}
+	);
+	if (strip.length === 0) return null;
+	return (
+		<div ref={box} data-testid="den-strip" data-inline={inline ? "true" : undefined} className={inline ? "relative flex shrink-0 items-center" : "relative flex items-center justify-center gap-3 px-2 pb-2 pt-1"}>
+			{visible.map(item)}
+			{rest.length > 0 && (
+				<Hint label={`${rest.length} more wolf${rest.length === 1 ? "" : "s"}`}>
+					<button
+						type="button"
+						data-testid="den-more"
+						aria-label={`${rest.length} more wolf${rest.length === 1 ? "" : "s"}${restNeeds > 0 ? `, ${restNeeds} waiting for you` : ""}`}
+						aria-expanded={more}
+						onClick={() => setMore((m) => !m)}
+						className="relative flex size-11 shrink-0 items-center justify-center rounded-full font-ui text-xs font-medium text-muted-foreground hover:bg-accent"
+					>
+						+{rest.length}
+						{restNeeds > 0 && <b data-testid="den-more-badge" className="absolute right-0.5 top-1.5 size-2.5 rounded-full bg-red-500 ring-2 ring-card" />}
+					</button>
+				</Hint>
+			)}
+			{more && rest.length > 0 && (
+				<div data-testid="den-more-tray" className="absolute bottom-full left-0 z-10 mb-1 flex items-center rounded-xl border bg-card/90 p-0.5 shadow-lg backdrop-blur-xl">
+					{rest.map(item)}
+				</div>
+			)}
 		</div>
 	);
 }

@@ -529,15 +529,26 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	const inset = useKeyboardInset(phone);
 	// Inline, the ask scrolls inside the visible area: 55% of the viewport, less the iOS keyboard (the dock sits above it, `inset` is its height).
 	const inlineCap = `min(55dvh, 55vh, calc((100dvh - ${inset}px) * 0.55))`;
+	// Phone: focusing the composer folds an open questionnaire to its header so the keyboard fits; blurring (or tapping the header) brings it back. Answers live in the session, so nothing is lost.
+	const focusCollapsed = useRef(false);
 	const sheetCard = askCard ? (
 		session.expanded ? (
 			<div data-testid="ask-sheet-host" data-composing={composing ? "true" : undefined} style={phone ? (sheet ? undefined : { maxHeight: inlineCap }) : composing ? undefined : { borderColor: color }} className={cn("flex min-h-0 flex-col overflow-hidden bg-card", phone ? (sheet ? "flex-1" : "shrink-0") : cn("rounded-t-2xl border border-b-0 shadow-lg", composing ? "max-h-[85vh]" : "max-h-[70vh]"))}>
 				<AskSheet key={askCard.callId} target={target} session={session} queue={queue} answering={answering} setAnswering={setAnswering} dictation={dictation} />
 			</div>
 		) : (
-			<button type="button" data-testid="ask-sheet-reopen" onClick={() => session.setExpanded(true)} className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border border-l-2 border-l-(color:--thread-accent) bg-card px-3 text-left font-ui text-xs shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
-				<span className="font-medium text-foreground">{queue.count >= 2 ? `Questions waiting (${queue.count})` : "Questions waiting"}</span>
-				<ChevronUpIcon aria-hidden className="size-4 text-muted-foreground" />
+			<button type="button" data-testid="ask-sheet-reopen" aria-label={phone ? "Show the questions" : undefined} onClick={() => { focusCollapsed.current = false; session.setExpanded(true); }} className={cn("wp-card-enter flex min-h-11 w-full items-center justify-between gap-2 border-l-2 border-l-(color:--thread-accent) bg-card px-3 text-left font-ui text-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", phone ? "rounded-none border-y" : "rounded-xl border shadow-sm")}>
+				{phone ? (
+					<>
+						<span className="min-w-0 truncate font-medium text-foreground" data-testid="ask-reopen-title">{askCard.card.steps?.[session.page]?.title ?? askCard.card.title ?? "Questions"}</span>
+						<span className="flex shrink-0 items-center gap-1 text-muted-foreground"><span data-testid="ask-reopen-count">{session.page + 1} of {session.pages}</span><ChevronUpIcon aria-hidden className="size-4" /></span>
+					</>
+				) : (
+					<>
+						<span className="font-medium text-foreground">{queue.count >= 2 ? `Questions waiting (${queue.count})` : "Questions waiting"}</span>
+						<ChevronUpIcon aria-hidden className="size-4 text-muted-foreground" />
+					</>
+				)}
 			</button>
 		)
 	) : null;
@@ -706,11 +717,17 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				// Docked in the thread page's slot (not a sheet): the dock is a static block that takes its own height in the page, so the last messages are never under it.
 				className={cn("flex flex-col border-t bg-card shadow-lg", dropping && "ring-2 ring-inset ring-(color:--thread-accent)", docked && !sheet ? "relative w-full" : "fixed inset-x-0", sheet ? cn(ZC.chatSheet, askCard ? "" : "rounded-t-2xl") : docked ? "" : ZC.chatBar)}
 				// A bottom sheet: sized to its content and capped at 70dvh (long content scrolls inside), anchored above the keyboard (bottom: inset), the page dimmed behind it.
-				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey), backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : {}), ...(composing ? {} : { borderColor: wolfTint ? "var(--wolf-accent)" : color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
+				style={{ ...(docked && !sheet ? {} : { bottom: inset }), paddingBottom: bottomPad, paddingLeft: "env(safe-area-inset-left)", paddingRight: "env(safe-area-inset-right)", ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey), backgroundImage: "linear-gradient(var(--wolf-tint), var(--wolf-tint))" } : {}), ...(composing ? {} : { borderColor: wolfTint ? "var(--wolf-accent)" : color }), ...(sheet ? (askCard ? { height: "100dvh", maxHeight: "100dvh" } : { maxHeight: "70dvh" }) : {}) }}
 				onKeyDown={trapTab}
+				onFocusCapture={(e) => {
+					if (askCard && session.expanded && !sheet && (e.target as HTMLElement).tagName === "TEXTAREA") { focusCollapsed.current = true; session.setExpanded(false); }
+				}}
+				onBlurCapture={(e) => {
+					if (focusCollapsed.current && (e.target as HTMLElement).tagName === "TEXTAREA") { focusCollapsed.current = false; session.setExpanded(true); }
+				}}
 			>
 				{!sheet && phoneTree}
-				{!sheet && !minimized && sheetCard && <div data-testid="bar-ask-inline" className="flex min-h-0 shrink-0 flex-col px-2 pb-1 pt-2">{sheetCard}</div>}
+				{!sheet && !minimized && sheetCard && <div data-testid="bar-ask-inline" className="flex min-h-0 shrink-0 flex-col pb-1 pt-2">{sheetCard}</div>}
 				{sheet && !minimized && (
 					<div
 						data-testid="bar-sheet-handle"

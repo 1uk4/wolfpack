@@ -550,7 +550,7 @@ describe("ChatBar on a phone", () => {
 		(window as any).visualViewport = { height: 500, offsetTop: 0, addEventListener: (n: string, cb: () => void) => void (listeners[n] = cb), removeEventListener() {} };
 		await mount();
 		assert.match(bar().getAttribute("style")!, /bottom:\s*300px/);
-		assert.doesNotMatch(bar().getAttribute("style")!, /env\(safe-area/);
+		assert.doesNotMatch(bar().getAttribute("style")!, /env\(safe-area-inset-bottom\)/);
 		(window as any).visualViewport.height = 800;
 		await act(async () => listeners.resize?.());
 		assert.match(bar().getAttribute("style")!, /bottom:\s*0(px)?\b/);
@@ -713,5 +713,59 @@ describe("the phone dock's compact composer (work-wolfpack-qoLvFIe)", () => {
 		assert.ok(!ta().parentElement!.contains(submit), "the submit sits beside the field, not inside it");
 		assert.doesNotMatch(submit.className, /\babsolute\b/);
 		assert.match(ta().className, /min-h-11/);
+	});
+});
+
+describe("the phone dock and questionnaire use the full width; typing folds the questionnaire (work-wolfpack-ZrBqJSr)", () => {
+	const ASK2 = { callId: "p1", threadId: "w/a", raisedAt: "2026-11-09T00:00:00Z", card: { tool: "ask", paged: true, fields: [{ id: "q1", kind: "single", label: "Pick", options: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }] }, { id: "q2", kind: "free-text", label: "Why" }], steps: [{ title: "First", fields: ["q1"] }, { title: "Second", fields: ["q2"] }] } };
+	const focusField = () => act(async () => void props(bar(), "onFocusCapture")({ target: ta() }));
+	const blurField = () => act(async () => void props(bar(), "onBlurCapture")({ target: ta() }));
+
+	it("the dock and the inline questionnaire take the whole width: no side margin or inset, only the safe area", async () => {
+		bodies.a = { messages: [], pendingCards: [ASK2] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		assert.match(bar().getAttribute("style")!, /padding-left: ?env\(safe-area-inset-left\)/);
+		assert.match(bar().getAttribute("style")!, /padding-right: ?env\(safe-area-inset-right\)/);
+		assert.doesNotMatch(bar().className, /\bm[xl]-|\brounded-/);
+		assert.doesNotMatch(q('[data-testid="bar-ask-inline"]')!.className, /\bp[xlr]-|\bm[xlr]-/);
+		assert.doesNotMatch(q('[data-testid="ask-sheet-host"]')!.className, /rounded|\bborder\b/);
+	});
+
+	it("focusing the composer folds the questionnaire to a title + 'n of m' header; tapping it restores the page with its answers", async () => {
+		bodies.a = { messages: [], pendingCards: [ASK2] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await click(qa('[data-testid="ask-option"]')[1]!);
+		await focusField();
+		assert.equal(q('[data-testid="ask-sheet"]'), null);
+		const head = q('[data-testid="ask-sheet-reopen"]')!;
+		assert.equal(q('[data-testid="ask-reopen-title"]')!.textContent, "First");
+		assert.equal(q('[data-testid="ask-reopen-count"]')!.textContent, "1 of 2");
+		assert.match(head.className, /min-h-11/);
+		await click(head);
+		assert.equal(q('[data-testid="ask-sheet-reopen"]'), null);
+		assert.equal(qa('[data-testid="ask-option"]')[1]!.getAttribute("aria-checked"), "true");
+	});
+
+	it("blurring the composer restores the questionnaire; one the owner folded by hand stays folded", async () => {
+		bodies.a = { messages: [], pendingCards: [ASK2] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await focusField();
+		await blurField();
+		assert.ok(q('[data-testid="ask-sheet"]'));
+		await click(q('[data-testid="ask-collapse"]'));
+		await blurField();
+		assert.ok(q('[data-testid="ask-sheet-reopen"]'));
+	});
+
+	it("desktop: the bar has no focus-fold and keeps its 'Questions waiting' header", async () => {
+		bodies.a = { messages: [], pendingCards: [ASK2] };
+		await mount();
+		await until(() => q('[data-testid="ask-sheet"]'), "the ask sheet");
+		await resize(false);
+		await until(() => !q('[data-layout="dock"]'), "the desktop bar");
+		assert.equal(props(bar(), "onFocusCapture"), undefined);
 	});
 });

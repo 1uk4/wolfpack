@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { pickComposerAnchor, trackSettle, SETTLE_FRAMES, SETTLE_MAX_FRAMES, type Anchor, type SettleState } from "@/src/core/graph/live/composer-anchor";
+import { pickComposerAnchor, trackSettle, SETTLE_FRAMES, SETTLE_MAX_FRAMES, type Anchor, type SettleState } from "@/src/core";
 import { BellIcon, ExternalLinkIcon, XIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { kbdEventForAction, featureOfThread, type RosterThread } from "@/src/core";

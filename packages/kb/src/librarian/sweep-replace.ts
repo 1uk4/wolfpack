@@ -59,6 +59,7 @@ export function notifySplitDue(
 
 /** Dry-run findings already logged in this process (entry|target), so a repeated sweep stays quiet. */
 const loggedWouldReplace = new Set<string>();
+const LOGGED_WOULD_REPLACE_MAX = 5000;
 
 export interface ReplaceContext {
   roots: KbRoots;
@@ -129,7 +130,10 @@ export async function replaceMisfits(ctx: ReplaceContext): Promise<Replacement[]
       const m: Replacement = { entryId: c.id, domain, from: c.from, to: String(d.section), fromFit: c.fit, toFit: d.fit };
       const memo = `${ctx.roots.kbBase}|${domain}|${c.id}|${m.to}`;
       const quiet = ctx.dryRun && loggedWouldReplace.has(memo);
-      if (ctx.dryRun) loggedWouldReplace.add(memo);
+      if (ctx.dryRun) {
+        if (loggedWouldReplace.size >= LOGGED_WOULD_REPLACE_MAX) loggedWouldReplace.clear(); // bounded: a long-lived hub forgets, and may log a finding once more
+        loggedWouldReplace.add(memo);
+      }
       if (!quiet) ctx.notify?.(`sweep: ${ctx.dryRun ? "would re-place" : "re-placing"} ${c.id}: ${c.from} (${c.fit.toFixed(2)}) -> ${m.to} (${d.fit.toFixed(2)}) [replace-misfit]`);
       if (!ctx.dryRun) {
         await ctx.writer.patchEntry(ctx.roots, domain, c.id, c.raw.replace(/^section: .+$/m, `section: ${m.to}`));

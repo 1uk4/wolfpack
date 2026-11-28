@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/shell/braille-spinner";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
 import { FEATURE_GRADUATED } from "@/components/thread/thread-closed";
-import { abortThread as abortBarThread, onOwnThreadPage, swapTarget } from "@/components/chat-bar/chat-bar-io";
+import { abortThread as abortBarThread, onOwnThreadPage, pageThreadOf, swapTarget } from "@/components/chat-bar/chat-bar-io";
 import { CompactMeter, finishDictation, publishBarDictation, useDictation, type Dictation } from "@/components/composer/dictation";
 import { appendToDraft, draftKey, readDraft } from "@/lib/composer-draft";
 import { setSpaceContext } from "@/components/composer/space-dictation";
@@ -484,7 +484,10 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 	const wolfKey = effectiveWolfColor({ name: target.wolf, color: wolfColor }, api.threads[target.wolf]?.find((t) => t.kind === "home")?.id);
 	const wolfTint = hasWolfColor(wolfKey);
 	const router = useRouter();
-	const onThreadPage = onOwnThreadPage(usePathname(), target);
+	const pathname = usePathname();
+	const onThreadPage = onOwnThreadPage(pathname, target);
+	// The fade backdrop is for a thread page's scrolling transcript only; derived from the route on render, so it switches with the page and never flashes.
+	const overTranscript = pageThreadOf(pathname) !== null;
 	const rawCards = useBarCards(target, working, BAR_EXTRAS.cards || BAR_EXTRAS.peek || BAR_EXTRAS.ask);
 	// A paged `ask` questionnaire has its own sheet (never the classic card path: the whole-card route refuses it). The other cards and the peek follow their extras.
 	const queue = useAskQueue(BAR_EXTRAS.ask ? askQueue(rawCards.pending) : []);
@@ -808,8 +811,8 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 
 	return (
 		<div ref={wrapRef} data-testid="chat-bar" data-state="open" data-dropping={dropping ? "true" : undefined} {...dropProps} data-compact={compact ? "true" : undefined} data-docked={docked ? "true" : undefined} data-wolf-color={wolfTint ? wolfKey : undefined} className={docked ? "relative w-full" : `fixed bottom-3 ${ZC.chatBar} -translate-x-1/2`} style={{ ...(docked ? {} : { left: geo.left, width: geo.width }), ...(wolfTint ? { ...wolfColorStyle(wolfKey), "--thread-accent": "var(--wolf-accent)", "--thread-accent-foreground": wolfAccentForeground(wolfKey) } : {}) } as CSSProperties}>
-			{/* Floating only: an opaque page-colour backdrop under the den strip, the bar and the gap below it, with a soft fade at its top edge, so thread text never shows through. */}
-			{!docked && <div aria-hidden data-testid="chat-bar-backdrop" className="pointer-events-none absolute -bottom-3 -top-6 -inset-x-3 -z-10 bg-gradient-to-t from-background from-[calc(100%-1.5rem)] to-transparent" />}
+			{/* Floating over a thread page only: an opaque page-colour backdrop under the den strip, the bar and the gap below it, with a soft fade at its top edge, so thread text never shows through. */}
+			{!docked && overTranscript && <div aria-hidden data-testid="chat-bar-backdrop" className="pointer-events-none absolute -bottom-3 -top-6 -inset-x-3 -z-10 bg-gradient-to-t from-background from-[calc(100%-1.5rem)] to-transparent" />}
 			{!vizOn && <DenStrip swap={denSwap} onSwap={onDenSwap} open={BAR_EXTRAS.switcher ? switcher : null} setOpen={setSwitcher} />}
 			{/* Card surface slot (PtJkpk6): the thread's pending question cards and the last-reply peek mount here, above the input. */}
 			<div data-slot="chat-bar-card-surface" data-testid="chat-bar-card-surface" className={cn("empty:hidden", askCard && session.expanded ? "" : "mb-2")}>

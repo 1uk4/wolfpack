@@ -8,7 +8,6 @@ import {
 	emptyLiveState,
 	featureOfThread,
 	workShortId,
-	HUB_WOLF,
 	homeDomainOf,
 	liveActive,
 	liveSignature,
@@ -613,10 +612,6 @@ export class LiveOverlay {
 			} else if (t.featureKey) {
 				const c = this.groupCentre.get(t.featureKey);
 				if (c) ref = { actor: "chat", key: t.featureKey, last: { x: c.x, y: c.y } };
-			} else if (t.wolf === HUB_WOLF) {
-				// A hub-side write (curator) starts at the domain hub node, drawn in the neutral node colour.
-				const p = t.target.domain ? host.nodePos(`dom:${t.target.domain}`) : null;
-				if (p) ref = { actor: "pt", key: "", last: { x: p.x, y: p.y } };
 			} else {
 				const b = this.bodies.get(t.wolf);
 				if (b) ref = { actor: "wolf", key: t.wolf, last: { x: b.x, y: b.y } };
@@ -655,7 +650,7 @@ export class LiveOverlay {
 		for (const t of s.trails) {
 			if (this.seenTrails.has(t.id)) continue;
 			this.seenTrails.add(t.id);
-			if (t.wolf === HUB_WOLF || wall - t.at > EVENT_MAX_AGE_MS) continue;
+			if (wall - t.at > EVENT_MAX_AGE_MS) continue;
 			const id = targetNodeId(t.target, (n) => host.hasNode(n));
 			const tp = id ? host.nodePos(id) : null;
 			const wb = this.bodies.get(t.wolf);
@@ -1156,7 +1151,7 @@ export class LiveOverlay {
 		// Trails: the path the wolf took to the thing it touched, fading over trailSec.
 		for (const t of s.trails) {
 			if (reduced) break; // no travel trails under reduced motion
-			const to = this.resolveTo(t.target, !t.subagentKey && !t.featureKey && t.wolf !== HUB_WOLF, host);
+			const to = this.resolveTo(t.target, !t.subagentKey && !t.featureKey, host);
 			const from = this.trailStart(t);
 			if (!to || !from) continue;
 			const age = 1 - trailAlpha(t, wall, this.settings.trailSec);
@@ -1165,7 +1160,7 @@ export class LiveOverlay {
 		}
 		// Pulses on the touched node.
 		for (const p of s.pulses) {
-			const at = this.resolveTo(p.target, !p.subagentKey && !p.featureKey && p.wolf !== HUB_WOLF, host);
+			const at = this.resolveTo(p.target, !p.subagentKey && !p.featureKey, host);
 			if (!at) continue;
 			const w = this.wolfItems.get(p.wolf);
 			EFFECTS.pulse!({ ctx, x: at.x, y: at.y, r: PULSE_R * m, k, t: Math.min(1, (wall - p.at) / DEFAULT_LIVE_OPTIONS.pulseMs), color: w?.color ?? host.colors.node, intensity: I, reduced });

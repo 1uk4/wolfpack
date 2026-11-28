@@ -33,7 +33,17 @@ function bfs(adj: Map<string, string[]>, from: string, to: string): string[] | n
  * An entry the map does not have yet (or cannot reach) ends the path at its section, or at the domain when that is missing too.
  */
 export function nervePath(edges: readonly NerveEdge[], dom: string, sec?: string, ent?: string, chain?: readonly string[]): string[] {
-	if (chain?.length) return [dom, ...chain.map((s) => `sec:${s}`), ...(ent ? [ent] : [])]; // the event carries the whole chain: no search needed
+	if (chain?.length) {
+		// the event carries the whole chain: walk it hop by hop, and end at the last hop that has a tree edge (never a shortcut across a gap)
+		const has = new Set(edges.map((e) => `${e.from}\u0000${e.to}`));
+		const hop = (a: string, b: string) => has.has(`${a}\u0000${b}`) || has.has(`${b}\u0000${a}`);
+		const out = [dom];
+		for (const id of [...chain.map((s) => `sec:${s}`), ...(ent ? [ent] : [])]) {
+			if (!hop(out[out.length - 1]!, id)) break;
+			out.push(id);
+		}
+		return out;
+	}
 	const adj = new Map<string, string[]>();
 	const link = (a: string, b: string) => (adj.get(a) ?? adj.set(a, []).get(a)!).push(b);
 	for (const e of edges) {

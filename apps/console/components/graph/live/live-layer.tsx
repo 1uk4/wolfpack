@@ -136,11 +136,12 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 	}, [renderer, live.enabled]);
 
 	// The curator's real queue: entries already pending when the graph opens orbit Home at once (and the list is re-read every 20 s). Not while the demo plays.
-	const demoOn = useSearchParams()?.get("kbdemo") === "1";
+	const kbdemo = useSearchParams()?.get("kbdemo") === "1";
+	const demoOn = kbdemo;
 	useEffect(() => (renderer && live.enabled && live.memory && !demoOn ? watchKbPending((items) => overlayRef.current?.syncPending(items)) : undefined), [renderer, live.enabled, live.memory, demoOn]);
 
 	// `?kbdemo=1` (dev builds only) plays the scripted memory life on /graph, as the first wolf on the map (else the attached thread's wolf, else a made-up one).
-	const demoAsked = useSearchParams()?.get("kbdemo") === "1" && process.env.NODE_ENV !== "production";
+	const demoAsked = kbdemo && process.env.NODE_ENV !== "production";
 	const demoWolf = Object.keys(getLiveSnapshot().state.wolves)[0] ?? attachedApi?.wolves[0]?.name ?? attachedApi?.attached?.wolf;
 	useEffect(() => (renderer && demoAsked ? startKbDemo(demoWolf, () => { const g = renderer.demoGraph(); return demoTargets(g.edges, g.ids); }, (dom) => demoWorkId(renderer.demoGraph().ids, dom)) : undefined), [renderer, demoAsked, demoWolf]);
 

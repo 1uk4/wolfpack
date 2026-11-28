@@ -68,10 +68,11 @@ const pendingSubs = new Set<() => void>();
 export const getKbPending = (): { items: KbPendingItem[]; total: number } => pendingNow;
 export const subscribeKbPending = (fn: () => void): (() => void) => (pendingSubs.add(fn), () => void pendingSubs.delete(fn));
 
-/** Read GET /api/kb/pending now and then (every 20 s while mounted); each answer goes to `onItems`. A failed read is an empty queue: no orbit. */
+/** Read GET /api/kb/pending now and then (every 20 s while mounted, not while the tab is hidden); each answer goes to `onItems`. A failed read is an empty queue: no orbit. Stopping clears the shared queue. */
 export function watchKbPending(onItems: (items: KbPendingItem[]) => void): () => void {
 	let stopped = false;
 	const read = async () => {
+		if (typeof document !== "undefined" && document.hidden) return;
 		let next = { items: [] as KbPendingItem[], total: 0 };
 		try {
 			const r = await fetch("/api/kb/pending", { cache: "no-store" });
@@ -90,6 +91,8 @@ export function watchKbPending(onItems: (items: KbPendingItem[]) => void): () =>
 	return () => {
 		stopped = true;
 		clearInterval(timer);
+		pendingNow = { items: [], total: 0 };
+		pendingSubs.forEach((fn) => fn());
 	};
 }
 
@@ -173,7 +176,6 @@ export function demoCycle(c: number, wolf: string = DEMO_WOLF, targets: readonly
 	return out;
 }
 
-/** Feed the scripted cycle (looping) through the live pipeline. Returns stop. Dev only: gated by `?kbdemo=1` in the page. */
 /** A work item that is on the loaded map (full id), for the demo work-record save to fly to; undefined when the map has no work node (the save then fades). */
 export function demoWorkId(ids: readonly string[], domain: string): string | undefined {
 	const n = ids.find((id) => id.startsWith("work:"));
@@ -182,6 +184,7 @@ export function demoWorkId(ids: readonly string[], domain: string): string | und
 	return rest.startsWith("work-") ? rest : `work-${domain}-${rest}`;
 }
 
+/** Feed the scripted cycle (looping) through the live pipeline. Returns stop. Dev only: gated by `?kbdemo=1` in the page. */
 export function startKbDemo(wolf: string = DEMO_WOLF, targetsOf?: () => DemoTarget[], workIdOf?: (domain: string) => string | undefined): () => void {
 	const wolfActor = { kind: "wolf", wolf } as const;
 	const fake = wolf === DEMO_WOLF; // a made-up wolf is brought online and offline; a real one is left alone

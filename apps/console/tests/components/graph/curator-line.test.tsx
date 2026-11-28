@@ -52,4 +52,38 @@ describe("curator line", () => {
 		stop();
 		await act(async () => root.unmount());
 	});
+
+	it("clears the pending count when the watcher stops, and does not read while the tab is hidden (work-wolfpack-W24l0C6)", async () => {
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		const root = createRoot(host);
+		await act(async () => root.render(<CuratorLine events={[]} />));
+		queue = { items: [{ wolf: "jack", denTopicId: "a" }], total: 1 };
+		let stop = () => {};
+		await act(async () => {
+			stop = watchKbPending(() => {});
+			await new Promise((r) => setTimeout(r, 0));
+		});
+		assert.equal(host.textContent, "Curator · 1 pending");
+		await act(async () => stop());
+		assert.equal(host.textContent, "", "a stopped watcher leaves no stale count");
+
+		let reads = 0;
+		const realFetch = globalThis.fetch;
+		globalThis.fetch = (async () => (reads++, { ok: true, json: async () => queue })) as never;
+		Object.defineProperty(document, "hidden", { value: true, configurable: true });
+		try {
+			await act(async () => {
+				stop = watchKbPending(() => {});
+				await new Promise((r) => setTimeout(r, 0));
+			});
+			assert.equal(reads, 0, "no read while hidden");
+			assert.equal(host.textContent, "");
+		} finally {
+			stop();
+			Object.defineProperty(document, "hidden", { value: false, configurable: true });
+			globalThis.fetch = realFetch;
+		}
+		await act(async () => root.unmount());
+	});
 });

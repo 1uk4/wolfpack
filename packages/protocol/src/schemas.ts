@@ -1413,6 +1413,8 @@ export const MemoryStatusSchema = z.object({
     stuck: z.number().int().positive(),
     oldestAgeMs: z.number().nonnegative(),
     nextRetryInMs: z.number().nonnegative(),
+    /** The highest try count among the stuck groups; with `message` it lets the banner name the real error after a few tries. */
+    tries: z.number().int().positive().optional(),
     message: z.string().optional(),
   }).optional(),
 });

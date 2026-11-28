@@ -116,7 +116,7 @@ export async function appendWorkLog(opts: AppendWorkLogOptions): Promise<WorkLog
             continue;
           }
           if (res.code === "log_full") {
-            pending?.pending(target, "consolidation-failed");
+            pending?.pending(target, "consolidation-failed", { message: LOG_FULL });
             const retryAt = pending?.entry(target)?.nextAttemptAt;
             outcomes.push({ work: target, target, ids, status: "pending", reason: LOG_FULL, cause: "consolidation-failed", ...(retryAt ? { retryAt } : {}) });
             continue;
@@ -143,7 +143,7 @@ export async function appendWorkLog(opts: AppendWorkLogOptions): Promise<WorkLog
       outcomes.push({ work: target, target, ids, status: "written", chars: lines.reduce((n, l) => n + l.text.length, 0) });
     } catch (err) {
       const reason = err instanceof Error ? err.message.split("\n")[0]! : String(err);
-      pending?.pending(target, phase);
+      pending?.pending(target, phase, { message: reason });
       const retryAt = pending?.entry(target)?.nextAttemptAt;
       outcomes.push({ work: target, target, ids, status: "pending", reason: isInfra(err) ? `model unavailable: ${reason}` : reason, cause: phase, ...(retryAt ? { retryAt } : {}) });
     }

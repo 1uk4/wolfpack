@@ -206,6 +206,8 @@ export {
   archivePath,
   discardLogPath,
   readPendingSummary,
+  sweepPending,
+  dueKeys,
   poolDir,
   type PendingCause,
   type ArchiveEntry,

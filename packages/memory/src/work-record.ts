@@ -783,7 +783,7 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
         continue;
       }
       onProgress?.(`  work ${work}: ${isInfra(err) ? "model unavailable" : "failed"}, ${obs.length} observation(s) stay pending — ${reason}`);
-      state?.pending(work, phase);
+      state?.pending(work, phase, { message: reason });
       const retryAt = state?.entry(work)?.nextAttemptAt;
       outcomes.push({ work, ids, status: "pending", reason, cause: phase, ...(retryAt ? { retryAt } : {}) });
     }

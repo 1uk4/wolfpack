@@ -85,8 +85,11 @@ const duration = (ms: number) => {
 };
 
 /** The warning for stuck saves ("Saves stuck for 2h · retry in 40m") with the failure message as hover text; null when none. */
-export function pendingNotice(p: { stuck: number; oldestAgeMs: number; nextRetryInMs: number; message?: string } | undefined): { text: string; title: string } | null {
+/** After this many failed tries the banner names the error rather than the countdown. */
+const SHOW_ERROR_AFTER_TRIES = 3;
+export function pendingNotice(p: { stuck: number; oldestAgeMs: number; nextRetryInMs: number; tries?: number; message?: string } | undefined): { text: string; title: string } | null {
 	if (!p || p.stuck <= 0) return null;
+	if (p.message && (p.tries ?? 0) >= SHOW_ERROR_AFTER_TRIES) return { text: `Saves stuck for ${duration(p.oldestAgeMs)} · ${p.message.length > 80 ? `${p.message.slice(0, 79)}…` : p.message}`, title: p.message };
 	return { text: `Saves stuck for ${duration(p.oldestAgeMs)} · retry ${p.nextRetryInMs <= 0 ? "due" : `in ${duration(p.nextRetryInMs)}`}`, title: p.message ?? "" };
 }
 

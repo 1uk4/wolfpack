@@ -63,6 +63,11 @@ describe("stuck saves notice", () => {
 		assert.deepEqual(pendingNotice({ stuck: 1, oldestAgeMs: 90_000, nextRetryInMs: 0 }), { text: "Saves stuck for 1m · retry due", title: "" });
 		assert.equal(pendingNotice(undefined), null);
 	});
+
+	it("names the real error once a save has failed 3 times, instead of only \"retry due\"", () => {
+		assert.deepEqual(pendingNotice({ stuck: 1, oldestAgeMs: 172_800_000, nextRetryInMs: 0, tries: 3, message: "Work API PATCH k: HTTP 502" }), { text: "Saves stuck for 2d · Work API PATCH k: HTTP 502", title: "Work API PATCH k: HTTP 502" });
+		assert.equal(pendingNotice({ stuck: 1, oldestAgeMs: 90_000, nextRetryInMs: 0, tries: 2, message: "boom" })?.text, "Saves stuck for 1m · retry due");
+	});
 });
 
 describe("tabs", () => {

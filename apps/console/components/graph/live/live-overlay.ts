@@ -35,7 +35,7 @@ import { newMotion, orbitTarget, restSlot, tetherStrength, wolfEvent, wolfStep, 
 import { elasticStep, orbitPhase, pullFor, ringSlots, trailOrigin, type Elastic } from "./live-rings";
 import { newRepeller, repelStep, setRep, type Repeller } from "./live-repel";
 import { redact } from "@/src/core";
-import { emptyKbLife, isKbVerb, kbLifeRate, reduceKbLife, stepKbLife } from "@/src/core";
+import { emptyKbLife, isKbVerb, kbLifeRate, reduceKbLife, stepKbLife, syncPendingKb, type KbPendingItem } from "@/src/core";
 import { drawKbLife, type KbFocus, type KbHoverTarget } from "./kb-life-draw";
 import { isMotionReduced, type MotionMode } from "@/src/core";
 
@@ -409,6 +409,15 @@ export class LiveOverlay {
 	loadState(s: LiveState): void {
 		if (this.settings.enabled && Object.keys(s.wolves).length > 0) this.state = s;
 		this.arm();
+		this.requestFrame();
+	}
+
+	/** The hub's pending queue: items not seen live join the Home orbit at once (a fresh page shows the real queue). */
+	syncPending(items: readonly KbPendingItem[]): void {
+		if (!this.settings.enabled || !this.settings.memory) return;
+		const next = syncPendingKb({ ...this.kb, reduced: this.reduced }, items, Date.now());
+		if (next === this.kb) return;
+		this.kb = next;
 		this.requestFrame();
 	}
 

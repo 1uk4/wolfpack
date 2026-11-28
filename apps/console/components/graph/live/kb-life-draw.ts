@@ -7,6 +7,7 @@
  */
 import { curatorBusy, displayFill, KB_FILL_EASE_MS, KB_NERVE_GLOW_MS, kbHoverText, kbNerveState, kbVisualOf, nerveHead, nervePath, nerveTrail, topicsOf, type KbPulse, type KbFlight, type KbLife, type KbResult } from "@/src/core";
 import { rgba } from "./live-effects";
+import { drawGraduatedMark, drawOrbitOverflow, flightWorkPos, orbitOverflow, workFlightPos } from "./kb-orbit";
 import { LIVE_TUNING } from "./live-tuning";
 
 /** The overlay unit (live-overlay OVERLAY_UNIT), duplicated to avoid a circular import. */
@@ -166,8 +167,9 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 			idx = (queuedIdx.get(f.wolf) ?? 0) + topicsOf(kb, f.wolf).length;
 			queuedIdx.set(f.wolf, (queuedIdx.get(f.wolf) ?? 0) + 1);
 		}
-		const start = body ? beside(body, idx, k) : cur;
-		const p = flightPos(f, start, cur, domainPos(host, f.result?.domain ?? f.domain) ?? resultPos(host, f.result, f.domain), wall, k, reduced, m, view);
+		const wp = f.workItem ? flightWorkPos(host, f) : null; // work-record save: ends at the feature's node; graduation: starts there
+		const start = f.graduated && wp ? wp : body ? beside(body, idx, k) : cur;
+		const p = f.kind === "work" && wp ? workFlightPos(f, start, wp, wall) : flightPos(f, start, cur, domainPos(host, f.result?.domain ?? f.domain) ?? resultPos(host, f.result, f.domain), wall, k, reduced, m, view);
 		if ((f.stage !== "queued" || f.born !== undefined) && f.stage !== "fade" && shown++ >= LIVE_TUNING.kbMaxItems) continue;
 		const alpha = f.stage === "fade" ? 1 - smooth((wall - f.at) / Math.max(1, f.endAt - f.at)) : 1;
 		const r = 4.2 / k;
@@ -184,9 +186,11 @@ export function drawKbLife(ctx: CanvasRenderingContext2D, kb: KbLife, host: KbDr
 		ctx.beginPath();
 		ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
 		ctx.fill();
+		if (f.graduated) drawGraduatedMark(ctx, p, k, color);
 		if (focus?.topicId === f.id) ring(ctx, p, 9 / k, host.colors.hoverText, k);
 		if (targets && f.stage !== "queued") targets.push({ key: "kbf:" + f.id, x: p.x, y: p.y, r: 8 / k, text: kbHoverText({ title: f.result?.title ?? "Memory item", outcome: f.result?.outcome ?? "in flight", ...(f.result?.domain ?? f.domain ? { domain: (f.result?.domain ?? f.domain)! } : {}), ...(f.result?.sectionTitle ? { sectionTitle: f.result.sectionTitle } : {}) }) });
 	}
+	drawOrbitOverflow(ctx, cur, orbitOverflow(kb.flights.filter((f) => f.kind !== "work" && !f.result).length, LIVE_TUNING.kbMaxItems), k, hr, host.colors.label, host.fontFamily);
 
 	// Results: the filed entry's nerve. A pulse runs down the tree edges (domain, section(s), entry), the path stays lit, then a ring at the entry.
 	for (const pl of kb.pulses) {

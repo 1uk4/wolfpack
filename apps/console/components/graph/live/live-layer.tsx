@@ -10,7 +10,8 @@
  * Threads cannot open in the viewer panel (it shows work items and KB entries only), so they open on their own page.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { pickComposerAnchor, trackSettle, SETTLE_FRAMES, SETTLE_MAX_FRAMES, type Anchor, type SettleState } from "@/src/core/graph/live/composer-anchor";
 import { BellIcon, ExternalLinkIcon, XIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { kbdEventForAction, featureOfThread, type RosterThread } from "@/src/core";
@@ -184,12 +185,30 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 	// The floating chat's rect (the you badge sits above it): measured on resize / scroll / size change / bar toggles, never per frame.
 	// Absent or hidden (collapsed, phone with it closed): null, and the badge falls back to bottom-centre of the canvas.
 	const minimized = attachedApi?.minimized ?? false;
+	const pathname = usePathname();
 	useEffect(() => {
 		const wrap = wrapRef.current;
 		if (!renderer || !wrap) return;
 		let bar: Element | null = null;
 		let ro: ResizeObserver | null = null;
-		const measure = () => {
+		let last: Anchor | null = null; // a hidden / mid-mount element reads 0,0: keep the last good anchor instead (see pickComposerAnchor)
+		let settle: SettleState = { anchor: null, still: 0 };
+		let frames = 0;
+		let loop = 0;
+		const EMPTY = { left: 0, top: 0, width: 0, height: 0 };
+		// The icon slides (left/top transition) and a ResizeObserver never fires for a move: after any trigger, re-read every frame until the anchor holds still.
+		const tick = () => {
+			loop = 0;
+			read();
+			settle = trackSettle(settle, last);
+			if (settle.still < SETTLE_FRAMES && ++frames < SETTLE_MAX_FRAMES) loop = requestAnimationFrame(tick);
+		};
+		const kick = () => {
+			frames = 0;
+			settle = { anchor: null, still: 0 };
+			if (!loop) loop = requestAnimationFrame(tick);
+		};
+		const read = () => {
 			const el = document.querySelector('[data-testid="chat-bar"]');
 			if (el !== bar) {
 				ro?.disconnect();
@@ -199,24 +218,30 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 					ro.observe(el);
 				}
 			}
-			const w = wrap.getBoundingClientRect();
-			const r = el?.getBoundingClientRect();
-			if (!r || r.width === 0 || r.height === 0) return void overlayRef.current?.setComposerRect(null);
-			overlayRef.current?.setComposerRect({ x: r.left - w.left, y: r.top - w.top, w: r.width, h: r.height });
+			last = pickComposerAnchor(wrap.getBoundingClientRect(), [el && getComputedStyle(el).visibility === "hidden" ? EMPTY : el?.getBoundingClientRect()], last);
+			overlayRef.current?.setComposerRect(last);
+		};
+		const measure = () => {
+			kick();
+			read();
 		};
 		ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => measure()) : null;
 		ro?.observe(wrap);
 		measure();
-		const raf = requestAnimationFrame(measure); // the bar re-renders after an attach / minimize: measure again once it has
 		window.addEventListener("resize", measure);
 		window.addEventListener("scroll", measure, true);
+		const vv = window.visualViewport; // the phone keyboard resizes / scrolls the visual viewport only
+		vv?.addEventListener("resize", measure);
+		vv?.addEventListener("scroll", measure);
 		return () => {
-			cancelAnimationFrame(raf);
+			cancelAnimationFrame(loop);
+			vv?.removeEventListener("resize", measure);
+			vv?.removeEventListener("scroll", measure);
 			ro?.disconnect();
 			window.removeEventListener("resize", measure);
 			window.removeEventListener("scroll", measure, true);
 		};
-	}, [renderer, att?.wolf, att?.threadId, minimized]);
+	}, [renderer, att?.wolf, att?.threadId, minimized, pathname]);
 
 	// A pinned card closes on any press outside it.
 	useEffect(() => {

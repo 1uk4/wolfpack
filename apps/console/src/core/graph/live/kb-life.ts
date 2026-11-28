@@ -42,7 +42,7 @@ export const KB_RING_MAX = 6;
 /** `slot` is the topic's fixed place on the ring round Home; the flight made from it inherits it. */
 export interface KbTopic { id: string; wolf: string; born: number; slot: number }
 export type KbOutcome = "create" | "merge" | "reject" | "parked";
-export interface KbResult { outcome: string; entryId?: string; domain?: string; section?: string; sectionPath?: string[]; sectionTitle?: string; ms?: number; tokens?: number }
+export interface KbResult { outcome: string; title?: string; entryId?: string; domain?: string; section?: string; sectionPath?: string[]; sectionTitle?: string; ms?: number; tokens?: number }
 export type FlightStage = "queued" | "travel" | "wait" | "place" | "fade";
 export interface KbFlight {
 	/** The den topic id (the correlation key). */
@@ -64,7 +64,7 @@ export interface KbFlight {
 	/** A flight made from a curate-done alone (no promote seen): it starts at the curator. */
 	synthetic?: true;
 }
-export interface KbPulse { id: string; kind: "create" | "merge"; entryId?: string; domain?: string; section?: string; sectionPath?: string[]; at: number }
+export interface KbPulse { id: string; kind: "create" | "merge" | "retire"; outcome?: string; title?: string; sectionTitle?: string; entryId?: string; domain?: string; section?: string; sectionPath?: string[]; at: number }
 export interface KbLife {
 	wolves: Record<string, KbWolf>;
 	topics: KbTopic[];
@@ -141,6 +141,7 @@ export function reduceKbLife(s: KbLife, e: ActivityEvent, now: number): KbLife {
 			if (id) delete curator[id];
 			const result: KbResult = {
 				outcome: d.outcome ?? "merge",
+				...(e.target?.title ? { title: e.target.title } : {}),
 				...(e.target?.kind === "kb-entry" ? { entryId: e.target.id } : {}),
 				...(e.target?.domain ?? e.domain ? { domain: (e.target?.domain ?? e.domain)! } : {}),
 				...(d.section ? { section: d.section } : {}),
@@ -200,13 +201,13 @@ export function stepKbLife(s: KbLife, now: number): KbLife {
 		if (n.stage === "travel" && now >= n.endAt) n = { ...n, stage: "wait", at: n.endAt, endAt: n.endAt };
 		if (n.stage === "wait") {
 			if (n.result) {
-				const landing = ["create", "merge"].includes(n.result.outcome);
+				const landing = kbVisualOf(n.result.outcome) !== "none";
 				const at = Math.max(now, n.at);
 				n = landing ? { ...n, stage: "place", at, endAt: at + dur(s, KB_PLACE_MS) } : { ...n, stage: "fade", at, endAt: at + dur(s, KB_FADE_MS) };
 			} else if (now - n.at > KB_WAIT_MAX_MS) n = { ...n, stage: "fade", at: now, endAt: now + dur(s, KB_FADE_MS) };
 		}
 		if ((n.stage === "place" || n.stage === "fade") && now >= n.endAt) {
-			if (n.stage === "place" && n.result) pulses.push({ id: n.id, kind: n.result.outcome === "create" ? "create" : "merge", ...(n.result.entryId ? { entryId: n.result.entryId } : {}), ...(n.result.domain ?? n.domain ? { domain: (n.result.domain ?? n.domain)! } : {}), ...(n.result.section ? { section: n.result.section } : {}), ...(n.result.sectionPath?.length ? { sectionPath: n.result.sectionPath } : {}), at: n.endAt });
+			if (n.stage === "place" && n.result) pulses.push({ id: n.id, kind: kbVisualOf(n.result.outcome) === "ghost" ? "retire" : n.result.outcome === "create" ? "create" : "merge", outcome: n.result.outcome, ...(n.result.title ? { title: n.result.title } : {}), ...(n.result.sectionTitle ? { sectionTitle: n.result.sectionTitle } : {}), ...(n.result.entryId ? { entryId: n.result.entryId } : {}), ...(n.result.domain ?? n.domain ? { domain: (n.result.domain ?? n.domain)! } : {}), ...(n.result.section ? { section: n.result.section } : {}), ...(n.result.sectionPath?.length ? { sectionPath: n.result.sectionPath } : {}), at: n.endAt });
 			changed = true;
 			continue; // flight over
 		}
@@ -259,6 +260,22 @@ export const kbLifeBusy = (s: KbLife, now: number): boolean => kbLifeRate(s, now
 
 /** The curator shimmers while it works a topic (curate-start) or a flight is waiting at it. */
 export const curatorBusy = (s: KbLife): boolean => Object.keys(s.curator).length > 0 || s.flights.some((f) => f.stage === "wait" && !f.result);
+
+export type KbVisual = "grow" | "ring" | "ghost" | "none";
+/** The filing visual of a curator outcome: a create grows in, an update / merge pulses a ring, a retire turns into a fading dashed ghost; reject / parked file nothing. */
+export function kbVisualOf(outcome: string): KbVisual {
+	if (outcome === "create") return "grow";
+	if (outcome === "merge" || outcome === "update" || outcome === "supersede") return "ring";
+	if (outcome === "retire" || outcome === "retired") return "ghost";
+	return "none";
+}
+
+const OUTCOME_WORD: Record<string, string> = { create: "created", merge: "merged", update: "updated", supersede: "superseded", retire: "retired", retired: "retired", reject: "rejected", parked: "parked" };
+/** The one-line hover summary of a filed entry or a flying item: "Title · outcome · domain › section". Missing parts are left out. */
+export function kbHoverText(x: { title?: string; outcome: string; domain?: string; sectionTitle?: string }): string {
+	const where = x.domain ? (x.sectionTitle ? `${x.domain} › ${x.sectionTitle}` : x.domain) : "";
+	return [x.title || "Entry", OUTCOME_WORD[x.outcome] ?? x.outcome, where].filter(Boolean).join(" · ");
+}
 
 /** The wolf's gathered topics in slot order (for drawing them beside it). */
 export const topicsOf = (s: KbLife, wolf: string): KbTopic[] => s.topics.filter((t) => t.wolf === wolf);

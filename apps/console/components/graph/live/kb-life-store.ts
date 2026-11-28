@@ -115,11 +115,11 @@ export function demoCycle(c: number, wolf: string = DEMO_WOLF, targets: readonly
 	// Compact life (loops every DEMO_LOOP_MS): the buffer fills (0.3-1.8 s), consolidation births 5 topics at the wolf (2.5 s) that fly to the Home ring and orbit it,
 	// they are promoted one by one (6-8.4 s) and the curator files each (from 9 s).
 	[6000, 12000, 18000, 25000, 33000, 40000].forEach((count, i) => out.push({ at: 300 + i * 300, event: { ...wolfBase, verb: "memory-observe", detail: { count, capacity: 40000 } } }));
-	const ids = [1, 2, 3, 4, 5];
-	out.push({ at: 2500, event: { ...wolfBase, verb: "memory-consolidate", detail: { count: 14, topicIds: ids.map(t) } } });
+	const ids = [1, 2, 3, 4, 5, 6];
+	out.push({ at: 2500, event: { ...wolfBase, verb: "memory-consolidate", detail: { count: 16, topicIds: ids.map(t) } } });
 	const place = (i: number): DemoTarget => targets.length ? targets[(i - 1) % targets.length]! : { domain: "wolfpack", section: "demo", entryId: `kb-demo-${i}` };
 	ids.forEach((i) => out.push({ at: 3500 + (i - 1) * 600, event: { ...wolfBase, verb: "memory-promote", target: { kind: "domain", id: place(i).domain }, detail: { ref: `demo-c-${c}-${i}`, topicIds: [t(i)] } } }));
-	const outcomes = ["create", "merge", "reject", "merge", "create"];
+	const outcomes = ["create", "merge", "retire", "update", "create", "reject"];
 	ids.forEach((i) => {
 		const base = 6500 + (i - 1) * 3000;
 		const at = place(i);
@@ -127,7 +127,7 @@ export function demoCycle(c: number, wolf: string = DEMO_WOLF, targets: readonly
 		const entryId = i === 5 && targets.length ? `kb-demo-new-${c}` : at.entryId;
 		out.push({ at: base, event: { actor: hubActor, verb: "curate-start", detail: { ref: t(i), topicIds: [t(i)] } } });
 		const o = outcomes[i - 1]!;
-		out.push({ at: base + 2200, event: { actor: hubActor, verb: "curate-done", ...(o === "reject" ? {} : { target: { kind: "kb-entry", id: entryId, domain: at.domain, title: o === "create" ? "Demo: new topic" : "Demo: merged topic" } }), detail: { outcome: o, ref: t(i), topicIds: [t(i)], ...(at.section ? { section: at.section } : {}), sectionTitle: "Demo", ms: 2200, tokens: 1800 * i } } });
+		out.push({ at: base + 2200, event: { actor: hubActor, verb: "curate-done", ...(o === "reject" ? {} : { target: { kind: "kb-entry", id: entryId, domain: at.domain, title: `Demo:  topic` } }), detail: { outcome: o, ref: t(i), topicIds: [t(i)], ...(at.section ? { section: at.section } : {}), sectionTitle: "Demo", ms: 2200, tokens: 1800 * i } } });
 	});
 	return out;
 }

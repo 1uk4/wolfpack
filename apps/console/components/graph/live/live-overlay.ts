@@ -36,7 +36,7 @@ import { elasticStep, orbitPhase, pullFor, ringSlots, trailOrigin, type Elastic 
 import { newRepeller, repelStep, setRep, type Repeller } from "./live-repel";
 import { redact } from "@/src/core";
 import { emptyKbLife, isKbVerb, kbLifeRate, reduceKbLife, stepKbLife } from "@/src/core";
-import { drawKbLife, type KbFocus } from "./kb-life-draw";
+import { drawKbLife, type KbFocus, type KbHoverTarget } from "./kb-life-draw";
 import { isMotionReduced, type MotionMode } from "@/src/core";
 
 export interface Pt { x: number; y: number }
@@ -191,7 +191,8 @@ const botGlyph = (): Path2D => (botPath ??= new Path2D("M4 10a2 2 0 0 1 2-2h12a2
 let wolfHead: Path2D | null = null;
 const wolfHeadPath = (): Path2D => (wolfHead ??= new Path2D(WOLF_HEAD_PATH));
 
-export type OverlayKind = "wolf" | "thread" | "feature" | "subagent" | "you";
+/** "kb": a lit filed entry or a mote in flight; its `label` is the one-line hover summary. */
+export type OverlayKind = "wolf" | "thread" | "feature" | "subagent" | "you" | "kb";
 export interface OverlayItem {
 	kind: OverlayKind;
 	key: string;
@@ -287,6 +288,8 @@ export class LiveOverlay {
 	/** The wall clock of the current frame (set in step, read by classifyNeed in the same frame). */
 	private wall = Date.now();
 	private kbFocus: KbFocus | null = null;
+	/** What the last frame's KB life drew that the pointer can hover (world coordinates). */
+	private kbTargets: KbHoverTarget[] = [];
 	private settings: OverlaySettings = LIVE_DEFAULTS;
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private mobileNow = false;
@@ -1269,7 +1272,10 @@ export class LiveOverlay {
 				EFFECTS.ring!({ ctx, x: it.x, y: it.y, r: it.r, k, t: 0, color: AMBER, intensity: I, reduced, time: now, alpha: it.alpha });
 			}
 		}
-		if (this.settings.enabled && this.settings.memory) drawKbLife(ctx, this.kb, host, (n) => this.wolfItems.get(n), k, wall, reduced, this.kbFocus, m);
+		if (this.settings.enabled && this.settings.memory) {
+			this.kbTargets = [];
+			drawKbLife(ctx, this.kb, host, (n) => this.wolfItems.get(n), k, wall, reduced, this.kbFocus, m, this.kbTargets);
+		}
 		this.drawPills(ctx, host, items, k);
 		const hl = this.highlight;
 		if (hl) {
@@ -1509,7 +1515,7 @@ export class LiveOverlay {
 		}
 		let best: OverlayHit | null = null;
 		let bestD = Infinity;
-		const prio: Record<OverlayKind, number> = { subagent: 0, thread: 1, feature: 1, you: 2, wolf: 3 };
+		const prio: Record<OverlayKind, number> = { subagent: 0, thread: 1, feature: 1, you: 2, wolf: 3, kb: 4 };
 		for (const it of this.cachedItems) {
 			const px = it.x * tr.k + tr.x;
 			const py = it.y * tr.k + tr.y;
@@ -1520,6 +1526,19 @@ export class LiveOverlay {
 			if (score < bestD) {
 				bestD = score;
 				best = { item: it, ring: it.needsYou && d > -2, sx: px, sy: py };
+			}
+		}
+		if (best) return best;
+		if (this.settings.memory) {
+			let kd = Infinity;
+			for (const t of this.kbTargets) {
+				const px = t.x * tr.k + tr.x;
+				const py = t.y * tr.k + tr.y;
+				const d = Math.hypot(px - sx, py - sy) - t.r * tr.k;
+				if (d > slop || d >= kd) continue;
+				kd = d;
+				const item: OverlayItem = { kind: "kb", key: t.key, wolf: "", x: t.x, y: t.y, r: t.r, alpha: 1, needsYou: false, online: true, color: "", label: t.text };
+				best = { item, ring: false, sx: px, sy: py };
 			}
 		}
 		return best;
@@ -1537,6 +1556,7 @@ export class LiveOverlay {
 		const s = this.state;
 		const p = this.privateView;
 		const it = hit.item;
+		if (it.kind === "kb") return { title: it.label, lines: [] };
 		if (it.kind === "wolf") {
 			const w = s.wolves[it.wolf];
 			const t = w?.activeThreadId ? s.threads[threadKey(it.wolf, w.activeThreadId)] : undefined;

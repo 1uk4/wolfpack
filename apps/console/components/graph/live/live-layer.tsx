@@ -68,6 +68,7 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 			},
 			onOverlaySelect: (hit, pointerType) => {
 				const touch = pointerType === "touch";
+				if (hit.item.kind === "kb") return void setShown({ hit, card: o.cardFor(hit), pinned: false, width: width() }); // a filed entry's summary: a tap shows it, nothing to pin
 				if (hit.ring) {
 					const t = o.needsYouThread(hit.item.wolf, hit.item.threadId);
 					if (t) return void answer(t.wolf, t.threadId);
@@ -231,7 +232,16 @@ export function LiveGraphLayer({ renderer, settings }: { renderer: GraphCanvasRe
 	const flip = shown ? shown.hit.sx > shown.width - 250 : false;
 	return (
 		<div ref={wrapRef} className="pointer-events-none absolute inset-0 z-[5] overflow-hidden">
-			{shown && live.enabled && (
+			{shown && live.enabled && shown.hit.item.kind === "kb" && (
+				<div
+					role="tooltip"
+					className="absolute max-w-[260px] truncate rounded-[10px] border border-border/50 bg-background/70 px-2.5 py-1.5 text-xs text-foreground shadow-md backdrop-blur-md"
+					style={{ left: flip ? undefined : shown.hit.sx + 12, right: flip ? shown.width - shown.hit.sx + 12 : undefined, top: Math.max(8, shown.hit.sy - 12) }}
+				>
+					{shown.card.title}
+				</div>
+			)}
+			{shown && live.enabled && shown.hit.item.kind !== "kb" && (
 				<div
 					ref={cardRef}
 					className={`absolute w-56 rounded-[11px] border border-border/50 bg-background/70 p-2.5 text-xs shadow-lg backdrop-blur-md ${shown.pinned ? "pointer-events-auto" : ""}`}

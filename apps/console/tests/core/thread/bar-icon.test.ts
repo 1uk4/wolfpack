@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { clampIconPos, defaultIconPos, isDrag, loadIconPos, saveIconPos, snapIconToEdge, ICON_POS_KEY } from "../../../src/core/thread/bar-icon.ts";
+import { clampIconPos, defaultIconPos, isDrag, loadIconPos, saveIconPos, phoneIconPos, ICON_POS_KEY } from "../../../src/core/thread/bar-icon.ts";
 import type { KeyValueStore } from "../../../src/core/thread/chat-bar.ts";
 
 const mem = () => {
@@ -35,10 +35,10 @@ describe("floating chat icon position", () => {
 		assert.deepEqual(loadIconPos(s, { width: 1000, height: 800 }, none, 500), { x: 476, y: 744 });
 	});
 
-	it("snaps to the nearer screen edge, keeping its height inside the safe area", () => {
-		assert.deepEqual(snapIconToEdge({ x: 100, y: 300 }, phone, notch), { x: 8, y: 300 }); // centre 124 < 195: left
-		assert.deepEqual(snapIconToEdge({ x: 250, y: 300 }, phone, notch), { x: 334, y: 300 }); // centre 274 > 195: right
-		assert.deepEqual(snapIconToEdge({ x: 250, y: 830 }, phone, notch), { x: 334, y: 754 }); // dropped over the home bar
+	it("on a phone the icon is fixed at the bottom centre of the safe area, portrait and landscape, clear of both bottom corners", () => {
+		assert.deepEqual(phoneIconPos({ width: 390, height: 844 }, { top: 47, right: 0, bottom: 34, left: 0 }), { x: 171, y: 754 });
+		assert.deepEqual(phoneIconPos({ width: 320, height: 568 }, { top: 0, right: 0, bottom: 0, left: 0 }), { x: 136, y: 512 });
+		assert.deepEqual(phoneIconPos({ width: 844, height: 390 }, { top: 0, right: 47, bottom: 21, left: 47 }), { x: 398, y: 313 }); // landscape notch on both sides
 	});
 
 	it("a drag needs more than 6px of travel; less is a tap", () => {

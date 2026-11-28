@@ -2,11 +2,11 @@
 
 /**
  * The floating chat collapsed to a small round icon: the Wolfpack mark, the attached wolf's status dot and the needs-you count.
- * Drag it anywhere (its spot is remembered per device, bar-icon.ts); on a phone it snaps to the nearer screen edge and keeps off the notch
- * and home bar. A press that moves more than a few px is a drag, never a tap; a tap (or Enter) expands the bar again.
+ * Drag it anywhere on desktop (its spot is remembered per device, bar-icon.ts); on a phone it is fixed at the bottom centre, above the home bar,
+ * so it never covers a page's bottom corner controls (the graph's Home and Settings, Activity). A press that moves more than a few px is a drag, never a tap; a tap (or Enter) expands the bar again.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { clampIconPos, isDrag, loadIconPos, saveIconPos, snapIconToEdge, type Insets, type IconPos, type KeyValueStore, type Viewport } from "@/src/core";
+import { clampIconPos, isDrag, loadIconPos, saveIconPos, phoneIconPos, type Insets, type IconPos, type KeyValueStore, type Viewport } from "@/src/core";
 import { WolfpackMark } from "@/components/shell/wolfpack-mark";
 import { Hint } from "@/components/ui/hint";
 import { CompactMeter, type Dictation } from "@/components/composer/dictation";
@@ -65,7 +65,7 @@ export function BarIcon({ phone, label, color, wolfStatus, needsYou, working, di
 	const centreRef = useRef<number | undefined>(undefined);
 	centreRef.current = !phone && col.width > 0 && col.width <= (typeof window === "undefined" ? 0 : window.innerWidth) ? col.left + col.width / 2 : undefined;
 
-	const place = (at: IconPos, toPhone: boolean) => (toPhone ? snapIconToEdge(at, viewport(), insets.current) : clampIconPos(at, viewport(), insets.current));
+	const place = (at: IconPos, toPhone: boolean) => (toPhone ? phoneIconPos(viewport(), insets.current) : clampIconPos(at, viewport(), insets.current));
 
 	// Before the first paint: read the safe area and the remembered spot (snapped to an edge on a phone), then keep the icon on screen when the window resizes.
 	useLayoutEffect(() => {
@@ -93,7 +93,7 @@ export function BarIcon({ phone, label, color, wolfStatus, needsYou, working, di
 	};
 
 	const onPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
-		if (!pos || drag.current || (e.pointerType === "mouse" && e.button !== 0)) return; // a second touch is ignored while one is down
+		if (!pos || phone || drag.current || (e.pointerType === "mouse" && e.button !== 0)) return; // a second touch is ignored while one is down
 		drag.current = { id: e.pointerId, px: e.clientX, py: e.clientY, ox: pos.x, oy: pos.y, moved: false, at: pos };
 		e.currentTarget.setPointerCapture?.(e.pointerId);
 	};
@@ -124,7 +124,7 @@ export function BarIcon({ phone, label, color, wolfStatus, needsYou, working, di
 	// Arrows nudge within the screen; on release the phone icon snaps to the nearer edge like a drag does.
 	const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
 		const step = { ArrowLeft: [-ARROW_STEP, 0], ArrowRight: [ARROW_STEP, 0], ArrowUp: [0, -ARROW_STEP], ArrowDown: [0, ARROW_STEP] }[e.key];
-		if (!step || !pos) return;
+		if (!step || !pos || phone) return;
 		e.preventDefault();
 		const next = clampIconPos({ x: pos.x + step[0]!, y: pos.y + step[1]! }, viewport(), insets.current);
 		setPos(next);
@@ -168,8 +168,9 @@ export function BarIcon({ phone, label, color, wolfStatus, needsYou, working, di
 					onKeyUp={onKeyUp}
 					style={{ borderColor: color }}
 					className={cn(
-						"relative flex size-12 touch-none select-none items-center justify-center rounded-full border bg-card/90 text-foreground shadow-lg backdrop-blur-md hover:bg-card focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-						dragging ? "cursor-grabbing" : "cursor-grab",
+						"relative flex size-12 select-none items-center justify-center rounded-full border bg-card/90 text-foreground shadow-lg backdrop-blur-md hover:bg-card focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+						!phone && "touch-none",
+						dragging ? "cursor-grabbing" : !phone && "cursor-grab",
 						dictation.active && "ring-2 ring-red-500/70",
 					)}
 				>

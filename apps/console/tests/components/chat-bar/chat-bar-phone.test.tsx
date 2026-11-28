@@ -273,14 +273,31 @@ describe("ChatBar on a phone", () => {
 		assert.equal(main.getAttribute("aria-label"), "Start dictation");
 		assert.match(q('[data-testid="composer"] button[aria-label="Attach images"]')!.className, /size-11/); // 44px
 		assert.deepEqual(order().filter((x) => x !== "input"), ["attach", "send"], "add-image sits beside the mic");
-		// The text field is one tap away: the keyboard icon, or the compact field.
-		await click(q('[data-testid="voice-keyboard"]'));
+		// The text field is one tap away: the compact field in the same row.
+		await click(q('[data-testid="voice-field"]'));
 		assert.equal(form().getAttribute("data-field"), "text");
 		await type("hello");
 		assert.equal(q('[data-testid="voice-main"]')!.getAttribute("aria-label"), "Send", "with text the big button sends");
 		await resize(false);
 		assert.equal(q('[data-testid="voice-main"]'), null, "the wide panel keeps its classic composer");
 		assert.deepEqual(order(), ["attach", "input", "send"]);
+	});
+
+	it("the phone dock is one composer row (attach, field, mic) with the wolf avatars on the header line and the name shown once", async () => {
+		await mount();
+		const row = q('[data-testid="composer"]')!;
+		assert.doesNotMatch(row.className, /flex-wrap/, "one row, never wrapped");
+		assert.equal(row.querySelector('[data-testid="voice-field"]')!.className.includes("basis-full"), false, "the field shares the row");
+		assert.equal(q('[data-testid="voice-keyboard"]'), null, "no keyboard button: the field itself opens the input");
+		assert.match(q('[data-testid="voice-main"]')!.className, /max-md:size-11/);
+		assert.equal(q('[data-testid="voice-main"]')!.className.includes("size-14"), false, "the mic is no longer the big circle");
+		const strip = q('[data-testid="den-strip"]')!;
+		assert.equal(strip.getAttribute("data-inline"), "true");
+		assert.ok(strip.parentElement!.querySelector('[data-testid="chat-bar-chip"]'), "the avatars share the header line with the chip");
+		assert.match(q('[data-testid="den-wolf"],[data-testid="chat-bar-swap"]')!.className, /size-11/, "44px hit area");
+		const chip = q('[data-testid="chat-bar-chip"]')!;
+		const title = chip.getAttribute("title")!.split(" \u00b7 ");
+		assert.equal(title[0] === title[1] ? chip.querySelector('[data-testid="chat-bar-chip-wolf"]') : null, null, "a thread named like its wolf shows the name once");
 	});
 
 	it("the compact field opens the text input too", async () => {
@@ -538,7 +555,7 @@ describe("ChatBar on a phone", () => {
 		startPath = "/wolf/w/thread/b";
 		await mount(A);
 		assert.equal(bar().getAttribute("data-layout"), "dock", "another thread page: the dock floats");
-		assert.match(q('[data-testid="chat-bar-swap"]')!.className, /max-md:size-11/, "the swap den button is thumb-sized");
+		assert.match(q('[data-testid="chat-bar-swap"]')!.className, /size-11/, "the swap den button is thumb-sized");
 		assert.equal(q('[data-testid="chat-bar-swap-wrap"]'), null, "no separate swap pill any more");
 		assert.equal(over(), "90px", "the page pads its bottom by the dock's height");
 		await act(async () => root?.unmount());

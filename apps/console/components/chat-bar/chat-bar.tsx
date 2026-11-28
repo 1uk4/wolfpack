@@ -635,7 +635,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 		>
 			<span data-testid="chat-bar-dot" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
 			<span className="truncate">{title}</span>
-			<span className="shrink-0 truncate text-muted-foreground max-w-20">{target.wolf}</span>
+			{title !== target.wolf && <span data-testid="chat-bar-chip-wolf" className="shrink-0 truncate text-muted-foreground max-w-20">{target.wolf}</span>}
 			{working && <BrailleSpinner />}
 			{dictation.active && <MicIcon data-testid="chat-bar-listening" className="size-3 shrink-0 text-red-500" />}
 		</button>
@@ -710,7 +710,6 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				onKeyDown={trapTab}
 			>
 				{!sheet && phoneTree}
-				{!sheet && !minimized && !vizOn && <DenStrip swap={denSwap} onSwap={onDenSwap} open={BAR_EXTRAS.switcher ? switcher : null} setOpen={setSwitcher} />}
 				{!sheet && !minimized && sheetCard && <div data-testid="bar-ask-inline" className="flex min-h-0 shrink-0 flex-col px-2 pb-1 pt-2">{sheetCard}</div>}
 				{sheet && !minimized && (
 					<div
@@ -756,6 +755,7 @@ function Bar({ docked = false, target, swap, phone, wrapRef, chipRef, switcher, 
 				{!minimized && !sheet && chipRow}
 				<div className="relative flex items-center gap-1 px-1.5">
 					{chip}
+					{!sheet && !minimized && !vizOn && <DenStrip inline swap={denSwap} onSwap={onDenSwap} open={BAR_EXTRAS.switcher ? switcher : null} setOpen={setSwitcher} />}
 					{sheet && badge}
 					{working && <span data-testid="chat-bar-working" className="font-ui text-xs text-muted-foreground">working…</span>}
 					<div className="ml-auto flex items-center">

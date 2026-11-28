@@ -484,21 +484,22 @@ const remount = async (stored: object | null) => {
 };
 
 describe("the phone dock's voice layout", () => {
-	it("the big button is the mic when idle and empty, Send with a draft, mic plus a small Stop while the wolf works, Stop dictation while recording and a spinner while flushing", async () => {
+	it("the big button is the mic when idle and empty, Send with a draft, Stop while the wolf works with nothing to send, Stop dictation while recording and a spinner while flushing", async () => {
 		await onPhone(async () => {
 			await mount("/kb", A);
 			assert.equal(mainBtn().getAttribute("aria-label"), "Start dictation");
-			assert.equal(q('[data-testid="voice-stop"]'), null, "no Stop while the wolf is idle");
 			await typeInBar("a draft");
 			assert.equal(mainBtn().getAttribute("aria-label"), "Send");
 			busyA = true;
 			await remount(A);
 			await wait();
 			assert.equal(mainBtn().getAttribute("aria-label"), "Send", "a draft is still Send while the wolf works");
-			assert.equal(q('[data-testid="voice-stop"]'), null, "Send only, no Stop beside it");
 			await typeInBar("");
-			assert.equal(mainBtn().getAttribute("aria-label"), "Start dictation", "working and empty: the mic");
-			assert.equal(q('[data-testid="voice-stop"]')!.getAttribute("aria-label"), "Stop the wolf");
+			assert.equal(mainBtn().getAttribute("aria-label"), "Stop", "working and empty: the one button is Stop");
+			busyA = false;
+			await remount(A);
+			await wait();
+			assert.equal(mainBtn().getAttribute("aria-label"), "Start dictation", "idle again: the mic");
 			await fire(phoneForm(), "submit");
 			await wait();
 			const ws = await say("spoken");
@@ -510,12 +511,12 @@ describe("the phone dock's voice layout", () => {
 		});
 	});
 
-	it("the small Stop aborts the working wolf's turn", async () => {
+	it("the Stop button aborts the working wolf's turn", async () => {
 		busyA = true;
 		await onPhone(async () => {
 			await mount("/kb", A);
 			await wait();
-			await act(async () => void reactProps(q('[data-testid="voice-stop"]')!).onClick());
+			await fire(phoneForm(), "submit");
 			await wait();
 			assert.equal(posts.filter((u) => /\/threads\/a\/abort$/.test(u)).length, 1);
 		});

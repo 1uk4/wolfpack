@@ -197,7 +197,7 @@ export function ThreadContextChip({ wolf, slug, threadId, refreshKey, turn: loca
 	const amber = ctx ? pastStartAt(ctx) : false;
 	const shown = open && selected === "memory";
 	const pct = ctx?.window ? Math.min(100, Math.round((ctx.tokens / ctx.window) * 100)) : undefined;
-	const count = ctx ? (ctx.window ? `${formatTokens(ctx.tokens)} / ${formatTokens(ctx.window)}` : formatTokens(ctx.tokens)) : "context —";
+	const count = ctx ? formatTokens(ctx.tokens) : "context —"; // the window and the percent live in the tooltip and the bar
 	// Everything the header no longer shows: wolf, turn state, percent, compactions, summarising.
 	const tip = [
 		`${wolf} · ${TURN_LABEL[turn]}`,
@@ -217,7 +217,7 @@ export function ThreadContextChip({ wolf, slug, threadId, refreshKey, turn: loca
 				data-turn={turn}
 				title={tip}
 				onClick={() => (shown ? panels.closePanel() : void panels.openPanel("memory"))}
-				className={`flex max-md:max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-xs hover:bg-accent ${amber ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}
+				className={`flex max-md:max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 font-ui text-xs hover:bg-accent ${amber ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}
 			>
 				{pct !== undefined && (
 					<span aria-hidden className="h-1.5 w-8 shrink-0 overflow-hidden rounded bg-accent" data-testid="context-chip-bar">

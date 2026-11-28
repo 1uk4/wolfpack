@@ -25,7 +25,6 @@ Reviewers only check against this standard; they never commit, fix up or rebase.
 - Put the work item ID in the subject: `agents: append the git standard (work-<domain>-<id>)`. Convention, not enforced.
 - Without a work item, use a conventional prefix: `fix(scope):`, `chore(scope):`, `docs(scope):`. With the ID in the subject the prefix is optional.
 - When you edit or delete a test, add a `test-change: <why>` line to the commit message (a hook will check it later).
-- Never add AI attribution: no `Co-Authored-By:` trailer naming a model or assistant (Claude, GPT, etc.), no "Generated with" line, and never set an assistant as commit author. Commits are authored by the owner's git identity.
 
 ## 4. Shared history
 - Never rewrite history that is already merged.

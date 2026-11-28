@@ -415,6 +415,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       return out;
     },
   });
+  let workRevision = 0; // bumped on every landed work write; part of the KB graph cache key
+  writer.onAppended(() => { workRevision++; });
   writer.onAppended(({ events }) => {
     // `work.created` is the only ledger event that carries a domain; seed the cache from it so the fold is rarely needed.
     for (const e of events) if (typeof e.domain === "string") domainCache.set(e.id, e.domain);
@@ -702,16 +704,21 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       if (!id || id.kind !== "worker") return all;
       return all.filter((d) => { try { requireKbDomain(id, d); return true; } catch { return false; } });
     }
-    const kbGraphCache = new Map<string, string>();
-    /** The graph of the hub's read-only KB copy for `domains`, cached on the per-domain revisions (a changed domain rebuilds). */
+    const kbGraphCache = new Map<string, { at: number; body: string }>();
+    const KB_GRAPH_TTL_MS = 30_000; // safety net: a write path that skips the work revision still shows within this
+    /**
+     * The graph of the hub's read-only KB copy for `domains`, cached on the per-domain KB revisions AND the work revision
+     * (bumped on every work write; work files are not KB revisions, so without it a changed work item stayed stale), for at most 30 s.
+     */
     function kbGraphBody(domains: string[], domain: string | undefined, archivedWork: boolean): string {
       const rev = domains.map((d) => { try { const h = revisions.head(d); return `${d}:${h.epoch}:${h.revision}`; } catch { return d; } }).join(",");
-      const key = JSON.stringify([domains, domain ?? null, archivedWork, rev]);
+      const key = JSON.stringify([domains, domain ?? null, archivedWork, rev, workRevision]);
+      const now = (opts.now ?? Date.now)();
       const hit = kbGraphCache.get(key);
-      if (hit !== undefined) return hit;
+      if (hit !== undefined && now - hit.at < KB_GRAPH_TTL_MS) return hit.body;
       const body = JSON.stringify(buildKbGraph(roots, { onlyDomains: domains, ...(domain ? { domain } : {}), archivedWork }));
       if (kbGraphCache.size >= 16) kbGraphCache.delete(kbGraphCache.keys().next().value as string);
-      kbGraphCache.set(key, body);
+      kbGraphCache.set(key, { at: now, body });
       return body;
     }
 

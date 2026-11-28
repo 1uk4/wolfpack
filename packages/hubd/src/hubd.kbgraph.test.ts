@@ -87,4 +87,19 @@ describe("hub KB graph", () => {
     for (const bad of ["..%2F..%2Fdomains.yaml", "%2e%2e", ".hidden", "a%2Fb"]) expect([400, 404], bad).toContain((await call("GET", `/v1/kb/entries/${bad}`, OP_HEADERS)).status);
     expect((await call("GET", "/v1/kb/entries/..%2F..%2Fdomains.yaml", OP_HEADERS)).status).not.toBe(200);
   });
+
+  it("a work change shows in the next graph (every variant); an unchanged hub serves the cached body", async () => {
+    const { call } = await setup();
+    type W = { nodes: { id: string }[] };
+    const get = async (q: string) => (await call("GET", `/v1/kb/graph${q}`, OP_HEADERS)).text();
+    const variants = ["?archivedWork=0", "?archivedWork=1"];
+    const before = await Promise.all(variants.map(get));
+    expect(await Promise.all(variants.map(get))).toEqual(before); // no change: same cached body
+    const f = await call("POST", "/v1/work", OP_HEADERS, { kind: "feature", domain: "alpha", title: "Fresh feature", assignee: "1uk4" });
+    expect(f.status).toBe(201);
+    const { id } = (await f.json()) as { id: string };
+    for (const q of variants) expect((JSON.parse(await get(q)) as W).nodes.map((n) => n.id), q).toContain(`work:${id}`);
+    const after = await Promise.all(variants.map(get));
+    expect(await Promise.all(variants.map(get))).toEqual(after); // cached again once the change is in
+  });
 });

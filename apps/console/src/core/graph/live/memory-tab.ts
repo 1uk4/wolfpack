@@ -113,3 +113,21 @@ export function tabItems(tab: ActivityTab, lines: readonly FeedLine[], rows: rea
 	if (tab === "memory") return [...m].sort((a, b) => a.time - b.time);
 	return [...l, ...m].sort((a, b) => a.time - b.time);
 }
+
+/** The curator line's numbers: `pending` entries waiting at Home (the hub queue), `filing` = curate-start seen without its curate-done. */
+export function curatorCounts(pending: number, events: readonly { event: ActivityEvent; at: number }[]): { pending: number; filing: number } {
+	const open = new Set<string>();
+	for (const { event: e } of events) {
+		const id = e.detail?.topicIds?.[0] ?? e.detail?.ref;
+		if (!id) continue;
+		if (e.verb === "curate-start") open.add(id);
+		else if (e.verb === "curate-done") open.delete(id);
+	}
+	return { pending, filing: open.size };
+}
+
+/** "Curator · 3 pending · 1 filing"; null when both are 0 (nothing extra to show). */
+export function curatorText(c: { pending: number; filing: number }): string | null {
+	const parts = [c.pending > 0 ? `${c.pending} pending` : "", c.filing > 0 ? `${c.filing} filing` : ""].filter(Boolean);
+	return parts.length ? ["Curator", ...parts].join(" · ") : null;
+}

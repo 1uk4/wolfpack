@@ -21,6 +21,7 @@ import { feedCountReducer, feedPanelBottom, feedPillLabel, formatFeed, formatPoo
 import type { MemoryStatus } from "@wolfpack/client";
 import { fetchMemoryStatus } from "@/components/kb/kb-client";
 import { setKbHover, useKbLiveEvents } from "./kb-life-store";
+import { CuratorLine } from "./curator-line";
 import type { GraphCanvasRenderer } from "../graph-canvas.ts";
 import { liveSettingsOf, type OverlayHighlight } from "./live-overlay";
 import { useLiveActivity } from "./live-store";
@@ -253,6 +254,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 					</Tooltip>
 					</TooltipProvider>
 				</div>
+				{memoryOn && tab === "memory" && <CuratorLine events={events} />}
 				{memoryOn && tab === "memory" && wolfNames.length > 0 && (
 					<div className="space-y-1 px-2.5 pt-1.5">
 						{wolfNames.map((w) => {

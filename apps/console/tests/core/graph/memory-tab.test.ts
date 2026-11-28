@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ActivityEvent } from "@wolfpack/protocol";
-import { formatPool, memoryRows, pendingNotice, poolBars, resolveTab, tabItems, tabsFor, type FeedLine } from "../../../src/core/index.ts";
+import { curatorCounts, curatorText, formatPool, memoryRows, pendingNotice, poolBars, resolveTab, tabItems, tabsFor, type FeedLine } from "../../../src/core/index.ts";
 
 let n = 0;
 const ev = (verb: string, o: Partial<ActivityEvent> = {}): ActivityEvent => ({ v: 1, id: `m${++n}`, pack: "p", ts: 0, ttlMs: 1000, actor: { kind: "wolf", wolf: "jack" }, verb, ...o }) as ActivityEvent;
@@ -92,5 +92,18 @@ describe("tabs", () => {
 		assert.deepEqual(keys("memory", true), ["r1"]);
 		assert.deepEqual(keys("all", false), ["l1", "l2"]);
 		assert.deepEqual(keys("memory", false), ["l1", "l2"]);
+	});
+});
+
+describe("curator line", () => {
+	const start = (id: string) => at(ev("curate-start", { actor: hub, detail: { topicIds: [id] } }), 1);
+	const done = (id: string) => at(ev("curate-done", { actor: hub, detail: { outcome: "merge", topicIds: [id] } }), 2);
+	it("counts filing as curate-start without its curate-done, and words pending and filing", () => {
+		assert.deepEqual(curatorCounts(3, [start("a"), start("b"), done("a")]), { pending: 3, filing: 1 });
+		assert.deepEqual(curatorCounts(0, [start("a"), done("a")]), { pending: 0, filing: 0 });
+		assert.equal(curatorText({ pending: 3, filing: 1 }), "Curator · 3 pending · 1 filing");
+		assert.equal(curatorText({ pending: 3, filing: 0 }), "Curator · 3 pending");
+		assert.equal(curatorText({ pending: 0, filing: 2 }), "Curator · 2 filing");
+		assert.equal(curatorText({ pending: 0, filing: 0 }), null);
 	});
 });

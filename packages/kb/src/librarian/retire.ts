@@ -46,8 +46,9 @@ function pruneEmptySections(roots: KbRoots, domain: string, candidates: Set<stri
     if (sec.parent) queue.push(String(sec.parent));
   }
   if (!removed.length) return [];
-  writeSections(roots, sections.filter((s) => !removed.includes(String(s.id))).map((s) => ({ ...s, childIds: s.childIds.filter((c) => !removed.includes(String(c))) })));
+  // Events first: a crash between the two leaves an event the next fold replays, never a snapshot with no event behind it.
   appendLedger(roots, removed.map((id) => ev.sectionRemoved(id, domain)));
+  writeSections(roots, sections.filter((s) => !removed.includes(String(s.id))).map((s) => ({ ...s, childIds: s.childIds.filter((c) => !removed.includes(String(c))) })));
   return removed;
 }
 

@@ -70,6 +70,18 @@ describe("retireEntries", () => {
     expect(readLedger(roots).filter((e) => e.t === "section_removed")).toMatchObject([{ sectionId: "sec-fit-aaaaaa" }]);
   });
 
+  it("cascades: retiring the last entry of a child also removes the parent section left with nothing", () => {
+    seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa"] });
+    writeFileSync(d("entries", "kb-fit-aaaaaaa.md"), "---\ntitle: a\nsummary: s\nsection: sec-fit-child1\n---\nbody");
+    const mk = (id: string, parent: string | null, childIds: string[]) => ({ id, domain: "fit", parent, depth: parent ? 1 : 0, label: id, title: id, centroid: [], memberCount: 0, childIds, summary: "s", summaryHash: "", dirty: false, memberCountAtLastLabel: 0, created: "2026-11-01", updated: "2026-11-01" }) as never;
+    writeSections(roots, [mk("sec-fit-parent", null, ["sec-fit-child1"]), mk("sec-fit-child1", "sec-fit-parent", [])]);
+
+    retireEntries(roots, ["kb-fit-aaaaaaa"], { reason: "user deleted" });
+
+    expect(readSections(roots)).toEqual([]);
+    expect(readLedger(roots).filter((e) => e.t === "section_removed").map((e) => (e as { sectionId: string }).sectionId).sort()).toEqual(["sec-fit-child1", "sec-fit-parent"]);
+  });
+
   it("records survivors: explicit ones win, a 'merged into' reason names one, no replacement is an explicit empty list", () => {
     seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa"], "kb-fit-bbbbbbb": ["kb-fit-bbbbbbb"], "kb-fit-ccccccc": ["kb-fit-ccccccc"] });
     retireEntries(roots, ["kb-fit-aaaaaaa"], { reason: "split into parts", survivors: ["kb-fit-sss1111", "kb-fit-sss2222"] });

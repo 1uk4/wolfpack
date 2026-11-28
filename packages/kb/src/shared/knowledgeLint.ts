@@ -71,14 +71,17 @@ const TEST_COUNT: RegExp[] = [
   /\(\s*\d{2,}\s+tests?\s*\)/i,
   /\btests?:\s*\d{2,}\b/i,
 ];
-const DEPLOY_STATUS: RegExp[] = [
-  /\((?:deployed|verified|shipped|merged on main|live)(?:\s+(?:to|on)\s+[^)]*)?\)/i,
-  /\b(?:deployed|shipped|rolled out|released)\s+(?:to|on|in)\s+(?:the\s+)?(?:vps|prod(?:uction)?|dewey|live|hal|mirror)\b/i,
-  /\bverified\s+(?:live|on the vps|in prod(?:uction)?|end-to-end|working|green)\b/i,
-  /\b(?:status|state)\s*:\s*(?:deployed|verified|shipped|done|complete[d]?)\b/i,
-  /^\W*(?:\*\*)?(?:deployed|verified|shipped|live)\b(?:\*\*)?\s*[:\-–—]/i,
-  /\b(?:needs?|awaiting|pending)\s+(?:a\s+)?(?:deploy|sync|restart)\b/i,
+/** How `scrubDeployStatus` handles a form: drop a parenthetical, strip a leading label, drop the whole sentence, or leave it to the retry. */
+type ScrubMode = "paren" | "lead" | "sentence" | "none";
+const DEPLOY_STATUS: Array<{ re: RegExp; scrub: ScrubMode }> = [
+  { re: /\((?:deployed|verified|shipped|merged on main|live)(?:\s+(?:to|on)\s+[^)]*)?\)/i, scrub: "paren" },
+  { re: /\b(?:deployed|shipped|rolled out|released)\s+(?:to|on|in)\s+(?:the\s+)?(?:vps|prod(?:uction)?|dewey|live|hal|mirror)\b/i, scrub: "sentence" },
+  { re: /\bverified\s+(?:live|on the vps|in prod(?:uction)?|end-to-end|working|green)\b/i, scrub: "sentence" },
+  { re: /\b(?:status|state)\s*:\s*(?:deployed|verified|shipped|done|complete[d]?)\b/i, scrub: "sentence" },
+  { re: /^\W*(?:\*\*)?(?:deployed|verified|shipped|live)\b(?:\*\*)?\s*[:\-–—]/i, scrub: "lead" },
+  { re: /\b(?:needs?|awaiting|pending)\s+(?:a\s+)?(?:deploy|sync|restart)\b/i, scrub: "none" },
 ];
+const hasDeployStatus = (line: string) => DEPLOY_STATUS.some((e) => e.re.test(line));
 const MONTH = "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?";
 const DATED_HEADING = new RegExp(`^#{2,6}\\s.*(?:\\d{4}-\\d{2}-\\d{2}|\\b${MONTH}\\s+\\d{1,2}\\b|\\b\\d{1,2}\\s+${MONTH}\\b|\\bweek\\s+\\d{1,2}\\b)`, "i");
 
@@ -139,30 +142,71 @@ export function scrubCommitHashes(text: string, replacement = "a commit"): strin
     .join("\n");
 }
 
-const STATUS_LEAD = /^(\s*(?:[-*+]\s+)?)(?:\*\*)?(?:deployed|verified|shipped|live)\b(?:\*\*)?\s*[:\-–—]\s*/i;
-// The inline patterns (all but the leading-word one), with the space before them.
-const STATUS_INLINE = [0, 1, 2, 3, 5].map((i) => new RegExp(`\\s*${DEPLOY_STATUS[i].source}`, "gi"));
+// A leading label: a prefix (quote, heading or bullet marks), the status word with optional bold, a colon (or a spaced dash).
+const LEAD_LABEL = /^(\W*?)(\*\*)?(?:deployed|verified|shipped|live)(\*\*)?\s*(?::|[-–—](?=\s))\s*(\*\*)?\s*/i;
+const LINE_PREFIX = /^\s*(?:(?:[-*+>]|#{1,6}|\d+[.)])\s+)*/;
+const inCode = (s: string, at: number) => (s.slice(0, at).match(/`/g)?.length ?? 0) % 2 === 1;
+
+/** Remove each status parenthetical (and the space before it) outside inline code. */
+function dropParens(line: string, re: RegExp): string {
+  const g = new RegExp(`\\s*${re.source}`, "gi");
+  const out = line.replace(g, (m, off: number) => (inCode(line, off + m.length - m.trimStart().length) ? m : ""));
+  return out !== line && !/^\s/.test(line) ? out.trimStart() : out;
+}
+
+/** Strip a leading status label, keeping the line prefix and any `**` that was not the label's own. */
+function stripLead(line: string): string {
+  const m = LEAD_LABEL.exec(line);
+  if (!m) return line;
+  const [all, pre, open, close, after] = m;
+  const keepBold = after && !(open && !close) ? "**" : "";
+  let rest = line.slice(all.length);
+  if (!keepBold && /^[a-z][a-z]/.test(rest)) rest = rest[0].toUpperCase() + rest.slice(1);
+  return pre + keepBold + rest;
+}
+
+/** Drop the whole sentence around the first match of `re` outside inline code. Null when nothing matched. */
+function dropSentence(line: string, re: RegExp): string | null {
+  if (/^\s*\|/.test(line)) return null;
+  const m = new RegExp(re.source, "i").exec(line);
+  if (!m || inCode(line, m.index)) return null;
+  const prefixLen = LINE_PREFIX.exec(line)![0].length;
+  let start = prefixLen;
+  for (const b of line.slice(prefixLen, m.index).matchAll(/[.!?]\s+/g)) start = prefixLen + (b.index ?? 0) + b[0].length;
+  const from = m.index + m[0].length;
+  const stop = /[.!?](?=\s|$)/.exec(line.slice(from));
+  const rest = stop ? line.slice(from + stop.index + 1) : "";
+  const before = line.slice(0, start);
+  if (rest.trim() === "") return (start > prefixLen ? before.trimEnd() : before) + rest;
+  return before + rest.trimStart();
+}
 
 function scrubStatusLine(line: string): string {
   let out = line;
-  for (let pass = 0; pass < 3 && DEPLOY_STATUS.some((r) => r.test(out)); pass++) {
-    out = out.replace(STATUS_LEAD, (_m, lead: string) => lead);
-    if (out !== line && STATUS_LEAD.test(line)) out = out.replace(/^(\s*(?:[-*+]\s+)?)(\p{Ll})/u, (_m, lead: string, c: string) => lead + c.toUpperCase());
-    for (const r of STATUS_INLINE) out = out.replace(r, "");
+  for (let pass = 0; pass < 6 && hasDeployStatus(out); pass++) {
+    let next = out;
+    for (const e of DEPLOY_STATUS) if (e.scrub === "paren") next = dropParens(next, e.re);
+    if (DEPLOY_STATUS.some((e) => e.scrub === "lead" && e.re.test(next))) next = stripLead(next);
+    if (next === out) {
+      for (const e of DEPLOY_STATUS) {
+        if (e.scrub !== "sentence") continue;
+        const dropped = dropSentence(next, e.re);
+        if (dropped !== null) { next = dropped; break; }
+      }
+    }
+    if (next === out) break;
+    out = next;
   }
-  if (out === line) return line;
-  return out
-    .replace(/\s*[;,]\s*([.!?])/g, "$1")
-    .replace(/\s+([,.;:!?])/g, "$1")
-    .replace(/(\S)[ \t]{2,}/g, "$1 ")
-    .replace(/[ \t]+$/, "");
+  return out;
 }
 
 /**
  * Remove the deploy/verified status wording the lint flags from the current-state
- * part of `text` (everything before `## History`; fenced code is left as is), so
- * the sentence stays readable. A line left with nothing but a bullet or
- * punctuation is dropped.
+ * part of `text` (everything before `## History`; fenced code is left as is).
+ * Only forms that come out clean are edited: a status parenthetical, a leading
+ * `Shipped:` label, or the whole sentence holding the phrase. Text is never cut
+ * out of the middle of a clause, and "needs a restart" is left for the retry. A
+ * line left with nothing but marks is dropped.
  */
 export function scrubDeployStatus(text: string): string {
   const { main, history } = splitHistory(text);
@@ -210,7 +254,7 @@ export function lintKnowledge(input: LintInput): LintFinding[] {
   const lines = proseLines(main);
   const testLine = lines.find((l) => TEST_COUNT.some((r) => r.test(l)));
   if (testLine) add("test-count", "test-count / suite-status line", testLine.trim());
-  const deployLine = lines.find((l) => DEPLOY_STATUS.some((r) => r.test(l)));
+  const deployLine = lines.find(hasDeployStatus);
   if (deployLine) add("deploy-status", "deploy/verified status line", deployLine.trim());
   const heads = lines.filter((l) => DATED_HEADING.test(l));
   if (heads.length) add("dated-heading", `${heads.length} dated heading(s) in the body (dates belong in History)`, heads[0].trim());

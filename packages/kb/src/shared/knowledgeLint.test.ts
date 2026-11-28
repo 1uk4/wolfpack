@@ -155,19 +155,25 @@ describe("empty wikilink targets", () => {
 });
 
 describe("scrubDeployStatus", () => {
-  const cases: Array<[string, string]> = [
-    ["The panel opens on tap (shipped).", "The panel opens on tap."],
-    ["The hub runs a curator (deployed to sfo-01) every hour.", "The hub runs a curator every hour."],
-    ["Shipped: the panel opens on tap", "The panel opens on tap"],
-    ["- **Verified**: the panel opens on tap", "- The panel opens on tap"],
-    ["The panel opens on tap, deployed to the VPS.", "The panel opens on tap."],
-    ["The sync works and verified working in production.", "The sync works and in production."],
-    ["The panel opens on tap. Status: done", "The panel opens on tap."],
-    ["The panel opens on tap; needs a restart.", "The panel opens on tap."],
+  const cases: Array<[string, string, string]> = [
+    ["removes a parenthetical", "The panel opens on tap (shipped).", "The panel opens on tap."],
+    ["removes a parenthetical with a target mid-line", "The hub runs a curator (deployed to sfo-01) every hour.", "The hub runs a curator every hour."],
+    ["strips a leading label in a quote", "> Shipped: the panel opens on tap", "> The panel opens on tap"],
+    ["strips a leading label in a heading", "## Live: the panel", "## The panel"],
+    ["strips a bold label with the colon inside", "- **Verified:** the panel opens on tap", "- The panel opens on tap"],
+    ["strips a bold label with the colon outside", "- **Verified**: the panel opens on tap", "- The panel opens on tap"],
+    ["keeps the case of a lowercase brand name", "Shipped: iOS opens the panel", "iOS opens the panel"],
+    ["drops the whole sentence for a mid-text status phrase", "The panel opens. It was verified live on the VPS today. Config applies at next boot.", "The panel opens. Config applies at next boot."],
+    ["drops a final status sentence", "The panel opens on tap. Status: done", "The panel opens on tap."],
+    ["drops a bullet that is only a status sentence", "- Deployed to the VPS.", ""],
+    ["leaves a need-a-restart fact for the retry", "Config changes need a restart.", "Config changes need a restart."],
+    ["does not touch inline code or spacing elsewhere", "Run `a  b` here  now (shipped) ok", "Run `a  b` here  now ok"],
   ];
-  it.each(cases)("clears %j", (before, after) => {
-    const out = scrubDeployStatus(before);
-    expect(out).toBe(after);
+  it.each(cases)("%s", (_n, before, after) => {
+    expect(scrubDeployStatus(before)).toBe(after);
+  });
+  it("leaves the lint no deploy-status finding", () => {
+    const out = scrubDeployStatus("A (shipped) b. Verified live in production here.\nShipped: x");
     expect(lintKnowledge({ body: out, workIds: "none" }).map((f) => f.code)).not.toContain("deploy-status");
   });
   it("drops a line that is only status and leaves History and code fences alone", () => {
@@ -175,3 +181,4 @@ describe("scrubDeployStatus", () => {
     expect(scrubDeployStatus(body)).toBe("# T\n\nKeeps state.\n```\nShipped: x\n```\n\n## History\n- Shipped: the thing (deployed to the VPS)\n");
   });
 });
+

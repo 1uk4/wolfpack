@@ -227,10 +227,10 @@ export async function distillTopic(engine: Engine, input: DistillInput): Promise
       system,
       prompt: buildPrompt(input, failures, missing, noInitiative, noFeature),
     });
-    // Commit hashes and deploy-status wording are scrubbed deterministically, before the lint ever sees them.
+    // Commit hashes (everywhere) and deploy-status wording (body only: the lint checks no summary for it) are scrubbed deterministically, before the lint sees them.
     const parsed = DistillOutputSchema.parse(raw);
-    itemSummary = parsed.summary ? scrubDeployStatus(scrubCommitHashes(parsed.summary)) : undefined;
-    const all = parsed.contributions.map((c) => ({ ...c, summary: scrubDeployStatus(scrubCommitHashes(c.summary)), body: scrubDeployStatus(scrubCommitHashes(c.body)) }));
+    itemSummary = parsed.summary ? scrubCommitHashes(parsed.summary) : undefined;
+    const all = parsed.contributions.map((c) => ({ ...c, summary: scrubCommitHashes(c.summary), body: scrubDeployStatus(scrubCommitHashes(c.body)) }));
     return grad ? all : all.slice(0, 4).map((c) => ({ ...c, initiative: undefined, feature: undefined }));
   };
   /** The standing feature's contribution: flagged, or slugged "feature". */

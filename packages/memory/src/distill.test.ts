@@ -66,6 +66,15 @@ describe("distillTopic", () => {
     expect(r.outputs[0].summary).toBe("Fixed by (a commit).");
   });
 
+  it("scrubs deploy-status wording before the lint, so it never costs a retry or a hold", async () => {
+    const wordy = { contributions: [{ ...clean, body: "## Design\nShipped: one item per run (shipped)." }] };
+    const { call, engine } = engineOf(wordy);
+    const r = await distillTopic(engine, { id: "t", title: "T", summary: "s", body: "raw", domain: "wolfpack", date: "2026-10-22" });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(r.heldCodes).toEqual([]);
+    expect(r.outputs[0].body).toContain("One item per run.");
+  });
+
   it("reports hard findings still present after the retry", async () => {
     const bad = { contributions: [{ ...clean, body: "## Design\nAll 120 tests pass. Task AbC1234." }] };
     const r = await distillTopic(engineOf(bad, bad).engine, { id: "t", title: "T", summary: "s", body: "raw", domain: "wolfpack", date: "2026-10-22" });

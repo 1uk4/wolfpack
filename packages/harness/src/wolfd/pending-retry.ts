@@ -26,13 +26,13 @@ export interface PendingRetryDeps {
 export function startPendingRetry(d: PendingRetryDeps): { stop(): void; tick(): Promise<void> } {
   let running = false;
   const tick = async (): Promise<void> => {
-    if (running) return;
+    if (running || d.isBusy?.()) return; // a consolidation in flight owns the pending state: leave the whole tick for the next one
     running = true;
     try {
       const now = d.now?.() ?? Date.now();
       const dropped = await sweepPending(d.den, { live: await d.readLive(), ...(d.isArchived ? { isArchived: d.isArchived } : {}), now });
       for (const x of dropped) d.log(`memory: dropped pending save for ${x.key} (${x.reason})`);
-      if (dueKeys(d.den, now).length === 0 || d.isBusy?.()) return;
+      if (dueKeys(d.den, now).length === 0) return;
       await d.retry();
     } catch (e) {
       d.log(`memory: pending save retry failed: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);

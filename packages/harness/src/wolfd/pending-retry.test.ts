@@ -56,6 +56,16 @@ describe("pending save retry timer", () => {
     expect(t.retry).not.toHaveBeenCalled();
   });
 
+  it("a busy consolidation skips the whole tick: nothing is swept or dropped, and nothing retried", async () => {
+    write({ gone: entry() });
+    const t = make({ isBusy: () => true });
+    await t.tick();
+    t.stop();
+    expect(Object.keys(JSON.parse(readFileSync(stateFile(), "utf-8")))).toEqual(["gone"]);
+    expect(t.log).not.toHaveBeenCalled();
+    expect(t.retry).not.toHaveBeenCalled();
+  });
+
   it("an unreachable hub is a quiet retry: the tick does not throw and the key stays", async () => {
     write({ k: entry() });
     const t = make({ retry: async () => { throw new Error("ECONNREFUSED"); }, isArchived: async () => { throw new Error("ECONNREFUSED"); } });

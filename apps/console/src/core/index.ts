@@ -88,6 +88,7 @@ export * from "./thread/den-strip.ts";
 export * from "./thread/page-pending.ts";
 // bar-icon.ts: the collapsed chat icon's position, clamping, edge snapping and drag threshold. Pure.
 export * from "./thread/bar-icon.ts";
+export * from "./thread/phone-viewport.ts";
 export * from "./graph/graph-layout.ts";
 export * from "./thread/thread-cards.ts";
 export * from "./thread/tool-rows.ts";

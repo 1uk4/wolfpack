@@ -147,7 +147,7 @@ export function GraphSettingsControl({
 				aria-expanded={open}
 				aria-label="Graph display settings"
 				onClick={() => setOpen((o) => !o)}
-				className={`flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent ${
+				className={`relative flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors before:absolute before:-inset-[5px] before:content-[''] hover:bg-accent ${
 					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
 				}`}
 			>

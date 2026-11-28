@@ -136,6 +136,15 @@ export function seedFeedFromSnapshot(snap: PresenceSnapshot, now: number, max = 
 	return out.sort((a, b) => a.at - b.at).slice(-max);
 }
 
+/**
+ * The expanded activity panel's CSS `bottom`. Desktop: 12px above the floating chat bar (`--chat-bar-top`). Phone: the collapsed chat icon sits at the
+ * bottom centre (48px + 8px margin above the safe area), so the panel also ends at least 8px above its top (56 + 8 = 64px + the inset).
+ */
+export function feedPanelBottom(phone: boolean): string {
+	const bar = "var(--chat-bar-top,0px) + 12px";
+	return phone ? `max(${bar}, env(safe-area-inset-bottom) + 64px)` : `calc(${bar})`;
+}
+
 /** The collapsed pill: "Quiet" with nothing to show, "Activity" otherwise, with how many arrived since collapsing. */
 export function feedPillLabel(newCount: number, lineCount: number): string {
 	if (newCount > 0) return `Activity · ${newCount} new`;

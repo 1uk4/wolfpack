@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { PresenceSnapshot } from "@wolfpack/protocol";
-import { feedCountReducer, feedPillLabel, formatFeed, relativeTime, seedFeedFromSnapshot, type FeedEvent } from "../../../src/core/graph/live/feed.ts";
+import { feedCountReducer, feedPanelBottom, feedPillLabel, formatFeed, relativeTime, seedFeedFromSnapshot, type FeedEvent } from "../../../src/core/graph/live/feed.ts";
 
 let n = 0;
 const ev = (verb: string, o: Partial<FeedEvent> = {}): FeedEvent => ({ id: `e${++n}`, at: 1000, ts: 0, verb, actor: { kind: "thread", wolf: "1uk4", threadId: "t1" }, ...o });
@@ -70,6 +70,11 @@ describe("activity feed formatter", () => {
 		const many = { ...snap, threads: Array.from({ length: 80 }, (_, i) => entry(`m${i}`, "thread-active", 1000 + i, { kind: "thread", wolf: "hal", threadId: `x${i}` })), subagents: [] } as unknown as PresenceSnapshot;
 		assert.deepEqual(seedFeedFromSnapshot(many, 0).map((e) => e.id).slice(-1), ["m79"]);
 		assert.equal(seedFeedFromSnapshot(many, 0).length, 50);
+	});
+
+	it("the expanded panel stays 12px over the chat bar on desktop and, on a phone, ends at least 8px above the centred 48px chat icon", () => {
+		assert.equal(feedPanelBottom(false), "calc(var(--chat-bar-top,0px) + 12px)");
+		assert.equal(feedPanelBottom(true), "max(var(--chat-bar-top,0px) + 12px, env(safe-area-inset-bottom) + 64px)"); // icon top = 8 + 48 above the inset; + 8 gap
 	});
 
 	it("the collapsed pill always has a label: Quiet with no lines, Activity otherwise, with the new count", () => {

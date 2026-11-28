@@ -90,6 +90,7 @@ export function openNodeInViewer(nodeId: string, open: OpenViewFn | null): boole
 /** The default node look when a node carries no colour of its own. */
 const NODE_COLOR_TOKEN = "--primary";
 /** The controls container leaves this much room on its left for the sidebar handle (graph-home.tsx draws it at the left edge, with the KB label beside it), so the two never overlap. A literal class: Tailwind only sees whole strings. */
+// Fit and Settings hit area (before:-inset-[5px]): 36px border-box = 34px padding box; +5px a side = 44px.
 const CHROME_LEFT_GUTTER = "left-[5rem]";
 
 type RenderSettings = GraphRenderSettings;
@@ -197,7 +198,7 @@ export function GraphChromeRow({
 							type="button"
 							onClick={onHome}
 							aria-label="Fit graph in view"
-							className="flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent"
+							className="relative flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors before:absolute before:-inset-[5px] before:content-[''] hover:bg-accent"
 						>
 							<HomeIcon className="size-4" />
 						</button>

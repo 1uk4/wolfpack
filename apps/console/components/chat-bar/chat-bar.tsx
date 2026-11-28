@@ -47,7 +47,7 @@ import type { Answering } from "@/components/ask/ask-sheet";
 import { askQueue, useAskQueue, useAskSession, type NoteState } from "@/components/ask/ask-session";
 import { replyLabel } from "@/components/ask/ask-reply";
 import { useOptionalServerEvent } from "@/components/shell/server-events";
-import { effectiveWolfColor, hasWolfColor, wolfColorStyle, wolfAccentForeground, attachable, barGeometry, barHiddenFor, pickHomeThread, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread } from "@/src/core";
+import { effectiveWolfColor, hasWolfColor, wolfColorStyle, wolfAccentForeground, attachable, barGeometry, barHiddenFor, PHONE_QUERY, pickHomeThread, hasPagePendingAsk, subscribePagePending, BAR_EXTRAS, kbdEventForAction, resolveThreadId, threadHref, type AttachedRef, type BarThread } from "@/src/core";
 import { ZC } from "@/lib/z-layers";
 
 export { abortThread, onOwnThreadPage, submitToThread, whenBusyFor } from "@/components/chat-bar/chat-bar-io";
@@ -84,18 +84,17 @@ const BarCardSurface = dynamic(() => import("@/components/chat-bar/bar-card-surf
 /** Full-height screens (the graph canvas, the new-chat page, a thread page) run under the bar; every other page scrolls, so the open bar reserves room under its content. */
 const FULL_HEIGHT = /^\/(graph|chat)(\/|$)|^\/wolf\/[^/]+\/thread(\/|$)/;
 
-/** md+ (768px): the floating pill. Below it the bar is a full-width dock at the bottom (phone layout). */
-const WIDE_QUERY = "(min-width: 768px)";
+/** Wide (desktop): the floating pill. A phone (narrow, or a short touch screen in landscape: PHONE_QUERY) gets the full-width dock at the bottom. */
 const canMatch = () => typeof window !== "undefined" && typeof window.matchMedia === "function";
 function subscribeWide(cb: () => void): () => void {
 	if (!canMatch()) return () => {};
-	const mq = window.matchMedia(WIDE_QUERY);
+	const mq = window.matchMedia(PHONE_QUERY);
 	mq.addEventListener?.("change", cb);
 	return () => mq.removeEventListener?.("change", cb);
 }
 /** Read synchronously (useSyncExternalStore), so a phone never paints the pill for a frame; the server snapshot is wide (desktop first). */
 export function useWide(): boolean {
-	return useSyncExternalStore(subscribeWide, () => (canMatch() ? window.matchMedia(WIDE_QUERY).matches : true), () => true);
+	return useSyncExternalStore(subscribeWide, () => (canMatch() ? !window.matchMedia(PHONE_QUERY).matches : true), () => true);
 }
 
 export function ChatBar() {

@@ -15,8 +15,9 @@ import { useRouter } from "next/navigation";
 import { ActivityIcon, ChevronDownIcon } from "lucide-react";
 import { threadHref } from "@/src/core";
 import { useAttachedThread } from "@/components/chat-bar/attached-thread";
+import { useWide } from "@/components/chat-bar/chat-bar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { feedCountReducer, feedPillLabel, formatFeed, formatPool, memoryRows, pendingNotice, poolBars, relativeTime, resolveTab, tabItems, tabsFor, wolfColor, type ActivityTab, type FeedLine, type MemoryRow } from "@/src/core";
+import { feedCountReducer, feedPanelBottom, feedPillLabel, formatFeed, formatPool, memoryRows, pendingNotice, poolBars, relativeTime, resolveTab, tabItems, tabsFor, wolfColor, type ActivityTab, type FeedLine, type MemoryRow } from "@/src/core";
 import type { MemoryStatus } from "@wolfpack/client";
 import { fetchMemoryStatus } from "@/components/kb/kb-client";
 import { setKbHover, useKbLiveEvents } from "./kb-life-store";
@@ -74,6 +75,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	const live = liveSettingsOf(settings);
 	const priv = (settings as { privateView?: boolean } | null)?.privateView === true;
 	const router = useRouter();
+	const wide = useWide();
 	const attachApi = useAttachedThread();
 	const { recent, connected, state } = useLiveActivity({ enabled: live.enabled });
 	const memoryOn = live.memory;
@@ -231,7 +233,7 @@ export function ActivityFeed({ renderer, settings }: { renderer: GraphCanvasRend
 	});
 	const tabs = tabsFor(memoryOn);
 	return (
-		<div className="pointer-events-none absolute bottom-[calc(var(--chat-bar-top,0px)+12px)] left-3 z-[6] w-[280px] max-w-[calc(100%-1.5rem)]">
+		<div style={{ bottom: feedPanelBottom(!wide) }} className="pointer-events-none absolute left-3 z-[6] w-[280px] max-w-[calc(100%-1.5rem)]">
 			<div className={`pointer-events-auto overflow-hidden rounded-[12px] border border-border/50 bg-background/70 shadow-sm backdrop-blur-md ${motion}`}>
 				<div className="flex items-center justify-between px-2.5 pt-1.5 text-[11px] text-muted-foreground">
 					<span className="inline-flex items-center gap-1" role="tablist" aria-label="Activity">

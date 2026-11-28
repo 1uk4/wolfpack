@@ -83,15 +83,17 @@ describe("tabs", () => {
 		assert.equal(resolveTab(null, true), "all");
 	});
 
-	it("All merges feed lines and memory rows by time, KB shows lines only, Memory rows only, and Memory off drops the rows everywhere", () => {
-		const lines = [line("l1", 1000), line("l2", 3000)];
+	it("All merges feed lines and memory rows by time, KB shows only KB-target lines (no thread or work lines), Memory rows only, and Memory off drops the rows everywhere", () => {
+		const kbLine = (key: string, time: number): FeedLine => ({ ...line(key, time), target: { kind: "kb-entry", id: "kb-wolfpack-A" } });
+		const lines = [kbLine("l1", 1000), kbLine("l2", 3000), line("thread", 3500)];
 		const rows = [row("r1", 2000)];
 		const keys = (t: Parameters<typeof tabItems>[0], on: boolean) => tabItems(t, lines, rows, on).map((i) => i.key);
-		assert.deepEqual(keys("all", true), ["l1", "r1", "l2"]);
+		assert.deepEqual(keys("all", true), ["l1", "r1", "l2", "thread"]);
 		assert.deepEqual(keys("kb", true), ["l1", "l2"]);
+		assert.deepEqual(keys("kb", false), ["l1", "l2"]);
 		assert.deepEqual(keys("memory", true), ["r1"]);
-		assert.deepEqual(keys("all", false), ["l1", "l2"]);
-		assert.deepEqual(keys("memory", false), ["l1", "l2"]);
+		assert.deepEqual(keys("all", false), ["l1", "l2", "thread"]);
+		assert.deepEqual(keys("memory", false), ["l1", "l2", "thread"]);
 	});
 });
 

@@ -1183,7 +1183,7 @@ export class GraphCanvasRenderer {
 	 *  capped at maxK so a lone node isn't blown up). Applied through the
 	 *  zoom behavior, so the camera callback fires like any move. Returns
 	 *  false when none of the ids is a known, visible node. */
-	focusOn(ids: readonly string[], maxK = 4): boolean {
+	focusOn(ids: readonly string[], maxK = 4, animate = false): boolean {
 		const w = this.canvas.clientWidth;
 		const h = this.canvas.clientHeight;
 		if (w < 10 || h < 10) return false;
@@ -1204,9 +1204,17 @@ export class GraphCanvasRenderer {
 		const cx = (box.minX + box.maxX) / 2;
 		const cy = (box.minY + box.maxY) / 2;
 		this.zoomTarget = null;
-		select(this.canvas).call(this.zoomBehavior.transform, zoomIdentity.translate(w / 2 - cx * k, h / 2 - cy * k).scale(k));
+		const dest = { k, x: w / 2 - cx * k, y: h / 2 - cy * k };
+		if (animate) {
+			this.flight = dest; // a ~200 ms glide (advanceZoom); reduced motion passes animate=false and jumps
+			this.markDirty();
+		} else {
+			this.flight = null;
+			select(this.canvas).call(this.zoomBehavior.transform, zoomIdentity.translate(dest.x, dest.y).scale(k));
+		}
 		return true;
 	}
+	private flight: { k: number; x: number; y: number } | null = null;
 
 	/** Pan (keeping the zoom) so the node is on screen; no-op when it already
 	 *  is. True when the camera moved. */
@@ -1287,6 +1295,11 @@ export class GraphCanvasRenderer {
 	}
 
 	/** Ring a node / target / wolf on the overlay (the activity feed's hover); null clears it. */
+	/** Which of these node ids are on the map (the activity replay picks its fly-to target from them). */
+	nodesOnMap(ids: readonly string[]): Set<string> {
+		return new Set(ids.filter((id) => this.nodeById.has(id)));
+	}
+
 	/** The map's tree edges and node ids, for the kbdemo to pick real filing targets from. */
 	demoGraph(): { edges: readonly { from: string; to: string }[]; ids: string[] } {
 		return { edges: this.data?.edges ?? [], ids: [...this.nodeById.keys()] };
@@ -1454,6 +1467,7 @@ export class GraphCanvasRenderer {
 		}
 		this.downPos = pos;
 		this.zoomTarget = null; // a pan takes over — cancel any zoom glide
+		this.flight = null;
 	};
 
 	private onPointerUp = (e: PointerEvent) => {
@@ -1750,6 +1764,18 @@ export class GraphCanvasRenderer {
 	 *  point under the cursor pinned. Frame-rate independent (exponential
 	 *  approach, time constant ZOOM_EASE_MS). Returns true while gliding. */
 	private advanceZoom(dt: number): boolean {
+		const f = this.flight;
+		if (f) {
+			const t0 = this.transform;
+			const b = 1 - Math.exp(-dt / 60);
+			const near = Math.abs(f.x - t0.x) < 0.5 && Math.abs(f.y - t0.y) < 0.5 && Math.abs(f.k - t0.k) / f.k < 0.002;
+			const k = near ? f.k : t0.k + (f.k - t0.k) * b;
+			const x = near ? f.x : t0.x + (f.x - t0.x) * b;
+			const y = near ? f.y : t0.y + (f.y - t0.y) * b;
+			if (near) this.flight = null;
+			select(this.canvas).call(this.zoomBehavior.transform, zoomIdentity.translate(x, y).scale(k));
+			return !near;
+		}
 		const target = this.zoomTarget;
 		if (!target) return false;
 		const t = this.transform;

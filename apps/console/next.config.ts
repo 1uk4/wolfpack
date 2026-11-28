@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { activityRedirects } from "./src/core/graph/live/activity-panel.ts";
 
 const nextConfig: NextConfig = {
 	// Self-contained server in .next/standalone, which the desktop shell spawns.
@@ -10,9 +11,9 @@ const nextConfig: NextConfig = {
 		agentUpgrade: "security",
 	},
 
-	// The KB Activity page is gone: its activity shows on the graph. Old bookmarks land there.
+	// The KB Activity page is gone: its activity shows on the graph's Activity panel (KB tab). Old bookmarks land there.
 	async redirects() {
-		return [{ source: "/kb-activity", destination: "/graph", permanent: false }];
+		return activityRedirects();
 	},
 
 	// No framing on any route: the console acts with the paired browser's hub token.

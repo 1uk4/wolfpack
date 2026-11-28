@@ -109,7 +109,9 @@ export type TabItem = { kind: "line"; key: string; time: number; line: FeedLine 
 export function tabItems(tab: ActivityTab, lines: readonly FeedLine[], rows: readonly MemoryRow[], memoryOn: boolean): TabItem[] {
 	const l: TabItem[] = lines.map((line) => ({ kind: "line", key: line.key, time: line.time, line }));
 	const m: TabItem[] = rows.map((row) => ({ kind: "memory", key: row.key, time: row.at, row }));
-	if (!memoryOn || tab === "kb") return l;
+	// KB = what was read, written or filed in the KB: lines whose target is a KB entry or section (thread starts, work touches and the rest are All only).
+	if (tab === "kb") return l.filter((i) => i.kind === "line" && i.line.target?.kind.startsWith("kb-"));
+	if (!memoryOn) return l;
 	if (tab === "memory") return [...m].sort((a, b) => a.time - b.time);
 	return [...l, ...m].sort((a, b) => a.time - b.time);
 }

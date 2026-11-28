@@ -48,6 +48,10 @@ import {
 import { GraphCanvasRenderer } from "./graph-canvas.ts";
 import { LiveGraphLayer } from "./live/live-layer";
 import { ActivityFeed } from "./live/activity-feed";
+import { ActivityToggle } from "./live/activity-toggle";
+import { useActivityPanel } from "./live/activity-panel-store";
+import { useWide } from "@/components/chat-bar/chat-bar";
+import { liveSettingsOf } from "./live/live-overlay";
 import { LiveErrorBoundary } from "./live/live-error-boundary";
 import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
@@ -165,6 +169,8 @@ export function GraphChromeRow({
 	groups?: GraphGroups;
 	changeGroups?: (update: (cur: GraphGroups) => GraphGroups) => void;
 }) {
+	// On a phone the open Activity sheet covers the bottom corner: the corner buttons step aside (the sheet has its own close).
+	const sheetOpen = !useWide() && useActivityPanel().open;
 	return (
 		<>
 			{!isEmpty && (
@@ -191,7 +197,8 @@ export function GraphChromeRow({
 					{noMatch && <div className="px-1.5 pt-1 text-[11px] text-muted-foreground">No matching nodes.</div>}
 				</div>
 			)}
-			<div className="graph-chrome-fade-in pointer-events-auto absolute bottom-0 right-0 flex shrink-0 items-center gap-2">
+			<div className={`graph-chrome-fade-in pointer-events-auto absolute bottom-0 right-0 flex shrink-0 items-center gap-2 ${sheetOpen ? "hidden" : ""}`}>
+				{!isEmpty && liveSettingsOf(settings).enabled && <ActivityToggle />}
 				{!isEmpty && onHome && (
 					<Hint label="Fit graph in view" side="top">
 						<button
